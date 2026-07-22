@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -96,6 +96,52 @@ class Settings(BaseSettings):
     ark_tts_sample_rate: int = 24000
     ark_tts_judge_asset_audio_format: str = "mp3"
     ark_tts_judge_asset_sample_rate: int = 24000
+    live_v2_model_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LIVE_V2_MODEL_API_KEY", "ARK_AGENT_PLAN_API_KEY"),
+    )
+    live_v2_model_base_url: str = Field(
+        default="https://ark.cn-beijing.volces.com/api/plan/v3",
+        validation_alias=AliasChoices(
+            "LIVE_V2_MODEL_BASE_URL",
+            "ARK_AGENT_PLAN_BASE_URL",
+        ),
+    )
+    live_v2_model_id: str = "doubao-seed-2-0-lite-260215"
+    live_v2_model_first_token_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
+    live_v2_model_total_seconds: float = Field(default=30.0, ge=0.1, le=180.0)
+    live_v2_tts_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LIVE_V2_TTS_ENABLED", "ARK_TTS_ENABLED"),
+    )
+    live_v2_tts_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LIVE_V2_TTS_API_KEY", "ARK_TTS_API_KEY"),
+    )
+    live_v2_tts_resource_id: str = Field(
+        default="seed-tts-2.0",
+        validation_alias=AliasChoices("LIVE_V2_TTS_RESOURCE_ID", "ARK_TTS_RESOURCE_ID"),
+    )
+    live_v2_tts_ws_url: str = Field(
+        default="wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection",
+        validation_alias=AliasChoices("LIVE_V2_TTS_WS_URL", "ARK_TTS_WS_URL"),
+    )
+    live_v2_tts_judge_speaker: str = Field(
+        default="zh_female_vv_uranus_bigtts",
+        validation_alias=AliasChoices(
+            "LIVE_V2_TTS_JUDGE_SPEAKER",
+            "ARK_TTS_JUDGE_SPEAKER",
+        ),
+    )
+    live_v2_tts_sample_rate: int = Field(
+        default=24000,
+        ge=8000,
+        le=48000,
+        validation_alias=AliasChoices("LIVE_V2_TTS_SAMPLE_RATE", "ARK_TTS_SAMPLE_RATE"),
+    )
+    live_v2_tts_first_chunk_seconds: float = Field(default=12.0, ge=0.1, le=120.0)
+    live_v2_tts_idle_seconds: float = Field(default=8.0, ge=0.1, le=120.0)
+    live_v2_voice_storage_dir: str = "data/live-v2/voices"
     judge_voice_worker_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
     judge_voice_worker_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     judge_voice_worker_probe_max_age_seconds: float = Field(default=45.0, ge=5.0, le=300.0)

@@ -9,6 +9,7 @@ def test_fixed_roles_have_expected_permission_boundaries() -> None:
 
     assert viewer == {
         AdminPermission.OVERVIEW_READ,
+        AdminPermission.V2_GAMES_READ,
         AdminPermission.RUNS_READ,
         AdminPermission.GAMES_READ,
         AdminPermission.PLAYERS_READ,

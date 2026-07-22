@@ -1,0 +1,170 @@
+import { AdminApiError } from "@/api/problem-details";
+import type {
+  V2GamePresentation,
+  V2GameRecordDetail,
+  V2GameRecordEvent,
+  V2GameRecordList,
+  V2GameRecordListItem,
+  V2GameRun,
+  V2VoiceAsset,
+} from "@/v2/game-records/types";
+
+export function parseV2GameRecordList(value: unknown): V2GameRecordList {
+  const record = object(value);
+  const pagination = object(record.pagination);
+  return {
+    items: array(record.items).map(parseListItem),
+    pagination: {
+      page: integer(pagination.page, 1),
+      page_size: integer(pagination.page_size, 1),
+      total: integer(pagination.total, 0),
+      pages: integer(pagination.pages, 0),
+    },
+  };
+}
+
+export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
+  const record = object(value);
+  return {
+    ...parseListItem(record),
+    rule_snapshot: object(record.rule_snapshot),
+    players_snapshot: array(record.players_snapshot).map(object),
+    runs: array(record.runs).map(parseRun),
+    events: array(record.events).map(parseEvent),
+    presentations: array(record.presentations).map(parsePresentation),
+    voice_assets: array(record.voice_assets).map(parseVoiceAsset),
+  };
+}
+
+function parseListItem(value: unknown): V2GameRecordListItem {
+  const record = object(value);
+  return {
+    game_id: text(record.game_id),
+    title: text(record.title),
+    status: text(record.status),
+    current_run_id: text(record.current_run_id),
+    record_schema_version: integer(record.record_schema_version, 1),
+    last_record_seq: integer(record.last_record_seq, 0),
+    last_presentation_seq: integer(record.last_presentation_seq, 0),
+    created_at: date(record.created_at),
+    updated_at: date(record.updated_at),
+  };
+}
+
+function parseRun(value: unknown): V2GameRun {
+  const record = object(value);
+  return {
+    run_id: text(record.run_id),
+    attempt_no: integer(record.attempt_no, 1),
+    status: text(record.status),
+    started_at: date(record.started_at),
+    completed_at: record.completed_at === null ? null : date(record.completed_at),
+  };
+}
+
+function parseEvent(value: unknown): V2GameRecordEvent {
+  const record = object(value);
+  return {
+    event_id: integer(record.event_id, 1),
+    record_seq: integer(record.record_seq, 1),
+    run_id: text(record.run_id),
+    event_type: text(record.event_type),
+    payload_schema_version: integer(record.payload_schema_version, 1),
+    payload: object(record.payload),
+    created_at: date(record.created_at),
+  };
+}
+
+function parsePresentation(value: unknown): V2GamePresentation {
+  const record = object(value);
+  return {
+    presentation_seq: integer(record.presentation_seq, 1),
+    presentation_id: text(record.presentation_id),
+    action_id: nullableText(record.action_id),
+    phase_id: text(record.phase_id),
+    actor_kind: text(record.actor_kind),
+    actor_id: text(record.actor_id),
+    speech_id: text(record.speech_id),
+    segment_index: integer(record.segment_index, 0),
+    source_event_id: integer(record.source_event_id, 1),
+    state: text(record.state),
+    subtitle_text: text(record.subtitle_text),
+    voice_asset_id: nullableText(record.voice_asset_id),
+    audio_duration_ms: nullableInteger(record.audio_duration_ms, 0),
+    created_at: date(record.created_at),
+    closed_at: nullableDate(record.closed_at),
+  };
+}
+
+function parseVoiceAsset(value: unknown): V2VoiceAsset {
+  const record = object(value);
+  return {
+    voice_asset_id: text(record.voice_asset_id),
+    action_id: text(record.action_id),
+    presentation_id: text(record.presentation_id),
+    speech_id: text(record.speech_id),
+    segment_index: integer(record.segment_index, 0),
+    state: text(record.state),
+    mime_type: text(record.mime_type),
+    sample_rate: integer(record.sample_rate, 1),
+    channels: integer(record.channels, 1),
+    sample_count: nullableInteger(record.sample_count, 0),
+    duration_ms: nullableInteger(record.duration_ms, 0),
+    pcm_sha256: nullableText(record.pcm_sha256),
+    size_bytes: nullableInteger(record.size_bytes, 0),
+    audio_url: nullableText(record.audio_url),
+    created_at: date(record.created_at),
+    completed_at: nullableDate(record.completed_at),
+  };
+}
+
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
+  return value as Record<string, unknown>;
+}
+
+function array(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw invalid();
+  return value;
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string" || !value) throw invalid();
+  return value;
+}
+
+function integer(value: unknown, minimum: number): number {
+  if (!Number.isInteger(value) || Number(value) < minimum) throw invalid();
+  return Number(value);
+}
+
+function nullableInteger(value: unknown, minimum: number): number | null {
+  return value === null ? null : integer(value, minimum);
+}
+
+function nullableText(value: unknown): string | null {
+  return value === null ? null : text(value);
+}
+
+function date(value: unknown): string {
+  const result = text(value);
+  if (!Number.isFinite(Date.parse(result))) throw invalid();
+  return result;
+}
+
+function nullableDate(value: unknown): string | null {
+  return value === null ? null : date(value);
+}
+
+function invalid() {
+  return new AdminApiError({
+    problem: {
+      type: "about:blank",
+      title: "V2 对局记录响应无效",
+      status: 502,
+      detail: "V2 对局记录数据不完整或格式错误。",
+      code: "admin_invalid_v2_game_record_response",
+      request_id: null,
+    },
+  });
+}

@@ -18,6 +18,7 @@ class AdminPermission(StrEnum):
     GAMES_READ = "games.read"
     GAMES_DEBUG_READ = "games.debug.read"
     GAMES_DELETE = "games.delete"
+    V2_GAMES_READ = "v2_games.read"
     PLAYERS_READ = "players.read"
     PLAYERS_WRITE = "players.write"
     PLAYERS_PUBLISH = "players.publish"
@@ -43,6 +44,7 @@ _VIEWER_PERMISSIONS = frozenset(
         AdminPermission.OVERVIEW_READ,
         AdminPermission.RUNS_READ,
         AdminPermission.GAMES_READ,
+        AdminPermission.V2_GAMES_READ,
         AdminPermission.PLAYERS_READ,
         AdminPermission.RULES_READ,
         AdminPermission.VOICE_READ,

@@ -7,7 +7,7 @@ import { routes } from "@/routes";
 import type { AdminPermission } from "@/app/admin-navigation";
 
 const expectedPermissions = [
-  "rules.read", "rules.write", "rules.publish", "rules.archive", "rules.set_default",
+  "rules.read", "rules.write", "rules.publish", "rules.archive", "rules.set_default", "v2_games.read",
 ] as const satisfies readonly AdminPermission[];
 
 function renderRoute(path: string) {
@@ -65,7 +65,7 @@ describe("admin app routes", () => {
   });
 
   it("exposes rule permissions and preview navigation", async () => {
-    expect(expectedPermissions).toHaveLength(5);
+    expect(expectedPermissions).toHaveLength(6);
     renderRoute("/overview");
     expect(await screen.findByRole("link", { name: /游戏规则/ })).toHaveAttribute("href", "/content/rules");
   });
@@ -99,6 +99,7 @@ describe("admin app routes", () => {
     ["/content/voice-assets", "法官语音资产"],
     ["/content/models", "模型管理"],
     ["/operations/games", "对局记录"],
+    ["/v2/operations/games", "V2 对局记录"],
     ["/operations/runs", "运行监控"],
     ["/system/settings", "运行设置"],
   ])("keeps the existing route %s connected", async (path, heading) => {

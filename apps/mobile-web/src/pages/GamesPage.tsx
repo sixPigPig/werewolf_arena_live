@@ -27,7 +27,6 @@ import {
   upsertSeatProfile,
 } from "../components/lobby/lobbyModel";
 import {
-  createGameRun,
   favoritePlayerProfile,
   listPlayerProfileFavorites,
   listPublicPlayerProfiles,
@@ -47,6 +46,7 @@ import {
   publicPlayerProfileFavoritesQueryKey,
   publicPlayerProfilesQueryKey,
 } from "../lib/player-profile-query-keys";
+import { createV2Game } from "../v2/api";
 
 export function GamesPage() {
   const navigate = useNavigate();
@@ -85,10 +85,10 @@ export function GamesPage() {
     queryKey: publicPlayerProfileFavoritesQueryKey,
     queryFn: listPlayerProfileFavorites,
   });
-  const createGameRunMutation = useMutation({
-    mutationFn: (request: Parameters<typeof createGameRun>[0]) =>
-      createGameRun(request),
-    onSuccess: (run) => navigate(`/games/${run.run_id}/live`),
+  const createV2GameMutation = useMutation({
+    mutationFn: (request: Parameters<typeof createV2Game>[0]) =>
+      createV2Game(request),
+    onSuccess: (game) => navigate(`/v2/games/${game.game_id}/live`),
   });
   const previewLineupMutation = useMutation({
     mutationFn: (request: Parameters<typeof previewGameLineup>[0]) =>
@@ -254,7 +254,7 @@ export function GamesPage() {
     ruleSetsQuery.isError ||
     playerProfilesQuery.isError ||
     !selectedRuleSet ||
-    createGameRunMutation.isPending ||
+    createV2GameMutation.isPending ||
     previewLineupMutation.isPending;
   const isLaunchDisabled = isSubmitDisabled || !launchStatus.canLaunch;
   const canFillSeats =
@@ -378,6 +378,7 @@ export function GamesPage() {
     onSuccess?: (
       configs: PlayerConfig[],
       report: LineupQualityReport,
+      ruleSetRevisionId: string | null,
     ) => void,
   ) {
     if (!selectedRuleSet) return;
@@ -403,7 +404,11 @@ export function GamesPage() {
           setPlayerConfigs(result.player_configs);
           setLineupQualityReport(result.lineup_quality_report);
           setLineupQualityError(null);
-          onSuccess?.(result.player_configs, result.lineup_quality_report);
+          onSuccess?.(
+            result.player_configs,
+            result.lineup_quality_report,
+            result.rule_set_revision_id,
+          );
         },
       },
     );
@@ -475,18 +480,30 @@ export function GamesPage() {
     requestLineupPreview(
       "empty_only",
       normalizedPlayerConfigs.map((config) => config.seat),
-      (validatedConfigs, report) => {
+      (validatedConfigs, report, ruleSetRevisionId) => {
         if (report.is_blocked && !qualityOverrideConfirmed) {
           return;
         }
-        createGameRunMutation.mutate({
-          rule_set_id: selectedRuleSet.id,
-          seed: seed ? Number(seed) : null,
-          max_rounds: parsedMaxRounds,
-          player_configs: validatedConfigs,
-          lineup_quality_policy_version: 1,
-          allow_lineup_quality_warnings:
-            report.is_blocked && qualityOverrideConfirmed,
+        const completePlayerConfigs = validatedConfigs.flatMap((config) =>
+          config.profile_id ? [{ ...config, profile_id: config.profile_id }] : [],
+        );
+        if (completePlayerConfigs.length !== selectedRuleSet.player_count) {
+          setValidationError("阵容快照不完整，请重新检查玩家座位");
+          return;
+        }
+        createV2GameMutation.mutate({
+          title: selectedRuleSet.name,
+          lobby_snapshot: {
+            schema_version: 1,
+            rule_set: selectedRuleSet,
+            rule_set_revision_id: ruleSetRevisionId,
+            seed: seed ? Number(seed) : null,
+            max_rounds: parsedMaxRounds,
+            player_configs: completePlayerConfigs,
+            lineup_quality_report: report,
+            allow_lineup_quality_warnings:
+              report.is_blocked && qualityOverrideConfirmed,
+          },
         });
       },
     );
@@ -517,7 +534,7 @@ export function GamesPage() {
       <LobbyRuleSummary
         changeButtonRef={rulePickerTriggerRef}
         disabled={
-          createGameRunMutation.isPending ||
+          createV2GameMutation.isPending ||
           previewLineupMutation.isPending ||
           ruleSetsQuery.isFetching
         }
@@ -534,7 +551,7 @@ export function GamesPage() {
           canFillSeats={canFillSeats}
           favoritesAvailable={favoritesAvailable}
           isBusy={
-            createGameRunMutation.isPending || previewLineupMutation.isPending
+            createV2GameMutation.isPending || previewLineupMutation.isPending
           }
           launchStatus={launchStatus}
           qualityError={lineupQualityError}
@@ -556,7 +573,7 @@ export function GamesPage() {
 
       <LobbyAdvancedSettings
         disabled={
-          createGameRunMutation.isPending || previewLineupMutation.isPending
+          createV2GameMutation.isPending || previewLineupMutation.isPending
         }
         maxRounds={maxRounds}
         maxRoundsError={validationError}
@@ -573,7 +590,7 @@ export function GamesPage() {
 
       <LobbyLaunchBar
         error={
-          createGameRunMutation.isError
+          createV2GameMutation.isError
             ? "无法发起对局"
             : lineupQualityError
               ? lineupQualityError
@@ -583,7 +600,7 @@ export function GamesPage() {
         }
         isLaunchDisabled={isLaunchDisabled}
         isPending={
-          createGameRunMutation.isPending || previewLineupMutation.isPending
+          createV2GameMutation.isPending || previewLineupMutation.isPending
         }
         onLaunch={handleSubmit}
         status={launchStatus}

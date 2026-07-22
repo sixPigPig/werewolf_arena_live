@@ -1,5 +1,6 @@
 export type AdminPermission =
   | "overview.read"
+  | "v2_games.read"
   | "games.read"
   | "games.delete"
   | "runs.read"
@@ -56,6 +57,14 @@ export const adminNavigation: AdminNavSection[] = [
     id: "operations",
     label: "运营诊断",
     items: [
+      {
+        id: "v2-games",
+        label: "V2 对局记录",
+        description: "全新事实序列与展示序列",
+        href: "/v2/operations/games",
+        marker: "V2",
+        permission: "v2_games.read",
+      },
       {
         id: "runs",
         label: "运行监控",

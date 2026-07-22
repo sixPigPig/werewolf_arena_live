@@ -9,6 +9,12 @@ const GameRecordsPage = lazy(
 const GameRecordDetailPage = lazy(
   () => import("@/features/game-records/GameRecordDetailPage"),
 );
+const V2GameRecordsPage = lazy(
+  () => import("@/v2/game-records/V2GameRecordsPage"),
+);
+const V2GameRecordDetailPage = lazy(
+  () => import("@/v2/game-records/V2GameRecordDetailPage"),
+);
 const LiveRunsPage = lazy(
   () => import("@/features/live-runs/LiveRunsPage"),
 );
@@ -87,6 +93,22 @@ export function GameRecordDetailRoute() {
   return (
     <LazyRoute>
       <GameRecordDetailPage />
+    </LazyRoute>
+  );
+}
+
+export function V2GameRecordsRoute() {
+  return (
+    <LazyRoute>
+      <V2GameRecordsPage />
+    </LazyRoute>
+  );
+}
+
+export function V2GameRecordDetailRoute() {
+  return (
+    <LazyRoute>
+      <V2GameRecordDetailPage />
     </LazyRoute>
   );
 }

@@ -6453,7 +6453,93 @@ a {
   font-size: 0.8rem;
 }
 
+.v2-game-record-list,
+.v2-record-sequence {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.v2-game-record-list > li {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.5fr) minmax(180px, 1fr) 120px 170px auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.v2-game-record-list > li > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.v2-game-record-list strong,
+.v2-game-record-list small,
+.v2-game-record-list time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-game-record-list strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.v2-game-record-list small,
+.v2-game-record-list time {
+  color: #667085;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.v2-game-record-list a {
+  color: #5925dc;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.v2-record-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.v2-record-sequence > li {
+  display: grid;
+  gap: 6px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.v2-record-sequence strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.v2-record-sequence small,
+.v2-record-sequence code {
+  color: #667085;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.v2-record-sequence p {
+  margin: 0;
+  color: #344054;
+  font-size: 13px;
+}
+
 @media (max-width: 1000px) {
+  .v2-game-record-list > li {
+    grid-template-columns: minmax(180px, 1fr) minmax(150px, 1fr) 100px auto;
+  }
+
+  .v2-game-record-list time {
+    display: none;
+  }
+
   .model-parameter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6470,6 +6556,15 @@ a {
 }
 
 @media (max-width: 720px) {
+  .v2-game-record-list > li,
+  .v2-record-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-game-record-list > li {
+    align-items: start;
+  }
+
   .models-heading,
   .model-provider-heading,
   .model-form-actions {

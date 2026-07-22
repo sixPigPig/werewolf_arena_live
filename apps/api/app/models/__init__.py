@@ -30,6 +30,13 @@ from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.v2.models import (
+    V2GameRecord,
+    V2GameRecordEvent,
+    V2GameRun,
+    V2LivePresentation,
+    V2VoiceAsset,
+)
 
 __all__ = [
     "AdminSession",
@@ -61,4 +68,9 @@ __all__ = [
     "VoicePlaybackObservationRecord",
     "VoiceUtteranceRecord",
     "VirtualPlayerProfile",
+    "V2GameRecord",
+    "V2GameRecordEvent",
+    "V2GameRun",
+    "V2LivePresentation",
+    "V2VoiceAsset",
 ]

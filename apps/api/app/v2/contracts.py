@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+V2LiveState = Literal[
+    "ready",
+    "generating",
+    "broadcasting",
+    "finalizing",
+    "awaiting_observation",
+    "failed",
+]
+
+
+class V2ApiMetaResponse(BaseModel):
+    api_version: Literal["v2"] = "v2"
+    status: Literal["realtime_first_sentence"] = "realtime_first_sentence"
+
+
+class V2LobbyRoleSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(min_length=1, max_length=80)
+    count: int = Field(ge=1, le=24)
+    team: str | None = Field(default=None, max_length=40)
+    model_group: str | None = Field(default=None, max_length=40)
+    category: str | None = Field(default=None, max_length=40)
+
+
+class V2LobbyRuleSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=80)
+    version: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    player_count: int = Field(ge=1, le=24)
+    roles: list[V2LobbyRoleSnapshot] = Field(min_length=1, max_length=24)
+    night_actions: list[str] | None = Field(default=None, max_length=40)
+    day_actions: list[str] | None = Field(default=None, max_length=40)
+    win_condition: str | None = Field(default=None, max_length=500)
+    reveal_policy: str | None = Field(default=None, max_length=80)
+    complexity: str | None = Field(default=None, max_length=80)
+    estimated_duration: str | None = Field(default=None, max_length=80)
+    role_summary: str | None = Field(default=None, max_length=500)
+    sheriff_enabled: bool | None = None
+    sheriff_vote_weight: float | None = Field(default=None, ge=1, le=3)
+    speech_policy: str | None = Field(default=None, max_length=80)
+    speech_rounds: int | None = Field(default=None, ge=1, le=20)
+    rule_tags: list[str] | None = Field(default=None, max_length=20)
+    werewolf_self_explosion_enabled: bool | None = None
+    exile_last_words_enabled: bool | None = None
+    sheriff_badge_bomb_policy: str | None = Field(default=None, max_length=80)
+    revision_id: str | None = Field(default=None, max_length=80)
+    revision_no: int | None = Field(default=None, ge=1)
+    schema_version: int | None = Field(default=None, ge=1)
+    content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    is_default: bool | None = None
+
+
+class V2LobbyPlayerSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    seat: int = Field(ge=1, le=24)
+    profile_id: str = Field(min_length=1, max_length=80)
+    name: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=120)
+    personality_id: str | None = Field(default=None, max_length=80)
+    personality: str | None = Field(default=None, max_length=4000)
+    appearance_id: str | None = Field(default=None, max_length=80)
+    avatar_prompt: str | None = Field(default=None, max_length=1000)
+    avatar_image_url: str | None = Field(default=None, max_length=2000)
+    avatar_asset_id: str | None = Field(default=None, max_length=120)
+    catchphrases: list[str] | None = Field(default=None, max_length=20)
+    strategy_profile: str | None = Field(default=None, max_length=80)
+    tts_speaker: str | None = Field(default=None, max_length=160)
+    tts_dialect: str | None = Field(default=None, max_length=80)
+    base_delivery_mood: str | None = Field(default=None, max_length=80)
+    base_delivery_intensity: str | None = Field(default=None, max_length=80)
+    base_delivery_pace: str | None = Field(default=None, max_length=80)
+    base_delivery_instruction: str | None = Field(default=None, max_length=1000)
+    voice_enabled: bool | None = None
+    voice_config_version: int | None = Field(default=None, ge=1)
+    tags: list[str] | None = Field(default=None, max_length=20)
+
+
+class V2LobbyQualityViolation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=120)
+    severity: Literal["warning", "error"]
+    key: str = Field(min_length=1, max_length=120)
+    count: int = Field(ge=0)
+    limit: int = Field(ge=0)
+    seat_numbers: list[int] = Field(default_factory=list, max_length=24)
+
+
+class V2LobbyQualitySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    policy_mode: Literal["observe", "repair", "enforce"]
+    player_count: int = Field(ge=1, le=24)
+    configured_count: int = Field(ge=0, le=24)
+    is_blocked: bool
+    was_repaired: bool
+    style_bucket_count: int = Field(ge=0)
+    required_style_bucket_count: int = Field(ge=0)
+    violations: list[V2LobbyQualityViolation] = Field(default_factory=list, max_length=50)
+
+
+class V2LobbyCreateSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    rule_set: V2LobbyRuleSnapshot
+    rule_set_revision_id: str | None = Field(default=None, max_length=80)
+    seed: int | None = None
+    max_rounds: int = Field(ge=1, le=20)
+    player_configs: list[V2LobbyPlayerSnapshot] = Field(min_length=1, max_length=24)
+    lineup_quality_report: V2LobbyQualitySnapshot
+    allow_lineup_quality_warnings: bool = False
+
+    @model_validator(mode="after")
+    def validate_complete_lineup(self) -> "V2LobbyCreateSnapshot":
+        expected_seats = set(range(1, self.rule_set.player_count + 1))
+        seats = [item.seat for item in self.player_configs]
+        profile_ids = [item.profile_id for item in self.player_configs]
+        if set(seats) != expected_seats or len(seats) != len(set(seats)):
+            raise ValueError("player_configs must cover every rule seat exactly once")
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("player_configs must use unique profiles")
+        report = self.lineup_quality_report
+        if (
+            report.player_count != self.rule_set.player_count
+            or report.configured_count != len(self.player_configs)
+        ):
+            raise ValueError("lineup quality report does not match player snapshot")
+        if report.is_blocked and not self.allow_lineup_quality_warnings:
+            raise ValueError("blocked lineup requires explicit warning override")
+        return self
+
+
+class V2GameCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="Live V2 实时首句对局", min_length=1, max_length=120)
+    lobby_snapshot: V2LobbyCreateSnapshot | None = None
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title cannot be blank")
+        return normalized
+
+
+class V2ActorResponse(BaseModel):
+    kind: Literal["judge", "player"]
+    id: str
+
+
+class V2CurrentPresentationResponse(BaseModel):
+    action_id: str
+    presentation_seq: int = Field(ge=1)
+    presentation_id: str
+    phase_id: str
+    actor: V2ActorResponse
+    speech_id: str
+    segment_index: int = Field(ge=0)
+    subtitle_text: str
+    join_sample_cursor: int = Field(ge=0)
+
+
+class V2LiveSnapshotResponse(BaseModel):
+    protocol_version: Literal[1] = 1
+    type: Literal["live.snapshot"] = "live.snapshot"
+    api_version: Literal["v2"] = "v2"
+    audience: Literal["player_public", "spectator_god_view"]
+    game_id: str
+    run_id: str
+    live_state: V2LiveState
+    latest_presentation_seq: int = Field(ge=0)
+    server_time: datetime
+    current_presentation: V2CurrentPresentationResponse | None
+
+
+class V2GameCreateResponse(BaseModel):
+    game_id: str
+    run_id: str
+    status: str
+    snapshot_url: str
+    websocket_url: str
+
+
+class AdminV2GameListItem(BaseModel):
+    game_id: str
+    title: str
+    status: str
+    current_run_id: str
+    record_schema_version: int
+    last_record_seq: int
+    last_presentation_seq: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminV2Pagination(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class AdminV2GameListResponse(BaseModel):
+    items: list[AdminV2GameListItem]
+    pagination: AdminV2Pagination
+
+
+class AdminV2RunResponse(BaseModel):
+    run_id: str
+    attempt_no: int
+    status: str
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class AdminV2EventResponse(BaseModel):
+    event_id: int
+    record_seq: int
+    run_id: str
+    event_type: str
+    payload_schema_version: int
+    payload: dict[str, Any]
+    created_at: datetime
+
+
+class AdminV2PresentationResponse(BaseModel):
+    presentation_seq: int
+    presentation_id: str
+    action_id: str | None
+    phase_id: str
+    actor_kind: str
+    actor_id: str
+    speech_id: str
+    segment_index: int
+    source_event_id: int
+    state: str
+    subtitle_text: str
+    voice_asset_id: str | None
+    audio_duration_ms: int | None
+    created_at: datetime
+    closed_at: datetime | None
+
+
+class AdminV2VoiceAssetResponse(BaseModel):
+    voice_asset_id: str
+    action_id: str
+    presentation_id: str
+    speech_id: str
+    segment_index: int
+    state: str
+    mime_type: str
+    sample_rate: int
+    channels: int
+    sample_count: int | None
+    duration_ms: int | None
+    pcm_sha256: str | None
+    size_bytes: int | None
+    audio_url: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class AdminV2GameDetailResponse(AdminV2GameListItem):
+    rule_snapshot: dict[str, Any]
+    players_snapshot: list[dict[str, Any]]
+    runs: list[AdminV2RunResponse]
+    events: list[AdminV2EventResponse]
+    presentations: list[AdminV2PresentationResponse]
+    voice_assets: list[AdminV2VoiceAssetResponse]

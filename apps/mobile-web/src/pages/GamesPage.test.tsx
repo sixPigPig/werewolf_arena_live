@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 
 import type {
-  GameRun,
   LineupPreviewRequest,
   LineupPreviewResponse,
   PublicPlayerProfile,
@@ -24,13 +23,16 @@ import type {
 import { GamesPage } from "./GamesPage";
 
 const gameClientMocks = vi.hoisted(() => ({
-  createGameRun: vi.fn(),
   favoritePlayerProfile: vi.fn(),
   listPlayerProfileFavorites: vi.fn(),
   listPublicPlayerProfiles: vi.fn(),
   listRuleSets: vi.fn(),
   previewGameLineup: vi.fn(),
   unfavoritePlayerProfile: vi.fn(),
+}));
+
+const v2ApiMocks = vi.hoisted(() => ({
+  createV2Game: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -40,7 +42,6 @@ vi.mock("@werewolf-arena/game-client", async () => {
 
   return {
     ...actual,
-    createGameRun: gameClientMocks.createGameRun,
     favoritePlayerProfile: gameClientMocks.favoritePlayerProfile,
     listPlayerProfileFavorites: gameClientMocks.listPlayerProfileFavorites,
     listPublicPlayerProfiles: gameClientMocks.listPublicPlayerProfiles,
@@ -49,6 +50,10 @@ vi.mock("@werewolf-arena/game-client", async () => {
     unfavoritePlayerProfile: gameClientMocks.unfavoritePlayerProfile,
   };
 });
+
+vi.mock("../v2/api", () => ({
+  createV2Game: v2ApiMocks.createV2Game,
+}));
 
 const classicRuleSet: RuleSetSummary = {
   id: "classic_8",
@@ -107,22 +112,13 @@ function buildProfile(
   };
 }
 
-function buildRun(overrides: Partial<GameRun> = {}): GameRun {
+function buildV2Game() {
   return {
-    run_id: "run-123",
-    session_id: "session-123",
-    villager_model: "test-model",
-    werewolf_model: "test-model",
-    seed: null,
-    max_rounds: 8,
-    winner: null,
-    status: "queued",
-    created_at: "2026-06-19T00:00:00.000Z",
-    started_at: null,
-    completed_at: null,
-    error: null,
-    event_count: 0,
-    ...overrides,
+    game_id: "v2_game_0123456789abcdef",
+    run_id: "v2_run_0123456789abcdef",
+    status: "ready" as const,
+    snapshot_url: "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
+    websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
   };
 }
 
@@ -190,7 +186,7 @@ function renderGamesPage() {
   const router = createMemoryRouter(
     [
       { path: "/games", element: <GamesPage /> },
-      { path: "/games/:gameId/live", element: <div /> },
+      { path: "/v2/games/:gameId/live", element: <div /> },
     ],
     { initialEntries: ["/games"] },
   );
@@ -334,7 +330,7 @@ describe("GamesPage", () => {
     gameClientMocks.listPlayerProfileFavorites.mockResolvedValue({
       profile_ids: ["profile-1"],
     });
-    gameClientMocks.createGameRun.mockResolvedValue(buildRun());
+    v2ApiMocks.createV2Game.mockResolvedValue(buildV2Game());
     gameClientMocks.previewGameLineup.mockImplementation(
       (request: LineupPreviewRequest) => Promise.resolve(buildLineupPreview(request)),
     );
@@ -755,25 +751,31 @@ describe("GamesPage", () => {
     const readyLaunchButton = screen.getByRole("button", { name: "开始对局" });
     expect(readyLaunchButton).toBeEnabled();
     expect(readyLaunchButton).toHaveClass("mobile-lobby-launch-button");
-    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
 
     await user.click(readyLaunchButton);
 
     await waitFor(() => {
-      expect(gameClientMocks.createGameRun).toHaveBeenCalledWith({
-        rule_set_id: "classic_8",
-        seed: null,
-        max_rounds: 8,
-        lineup_quality_policy_version: 1,
-        allow_lineup_quality_warnings: false,
-        player_configs: [
-          { seat: 1, profile_id: expect.any(String) },
-          { seat: 2, profile_id: expect.any(String) },
-        ],
+      expect(v2ApiMocks.createV2Game).toHaveBeenCalledWith({
+        title: "经典 8 人",
+        lobby_snapshot: expect.objectContaining({
+          schema_version: 1,
+          rule_set: classicRuleSet,
+          rule_set_revision_id: null,
+          seed: null,
+          max_rounds: 8,
+          allow_lineup_quality_warnings: false,
+          player_configs: [
+            { seat: 1, profile_id: expect.any(String) },
+            { seat: 2, profile_id: expect.any(String) },
+          ],
+        }),
       });
     });
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/games/run-123/live");
+      expect(router.state.location.pathname).toBe(
+        "/v2/games/v2_game_0123456789abcdef/live",
+      );
     });
   });
 
@@ -816,7 +818,7 @@ describe("GamesPage", () => {
 
   it("disables lineup actions while game creation is pending", async () => {
     const user = userEvent.setup();
-    gameClientMocks.createGameRun.mockReturnValue(
+    v2ApiMocks.createV2Game.mockReturnValue(
       new Promise(() => undefined),
     );
     renderGamesPage();
@@ -885,7 +887,7 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "开始对局" }));
     const qualityPanel = await screen.findByRole("region", { name: "阵容质量" });
     expect(within(qualityPanel).getByText("阵容需要调整")).toBeVisible();
-    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
 
     await user.click(
       within(qualityPanel).getByRole("button", { name: "仍使用当前阵容" }),
@@ -893,8 +895,12 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     await waitFor(() =>
-      expect(gameClientMocks.createGameRun).toHaveBeenCalledWith(
-        expect.objectContaining({ allow_lineup_quality_warnings: true }),
+      expect(v2ApiMocks.createV2Game).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lobby_snapshot: expect.objectContaining({
+            allow_lineup_quality_warnings: true,
+          }),
+        }),
       ),
     );
   });
@@ -944,7 +950,7 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "选择 2 号座位，当前为 白石" }),
     ).toBeVisible();
-    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
@@ -961,7 +967,7 @@ describe("GamesPage", () => {
       await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
-    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
   });
 
   it("disables launch until empty seats are completed from the library", async () => {
@@ -1004,7 +1010,7 @@ describe("GamesPage", () => {
       await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
-    expect(gameClientMocks.createGameRun).not.toHaveBeenCalled();
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
   });
 
   it("opens the full-screen modal player picker from a selected seat", async () => {

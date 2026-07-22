@@ -24,6 +24,8 @@ import {
   RuleSetNewRoute,
   RuleSetDetailRoute,
   ModelsRoute,
+  V2GameRecordDetailRoute,
+  V2GameRecordsRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -45,6 +47,22 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdminPermission permission="overview.read">
                     <OverviewRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "v2/operations/games",
+                element: (
+                  <RequireAdminPermission permission="v2_games.read">
+                    <V2GameRecordsRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "v2/operations/games/:gameId",
+                element: (
+                  <RequireAdminPermission permission="v2_games.read">
+                    <V2GameRecordDetailRoute />
                   </RequireAdminPermission>
                 ),
               },

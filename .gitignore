@@ -32,6 +32,9 @@ apps/api/.venv/
 *.log
 apps/api/logs/
 
+# Live V2 runtime voice assets
+apps/api/data/live-v2/voices/
+
 # Local git worktrees
 .worktrees/
 
