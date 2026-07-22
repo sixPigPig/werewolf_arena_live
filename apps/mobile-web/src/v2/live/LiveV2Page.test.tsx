@@ -67,6 +67,15 @@ beforeEach(() => {
   copyToChannel.mockClear();
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("WebSocket", FakeWebSocket);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(snapshot("ready", null)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
 });
 
 afterEach(() => {
@@ -74,6 +83,18 @@ afterEach(() => {
 });
 
 describe("LiveV2Page", () => {
+  it("shows the immutable public seats before starting any realtime action", async () => {
+    renderPage();
+
+    expect(await screen.findByText("阿青")).toBeInTheDocument();
+    expect(screen.getByText("白石")).toBeInTheDocument();
+    expect(screen.getByText("1号")).toBeInTheDocument();
+    expect(screen.getByText("2号")).toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(sourceStart).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "进入实时直播" })).toBeInTheDocument();
+  });
+
   it("starts after a user gesture, plays live PCM, and stops after one sentence", async () => {
     renderPage();
 
@@ -184,6 +205,20 @@ function snapshot(
     audience: "player_public",
     live_state: liveState,
     latest_presentation_seq: presentation ? 1 : 0,
+    public_players: [
+      {
+        seat: 1,
+        player_id: "profile-1",
+        display_name: "阿青",
+        avatar_url: null,
+      },
+      {
+        seat: 2,
+        player_id: "profile-2",
+        display_name: "白石",
+        avatar_url: null,
+      },
+    ],
     current_presentation: presentation,
   };
 }

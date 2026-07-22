@@ -118,6 +118,13 @@ export type V2Presentation = {
   join_sample_cursor: number;
 };
 
+export type V2PublicPlayerSeat = {
+  seat: number;
+  player_id: string;
+  display_name: string;
+  avatar_url: string | null;
+};
+
 export type V2LiveSnapshot = {
   protocol_version: 1;
   type: "live.snapshot";
@@ -128,6 +135,7 @@ export type V2LiveSnapshot = {
   live_state: V2LiveState;
   latest_presentation_seq: number;
   server_time: string;
+  public_players: V2PublicPlayerSeat[];
   current_presentation: V2Presentation | null;
 };
 
@@ -231,6 +239,12 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
   };
 }
 
+export function parseV2LiveSnapshotResponse(value: unknown): V2LiveSnapshot {
+  const message = parseV2ServerMessage(JSON.stringify(value));
+  if (message.type !== "live.snapshot") throw invalid();
+  return message;
+}
+
 export function parseV2ServerMessage(raw: string): V2ServerMessage {
   const value = object(JSON.parse(raw));
   if (integer(value.protocol_version, 1) !== 1) throw invalid();
@@ -249,6 +263,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       audience: literal(value.audience, ["player_public", "spectator_god_view"]),
       live_state: liveState(value.live_state),
       latest_presentation_seq: integer(value.latest_presentation_seq, 0),
+      public_players: publicPlayerSeats(value.public_players),
       current_presentation:
         value.current_presentation === null ? null : presentation(value.current_presentation),
     };
@@ -376,6 +391,34 @@ function parseActor(value: unknown): V2Presentation["actor"] {
   };
 }
 
+function publicPlayerSeats(value: unknown): V2PublicPlayerSeat[] {
+  if (!Array.isArray(value) || value.length > 24) throw invalid();
+  const players = value.map((item) => {
+    const record = exactObject(item, [
+      "seat",
+      "player_id",
+      "display_name",
+      "avatar_url",
+    ]);
+    return {
+      seat: integer(record.seat, 1),
+      player_id: text(record.player_id),
+      display_name: text(record.display_name),
+      avatar_url: record.avatar_url === null ? null : text(record.avatar_url),
+    };
+  });
+  let previousSeat = 0;
+  const playerIds = new Set<string>();
+  for (const player of players) {
+    if (player.seat > 24 || player.seat <= previousSeat || playerIds.has(player.player_id)) {
+      throw invalid();
+    }
+    previousSeat = player.seat;
+    playerIds.add(player.player_id);
+  }
+  return players;
+}
+
 function liveState(value: unknown): V2LiveState {
   return literal(value, [
     "ready",
@@ -390,6 +433,12 @@ function liveState(value: unknown): V2LiveState {
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
   return value as Record<string, unknown>;
+}
+
+function exactObject(value: unknown, allowedKeys: readonly string[]): Record<string, unknown> {
+  const record = object(value);
+  if (Object.keys(record).some((key) => !allowedKeys.includes(key))) throw invalid();
+  return record;
 }
 
 function text(value: unknown): string {

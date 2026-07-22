@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { resolveV2WebSocketUrl } from "../api";
+import { fetchV2LiveSnapshot, resolveV2WebSocketUrl } from "../api";
 import {
   decodeV2AudioFrame,
   parseV2ServerMessage,
   type V2LiveState,
   type V2Presentation,
+  type V2PublicPlayerSeat,
 } from "../contracts";
 import { V2PcmPlayer } from "./V2PcmPlayer";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "failed";
+type RosterState = "loading" | "ready" | "failed";
 
 export function LiveV2Page() {
   const { gameId = "" } = useParams();
@@ -22,7 +24,28 @@ export function LiveV2Page() {
   const [liveState, setLiveState] = useState<V2LiveState | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [presentation, setPresentation] = useState<V2Presentation | null>(null);
+  const [publicPlayers, setPublicPlayers] = useState<V2PublicPlayerSeat[]>([]);
+  const [rosterState, setRosterState] = useState<RosterState>("loading");
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetchV2LiveSnapshot(gameId)
+      .then((snapshot) => {
+        if (!active) return;
+        setPublicPlayers(snapshot.public_players);
+        setRosterState("ready");
+      })
+      .catch((reason) => {
+        if (!active) return;
+        setRosterState("failed");
+        setRosterError(reason instanceof Error ? reason.message : "无法读取本局座位快照");
+      });
+    return () => {
+      active = false;
+    };
+  }, [gameId]);
 
   useEffect(() => {
     return () => {
@@ -58,6 +81,9 @@ export function LiveV2Page() {
             setRunId(message.run_id);
             if (message.type === "live.snapshot") {
               setLiveState(message.live_state);
+              setPublicPlayers(message.public_players);
+              setRosterState("ready");
+              setRosterError(null);
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
               if (message.current_presentation) player.begin(message.current_presentation);
@@ -177,6 +203,35 @@ export function LiveV2Page() {
         <h1>Live V2</h1>
         <small>{gameId}</small>
       </header>
+
+      <section className="mobile-live-v2-roster" aria-labelledby="v2-roster-heading">
+        <header>
+          <h2 id="v2-roster-heading">本局座位</h2>
+          <span>{rosterState === "ready" ? `${publicPlayers.length} 位玩家` : "读取中"}</span>
+        </header>
+        {rosterState === "loading" ? <p role="status">正在读取不可变玩家快照...</p> : null}
+        {rosterState === "failed" ? <p role="alert">{rosterError}</p> : null}
+        {rosterState === "ready" && publicPlayers.length === 0 ? (
+          <p>本对局没有大厅玩家快照。</p>
+        ) : null}
+        {publicPlayers.length > 0 ? (
+          <ol aria-label="本局玩家座位">
+            {publicPlayers.map((player) => (
+              <li key={player.player_id}>
+                <span className="mobile-live-v2-seat-number">{player.seat}号</span>
+                <span className="mobile-live-v2-seat-avatar" aria-hidden="true">
+                  {player.avatar_url ? (
+                    <img src={player.avatar_url} alt="" />
+                  ) : (
+                    player.display_name.slice(0, 1)
+                  )}
+                </span>
+                <strong>{player.display_name}</strong>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </section>
 
       {connectionState === "idle" ? (
         <section className="mobile-live-v2-stage">

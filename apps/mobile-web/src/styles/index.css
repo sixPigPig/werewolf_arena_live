@@ -271,6 +271,94 @@ textarea {
   font-size: 10px;
 }
 
+.mobile-live-v2-roster {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgb(245 212 139 / 18%);
+  border-radius: 12px;
+  background: rgb(13 17 21 / 92%);
+}
+
+.mobile-live-v2-roster > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-live-v2-roster h2,
+.mobile-live-v2-roster p {
+  margin: 0;
+}
+
+.mobile-live-v2-roster h2 {
+  color: #f5d48b;
+  font-size: 14px;
+}
+
+.mobile-live-v2-roster header span,
+.mobile-live-v2-roster p {
+  color: #8f9aa4;
+  font-size: 11px;
+}
+
+.mobile-live-v2-roster ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobile-live-v2-roster li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgb(245 212 139 / 12%);
+  border-radius: 9px;
+  background: rgb(244 232 210 / 3%);
+}
+
+.mobile-live-v2-seat-number {
+  color: #a99a83;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.mobile-live-v2-seat-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid rgb(245 212 139 / 28%);
+  border-radius: 50%;
+  background: #241d15;
+  color: #f5d48b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mobile-live-v2-seat-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mobile-live-v2-roster li strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f4ead8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mobile-live-v2-stage {
   display: grid;
   gap: 16px;

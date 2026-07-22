@@ -1,6 +1,6 @@
 # Live V2 单次实时动作与直播协议草案
 
-> 状态：已确认（2026-07-22）。只授权实现本文定义的第一句话垂直切片，不授权开发第二动作。
+> 状态：已确认（2026-07-22）。第一句话垂直切片已经通过；协议已追加公开玩家座位快照，但仍不授权开发第二动作。
 
 ## 1. 本步唯一目标
 
@@ -197,11 +197,21 @@ GET /api/v2/live/games/{game_id}/ws
   "server_time": "2026-07-22T12:00:00.000Z",
   "live_state": "ready",
   "latest_presentation_seq": 0,
+  "public_players": [
+    {
+      "seat": 1,
+      "player_id": "system-player-01",
+      "display_name": "沈砚",
+      "avatar_url": "/api/v1/public/player-profiles/system-player-01/avatar"
+    }
+  ],
   "current_presentation": null
 }
 ```
 
 若重连时正在播报，`current_presentation` 只包含当前展示、当前字幕和加入时的 `join_sample_cursor`，不包含已经发送的音频块。若播报已经结束，则必须为 `null`。
+
+`public_players` 是创建对局时玩家快照的公开、不可变投影，必须按 `seat` 升序排列。每项只能包含 `seat`、`player_id`、`display_name` 和 `avatar_url`；角色、模型、人格、策略、提示词、TTS 配置以及其他内部字段不得进入普通直播协议。Mobile 可以在用户点击进入实时直播前通过 REST snapshot 展示这些座位；读取座位本身不得创建 action、请求模型或解锁音频。
 
 ### 9.2 `client.ready`：客户端到服务端
 

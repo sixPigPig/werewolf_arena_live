@@ -162,7 +162,16 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
         assert game.rule_snapshot["seed"] == 42
         assert game.rule_snapshot["max_rounds"] == 8
         assert game.players_snapshot == [
-            {"seat": 1, "profile_id": "profile-1", "name": "阿青"},
+            {
+                "seat": 1,
+                "profile_id": "profile-1",
+                "name": "阿青",
+                "model": "private-model-id",
+                "personality": "private personality prompt",
+                "avatar_image_url": "/api/v1/public/player-profiles/profile-1/avatar",
+                "strategy_profile": "private-strategy",
+                "tts_speaker": "private-speaker",
+            },
             {"seat": 2, "profile_id": "profile-2", "name": "白石"},
         ]
         assert run is not None and run.status == "ready"
@@ -174,24 +183,50 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
             "rule_set_id": "classic_8",
             "player_count": 2,
         }
-        assert db.scalar(
-            select(func.count())
-            .select_from(V2LivePresentation)
-            .where(V2LivePresentation.game_id == created["game_id"])
-        ) == 0
-        assert db.scalar(
-            select(func.count())
-            .select_from(V2VoiceAsset)
-            .where(V2VoiceAsset.game_id == created["game_id"])
-        ) == 0
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2LivePresentation)
+                .where(V2LivePresentation.game_id == created["game_id"])
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2VoiceAsset)
+                .where(V2VoiceAsset.game_id == created["game_id"])
+            )
+            == 0
+        )
+
+    snapshot = client.get(created["snapshot_url"])
+    assert snapshot.status_code == 200
+    public_players = snapshot.json()["public_players"]
+    assert public_players == [
+        {
+            "seat": 1,
+            "player_id": "profile-1",
+            "display_name": "阿青",
+            "avatar_url": "/api/v1/public/player-profiles/profile-1/avatar",
+        },
+        {
+            "seat": 2,
+            "player_id": "profile-2",
+            "display_name": "白石",
+            "avatar_url": None,
+        },
+    ]
+    assert all(
+        set(player) == {"seat", "player_id", "display_name", "avatar_url"}
+        for player in public_players
+    )
 
 
 def test_v2_lobby_create_rejects_incomplete_or_duplicate_lineups(v2_context) -> None:
     client, _session_factory, _voice_root = v2_context
     incomplete = _lobby_create_request()
-    incomplete["lobby_snapshot"]["player_configs"] = [
-        {"seat": 1, "profile_id": "profile-1"}
-    ]
+    incomplete["lobby_snapshot"]["player_configs"] = [{"seat": 1, "profile_id": "profile-1"}]
     duplicate = _lobby_create_request()
     duplicate["lobby_snapshot"]["player_configs"][1]["profile_id"] = "profile-1"
 
@@ -211,6 +246,7 @@ def test_first_ready_viewer_receives_one_realtime_sentence_and_voice_is_saved(
     snapshot = client.get(identifiers["snapshot_url"])
     assert snapshot.status_code == 200
     assert snapshot.json()["live_state"] == "ready"
+    assert snapshot.json()["public_players"] == []
     assert snapshot.json()["current_presentation"] is None
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
@@ -380,7 +416,16 @@ def _lobby_create_request() -> dict[str, Any]:
             "seed": 42,
             "max_rounds": 8,
             "player_configs": [
-                {"seat": 1, "profile_id": "profile-1", "name": "阿青"},
+                {
+                    "seat": 1,
+                    "profile_id": "profile-1",
+                    "name": "阿青",
+                    "model": "private-model-id",
+                    "personality": "private personality prompt",
+                    "avatar_image_url": "/api/v1/public/player-profiles/profile-1/avatar",
+                    "strategy_profile": "private-strategy",
+                    "tts_speaker": "private-speaker",
+                },
                 {"seat": 2, "profile_id": "profile-2", "name": "白石"},
             ],
             "lineup_quality_report": {

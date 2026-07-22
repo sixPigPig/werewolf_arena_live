@@ -18,6 +18,7 @@ from app.v2.contracts import (
     V2LiveSnapshotResponse,
 )
 from app.v2.model_client import V2ModelClient
+from app.v2.public_projection import project_public_player_seats
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
 from app.v2.service import current_presentation, get_game, server_now
 from app.v2.tts_client import V2TtsClient
@@ -194,6 +195,7 @@ class V2LiveRuntime:
                 live_state=_live_state(game.status),
                 latest_presentation_seq=game.last_presentation_seq,
                 server_time=server_now(),
+                public_players=project_public_player_seats(game.players_snapshot),
                 current_presentation=current,
             )
             return response.model_dump(mode="json")

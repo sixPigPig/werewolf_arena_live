@@ -10,6 +10,7 @@ import pytest
 
 from app.v2.model_client import V2ModelError, V2QualityError, _accepted_sentence, _sse_data
 from app.v2.protocol import V2LiveProtocolError, audio_frame
+from app.v2.public_projection import V2PublicProjectionError, project_public_player_seats
 from app.v2.repository import V2PresentationIdentity
 from app.v2.tts_client import (
     _AUDIO_SERVER,
@@ -40,7 +41,9 @@ def _identity() -> V2PresentationIdentity:
 
 def test_sentence_gate_accepts_only_the_first_complete_public_sentence() -> None:
     assert _accepted_sentence("欢迎来到这场实时") is None
-    assert _accepted_sentence("欢迎来到这场实时狼人杀对局。后续文字") == "欢迎来到这场实时狼人杀对局。"
+    assert (
+        _accepted_sentence("欢迎来到这场实时狼人杀对局。后续文字") == "欢迎来到这场实时狼人杀对局。"
+    )
     with pytest.raises(V2QualityError, match="model_sentence_quoted"):
         _accepted_sentence("“欢迎来到这场实时狼人杀对局。”")
     with pytest.raises(V2QualityError, match="model_sentence_forbidden_format"):
@@ -56,6 +59,55 @@ def test_sse_parser_rejects_malformed_provider_events() -> None:
     }
     with pytest.raises(V2ModelError, match="model_invalid_sse"):
         _sse_data("data: {")
+
+
+def test_public_player_projection_is_ordered_and_fail_closed() -> None:
+    projected = project_public_player_seats(
+        [
+            {
+                "seat": 2,
+                "profile_id": "profile-2",
+                "name": "",
+                "model": "must-not-leak",
+            },
+            {
+                "seat": 1,
+                "profile_id": "profile-1",
+                "name": "阿青",
+                "avatar_image_url": "/avatar/profile-1",
+                "personality": "must-not-leak",
+            },
+        ]
+    )
+
+    assert [item.model_dump(mode="json") for item in projected] == [
+        {
+            "seat": 1,
+            "player_id": "profile-1",
+            "display_name": "阿青",
+            "avatar_url": "/avatar/profile-1",
+        },
+        {
+            "seat": 2,
+            "player_id": "profile-2",
+            "display_name": "2号玩家",
+            "avatar_url": None,
+        },
+    ]
+    with pytest.raises(V2PublicProjectionError, match="duplicate player seat"):
+        project_public_player_seats(
+            [
+                {"seat": 1, "profile_id": "profile-1"},
+                {"seat": 1, "profile_id": "profile-2"},
+            ]
+        )
+    with pytest.raises(V2PublicProjectionError, match="duplicate public player id"):
+        project_public_player_seats(
+            [
+                {"seat": 1, "profile_id": "profile-1"},
+                {"seat": 2, "profile_id": "profile-1"},
+            ]
+        )
 
 
 def test_live_audio_frame_binds_pcm_to_one_presentation() -> None:

@@ -40,6 +40,7 @@ from app.v2.contracts import (
     V2LiveSnapshotResponse,
 )
 from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
+from app.v2.public_projection import project_public_player_seats
 from app.v2.service import (
     V2RecordNotFound,
     V2VoiceAssetUnavailable,
@@ -131,6 +132,7 @@ def read_live_snapshot(
         live_state=_live_state(game.status),
         latest_presentation_seq=game.last_presentation_seq,
         server_time=server_now(),
+        public_players=project_public_player_seats(game.players_snapshot),
         current_presentation=(
             V2CurrentPresentationResponse(
                 action_id=presentation.action_id,
@@ -234,7 +236,9 @@ def read_admin_v2_game(
         rule_snapshot=game.rule_snapshot,
         players_snapshot=game.players_snapshot,
         runs=[AdminV2RunResponse.model_validate(run, from_attributes=True) for run in runs],
-        events=[AdminV2EventResponse.model_validate(event, from_attributes=True) for event in events],
+        events=[
+            AdminV2EventResponse.model_validate(event, from_attributes=True) for event in events
+        ],
         presentations=[
             AdminV2PresentationResponse.model_validate(item, from_attributes=True)
             for item in presentations
@@ -281,8 +285,7 @@ def _admin_voice_asset(asset: object) -> AdminV2VoiceAssetResponse:
     return value.model_copy(
         update={
             "audio_url": (
-                f"/api/v1/admin/v2/games/{asset.game_id}/voice-assets/"
-                f"{asset.voice_asset_id}/audio"
+                f"/api/v1/admin/v2/games/{asset.game_id}/voice-assets/{asset.voice_asset_id}/audio"
             )
         }
     )
@@ -300,7 +303,9 @@ def _valid_game_id(game_id: str) -> bool:
     return all(character in "0123456789abcdef" for character in game_id[8:])
 
 
-def _live_state(status: str) -> Literal[
+def _live_state(
+    status: str,
+) -> Literal[
     "ready",
     "generating",
     "broadcasting",

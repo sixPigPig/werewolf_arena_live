@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createV2Game } from "./api";
+import { createV2Game, fetchV2LiveSnapshot } from "./api";
 
 
 afterEach(() => {
@@ -117,6 +117,87 @@ describe("createV2Game", () => {
           allow_lineup_quality_warnings: false,
         },
       }),
+    ).rejects.toThrow("V2 实时直播协议无效");
+  });
+});
+
+describe("fetchV2LiveSnapshot", () => {
+  it("loads the ordered public seat projection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          type: "live.snapshot",
+          api_version: "v2",
+          audience: "player_public",
+          game_id: "v2_game_0123456789abcdef",
+          run_id: "v2_run_0123456789abcdef",
+          live_state: "ready",
+          latest_presentation_seq: 0,
+          server_time: "2026-07-22T12:00:00Z",
+          public_players: [
+            {
+              seat: 1,
+              player_id: "profile-1",
+              display_name: "阿青",
+              avatar_url: null,
+            },
+          ],
+          current_presentation: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = await fetchV2LiveSnapshot("v2_game_0123456789abcdef");
+
+    expect(snapshot.public_players).toEqual([
+      {
+        seat: 1,
+        player_id: "profile-1",
+        display_name: "阿青",
+        avatar_url: null,
+      },
+    ]);
+    expect(new URL(String(fetchMock.mock.calls[0][0])).pathname).toBe(
+      "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
+    );
+  });
+
+  it("rejects private player fields in a public seat", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            protocol_version: 1,
+            type: "live.snapshot",
+            api_version: "v2",
+            audience: "player_public",
+            game_id: "v2_game_0123456789abcdef",
+            run_id: "v2_run_0123456789abcdef",
+            live_state: "ready",
+            latest_presentation_seq: 0,
+            server_time: "2026-07-22T12:00:00Z",
+            public_players: [
+              {
+                seat: 1,
+                player_id: "profile-1",
+                display_name: "阿青",
+                avatar_url: null,
+                role: "werewolf",
+              },
+            ],
+            current_presentation: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      fetchV2LiveSnapshot("v2_game_0123456789abcdef"),
     ).rejects.toThrow("V2 实时直播协议无效");
   });
 });

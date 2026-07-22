@@ -135,9 +135,8 @@ class V2LobbyCreateSnapshot(BaseModel):
         if len(profile_ids) != len(set(profile_ids)):
             raise ValueError("player_configs must use unique profiles")
         report = self.lineup_quality_report
-        if (
-            report.player_count != self.rule_set.player_count
-            or report.configured_count != len(self.player_configs)
+        if report.player_count != self.rule_set.player_count or report.configured_count != len(
+            self.player_configs
         ):
             raise ValueError("lineup quality report does not match player snapshot")
         if report.is_blocked and not self.allow_lineup_quality_warnings:
@@ -177,6 +176,15 @@ class V2CurrentPresentationResponse(BaseModel):
     join_sample_cursor: int = Field(ge=0)
 
 
+class V2PublicPlayerSeatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    seat: int = Field(ge=1, le=24)
+    player_id: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=80)
+    avatar_url: str | None = Field(default=None, max_length=2000)
+
+
 class V2LiveSnapshotResponse(BaseModel):
     protocol_version: Literal[1] = 1
     type: Literal["live.snapshot"] = "live.snapshot"
@@ -187,6 +195,7 @@ class V2LiveSnapshotResponse(BaseModel):
     live_state: V2LiveState
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
+    public_players: list[V2PublicPlayerSeatResponse] = Field(max_length=24)
     current_presentation: V2CurrentPresentationResponse | None
 
 
