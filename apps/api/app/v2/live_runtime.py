@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import WebSocket
@@ -15,12 +15,29 @@ from app.v2.action_engine import V2ActionEngine, V2ModelPort, V2TtsPort
 from app.v2.contracts import (
     V2ActorResponse,
     V2CurrentPresentationResponse,
+    V2GamePhaseResponse,
+    V2GodViewLiveSnapshotResponse,
     V2LiveSnapshotResponse,
 )
+from app.v2.god_view_projection import project_god_view_player_identities
+from app.v2.first_night_engine import V2FirstNightEngine
+from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
-from app.v2.public_projection import project_public_player_seats
+from app.v2.night_repository import V2NightRepository
+from app.v2.public_projection import (
+    project_public_player_seats,
+    project_public_role_assignment_status,
+    project_public_rule_snapshot,
+)
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
-from app.v2.service import current_presentation, get_game, server_now
+from app.v2.service import (
+    current_presentation,
+    get_game,
+    god_view_role_assignments,
+    player_state_map,
+    role_assignment_count,
+    server_now,
+)
 from app.v2.tts_client import V2TtsClient
 
 
@@ -28,9 +45,23 @@ class V2ClientProtocolError(RuntimeError):
     pass
 
 
+V2Audience = Literal["player_public", "spectator_god_view"]
+
+
+def _audience_targets(value: str) -> tuple[V2Audience, ...]:
+    if value == "all":
+        return ("player_public", "spectator_god_view")
+    if value == "public":
+        return ("player_public",)
+    if value == "god_view":
+        return ("spectator_god_view",)
+    raise V2ClientProtocolError("invalid_server_audience")
+
+
 @dataclass
 class _Subscriber:
     websocket: WebSocket
+    audience: V2Audience
     ready: bool = False
 
 
@@ -40,7 +71,7 @@ class _GameChannel:
         *,
         game_id: str,
         snapshot_factory: Any,
-        engine: V2ActionEngine,
+        engine: V2LiveFlowEngine,
     ) -> None:
         self.game_id = game_id
         self._snapshot_factory = snapshot_factory
@@ -48,31 +79,37 @@ class _GameChannel:
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, _Subscriber] = {}
         self._task: asyncio.Task[None] | None = None
-        self._current_identity: V2PresentationIdentity | None = None
-        self._sample_cursor = 0
+        self._current_identity: dict[V2Audience, V2PresentationIdentity | None] = {
+            "player_public": None,
+            "spectator_god_view": None,
+        }
+        self._sample_cursor: dict[V2Audience, int] = {
+            "player_public": 0,
+            "spectator_god_view": 0,
+        }
 
-    async def connect(self, websocket: WebSocket) -> str:
+    async def connect(self, websocket: WebSocket, *, audience: V2Audience) -> str:
         subscriber_id = f"v2_conn_{uuid4().hex[:16]}"
         async with self._lock:
-            subscriber = _Subscriber(websocket=websocket)
+            subscriber = _Subscriber(websocket=websocket, audience=audience)
             self._subscribers[subscriber_id] = subscriber
-            await websocket.send_json(self._snapshot())
+            await websocket.send_json(self._snapshot(audience))
         return subscriber_id
 
     async def ready(self, subscriber_id: str, message: dict[str, Any]) -> None:
-        _validate_ready(message)
         async with self._lock:
             subscriber = self._subscribers.get(subscriber_id)
             if subscriber is None:
                 raise V2ClientProtocolError("unknown_connection")
+            _validate_ready(message, audience=subscriber.audience)
             if subscriber.ready:
                 return
-            await subscriber.websocket.send_json(self._snapshot())
+            await subscriber.websocket.send_json(self._snapshot(subscriber.audience))
             subscriber.ready = True
-            snapshot = self._snapshot()
+            snapshot = self._snapshot(subscriber.audience)
             if snapshot["live_state"] == "ready" and self._task is None:
                 self._task = asyncio.create_task(
-                    self._engine.run_first_judge_sentence(
+                    self._engine.run(
                         game_id=self.game_id,
                         broadcaster=self,
                     )
@@ -83,26 +120,34 @@ class _GameChannel:
         async with self._lock:
             self._subscribers.pop(subscriber_id, None)
 
-    async def broadcast_json(self, value: dict[str, Any]) -> None:
-        await self._broadcast(value, binary=False)
+    async def broadcast_json(
+        self,
+        value: dict[str, Any],
+        *,
+        audience: str = "all",
+    ) -> None:
+        await self._broadcast(value, binary=False, audience=audience)
 
-    async def broadcast_bytes(self, value: bytes) -> None:
-        await self._broadcast(value, binary=True)
+    async def broadcast_bytes(self, value: bytes, *, audience: str = "all") -> None:
+        await self._broadcast(value, binary=True, audience=audience)
 
     async def set_current(
         self,
         identity: V2PresentationIdentity | None,
         sample_cursor: int,
+        *,
+        audience: str = "all",
     ) -> None:
         async with self._lock:
-            self._current_identity = identity
-            self._sample_cursor = sample_cursor
+            for target in _audience_targets(audience):
+                self._current_identity[target] = identity
+                self._sample_cursor[target] = sample_cursor
 
-    async def _broadcast(self, value: Any, *, binary: bool) -> None:
+    async def _broadcast(self, value: Any, *, binary: bool, audience: str) -> None:
         async with self._lock:
             failed: list[str] = []
             for subscriber_id, subscriber in self._subscribers.items():
-                if not subscriber.ready:
+                if not subscriber.ready or subscriber.audience not in _audience_targets(audience):
                     continue
                 try:
                     if binary:
@@ -114,10 +159,11 @@ class _GameChannel:
             for subscriber_id in failed:
                 self._subscribers.pop(subscriber_id, None)
 
-    def _snapshot(self) -> dict[str, Any]:
+    def _snapshot(self, audience: V2Audience) -> dict[str, Any]:
         return self._snapshot_factory(
             game_id=self.game_id,
-            sample_cursor=self._sample_cursor,
+            sample_cursor=self._sample_cursor[audience],
+            audience=audience,
         )
 
     def _task_done(self, task: asyncio.Task[None]) -> None:
@@ -137,19 +183,36 @@ class V2LiveRuntime:
     ) -> None:
         self._session_factory = session_factory
         self._repository = V2ActionRepository(session_factory)
-        self._engine = V2ActionEngine(
+        self._night_repository = V2NightRepository(session_factory)
+        self._action_engine = V2ActionEngine(
             repository=self._repository,
             model_client=model_client,
             tts_client=tts_client,
             voice_root=voice_root,
             sample_rate=sample_rate,
         )
+        self._first_night_engine = V2FirstNightEngine(
+            repository=self._night_repository,
+            action_engine=self._action_engine,
+        )
+        self._engine = V2LiveFlowEngine(
+            action_repository=self._repository,
+            night_repository=self._night_repository,
+            action_engine=self._action_engine,
+            first_night_engine=self._first_night_engine,
+        )
         self._channels: dict[str, _GameChannel] = {}
         self._channels_lock = asyncio.Lock()
 
-    async def connect(self, *, game_id: str, websocket: WebSocket) -> tuple[str, _GameChannel]:
+    async def connect(
+        self,
+        *,
+        game_id: str,
+        websocket: WebSocket,
+        audience: V2Audience = "player_public",
+    ) -> tuple[str, _GameChannel]:
         channel = await self._channel(game_id)
-        return await channel.connect(websocket), channel
+        return await channel.connect(websocket, audience=audience), channel
 
     async def ready(
         self,
@@ -168,10 +231,17 @@ class V2LiveRuntime:
     ) -> None:
         await channel.disconnect(subscriber_id)
 
-    def snapshot(self, *, game_id: str, sample_cursor: int = 0) -> dict[str, Any]:
+    def snapshot(
+        self,
+        *,
+        game_id: str,
+        sample_cursor: int = 0,
+        audience: V2Audience = "player_public",
+    ) -> dict[str, Any]:
         with self._session_factory() as db:
             game = get_game(db, game_id)
-            presentation = current_presentation(db, game_id)
+            presentation = current_presentation(db, game_id, audience=audience)
+            states = player_state_map(db, game_id)
             current = None
             if presentation is not None and presentation.action_id is not None:
                 current = V2CurrentPresentationResponse(
@@ -188,23 +258,48 @@ class V2LiveRuntime:
                     subtitle_text=presentation.subtitle_text,
                     join_sample_cursor=sample_cursor,
                 )
-            response = V2LiveSnapshotResponse(
-                audience="player_public",
-                game_id=game.game_id,
-                run_id=game.current_run_id,
-                live_state=_live_state(game.status),
-                latest_presentation_seq=game.last_presentation_seq,
-                server_time=server_now(),
-                public_players=project_public_player_seats(game.players_snapshot),
-                current_presentation=current,
-            )
+            if audience == "spectator_god_view":
+                response = V2GodViewLiveSnapshotResponse(
+                    game_id=game.game_id,
+                    run_id=game.current_run_id,
+                    live_state=_live_state(game.status),
+                    game_phase=_game_phase(game),
+                    latest_presentation_seq=game.last_presentation_seq,
+                    server_time=server_now(),
+                    rule=project_public_rule_snapshot(game.rule_snapshot),
+                    players=project_god_view_player_identities(
+                        players_snapshot=game.players_snapshot,
+                        assignments=god_view_role_assignments(db, game.game_id),
+                        player_states=states,
+                    ),
+                    current_presentation=current,
+                )
+            else:
+                response = V2LiveSnapshotResponse(
+                    audience="player_public",
+                    game_id=game.game_id,
+                    run_id=game.current_run_id,
+                    live_state=_live_state(game.status),
+                    game_phase=_game_phase(game),
+                    latest_presentation_seq=game.last_presentation_seq,
+                    server_time=server_now(),
+                    public_rule=project_public_rule_snapshot(game.rule_snapshot),
+                    public_players=project_public_player_seats(
+                        game.players_snapshot,
+                        player_states=states,
+                    ),
+                    public_role_assignment=project_public_role_assignment_status(
+                        role_assignment_count(db, game.game_id)
+                    ),
+                    current_presentation=current,
+                )
             return response.model_dump(mode="json")
 
     async def _channel(self, game_id: str) -> _GameChannel:
         async with self._channels_lock:
             channel = self._channels.get(game_id)
             if channel is None:
-                self.snapshot(game_id=game_id)
+                self.snapshot(game_id=game_id, audience="player_public")
                 channel = _GameChannel(
                     game_id=game_id,
                     snapshot_factory=self.snapshot,
@@ -239,8 +334,9 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
     )
 
 
-def _validate_ready(message: dict[str, Any]) -> None:
-    if message.get("protocol_version") != 1 or message.get("type") != "client.ready":
+def _validate_ready(message: dict[str, Any], *, audience: V2Audience) -> None:
+    expected_type = "god_view.ready" if audience == "spectator_god_view" else "client.ready"
+    if message.get("protocol_version") != 1 or message.get("type") != expected_type:
         raise V2ClientProtocolError("invalid_ready_message")
     audio = message.get("audio")
     if not isinstance(audio, dict):
@@ -261,3 +357,11 @@ def _live_state(status: str) -> str:
     }:
         return status
     return "failed"
+
+
+def _game_phase(game: Any) -> V2GamePhaseResponse:
+    return V2GamePhaseResponse(
+        phase_seq=game.phase_seq,
+        phase_id=game.phase_id,
+        phase_state=game.phase_state,
+    )

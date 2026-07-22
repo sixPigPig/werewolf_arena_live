@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 import time
 from typing import Any, Protocol
 from uuid import uuid4
 
-from app.v2.model_client import V2ModelError, V2ModelSpeech, V2QualityError
+from app.v2.model_client import (
+    V2ModelDecision,
+    V2ModelError,
+    V2ModelSpeech,
+    V2QualityError,
+)
 from app.v2.protocol import (
     V2LiveProtocolError,
     audio_frame,
     live_state,
+    game_phase_changed,
     presentation_closed,
     presentation_failed,
     presentation_opened,
@@ -31,12 +38,21 @@ logger = logging.getLogger(__name__)
 
 
 class V2ModelPort(Protocol):
-    async def generate_first_sentence(
+    async def generate_judge_sentence(
         self,
         *,
         action_context: dict[str, Any],
         attempt_id: str,
+        model_id: str | None = None,
     ) -> V2ModelSpeech: ...
+
+    async def generate_action_decision(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        model_id: str | None = None,
+    ) -> V2ModelDecision: ...
 
 
 class V2TtsPort(Protocol):
@@ -45,19 +61,52 @@ class V2TtsPort(Protocol):
         *,
         text: str,
         attempt_id: str,
+        speaker: str | None = None,
     ) -> AsyncIterator[bytes]: ...
 
 
 class V2BroadcastPort(Protocol):
-    async def broadcast_json(self, value: dict[str, Any]) -> None: ...
+    async def broadcast_json(
+        self,
+        value: dict[str, Any],
+        *,
+        audience: str = "all",
+    ) -> None: ...
 
-    async def broadcast_bytes(self, value: bytes) -> None: ...
+    async def broadcast_bytes(self, value: bytes, *, audience: str = "all") -> None: ...
 
     async def set_current(
         self,
         identity: V2PresentationIdentity | None,
         sample_cursor: int,
+        *,
+        audience: str = "all",
     ) -> None: ...
+
+
+@dataclass(frozen=True)
+class V2SpeechSpec:
+    action_type: str
+    phase_id: str
+    required_phase_state: str
+    objective: str
+    success_live_state: str
+    success_phase_state: str
+    actor_kind: str = "judge"
+    actor_id: str = "judge"
+    audience: str = "all"
+    speaker: str | None = None
+    model_id: str | None = None
+    activation_id: str | None = None
+    output_kind: str = "public_speech"
+    context: dict[str, Any] | None = None
+    allowed_target_ids: tuple[str, ...] | None = None
+    target_optional: bool = False
+
+
+@dataclass(frozen=True)
+class V2ActionResult:
+    decision: V2ModelDecision | None = None
 
 
 class V2ActionEngine:
@@ -76,21 +125,121 @@ class V2ActionEngine:
         self._voice_root = voice_root
         self._sample_rate = sample_rate
 
-    async def run_first_judge_sentence(
+    async def run_opening_to_nightfall(
         self,
         *,
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> None:
+        opening_completed = await self._run_judge_sentence(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=_OPENING_SPEECH,
+        )
+        if not opening_completed:
+            return
+        try:
+            transition = self._repository.transition_to_first_night(game_id=game_id)
+        except Exception as exc:
+            failure_kind, failure_code = _failure(exc)
+            logger.warning(
+                "Live V2 phase transition failed",
+                extra={
+                    "game_id": game_id,
+                    "failure_kind": failure_kind,
+                    "failure_code": failure_code,
+                },
+            )
+            try:
+                failed_run_id = self._repository.fail_phase_transition(
+                    game_id=game_id,
+                    failure_kind=failure_kind,
+                    failure_code=failure_code,
+                )
+            except Exception:
+                logger.exception("Live V2 could not persist phase transition failure")
+                return
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=game_id,
+                    run_id=failed_run_id,
+                    state="failed",
+                    reason=failure_code,
+                )
+            )
+            return
+        await broadcaster.broadcast_json(game_phase_changed(transition))
+        await self._run_judge_sentence(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=_NIGHTFALL_ANNOUNCEMENT,
+        )
+
+    async def run_judge_speech(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+    ) -> bool:
+        return (
+            await self._run_model_action(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+                decision=False,
+            )
+            is not None
+        )
+
+    async def run_player_decision(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+    ) -> V2ModelDecision | None:
+        result = await self._run_model_action(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=spec,
+            decision=True,
+        )
+        return result.decision if result is not None else None
+
+    async def _run_judge_sentence(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+    ) -> bool:
+        return await self.run_judge_speech(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=spec,
+        )
+
+    async def _run_model_action(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+        decision: bool,
+    ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
-        context = _action_context(game_id=game_id, action_id=action_id)
+        context = _action_context(game_id=game_id, action_id=action_id, spec=spec)
         claim = self._repository.claim_action(
             game_id=game_id,
             action_id=action_id,
             context=context,
+            expected_phase_id=spec.phase_id,
+            expected_phase_state=spec.required_phase_state,
+            activation_id=spec.activation_id,
         )
         if claim is None:
-            return
+            return None
         context["run_id"] = claim.run_id
         identity: V2PresentationIdentity | None = None
         recorder: V2VoiceRecorder | None = None
@@ -100,7 +249,8 @@ class V2ActionEngine:
                     game_id=claim.game_id,
                     run_id=claim.run_id,
                     state="generating",
-                )
+                ),
+                audience=spec.audience,
             )
             model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
             self._repository.append_event(
@@ -111,18 +261,42 @@ class V2ActionEngine:
                     "attempt_id": model_attempt_id,
                 },
             )
-            speech = await self._model_client.generate_first_sentence(
-                action_context=context,
-                attempt_id=model_attempt_id,
-            )
+            model_decision: V2ModelDecision | None = None
+            if decision:
+                model_decision = await self._model_client.generate_action_decision(
+                    action_context=context,
+                    attempt_id=model_attempt_id,
+                    model_id=spec.model_id,
+                )
+                speech_text = model_decision.speech
+                provider_request_id = model_decision.provider_request_id
+                first_token_ms = model_decision.first_token_ms
+                sentence_ms = model_decision.completed_ms
+                if spec.allowed_target_ids is None:
+                    raise V2RepositoryError("decision action has no target policy")
+                if model_decision.target_player_id is None:
+                    if not spec.target_optional:
+                        raise V2QualityError("model_decision_target_required")
+                elif model_decision.target_player_id not in spec.allowed_target_ids:
+                    raise V2QualityError("model_decision_target_not_allowed")
+            else:
+                speech = await self._model_client.generate_judge_sentence(
+                    action_context=context,
+                    attempt_id=model_attempt_id,
+                    model_id=spec.model_id,
+                )
+                speech_text = speech.text
+                provider_request_id = speech.provider_request_id
+                first_token_ms = speech.first_token_ms
+                sentence_ms = speech.sentence_ms
             self._repository.append_event(
                 game_id=claim.game_id,
                 event_type="model_first_token_received",
                 payload={
                     "action_id": claim.action_id,
                     "attempt_id": model_attempt_id,
-                    "provider_request_id": speech.provider_request_id,
-                    "first_token_ms": speech.first_token_ms,
+                    "provider_request_id": provider_request_id,
+                    "first_token_ms": first_token_ms,
                 },
             )
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
@@ -133,18 +307,26 @@ class V2ActionEngine:
                 presentation_id=presentation_id,
                 speech_id=speech_id,
                 voice_asset_id=voice_asset_id,
-                subtitle_text=speech.text,
+                subtitle_text=speech_text,
                 sample_rate=self._sample_rate,
+                actor_kind=spec.actor_kind,
+                actor_id=spec.actor_id,
+                audience=spec.audience,
             )
-            await broadcaster.set_current(identity, 0)
-            await broadcaster.broadcast_json(presentation_opened(identity))
-            await broadcaster.broadcast_json(segment_committed(identity))
+            await broadcaster.set_current(identity, 0, audience=spec.audience)
+            await broadcaster.broadcast_json(
+                presentation_opened(identity), audience=spec.audience
+            )
+            await broadcaster.broadcast_json(
+                segment_committed(identity), audience=spec.audience
+            )
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,
                     run_id=claim.run_id,
                     state="broadcasting",
-                )
+                ),
+                audience=spec.audience,
             )
             tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
             self._repository.append_event(
@@ -153,7 +335,7 @@ class V2ActionEngine:
                 payload={
                     "action_id": claim.action_id,
                     "attempt_id": tts_attempt_id,
-                    "sentence_ms": speech.sentence_ms,
+                    "sentence_ms": sentence_ms,
                 },
             )
             recorder = V2VoiceRecorder(
@@ -167,8 +349,9 @@ class V2ActionEngine:
             chunk_index = 0
             first_chunk = True
             async for pcm in self._tts_client.synthesize(
-                text=speech.text,
+                text=speech_text,
                 attempt_id=tts_attempt_id,
+                speaker=spec.speaker,
             ):
                 sample_count = recorder.append(pcm)
                 if first_chunk:
@@ -197,12 +380,16 @@ class V2ActionEngine:
                     sample_rate=self._sample_rate,
                     pcm=pcm,
                 )
-                await broadcaster.broadcast_bytes(packet)
+                await broadcaster.broadcast_bytes(packet, audience=spec.audience)
                 now = time.monotonic()
                 duration = sample_count / self._sample_rate
                 official_end = max(official_end or now, now) + duration
                 sample_cursor += sample_count
-                await broadcaster.set_current(identity, sample_cursor)
+                await broadcaster.set_current(
+                    identity,
+                    sample_cursor,
+                    audience=spec.audience,
+                )
                 chunk_index += 1
             if first_chunk or official_end is None:
                 raise V2TtsError("tts_empty_audio")
@@ -216,7 +403,8 @@ class V2ActionEngine:
                     game_id=claim.game_id,
                     run_id=claim.run_id,
                     state="finalizing",
-                )
+                ),
+                audience=spec.audience,
             )
             recorded = recorder.finalize()
             recorder = None
@@ -236,31 +424,42 @@ class V2ActionEngine:
                 identity=identity,
                 final_chunk_index=chunk_index - 1,
                 final_sample_cursor=sample_cursor,
+                next_live_state=spec.success_live_state,
+                next_phase_state=spec.success_phase_state,
             )
             await broadcaster.broadcast_json(
                 presentation_closed(
                     identity,
                     final_chunk_index=chunk_index - 1,
                     final_sample_cursor=sample_cursor,
-                )
+                ),
+                audience=spec.audience,
             )
-            await broadcaster.set_current(None, sample_cursor)
-            await broadcaster.broadcast_json(
-                live_state(
-                    game_id=claim.game_id,
-                    run_id=claim.run_id,
-                    state="awaiting_observation",
-                )
+            await broadcaster.set_current(
+                None,
+                sample_cursor,
+                audience=spec.audience,
             )
+            if spec.success_live_state == "awaiting_observation":
+                await broadcaster.broadcast_json(
+                    live_state(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        state="awaiting_observation",
+                    ),
+                    audience=spec.audience,
+                )
+            return V2ActionResult(decision=model_decision)
         except Exception as exc:
             if recorder is not None:
                 recorder.abort()
             failure_kind, failure_code = _failure(exc)
             logger.warning(
-                "Live V2 first sentence failed",
+                "Live V2 judge sentence failed",
                 extra={
                     "game_id": claim.game_id,
                     "action_id": claim.action_id,
+                    "action_type": spec.action_type,
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
                 },
@@ -281,7 +480,8 @@ class V2ActionEngine:
                         run_id=claim.run_id,
                         state="failed",
                         reason=failure_code,
-                    )
+                    ),
+                    audience="all",
                 )
             else:
                 await broadcaster.broadcast_json(
@@ -289,24 +489,49 @@ class V2ActionEngine:
                         identity,
                         failure_kind=failure_kind,
                         failure_code=failure_code,
-                    )
+                    ),
+                    audience="all",
                 )
-                await broadcaster.set_current(None, 0)
+                await broadcaster.set_current(None, 0, audience=spec.audience)
+            return None
 
 
-def _action_context(*, game_id: str, action_id: str) -> dict[str, Any]:
+_OPENING_SPEECH = V2SpeechSpec(
+    action_type="judge_opening_speech",
+    phase_id="opening",
+    required_phase_state="opening_ready",
+    objective="生成本场直播的法官开场播报",
+    success_live_state="ready",
+    success_phase_state="opening_speech_closed",
+)
+
+_NIGHTFALL_ANNOUNCEMENT = V2SpeechSpec(
+    action_type="judge_nightfall_announcement",
+    phase_id="first_night",
+    required_phase_state="nightfall_ready",
+    objective="生成宣布本局进入首夜并提醒所有玩家闭眼的法官播报",
+    success_live_state="awaiting_observation",
+    success_phase_state="nightfall_announced",
+)
+
+
+def _action_context(
+    *,
+    game_id: str,
+    action_id: str,
+    spec: V2SpeechSpec,
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "action_id": action_id,
-        "action_type": "judge_opening_speech",
+        "action_type": spec.action_type,
         "game_id": game_id,
-        "phase_id": "opening",
-        "actor": {"kind": "judge", "id": "judge"},
-        "objective": "生成本场直播的法官开场第一句话",
+        "phase_id": spec.phase_id,
+        "actor": {"kind": spec.actor_kind, "id": spec.actor_id},
+        "objective": spec.objective,
         "output_contract": {
-            "kind": "public_speech",
+            "kind": spec.output_kind,
             "language": "zh-CN",
-            "sentence_count": 1,
         },
         "influence": {
             "schema_version": 1,
@@ -315,6 +540,7 @@ def _action_context(*, game_id: str, action_id: str) -> dict[str, Any]:
             "strength": 0,
             "signals": [],
         },
+        **(spec.context or {}),
     }
 
 

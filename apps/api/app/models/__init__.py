@@ -31,10 +31,19 @@ from app.models.runtime_worker import RuntimeWorkerRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.v2.models import (
+    V2AbilityActivation,
+    V2AbilityInstance,
+    V2ActionWindow,
+    V2EffectIntent,
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
+    V2GodViewAccessGrant,
+    V2KnowledgeFact,
     V2LivePresentation,
+    V2PlayerState,
+    V2RoleAssignment,
+    V2RoleAssignmentBatch,
     V2VoiceAsset,
 )
 
@@ -68,9 +77,18 @@ __all__ = [
     "VoicePlaybackObservationRecord",
     "VoiceUtteranceRecord",
     "VirtualPlayerProfile",
+    "V2AbilityActivation",
+    "V2AbilityInstance",
+    "V2ActionWindow",
+    "V2EffectIntent",
     "V2GameRecord",
     "V2GameRecordEvent",
     "V2GameRun",
+    "V2GodViewAccessGrant",
+    "V2KnowledgeFact",
     "V2LivePresentation",
+    "V2PlayerState",
+    "V2RoleAssignment",
+    "V2RoleAssignmentBatch",
     "V2VoiceAsset",
 ]

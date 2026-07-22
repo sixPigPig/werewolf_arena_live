@@ -29,10 +29,17 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     ...parseListItem(record),
     rule_snapshot: object(record.rule_snapshot),
     players_snapshot: array(record.players_snapshot).map(object),
+    ability_snapshot: object(record.ability_snapshot),
     runs: array(record.runs).map(parseRun),
     events: array(record.events).map(parseEvent),
     presentations: array(record.presentations).map(parsePresentation),
     voice_assets: array(record.voice_assets).map(parseVoiceAsset),
+    player_states: array(record.player_states).map(object),
+    action_windows: array(record.action_windows).map(object),
+    ability_instances: array(record.ability_instances).map(object),
+    ability_activations: array(record.ability_activations).map(object),
+    effect_intents: array(record.effect_intents).map(object),
+    knowledge_facts: array(record.knowledge_facts).map(object),
   };
 }
 
@@ -46,6 +53,9 @@ function parseListItem(value: unknown): V2GameRecordListItem {
     record_schema_version: integer(record.record_schema_version, 1),
     last_record_seq: integer(record.last_record_seq, 0),
     last_presentation_seq: integer(record.last_presentation_seq, 0),
+    phase_seq: integer(record.phase_seq, 0),
+    phase_id: text(record.phase_id),
+    phase_state: text(record.phase_state),
     created_at: date(record.created_at),
     updated_at: date(record.updated_at),
   };
@@ -81,9 +91,11 @@ function parsePresentation(value: unknown): V2GamePresentation {
     presentation_seq: integer(record.presentation_seq, 1),
     presentation_id: text(record.presentation_id),
     action_id: nullableText(record.action_id),
+    activation_id: nullableText(record.activation_id),
     phase_id: text(record.phase_id),
     actor_kind: text(record.actor_kind),
     actor_id: text(record.actor_id),
+    audience: text(record.audience),
     speech_id: text(record.speech_id),
     segment_index: integer(record.segment_index, 0),
     source_event_id: integer(record.source_event_id, 1),
@@ -101,6 +113,8 @@ function parseVoiceAsset(value: unknown): V2VoiceAsset {
   return {
     voice_asset_id: text(record.voice_asset_id),
     action_id: text(record.action_id),
+    activation_id: nullableText(record.activation_id),
+    audience: text(record.audience),
     presentation_id: text(record.presentation_id),
     speech_id: text(record.speech_id),
     segment_index: integer(record.segment_index, 0),

@@ -84,7 +84,7 @@ export default function V2GameRecordDetailPage() {
                       <Tag color="purple">#{presentation.presentation_seq}</Tag>
                       <Typography.Text strong>{presentation.actor_kind} · {presentation.state}</Typography.Text>
                       <Typography.Paragraph>{presentation.subtitle_text}</Typography.Paragraph>
-                      <Typography.Text type="secondary">action {presentation.action_id ?? "—"} · speech {presentation.speech_id} · segment {presentation.segment_index}</Typography.Text>
+                      <Typography.Text type="secondary">{presentation.audience} · action {presentation.action_id ?? "—"} · activation {presentation.activation_id ?? "—"} · speech {presentation.speech_id} · segment {presentation.segment_index}</Typography.Text>
                     </li>
                   ))}
                 </ol>
@@ -99,7 +99,7 @@ export default function V2GameRecordDetailPage() {
                     <li key={voice.voice_asset_id}>
                       <Tag color={voice.state === "ready" ? "success" : "processing"}>{voice.state}</Tag>
                       <Typography.Text strong>{voice.voice_asset_id}</Typography.Text>
-                      <Typography.Text type="secondary">action {voice.action_id} · {voice.sample_rate} Hz · {voice.sample_count ?? 0} samples · {voice.duration_ms ?? 0} ms</Typography.Text>
+                      <Typography.Text type="secondary">{voice.audience} · action {voice.action_id} · activation {voice.activation_id ?? "—"} · {voice.sample_rate} Hz · {voice.sample_count ?? 0} samples · {voice.duration_ms ?? 0} ms</Typography.Text>
                       <Typography.Text code>pcm sha256 {voice.pcm_sha256 ?? "—"}</Typography.Text>
                       {voice.audio_url ? (
                         <audio controls preload="none" src={voice.audio_url}>当前浏览器不支持播放 V2 保存语音。</audio>
@@ -113,10 +113,46 @@ export default function V2GameRecordDetailPage() {
               key: "voices",
               label: `保存语音 (${game.voice_assets.length})`,
             },
+            {
+              children: (
+                <div>
+                  <RecordSection label="冻结能力快照" records={[game.ability_snapshot]} />
+                  <RecordSection label="行动窗口" records={game.action_windows} />
+                  <RecordSection label="能力实例" records={game.ability_instances} />
+                  <RecordSection label="能力激活与决策" records={game.ability_activations} />
+                  <RecordSection label="效果意图" records={game.effect_intents} />
+                  <RecordSection label="私密知识" records={game.knowledge_facts} />
+                  <RecordSection label="玩家状态" records={game.player_states} />
+                </div>
+              ),
+              key: "ability-runtime",
+              label: `能力运行时 (${game.ability_activations.length})`,
+            },
           ]}
         />
       </Card>
     </AdminPage>
+  );
+}
+
+function RecordSection({
+  label,
+  records,
+}: {
+  label: string;
+  records: Array<Record<string, unknown>>;
+}) {
+  return (
+    <section>
+      <Typography.Title level={5}>{label} ({records.length})</Typography.Title>
+      <ol className="v2-record-sequence ant-v2-record-sequence">
+        {records.map((record, index) => (
+          <li key={`${label}-${index}`}>
+            <Typography.Text code>{JSON.stringify(record)}</Typography.Text>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 

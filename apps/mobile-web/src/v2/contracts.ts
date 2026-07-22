@@ -6,6 +6,25 @@ export type V2LiveState =
   | "awaiting_observation"
   | "failed";
 
+export type V2GamePhase = {
+  phase_seq: number;
+  phase_id: "legacy" | "opening" | "first_night" | "day_1";
+  phase_state:
+    | "legacy_frozen"
+    | "opening_ready"
+    | "opening_speech_closed"
+    | "nightfall_ready"
+    | "nightfall_announced"
+    | "night_running"
+    | "dawn_announcement_ready"
+    | "dawn_announced"
+    | "dawn_reactions_ready"
+    | "public_day_ready"
+    | "sheriff_election_ready"
+    | "game_completed"
+    | "failed";
+};
+
 export type V2LobbyRuleSnapshot = {
   id: string;
   version: string;
@@ -104,6 +123,9 @@ export type V2GameCreateResponse = {
   status: "ready";
   snapshot_url: string;
   websocket_url: string;
+  god_view_snapshot_url: string;
+  god_view_websocket_url: string;
+  god_view_access_token: string;
 };
 
 export type V2Presentation = {
@@ -123,19 +145,81 @@ export type V2PublicPlayerSeat = {
   player_id: string;
   display_name: string;
   avatar_url: string | null;
+  alive: boolean;
+};
+
+export type V2PublicRuleSnapshot = {
+  rule_id: string;
+  name: string;
+  version: string;
+  player_count: number;
+  roles: Array<{ role: string; count: number }>;
+  max_rounds: number;
+  sheriff_enabled: boolean | null;
+  werewolf_self_explosion_enabled: boolean | null;
+  exile_last_words_enabled: boolean | null;
+};
+
+export type V2PublicRoleAssignmentStatus = {
+  state: "sealed" | "unavailable";
+  assigned_count: number;
 };
 
 export type V2LiveSnapshot = {
   protocol_version: 1;
   type: "live.snapshot";
   api_version: "v2";
-  audience: "player_public" | "spectator_god_view";
+  audience: "player_public";
   game_id: string;
   run_id: string;
   live_state: V2LiveState;
+  game_phase: V2GamePhase;
   latest_presentation_seq: number;
   server_time: string;
+  public_rule: V2PublicRuleSnapshot | null;
   public_players: V2PublicPlayerSeat[];
+  public_role_assignment: V2PublicRoleAssignmentStatus;
+  current_presentation: V2Presentation | null;
+};
+
+export type V2GodViewPlayerIdentity = {
+  seat: number;
+  player_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  role: string;
+  team: string | null;
+  alive: boolean;
+  death_cause: string | null;
+};
+
+export type V2GodViewIdentitySnapshot = {
+  protocol_version: 1;
+  type: "god_view.identity_snapshot";
+  api_version: "v2";
+  audience: "spectator_god_view";
+  game_id: string;
+  run_id: string;
+  live_state: V2LiveState;
+  game_phase: V2GamePhase;
+  server_time: string;
+  rule: V2PublicRuleSnapshot | null;
+  players: V2GodViewPlayerIdentity[];
+};
+
+export type V2GodViewLiveSnapshot = {
+  protocol_version: 1;
+  type: "god_view.live_snapshot";
+  api_version: "v2";
+  audience: "spectator_god_view";
+  game_id: string;
+  run_id: string;
+  live_state: V2LiveState;
+  game_phase: V2GamePhase;
+  latest_presentation_seq: number;
+  server_time: string;
+  rule: V2PublicRuleSnapshot | null;
+  players: V2GodViewPlayerIdentity[];
   current_presentation: V2Presentation | null;
 };
 
@@ -171,6 +255,60 @@ export type V2StateChanged = {
   reason: string | null;
 };
 
+export type V2GamePhaseChanged = {
+  protocol_version: 1;
+  type: "game.phase_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  phase_seq: number;
+  previous_phase_id: V2GamePhase["phase_id"];
+  phase_id: V2GamePhase["phase_id"];
+  phase_state: V2GamePhase["phase_state"];
+};
+
+export type V2NightProgress = {
+  protocol_version: 1;
+  type: "night.progress_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  stage: "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced";
+  latest_presentation_seq: number;
+};
+
+export type V2AbilityProgress = {
+  protocol_version: 1;
+  type: "ability.progress_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  ability_id: string;
+  status: string;
+  actor_player_id: string | null;
+  target_player_id: string | null;
+  round_no: number | null;
+};
+
+export type V2DawnResult = {
+  protocol_version: 1;
+  type: "dawn.result_announced";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  dead_player_ids: string[];
+};
+
+export type V2GodViewNightResolved = {
+  protocol_version: 1;
+  type: "god_view.night_resolved";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  deaths: Array<{ player_id: string; cause: string }>;
+  attack_prevented_by: string | null;
+};
+
 export type V2PresentationClosed = {
   protocol_version: 1;
   type: "presentation.closed";
@@ -203,9 +341,15 @@ export type V2PresentationFailed = {
 
 export type V2ServerMessage =
   | V2LiveSnapshot
+  | V2GodViewLiveSnapshot
   | V2PresentationOpened
   | V2SegmentCommitted
   | V2StateChanged
+  | V2GamePhaseChanged
+  | V2NightProgress
+  | V2AbilityProgress
+  | V2DawnResult
+  | V2GodViewNightResolved
   | V2PresentationClosed
   | V2PresentationFailed;
 
@@ -229,13 +373,25 @@ export type V2AudioFrame = {
 };
 
 export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse {
-  const record = object(value);
+  const record = exactObject(value, [
+    "game_id",
+    "run_id",
+    "status",
+    "snapshot_url",
+    "websocket_url",
+    "god_view_snapshot_url",
+    "god_view_websocket_url",
+    "god_view_access_token",
+  ]);
   return {
     game_id: id(record.game_id, "v2_game_"),
     run_id: id(record.run_id, "v2_run_"),
     status: literal(record.status, ["ready"]),
     snapshot_url: apiPath(record.snapshot_url),
     websocket_url: apiPath(record.websocket_url),
+    god_view_snapshot_url: godViewApiPath(record.god_view_snapshot_url),
+    god_view_websocket_url: godViewApiPath(record.god_view_websocket_url),
+    god_view_access_token: godViewAccessToken(record.god_view_access_token),
   };
 }
 
@@ -243,6 +399,40 @@ export function parseV2LiveSnapshotResponse(value: unknown): V2LiveSnapshot {
   const message = parseV2ServerMessage(JSON.stringify(value));
   if (message.type !== "live.snapshot") throw invalid();
   return message;
+}
+
+export function parseV2GodViewIdentitySnapshotResponse(
+  value: unknown,
+): V2GodViewIdentitySnapshot {
+  const record = exactObject(value, [
+    "protocol_version",
+    "type",
+    "api_version",
+    "audience",
+    "game_id",
+    "run_id",
+    "live_state",
+    "game_phase",
+    "server_time",
+    "rule",
+    "players",
+  ]);
+  const rule = record.rule === null ? null : publicRule(record.rule);
+  const players = godViewPlayers(record.players);
+  if (rule !== null && rule.player_count !== players.length) throw invalid();
+  return {
+    protocol_version: literal(record.protocol_version, [1] as const),
+    type: literal(record.type, ["god_view.identity_snapshot"]),
+    api_version: literal(record.api_version, ["v2"]),
+    audience: literal(record.audience, ["spectator_god_view"]),
+    game_id: id(record.game_id, "v2_game_"),
+    run_id: id(record.run_id, "v2_run_"),
+    live_state: liveState(record.live_state),
+    game_phase: gamePhase(record.game_phase),
+    server_time: date(record.server_time),
+    rule,
+    players,
+  };
 }
 
 export function parseV2ServerMessage(raw: string): V2ServerMessage {
@@ -256,16 +446,75 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
     server_time: date(value.server_time),
   };
   if (type === "live.snapshot") {
+    const snapshot = exactObject(value, [
+      "protocol_version",
+      "type",
+      "api_version",
+      "audience",
+      "game_id",
+      "run_id",
+      "live_state",
+      "game_phase",
+      "latest_presentation_seq",
+      "server_time",
+      "public_rule",
+      "public_players",
+      "public_role_assignment",
+      "current_presentation",
+    ]);
     return {
       ...base,
       type,
-      api_version: literal(value.api_version, ["v2"]),
-      audience: literal(value.audience, ["player_public", "spectator_god_view"]),
-      live_state: liveState(value.live_state),
-      latest_presentation_seq: integer(value.latest_presentation_seq, 0),
-      public_players: publicPlayerSeats(value.public_players),
+      api_version: literal(snapshot.api_version, ["v2"]),
+      audience: literal(snapshot.audience, ["player_public"]),
+      live_state: liveState(snapshot.live_state),
+      game_phase: gamePhase(snapshot.game_phase),
+      latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      public_rule:
+        snapshot.public_rule === null ? null : publicRule(snapshot.public_rule),
+      public_players: publicPlayerSeats(snapshot.public_players),
+      public_role_assignment: publicRoleAssignmentStatus(
+        snapshot.public_role_assignment,
+      ),
       current_presentation:
-        value.current_presentation === null ? null : presentation(value.current_presentation),
+        snapshot.current_presentation === null
+          ? null
+          : presentation(snapshot.current_presentation),
+    };
+  }
+  if (type === "god_view.live_snapshot") {
+    const snapshot = exactObject(value, [
+      "protocol_version",
+      "type",
+      "api_version",
+      "audience",
+      "game_id",
+      "run_id",
+      "live_state",
+      "game_phase",
+      "latest_presentation_seq",
+      "server_time",
+      "rule",
+      "players",
+      "current_presentation",
+    ]);
+    const rule = snapshot.rule === null ? null : publicRule(snapshot.rule);
+    const players = godViewPlayers(snapshot.players);
+    if (rule !== null && rule.player_count !== players.length) throw invalid();
+    return {
+      ...base,
+      type,
+      api_version: literal(snapshot.api_version, ["v2"]),
+      audience: literal(snapshot.audience, ["spectator_god_view"]),
+      live_state: liveState(snapshot.live_state),
+      game_phase: gamePhase(snapshot.game_phase),
+      latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      rule,
+      players,
+      current_presentation:
+        snapshot.current_presentation === null
+          ? null
+          : presentation(snapshot.current_presentation),
     };
   }
   if (type === "live.state_changed") {
@@ -274,6 +523,65 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       type,
       live_state: liveState(value.live_state),
       reason: value.reason === null ? null : text(value.reason),
+    };
+  }
+  if (type === "game.phase_changed") {
+    return {
+      ...base,
+      type,
+      phase_seq: integer(value.phase_seq, 1),
+      previous_phase_id: phaseId(value.previous_phase_id),
+      phase_id: phaseId(value.phase_id),
+      phase_state: phaseState(value.phase_state),
+    };
+  }
+  if (type === "night.progress_changed") {
+    return {
+      ...base,
+      type,
+      stage: literal(value.stage, [
+        "night_started",
+        "actions_in_progress",
+        "night_resolved",
+        "dawn_announced",
+      ]),
+      latest_presentation_seq: integer(value.latest_presentation_seq, 0),
+    };
+  }
+  if (type === "ability.progress_changed") {
+    return {
+      ...base,
+      type,
+      ability_id: text(value.ability_id),
+      status: text(value.status),
+      actor_player_id:
+        value.actor_player_id === null ? null : text(value.actor_player_id),
+      target_player_id:
+        value.target_player_id === null ? null : text(value.target_player_id),
+      round_no: value.round_no === null ? null : integer(value.round_no, 1),
+    };
+  }
+  if (type === "dawn.result_announced") {
+    if (!Array.isArray(value.dead_player_ids)) throw invalid();
+    return {
+      ...base,
+      type,
+      dead_player_ids: value.dead_player_ids.map(text),
+    };
+  }
+  if (type === "god_view.night_resolved") {
+    if (!Array.isArray(value.deaths)) throw invalid();
+    return {
+      ...base,
+      type,
+      deaths: value.deaths.map((item) => {
+        const death = exactObject(item, ["player_id", "cause"]);
+        return { player_id: text(death.player_id), cause: text(death.cause) };
+      }),
+      attack_prevented_by:
+        value.attack_prevented_by === null
+          ? null
+          : text(value.attack_prevented_by),
     };
   }
   if (type === "presentation.opened") {
@@ -383,6 +691,15 @@ function presentation(value: unknown): V2Presentation {
   };
 }
 
+function gamePhase(value: unknown): V2GamePhase {
+  const record = exactObject(value, ["phase_seq", "phase_id", "phase_state"]);
+  return {
+    phase_seq: integer(record.phase_seq, 0),
+    phase_id: phaseId(record.phase_id),
+    phase_state: phaseState(record.phase_state),
+  };
+}
+
 function parseActor(value: unknown): V2Presentation["actor"] {
   const record = object(value);
   return {
@@ -399,12 +716,14 @@ function publicPlayerSeats(value: unknown): V2PublicPlayerSeat[] {
       "player_id",
       "display_name",
       "avatar_url",
+      "alive",
     ]);
     return {
       seat: integer(record.seat, 1),
       player_id: text(record.player_id),
       display_name: text(record.display_name),
       avatar_url: record.avatar_url === null ? null : text(record.avatar_url),
+      alive: boolean(record.alive),
     };
   });
   let previousSeat = 0;
@@ -419,6 +738,102 @@ function publicPlayerSeats(value: unknown): V2PublicPlayerSeat[] {
   return players;
 }
 
+function publicRule(value: unknown): V2PublicRuleSnapshot {
+  const record = exactObject(value, [
+    "rule_id",
+    "name",
+    "version",
+    "player_count",
+    "roles",
+    "max_rounds",
+    "sheriff_enabled",
+    "werewolf_self_explosion_enabled",
+    "exile_last_words_enabled",
+  ]);
+  if (!Array.isArray(record.roles) || record.roles.length === 0 || record.roles.length > 24) {
+    throw invalid();
+  }
+  const roles = record.roles.map((value) => {
+    const role = exactObject(value, ["role", "count"]);
+    return { role: text(role.role), count: boundedInteger(role.count, 1, 24) };
+  });
+  const playerCount = boundedInteger(record.player_count, 1, 24);
+  const seenRoles = new Set<string>();
+  let roleCount = 0;
+  for (const role of roles) {
+    if (seenRoles.has(role.role)) throw invalid();
+    seenRoles.add(role.role);
+    roleCount += role.count;
+  }
+  if (roleCount !== playerCount) throw invalid();
+  return {
+    rule_id: text(record.rule_id),
+    name: text(record.name),
+    version: text(record.version),
+    player_count: playerCount,
+    roles,
+    max_rounds: boundedInteger(record.max_rounds, 1, 20),
+    sheriff_enabled: nullableBoolean(record.sheriff_enabled),
+    werewolf_self_explosion_enabled: nullableBoolean(
+      record.werewolf_self_explosion_enabled,
+    ),
+    exile_last_words_enabled: nullableBoolean(record.exile_last_words_enabled),
+  };
+}
+
+function publicRoleAssignmentStatus(value: unknown): V2PublicRoleAssignmentStatus {
+  const record = exactObject(value, ["state", "assigned_count"]);
+  const state = literal(record.state, ["sealed", "unavailable"]);
+  const assignedCount = boundedInteger(record.assigned_count, 0, 24);
+  if ((state === "sealed" && assignedCount === 0) ||
+      (state === "unavailable" && assignedCount !== 0)) {
+    throw invalid();
+  }
+  return { state, assigned_count: assignedCount };
+}
+
+function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 24) throw invalid();
+  const players = value.map((item) => {
+    const record = exactObject(item, [
+      "seat",
+      "player_id",
+      "display_name",
+      "avatar_url",
+      "role",
+      "team",
+      "alive",
+      "death_cause",
+    ]);
+    return {
+      seat: boundedInteger(record.seat, 1, 24),
+      player_id: text(record.player_id),
+      display_name: text(record.display_name),
+      avatar_url: record.avatar_url === null ? null : text(record.avatar_url),
+      role: text(record.role),
+      team: record.team === null ? null : text(record.team),
+      alive: boolean(record.alive),
+      death_cause: record.death_cause === null ? null : text(record.death_cause),
+    };
+  });
+  const seats = new Set<number>();
+  const playerIds = new Set<string>();
+  let previousSeat = 0;
+  for (const player of players) {
+    if (
+      player.seat <= previousSeat ||
+      seats.has(player.seat) ||
+      playerIds.has(player.player_id)
+    ) {
+      throw invalid();
+    }
+    previousSeat = player.seat;
+    seats.add(player.seat);
+    playerIds.add(player.player_id);
+  }
+  return players;
+}
+
 function liveState(value: unknown): V2LiveState {
   return literal(value, [
     "ready",
@@ -426,6 +841,28 @@ function liveState(value: unknown): V2LiveState {
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "failed",
+  ]);
+}
+
+function phaseId(value: unknown): V2GamePhase["phase_id"] {
+  return literal(value, ["legacy", "opening", "first_night", "day_1"]);
+}
+
+function phaseState(value: unknown): V2GamePhase["phase_state"] {
+  return literal(value, [
+    "legacy_frozen",
+    "opening_ready",
+    "opening_speech_closed",
+    "nightfall_ready",
+    "nightfall_announced",
+    "night_running",
+    "dawn_announcement_ready",
+    "dawn_announced",
+    "dawn_reactions_ready",
+    "public_day_ready",
+    "sheriff_election_ready",
+    "game_completed",
     "failed",
   ]);
 }
@@ -451,6 +888,12 @@ function integer(value: unknown, minimum: number): number {
   return Number(value);
 }
 
+function boundedInteger(value: unknown, minimum: number, maximum: number): number {
+  const result = integer(value, minimum);
+  if (result > maximum) throw invalid();
+  return result;
+}
+
 function literal<const T extends string | number>(value: unknown, values: readonly T[]): T {
   if (!values.includes(value as T)) throw invalid();
   return value as T;
@@ -459,6 +902,10 @@ function literal<const T extends string | number>(value: unknown, values: readon
 function boolean(value: unknown): boolean {
   if (typeof value !== "boolean") throw invalid();
   return value;
+}
+
+function nullableBoolean(value: unknown): boolean | null {
+  return value === null ? null : boolean(value);
 }
 
 function date(value: unknown): string {
@@ -476,6 +923,18 @@ function id(value: unknown, prefix: string): string {
 function apiPath(value: unknown): string {
   const result = text(value);
   if (!result.startsWith("/api/v2/")) throw invalid();
+  return result;
+}
+
+function godViewApiPath(value: unknown): string {
+  const result = apiPath(value);
+  if (!result.startsWith("/api/v2/god-view/games/")) throw invalid();
+  return result;
+}
+
+function godViewAccessToken(value: unknown): string {
+  const result = text(value);
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(result)) throw invalid();
   return result;
 }
 

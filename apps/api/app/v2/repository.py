@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.models import (
+    V2AbilityActivation,
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
@@ -25,6 +26,18 @@ class V2ActionClaim:
     game_id: str
     run_id: str
     action_id: str
+    phase_id: str
+    activation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class V2PhaseTransition:
+    game_id: str
+    run_id: str
+    phase_seq: int
+    previous_phase_id: str
+    phase_id: str
+    phase_state: str
 
 
 @dataclass(frozen=True)
@@ -32,6 +45,7 @@ class V2PresentationIdentity:
     game_id: str
     run_id: str
     action_id: str
+    phase_id: str
     presentation_seq: int
     presentation_id: str
     speech_id: str
@@ -39,6 +53,10 @@ class V2PresentationIdentity:
     voice_asset_id: str
     storage_key: str
     subtitle_text: str
+    activation_id: str | None = None
+    actor_kind: str = "judge"
+    actor_id: str = "judge"
+    audience: str = "all"
 
 
 class V2ActionRepository:
@@ -51,12 +69,29 @@ class V2ActionRepository:
         game_id: str,
         action_id: str,
         context: dict[str, Any],
+        expected_phase_id: str,
+        expected_phase_state: str,
+        activation_id: str | None = None,
     ) -> V2ActionClaim | None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
-            if game.status != "ready":
+            if (
+                game.status != "ready"
+                or game.phase_id != expected_phase_id
+                or game.phase_state != expected_phase_state
+            ):
                 return None
             run = _run(db, game.current_run_id)
+            if activation_id is not None:
+                activation = db.get(V2AbilityActivation, activation_id)
+                if (
+                    activation is None
+                    or activation.game_id != game.game_id
+                    or activation.status != "open"
+                    or activation.action_id is not None
+                ):
+                    raise V2RepositoryError("ability activation cannot claim action")
+                activation.action_id = action_id
             game.status = "generating"
             run.status = "generating"
             _append_event(
@@ -66,10 +101,17 @@ class V2ActionRepository:
                 event_type="action_opened",
                 payload={
                     "action_id": action_id,
+                    "activation_id": activation_id,
                     "context": {**context, "run_id": run.run_id},
                 },
             )
-            return V2ActionClaim(game_id=game.game_id, run_id=run.run_id, action_id=action_id)
+            return V2ActionClaim(
+                game_id=game.game_id,
+                run_id=run.run_id,
+                action_id=action_id,
+                phase_id=game.phase_id,
+                activation_id=activation_id,
+            )
 
     def append_event(
         self,
@@ -98,6 +140,9 @@ class V2ActionRepository:
         voice_asset_id: str,
         subtitle_text: str,
         sample_rate: int,
+        actor_kind: str = "judge",
+        actor_id: str = "judge",
+        audience: str = "all",
     ) -> V2PresentationIdentity:
         storage_key = f"{claim.game_id}/{voice_asset_id}.wav"
         with self._session_factory.begin() as db:
@@ -112,6 +157,7 @@ class V2ActionRepository:
                 event_type="speech_opened",
                 payload={
                     "action_id": claim.action_id,
+                    "activation_id": claim.activation_id,
                     "presentation_id": presentation_id,
                     "presentation_seq": presentation_seq,
                     "speech_id": speech_id,
@@ -124,6 +170,7 @@ class V2ActionRepository:
                 event_type="speech_segment_committed",
                 payload={
                     "action_id": claim.action_id,
+                    "activation_id": claim.activation_id,
                     "presentation_id": presentation_id,
                     "presentation_seq": presentation_seq,
                     "speech_id": speech_id,
@@ -143,6 +190,8 @@ class V2ActionRepository:
                 game_id=claim.game_id,
                 run_id=claim.run_id,
                 action_id=claim.action_id,
+                activation_id=claim.activation_id,
+                audience=audience,
                 presentation_id=presentation_id,
                 speech_id=speech_id,
                 segment_index=0,
@@ -159,10 +208,12 @@ class V2ActionRepository:
                 presentation_seq=presentation_seq,
                 presentation_id=presentation_id,
                 action_id=claim.action_id,
+                activation_id=claim.activation_id,
                 run_id=claim.run_id,
-                phase_id="opening",
-                actor_kind="judge",
-                actor_id="judge",
+                phase_id=claim.phase_id,
+                actor_kind=actor_kind,
+                actor_id=actor_id,
+                audience=audience,
                 speech_id=speech_id,
                 segment_index=0,
                 source_event_id=committed.event_id,
@@ -182,6 +233,7 @@ class V2ActionRepository:
             game_id=claim.game_id,
             run_id=claim.run_id,
             action_id=claim.action_id,
+            phase_id=claim.phase_id,
             presentation_seq=presentation_seq,
             presentation_id=presentation_id,
             speech_id=speech_id,
@@ -189,6 +241,10 @@ class V2ActionRepository:
             voice_asset_id=voice_asset_id,
             storage_key=storage_key,
             subtitle_text=subtitle_text,
+            activation_id=claim.activation_id,
+            actor_kind=actor_kind,
+            actor_id=actor_id,
+            audience=audience,
         )
 
     def mark_finalizing(self, *, game_id: str, tts_attempt_id: str, sample_count: int) -> None:
@@ -240,6 +296,7 @@ class V2ActionRepository:
                 event_type="voice_asset_saved",
                 payload={
                     "action_id": identity.action_id,
+                    "activation_id": identity.activation_id,
                     "voice_asset_id": identity.voice_asset_id,
                     "sample_count": sample_count,
                     "duration_ms": duration_ms,
@@ -254,6 +311,8 @@ class V2ActionRepository:
         identity: V2PresentationIdentity,
         final_chunk_index: int,
         final_sample_cursor: int,
+        next_live_state: str,
+        next_phase_state: str,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, identity.game_id)
@@ -266,9 +325,12 @@ class V2ActionRepository:
                 raise V2RepositoryError("action cannot complete without ready voice")
             presentation.state = "closed"
             presentation.closed_at = _now()
-            game.status = "awaiting_observation"
+            if game.phase_id != identity.phase_id:
+                raise V2RepositoryError("action phase changed before completion")
+            game.status = next_live_state
+            game.phase_state = next_phase_state
             run = _run(db, identity.run_id)
-            run.status = "awaiting_observation"
+            run.status = next_live_state
             _append_event(
                 db,
                 game=game,
@@ -276,6 +338,7 @@ class V2ActionRepository:
                 event_type="audio_drained",
                 payload={
                     "action_id": identity.action_id,
+                    "activation_id": identity.activation_id,
                     "presentation_id": identity.presentation_id,
                     "final_chunk_index": final_chunk_index,
                     "final_sample_cursor": final_sample_cursor,
@@ -288,6 +351,7 @@ class V2ActionRepository:
                 event_type="speech_closed",
                 payload={
                     "action_id": identity.action_id,
+                    "activation_id": identity.activation_id,
                     "presentation_id": identity.presentation_id,
                     "speech_id": identity.speech_id,
                 },
@@ -301,8 +365,70 @@ class V2ActionRepository:
                     "action_id": identity.action_id,
                     "voice_asset_id": identity.voice_asset_id,
                     "result": "audio_drained_and_voice_saved",
+                    "phase_id": identity.phase_id,
                 },
             )
+
+    def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            if (
+                game.status != "ready"
+                or game.phase_id != "opening"
+                or game.phase_state != "opening_speech_closed"
+            ):
+                raise V2RepositoryError("opening is not ready to enter first night")
+            previous_phase_id = game.phase_id
+            game.phase_seq += 1
+            game.phase_id = "first_night"
+            game.phase_state = "nightfall_ready"
+            transition = V2PhaseTransition(
+                game_id=game.game_id,
+                run_id=game.current_run_id,
+                phase_seq=game.phase_seq,
+                previous_phase_id=previous_phase_id,
+                phase_id=game.phase_id,
+                phase_state=game.phase_state,
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=game.current_run_id,
+                event_type="game_phase_changed",
+                payload={
+                    "phase_seq": transition.phase_seq,
+                    "previous_phase_id": transition.previous_phase_id,
+                    "phase_id": transition.phase_id,
+                    "phase_state": transition.phase_state,
+                },
+            )
+            return transition
+
+    def fail_phase_transition(
+        self,
+        *,
+        game_id: str,
+        failure_kind: str,
+        failure_code: str,
+    ) -> str:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            run = _run(db, game.current_run_id)
+            game.status = "failed"
+            game.phase_state = "failed"
+            run.status = "failed"
+            run.completed_at = _now()
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="game_phase_transition_failed",
+                payload={
+                    "failure_kind": failure_kind,
+                    "failure_code": failure_code,
+                },
+            )
+            return run.run_id
 
     def fail_action(
         self,
@@ -315,6 +441,7 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             game.status = "failed"
+            game.phase_state = "failed"
             run = _run(db, claim.run_id)
             run.status = "failed"
             run.completed_at = _now()

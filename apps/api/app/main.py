@@ -10,6 +10,7 @@ from app.api.admin.errors import (
 from app.api.router import api_router
 from app.core.config import settings
 from app.v2.live_runtime import build_v2_live_runtime
+from app.v2.router import god_view_router as api_v2_god_view_router
 from app.v2.router import public_router as api_v2_router
 
 
@@ -26,6 +27,7 @@ def create_application() -> FastAPI:
     )
     app.include_router(api_router, prefix=settings.api_v1_prefix.rstrip("/"))
     app.include_router(api_v2_router, prefix="/api/v2")
+    app.include_router(api_v2_god_view_router, prefix="/api/v2")
     app.state.v2_live_runtime = build_v2_live_runtime()
     return app
 
