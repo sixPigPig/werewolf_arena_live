@@ -24,6 +24,9 @@ const LiveRunDetailPage = lazy(
 const JudgeVoiceAssetsPage = lazy(
   () => import("@/features/voice-assets/JudgeVoiceAssetsPage"),
 );
+const JudgeConfigurationPage = lazy(
+  () => import("@/features/judge-configuration/JudgeConfigurationPage"),
+);
 const PlayerProfilesPage = lazy(
   () => import("@/features/player-profiles/PlayerProfilesPage"),
 );
@@ -133,6 +136,14 @@ export function JudgeVoiceAssetsRoute() {
   return (
     <LazyRoute>
       <JudgeVoiceAssetsPage />
+    </LazyRoute>
+  );
+}
+
+export function JudgeConfigurationRoute() {
+  return (
+    <LazyRoute>
+      <JudgeConfigurationPage />
     </LazyRoute>
   );
 }

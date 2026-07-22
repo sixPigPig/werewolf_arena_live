@@ -15,8 +15,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.judge_voice_asset_import import import_judge_voice_assets
+from app.judge_configuration import runtime_judge_configuration
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
-from app.werewolf.judge_voice_assets import generate_judge_voice_assets, list_judge_voice_line_definitions
+from app.werewolf.judge_voice_assets import (
+    generate_judge_voice_assets,
+    list_judge_voice_line_definitions,
+)
 from app.werewolf.volcengine_tts import VolcengineTtsConfig
 
 
@@ -129,7 +133,7 @@ def _execute_job(session_factory: sessionmaker[Session], job_id: str) -> None:
             job.completed_at = datetime.now(tz=UTC)
             db.commit()
             return
-        config = _judge_config()
+        config = _judge_config(db)
         if not config.available:
             job.failed_count = len(selected)
             _fail(job, f"tts_{config.unavailable_reason or 'unavailable'}")
@@ -172,14 +176,19 @@ def _fail(job: JudgeVoiceGenerationJob, code: str) -> None:
     job.completed_at = datetime.now(tz=UTC)
 
 
-def _judge_config() -> VolcengineTtsConfig:
+def _judge_config(db: Session) -> VolcengineTtsConfig:
+    judge = runtime_judge_configuration(
+        db,
+        default_model_id=settings.live_v2_model_id,
+        default_tts_speaker=settings.ark_tts_judge_speaker,
+    )
     return VolcengineTtsConfig(
         enabled=settings.ark_tts_enabled,
         api_key=settings.ark_tts_api_key,
         resource_id=settings.ark_tts_resource_id,
         ws_url=settings.ark_tts_ws_url,
         player_speaker=settings.ark_tts_player_speaker,
-        judge_speaker=settings.ark_tts_judge_speaker,
+        judge_speaker=judge.tts_speaker,
         audio_format=settings.ark_tts_judge_asset_audio_format,
         sample_rate=settings.ark_tts_judge_asset_sample_rate,
     )

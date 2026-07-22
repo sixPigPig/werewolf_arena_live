@@ -13,6 +13,7 @@ from app.models.game_session import (
     VoicePlaybackObservationRecord,
 )
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
+from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.live import (
     GodViewLiveEventRecord,
     LiveEventRecord,
@@ -58,6 +59,7 @@ __all__ = [
     "GameQualityEvaluationRecord",
     "JudgeVoiceAssetRecord",
     "JudgeVoiceGenerationJob",
+    "JudgeConfigurationRecord",
     "GodViewLiveEventRecord",
     "LiveEventRecord",
     "LiveRunRecord",

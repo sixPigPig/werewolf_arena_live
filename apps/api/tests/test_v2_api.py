@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.judge_configuration import RuntimeJudgeConfiguration
 from app.main import create_application
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveRunRecord
@@ -74,7 +75,7 @@ class FakeV2ModelClient:
             "signals": [],
         }
         assert attempt_id.startswith("v2_model_")
-        assert model_id is None
+        assert model_id == "judge-configured-model"
         text_by_action = {
             "judge_opening_speech": "欢迎来到这场实时狼人杀对局。",
             "judge_nightfall_announcement": "夜幕已经降临，请所有玩家闭眼。",
@@ -184,6 +185,12 @@ def v2_context(
         tts_client=tts_client,
         voice_root=voice_root,
         sample_rate=24000,
+        judge_configuration_provider=lambda: RuntimeJudgeConfiguration(
+            model_provider="agent_plan",
+            model_id="judge-configured-model",
+            tts_speaker="judge-configured-speaker",
+            version=1,
+        ),
     )
     application.state.v2_test_model_client = model_client
     application.state.v2_test_tts_client = tts_client
@@ -552,6 +559,10 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
     )
     assert model_client.call_count == 2
     assert tts_client.call_count == 2
+    assert tts_client.speakers == [
+        "judge-configured-speaker",
+        "judge-configured-speaker",
+    ]
     assert [context["action_type"] for context in model_client.contexts] == [
         "judge_opening_speech",
         "judge_nightfall_announcement",

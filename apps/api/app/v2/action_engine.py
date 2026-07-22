@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -9,6 +9,7 @@ import time
 from typing import Any, Protocol
 from uuid import uuid4
 
+from app.judge_configuration import RuntimeJudgeConfiguration
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
@@ -118,12 +119,14 @@ class V2ActionEngine:
         tts_client: V2TtsPort,
         voice_root: Path,
         sample_rate: int,
+        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration] | None = None,
     ) -> None:
         self._repository = repository
         self._model_client = model_client
         self._tts_client = tts_client
         self._voice_root = voice_root
         self._sample_rate = sample_rate
+        self._judge_configuration_provider = judge_configuration_provider
 
     async def run_opening_to_nightfall(
         self,
@@ -229,6 +232,17 @@ class V2ActionEngine:
         decision: bool,
     ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
+        judge_configuration = (
+            self._judge_configuration_provider()
+            if spec.actor_kind == "judge" and self._judge_configuration_provider is not None
+            else None
+        )
+        model_id = spec.model_id or (
+            judge_configuration.model_id if judge_configuration is not None else None
+        )
+        speaker = spec.speaker or (
+            judge_configuration.tts_speaker if judge_configuration is not None else None
+        )
         context = _action_context(game_id=game_id, action_id=action_id, spec=spec)
         claim = self._repository.claim_action(
             game_id=game_id,
@@ -266,7 +280,7 @@ class V2ActionEngine:
                 model_decision = await self._model_client.generate_action_decision(
                     action_context=context,
                     attempt_id=model_attempt_id,
-                    model_id=spec.model_id,
+                    model_id=model_id,
                 )
                 speech_text = model_decision.speech
                 provider_request_id = model_decision.provider_request_id
@@ -283,7 +297,7 @@ class V2ActionEngine:
                 speech = await self._model_client.generate_judge_sentence(
                     action_context=context,
                     attempt_id=model_attempt_id,
-                    model_id=spec.model_id,
+                    model_id=model_id,
                 )
                 speech_text = speech.text
                 provider_request_id = speech.provider_request_id
@@ -351,7 +365,7 @@ class V2ActionEngine:
             async for pcm in self._tts_client.synthesize(
                 text=speech_text,
                 attempt_id=tts_attempt_id,
-                speaker=spec.speaker,
+                speaker=speaker,
             ):
                 sample_count = recorder.append(pcm)
                 if first_chunk:

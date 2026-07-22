@@ -9,6 +9,7 @@ import {
   GameRecordDetailRoute,
   GameRecordsRoute,
   JudgeVoiceAssetsRoute,
+  JudgeConfigurationRoute,
   LoginRoute,
   LiveRunDetailRoute,
   LiveRunsRoute,
@@ -95,6 +96,14 @@ export const routes: RouteObject[] = [
                 element: (
                   <RequireAdminPermission permission="games.read">
                     <GameRecordDetailRoute />
+                  </RequireAdminPermission>
+                ),
+              },
+              {
+                path: "content/judge",
+                element: (
+                  <RequireAdminPermission permission="settings.read">
+                    <JudgeConfigurationRoute />
                   </RequireAdminPermission>
                 ),
               },

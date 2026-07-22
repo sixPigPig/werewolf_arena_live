@@ -96,6 +96,7 @@ describe("admin app routes", () => {
   it.each([
     ["/overview", "运营总览"],
     ["/content/players", "虚拟玩家"],
+    ["/content/judge", "法官配置"],
     ["/content/voice-assets", "法官语音资产"],
     ["/content/models", "模型管理"],
     ["/operations/games", "对局记录"],

@@ -96,6 +96,14 @@ export const adminNavigation: AdminNavSection[] = [
         permission: "players.read",
       },
       {
+        id: "judge-configuration",
+        label: "法官配置",
+        description: "模型与播报音色",
+        href: "/content/judge",
+        marker: "判",
+        permission: "settings.read",
+      },
+      {
         id: "voice-assets",
         label: "法官语音",
         description: "覆盖率、缺失项与试听",

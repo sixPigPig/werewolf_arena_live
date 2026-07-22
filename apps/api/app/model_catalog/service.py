@@ -12,6 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.providers import (
@@ -255,6 +256,14 @@ def update_model_configuration(
         raise ModelConfigurationConflict(
             f"{assigned_count} player profiles still use this model."
         )
+    judge_assigned = db.get(JudgeConfigurationRecord, "default")
+    if (
+        not enabled
+        and judge_assigned is not None
+        and judge_assigned.model_provider == provider
+        and judge_assigned.model_id == model_id
+    ):
+        raise ModelConfigurationConflict("The judge configuration still uses this model.")
     if not enabled and record.is_default:
         raise ModelConfigurationConflict("Select another default model before disabling this one.")
     if record.is_default and not is_default:
