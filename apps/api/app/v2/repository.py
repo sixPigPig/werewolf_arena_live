@@ -63,6 +63,34 @@ class V2ActionRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
+    def start_game(self, *, game_id: str, audience: str) -> bool:
+        """Start a newly created game once, when its first viewer is ready."""
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            if game.status != "waiting_to_start":
+                return False
+            if game.phase_id != "opening" or game.phase_state != "opening_ready":
+                raise V2RepositoryError("waiting game is not ready for opening")
+            run = _run(db, game.current_run_id)
+            if run.status != "waiting_to_start" or run.started_at is not None:
+                raise V2RepositoryError("waiting run has already been started")
+            started_at = _now()
+            game.status = "ready"
+            run.status = "ready"
+            run.started_at = started_at
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="game_started",
+                payload={
+                    "start_mode": "first_ready_viewer",
+                    "trigger_audience": audience,
+                    "started_at": started_at.isoformat(),
+                },
+            )
+            return True
+
     def claim_action(
         self,
         *,
@@ -398,6 +426,45 @@ class V2ActionRepository:
                 payload={
                     "phase_seq": transition.phase_seq,
                     "previous_phase_id": transition.previous_phase_id,
+                    "phase_id": transition.phase_id,
+                    "phase_state": transition.phase_state,
+                },
+            )
+            return transition
+
+    def record_phase_state_change(
+        self,
+        *,
+        game_id: str,
+        phase_id: str,
+        previous_phase_state: str,
+        phase_state: str,
+    ) -> V2PhaseTransition:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            if (
+                game.status != "awaiting_observation"
+                or game.phase_id != phase_id
+                or game.phase_state != phase_state
+            ):
+                raise V2RepositoryError("completed action phase state does not match")
+            transition = V2PhaseTransition(
+                game_id=game.game_id,
+                run_id=game.current_run_id,
+                phase_seq=game.phase_seq,
+                previous_phase_id=game.phase_id,
+                phase_id=game.phase_id,
+                phase_state=game.phase_state,
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=game.current_run_id,
+                event_type="game_phase_changed",
+                payload={
+                    "phase_seq": transition.phase_seq,
+                    "previous_phase_id": transition.previous_phase_id,
+                    "previous_phase_state": previous_phase_state,
                     "phase_id": transition.phase_id,
                     "phase_state": transition.phase_state,
                 },

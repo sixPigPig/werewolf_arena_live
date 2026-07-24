@@ -200,6 +200,44 @@ export function GodViewPage() {
               });
               return;
             }
+            if (message.type === "day.progress_changed") {
+              return;
+            }
+            if (message.type === "match.state_changed") {
+              setSnapshot((current) =>
+                current
+                  ? {
+                      ...current,
+                      match_state: {
+                        round_no: message.round_no,
+                        sheriff_player_id: message.sheriff_player_id,
+                        sheriff_badge_state: message.sheriff_badge_state,
+                        winner: message.winner,
+                      },
+                    }
+                  : current,
+              );
+              return;
+            }
+            if (message.type === "player.state_changed") {
+              setSnapshot((current) =>
+                current
+                  ? {
+                      ...current,
+                      players: current.players.map((item) =>
+                        item.player_id === message.player_id
+                          ? {
+                              ...item,
+                              alive: message.alive,
+                              death_cause: message.alive ? null : message.cause,
+                            }
+                          : item,
+                      ),
+                    }
+                  : current,
+              );
+              return;
+            }
             if (message.type === "night.progress_changed") {
               throw new Error("上帝视角收到普通观众夜间投影，连接已关闭");
             }
@@ -310,11 +348,16 @@ export function GodViewPage() {
   }
 
   return (
-    <main className={`mobile-page mobile-god-view-page${gamePhase?.phase_id === "first_night" ? " is-first-night" : ""}`}>
+    <main className={`mobile-page mobile-god-view-page${isNightPhase(gamePhase) ? " is-night" : ""}`}>
       <header className="mobile-god-view-heading">
         <span>LIVE V2 · OMNISCIENT</span>
         <h1>上帝视角</h1>
         <small>{gameId}</small>
+        {snapshot?.match_state ? (
+          <small>
+            第 {snapshot.match_state.round_no} 轮 · {godSheriffLabel(snapshot)}
+          </small>
+        ) : null}
       </header>
 
       <section className="mobile-god-view-warning" aria-label="上帝视角隐私提示">
@@ -374,18 +417,26 @@ export function GodViewPage() {
         <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
       ) : null}
 
-      {gamePhase?.phase_id === "first_night" ? (
+      {isNightPhase(gamePhase) ? (
         <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
-          <span>第一夜 · 全知模式</span>
-          <strong>{gamePhase.phase_state === "night_running" ? "全知首夜能力执行中" : "天黑，请闭眼"}</strong>
+          <span>第 {snapshot?.match_state?.round_no ?? 1} 夜 · 全知模式</span>
+          <strong>{gamePhase?.phase_state === "night_running" ? "全知夜间能力执行中" : "天黑，请闭眼"}</strong>
           <small>全部私密决策、目标、字幕和同源语音只投影到本模式。</small>
+        </section>
+      ) : null}
+
+      {isDayPhase(gamePhase) ? (
+        <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
+          <span>第 {snapshot?.match_state?.round_no ?? 1} 天 · 全知模式</span>
+          <strong>{dayPhaseLabel(gamePhase?.phase_state ?? "")}</strong>
+          <small>公开动作向所有观众播出；秘密自爆判断只在全知模式展示。</small>
         </section>
       ) : null}
 
       {abilityProgress.length > 0 ? (
         <section className="mobile-god-view-stage" aria-labelledby="god-ability-progress">
           <span>私密能力流水</span>
-          <h2 id="god-ability-progress">首夜实时决策</h2>
+          <h2 id="god-ability-progress">夜间实时决策</h2>
           <ol>
             {abilityProgress.map((item, index) => (
               <li key={`${item.ability_id}-${item.actor_player_id ?? "system"}-${index}`}>
@@ -400,7 +451,9 @@ export function GodViewPage() {
 
       {liveState === "awaiting_observation" && connectionState !== "idle" ? (
         <p className="mobile-status-banner" role="status">
-          当前验收切片已实时完成；私密与公开语音均已分别保存，上帝视角正在等待本步验收。
+          {snapshot?.match_state?.winner
+            ? `完整对局已结束：${snapshot.match_state.winner === "villagers" ? "好人阵营" : "狼人阵营"}获胜。`
+            : "当前对局已停止；私密与公开语音均已分别保存。"}
         </p>
       ) : null}
 
@@ -453,24 +506,29 @@ export function GodViewPage() {
 }
 
 function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string {
-  const isNight = phase?.phase_id === "first_night";
+  const isNight = isNightPhase(phase);
+  if (state === "waiting_to_start") return "等待观众点击进入，正式对局尚未开始";
   if (state === "ready") return "音频已解锁，等待启动实时法官动作...";
   if (state === "generating") {
-    if (phase?.phase_state === "night_running") return "首夜私密动作正在实时请求大模型...";
-    if (phase?.phase_id === "day_1") return "黎明公开播报正在实时生成...";
+    if (phase?.phase_state === "night_running") return "夜间私密动作正在实时请求大模型...";
+    if (phase?.phase_state === "sheriff_election_ready") return "法官正在实时生成警长竞选开场...";
+    if (phase?.phase_state === "public_day_ready") return "法官正在实时生成白天发言开场...";
+    if (isDayPhase(phase)) return "白天公开动作正在实时请求大模型...";
     return isNight
       ? "法官正在通过大模型实时生成入夜播报..."
       : "法官正在通过大模型实时生成开场播报...";
   }
   if (state === "broadcasting") {
-    if (phase?.phase_state === "night_running") return "首夜私密字幕与语音正在实时播出";
-    if (phase?.phase_id === "day_1") return "黎明结果正在实时播报";
+    if (phase?.phase_state === "night_running") return "夜间私密字幕与语音正在实时播出";
+    if (phase?.phase_state === "sheriff_election_ready") return "警长竞选开场正在实时播报";
+    if (phase?.phase_state === "public_day_ready") return "白天发言开场正在实时播报";
+    if (isDayPhase(phase)) return "白天公开动作正在实时播报";
     return isNight
       ? "法官入夜话术正在向全部观众实时播报"
       : "法官开场话术正在向全部观众实时播报";
   }
   if (state === "finalizing") return "播报完成，正在校验并保存同源 V2 语音资产...";
-  if (state === "awaiting_observation") return "首夜流程已完成，等待本步验收";
+  if (state === "awaiting_observation") return "完整对局已经结束";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";
 }
@@ -483,9 +541,33 @@ function abilityLabel(value: string): string {
     "witch.heal": "女巫解药",
     "witch.poison": "女巫毒药",
     "hunter.death_shot": "猎人开枪",
-    "night.resolve": "首夜结算",
+    "night.resolve": "夜间结算",
   };
   return labels[value] ?? value;
+}
+
+function isNightPhase(phase: V2GamePhase | null): boolean {
+  return phase?.phase_id === "first_night" || phase?.phase_id.startsWith("night_") === true;
+}
+
+function isDayPhase(phase: V2GamePhase | null): boolean {
+  return phase?.phase_id.startsWith("day_") === true;
+}
+
+function dayPhaseLabel(phaseState: string): string {
+  if (phaseState === "sheriff_election_ready") return "准备警长竞选";
+  if (phaseState === "sheriff_election_open") return "警长竞选进行中";
+  if (phaseState === "public_discussion_open") return "公开发言与放逐流程进行中";
+  if (phaseState === "game_completed") return "对局已结束";
+  return "黎明结算与死亡响应进行中";
+}
+
+function godSheriffLabel(snapshot: GodViewSnapshot): string {
+  const match = snapshot.match_state;
+  if (!match || match.sheriff_badge_state === "disabled") return "本局无警长";
+  if (match.sheriff_badge_state === "pending") return "警长待选";
+  if (match.sheriff_badge_state === "destroyed") return "警徽已流失";
+  return `警长：${playerName(snapshot, match.sheriff_player_id ?? "")}`;
 }
 
 function statusLabel(value: string): string {
@@ -502,6 +584,8 @@ function deathCauseLabel(value: string | null): string {
   if (value === "werewolf_attack") return "狼人袭击";
   if (value === "witch_poison") return "女巫毒杀";
   if (value === "hunter_shot") return "猎人开枪";
+  if (value === "exile") return "投票放逐";
+  if (value === "werewolf_self_explosion") return "狼人自爆";
   return value ?? "原因未记录";
 }
 

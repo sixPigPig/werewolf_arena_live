@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 V2LiveState = Literal[
+    "waiting_to_start",
     "ready",
     "generating",
     "broadcasting",
@@ -14,27 +15,13 @@ V2LiveState = Literal[
     "awaiting_observation",
     "failed",
 ]
-V2GamePhaseId = Literal["legacy", "opening", "first_night", "day_1"]
-V2GamePhaseState = Literal[
-    "legacy_frozen",
-    "opening_ready",
-    "opening_speech_closed",
-    "nightfall_ready",
-    "nightfall_announced",
-    "night_running",
-    "dawn_announcement_ready",
-    "dawn_announced",
-    "dawn_reactions_ready",
-    "public_day_ready",
-    "sheriff_election_ready",
-    "game_completed",
-    "failed",
-]
+V2GamePhaseId = str
+V2GamePhaseState = str
 
 
 class V2ApiMetaResponse(BaseModel):
     api_version: Literal["v2"] = "v2"
-    status: Literal["realtime_first_night"] = "realtime_first_night"
+    status: Literal["realtime_complete_match"] = "realtime_complete_match"
 
 
 class V2LobbyRoleSnapshot(BaseModel):
@@ -197,6 +184,15 @@ class V2GamePhaseResponse(BaseModel):
     phase_state: V2GamePhaseState
 
 
+class V2MatchStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int = Field(ge=1, le=20)
+    sheriff_player_id: str | None = Field(default=None, max_length=80)
+    sheriff_badge_state: Literal["disabled", "pending", "held", "destroyed"]
+    winner: Literal["villagers", "werewolves"] | None = None
+
+
 class V2CurrentPresentationResponse(BaseModel):
     action_id: str
     presentation_seq: int = Field(ge=1)
@@ -264,6 +260,7 @@ class V2LiveSnapshotResponse(BaseModel):
     run_id: str
     live_state: V2LiveState
     game_phase: V2GamePhaseResponse
+    match_state: V2MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
     public_rule: V2PublicRuleSnapshotResponse | None
@@ -296,6 +293,7 @@ class V2GodViewIdentitySnapshotResponse(BaseModel):
     run_id: str
     live_state: V2LiveState
     game_phase: V2GamePhaseResponse
+    match_state: V2MatchStateResponse | None
     server_time: datetime
     rule: V2PublicRuleSnapshotResponse | None
     players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
@@ -312,6 +310,7 @@ class V2GodViewLiveSnapshotResponse(BaseModel):
     run_id: str
     live_state: V2LiveState
     game_phase: V2GamePhaseResponse
+    match_state: V2MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
     rule: V2PublicRuleSnapshotResponse | None
@@ -324,7 +323,7 @@ class V2GameCreateResponse(BaseModel):
 
     game_id: str
     run_id: str
-    status: Literal["ready"]
+    status: Literal["waiting_to_start"]
     snapshot_url: str
     websocket_url: str
     god_view_snapshot_url: str
@@ -363,7 +362,7 @@ class AdminV2RunResponse(BaseModel):
     run_id: str
     attempt_no: int
     status: str
-    started_at: datetime
+    started_at: datetime | None
     completed_at: datetime | None
 
 
@@ -418,12 +417,42 @@ class AdminV2VoiceAssetResponse(BaseModel):
     completed_at: datetime | None
 
 
+class AdminV2ModelRequestResponse(BaseModel):
+    attempt_id: str
+    action_id: str
+    run_id: str
+    phase_id: str
+    action_type: str
+    actor_kind: str
+    actor_id: str
+    audience: str
+    request_kind: str
+    model_id: str | None
+    model_provider: str | None
+    judge_configuration_version: int | None
+    status: Literal["running", "succeeded", "failed"]
+    request_payload: dict[str, Any] | None
+    input_source: Literal["persisted", "reconstructed", "unavailable"]
+    raw_response: str | None
+    parsed_output: dict[str, Any] | None
+    output_source: Literal["persisted", "legacy_inferred", "unavailable"]
+    provider_request_id: str | None
+    first_token_ms: int | None
+    completed_ms: int | None
+    failure_kind: str | None
+    failure_code: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+
 class AdminV2GameDetailResponse(AdminV2GameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
     ability_snapshot: dict[str, Any]
+    match_state: dict[str, Any] | None
     runs: list[AdminV2RunResponse]
     events: list[AdminV2EventResponse]
+    model_requests: list[AdminV2ModelRequestResponse]
     presentations: list[AdminV2PresentationResponse]
     voice_assets: list[AdminV2VoiceAssetResponse]
     player_states: list[dict[str, Any]]

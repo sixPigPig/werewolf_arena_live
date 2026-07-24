@@ -7,6 +7,7 @@ import {
   parseV2ServerMessage,
   type V2GamePhase,
   type V2LiveState,
+  type V2MatchState,
   type V2Presentation,
   type V2PublicPlayerSeat,
   type V2PublicRoleAssignmentStatus,
@@ -31,6 +32,7 @@ export function LiveV2Page() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [liveState, setLiveState] = useState<V2LiveState | null>(null);
   const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
+  const [matchState, setMatchState] = useState<V2MatchState | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [presentation, setPresentation] = useState<V2Presentation | null>(null);
   const [publicPlayers, setPublicPlayers] = useState<V2PublicPlayerSeat[]>([]);
@@ -43,6 +45,7 @@ export function LiveV2Page() {
   const [nightProgress, setNightProgress] = useState<
     "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced" | null
   >(null);
+  const [dayProgress, setDayProgress] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -53,6 +56,7 @@ export function LiveV2Page() {
         setPublicPlayers(snapshot.public_players);
         setRoleAssignment(snapshot.public_role_assignment);
         setGamePhase(snapshot.game_phase);
+        setMatchState(snapshot.match_state);
         setRosterState("ready");
       })
       .catch((reason) => {
@@ -100,6 +104,7 @@ export function LiveV2Page() {
             if (message.type === "live.snapshot") {
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
+              setMatchState(message.match_state);
               setPublicRule(message.public_rule);
               setPublicPlayers(message.public_players);
               setRoleAssignment(message.public_role_assignment);
@@ -152,6 +157,32 @@ export function LiveV2Page() {
             }
             if (message.type === "night.progress_changed") {
               setNightProgress(message.stage);
+              return;
+            }
+            if (message.type === "day.progress_changed") {
+              setDayProgress(message.stage);
+              return;
+            }
+            if (message.type === "match.state_changed") {
+              setMatchState({
+                round_no: message.round_no,
+                sheriff_player_id: message.sheriff_player_id,
+                sheriff_badge_state: message.sheriff_badge_state,
+                winner: message.winner,
+              });
+              return;
+            }
+            if (message.type === "player.state_changed") {
+              if (message.cause !== null) {
+                throw new Error("普通观众连接收到私密死亡原因，连接已关闭");
+              }
+              setPublicPlayers((current) =>
+                current.map((player) =>
+                  player.player_id === message.player_id
+                    ? { ...player, alive: message.alive }
+                    : player,
+                ),
+              );
               return;
             }
             if (message.type === "ability.progress_changed") {
@@ -250,11 +281,16 @@ export function LiveV2Page() {
   }
 
   return (
-    <main className={`mobile-page mobile-live-v2-page${gamePhase?.phase_id === "first_night" ? " is-first-night" : ""}`}>
+    <main className={`mobile-page mobile-live-v2-page${isNightPhase(gamePhase) ? " is-night" : ""}`}>
       <header className="mobile-live-v2-heading">
         <span>LIVE V2 · REALTIME</span>
         <h1>Live V2</h1>
         <small>{gameId}</small>
+        {matchState ? (
+          <small>
+            第 {matchState.round_no} 轮 · {sheriffLabel(matchState, publicPlayers)}
+          </small>
+        ) : null}
       </header>
 
       <section className="mobile-live-v2-rule" aria-labelledby="v2-rule-heading">
@@ -339,7 +375,7 @@ export function LiveV2Page() {
           <span>实时对局</span>
           <blockquote>点击后解锁音频；法官播报、玩家决策和语音都将在对应动作发生时实时生成。</blockquote>
           <button className="mobile-button mobile-button-primary" onClick={() => void enterLive()} type="button">
-            进入实时直播
+            进入实时观赛
           </button>
         </section>
       ) : null}
@@ -368,24 +404,32 @@ export function LiveV2Page() {
         <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
       ) : null}
 
-      {gamePhase?.phase_id === "first_night" ? (
+      {isNightPhase(gamePhase) ? (
         <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
-          <span>第一夜</span>
-          <strong>{gamePhase.phase_state === "night_running" ? "首夜能力正在实时执行" : "天黑，请闭眼"}</strong>
+          <span>第 {matchState?.round_no ?? 1} 夜</span>
+          <strong>{gamePhase?.phase_state === "night_running" ? "夜间能力正在实时执行" : "天黑，请闭眼"}</strong>
           <small>{nightProgressLabel(nightProgress)}</small>
         </section>
       ) : null}
 
-      {gamePhase?.phase_id === "day_1" ? (
+      {isDayPhase(gamePhase) ? (
         <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
-          <span>第一天</span>
-          <strong>{gamePhase.phase_state === "sheriff_election_ready" ? "等待警长竞选" : gamePhase.phase_state === "game_completed" ? "对局已结束" : "黎明结算完成"}</strong>
-          <small>首夜所有已配置能力已经结算，当前停在下一公开行动窗口之前。</small>
+          <span>第 {matchState?.round_no ?? 1} 天</span>
+          <strong>{dayPhaseLabel(gamePhase?.phase_state ?? "")}</strong>
+          <small>
+            {dayProgress && gamePhase?.phase_state !== "game_completed"
+              ? `实时阶段：${dayProgress}`
+              : dayPhaseDescription(gamePhase?.phase_state ?? "")}
+          </small>
         </section>
       ) : null}
 
       {liveState === "awaiting_observation" ? (
-        <p className="mobile-status-banner" role="status">当前验收切片已实时完成；所有已播语音均已分别保存，流程停在下一行动窗口之前。</p>
+        <p className="mobile-status-banner" role="status">
+          {matchState?.winner
+            ? `对局已结束：${matchState.winner === "villagers" ? "好人阵营" : "狼人阵营"}获胜。`
+            : "当前对局已停止；所有已播语音均已保存。"}
+        </p>
       ) : null}
 
       {error ? (
@@ -402,22 +446,27 @@ export function LiveV2Page() {
 }
 
 function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string {
-  const isNight = phase?.phase_id === "first_night";
+  const isNight = isNightPhase(phase);
+  if (state === "waiting_to_start") return "等待观众点击进入，正式对局尚未开始";
   if (state === "ready") return "音频已解锁，等待启动实时法官动作...";
   if (state === "generating") {
-    if (phase?.phase_state === "night_running") return "首夜动作正在实时请求大模型...";
-    if (phase?.phase_id === "day_1") return "法官正在实时生成黎明播报...";
+    if (phase?.phase_state === "night_running") return "夜间动作正在实时请求大模型...";
+    if (phase?.phase_state === "sheriff_election_ready") return "法官正在实时生成警长竞选开场...";
+    if (phase?.phase_state === "public_day_ready") return "法官正在实时生成白天发言开场...";
+    if (isDayPhase(phase)) return "白天动作正在实时请求大模型...";
     return isNight
       ? "法官正在通过大模型实时生成入夜播报..."
       : "法官正在通过大模型实时生成开场播报...";
   }
   if (state === "broadcasting") {
-    if (phase?.phase_state === "night_running") return "首夜动作语音正在实时播出";
-    if (phase?.phase_id === "day_1") return "黎明结果正在实时播报";
+    if (phase?.phase_state === "night_running") return "夜间动作语音正在实时播出";
+    if (phase?.phase_state === "sheriff_election_ready") return "警长竞选开场正在实时播报";
+    if (phase?.phase_state === "public_day_ready") return "白天发言开场正在实时播报";
+    if (isDayPhase(phase)) return "白天动作正在实时播报";
     return isNight ? "法官入夜话术实时播报中" : "法官开场话术实时播报中";
   }
   if (state === "finalizing") return "语音播报完成，正在校验并保存 V2 语音资产...";
-  if (state === "awaiting_observation") return "当前流程已完成，等待本步验收";
+  if (state === "awaiting_observation") return "完整对局已经结束";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";
 }
@@ -425,11 +474,44 @@ function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string
 function nightProgressLabel(
   stage: "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced" | null,
 ): string {
-  if (stage === "night_started") return "首夜行动窗口已经打开。";
+  if (stage === "night_started") return "夜间行动窗口已经打开。";
   if (stage === "actions_in_progress") return "私密能力正在依规则执行；普通观众只接收安全进度。";
-  if (stage === "night_resolved") return "首夜效果已由确定性规则结算，正在等待黎明播报。";
+  if (stage === "night_resolved") return "夜间效果已由确定性规则结算，正在等待黎明播报。";
   if (stage === "dawn_announced") return "黎明结果已公开播报。";
-  return "等待首夜实时行动开始。";
+  return "等待夜间实时行动开始。";
+}
+
+function dayPhaseLabel(phaseState: string): string {
+  if (phaseState === "sheriff_election_ready") return "等待警长竞选";
+  if (phaseState === "sheriff_election_open") return "警长竞选已开始";
+  if (phaseState === "public_discussion_open") return "白天发言已开始";
+  if (phaseState === "game_completed") return "对局已结束";
+  return "黎明结算完成";
+}
+
+function dayPhaseDescription(phaseState: string): string {
+  if (phaseState === "sheriff_election_open") return "玩家正在实时参选、发言、退水和投票。";
+  if (phaseState === "public_discussion_open") return "存活玩家正在依次实时发言和投票。";
+  if (phaseState === "game_completed") return "胜负条件已经由确定性规则结算。";
+  return "夜间已结算，正在进入下一公开行动窗口。";
+}
+
+function isNightPhase(phase: V2GamePhase | null): boolean {
+  return phase?.phase_id === "first_night" || phase?.phase_id.startsWith("night_") === true;
+}
+
+function isDayPhase(phase: V2GamePhase | null): boolean {
+  return phase?.phase_id.startsWith("day_") === true;
+}
+
+function sheriffLabel(
+  state: V2MatchState,
+  players: V2PublicPlayerSeat[],
+): string {
+  if (state.sheriff_badge_state === "disabled") return "本局无警长";
+  if (state.sheriff_badge_state === "pending") return "警长待选";
+  if (state.sheriff_badge_state === "destroyed") return "警徽已流失";
+  return `警长：${publicPlayerName(players, state.sheriff_player_id ?? "")}`;
 }
 
 function ruleFlagLabel(value: boolean | null): string {
