@@ -118,6 +118,45 @@ class V2GameRun(Base):
         nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class V2GameControlRequest(Base):
+    __tablename__ = "v2_game_control_requests"
+    __table_args__ = (
+        Index(
+            "uq_v2_game_control_actor_key",
+            "actor_user_id",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    actor_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
 
 class V2GodViewAccessGrant(Base):
@@ -379,9 +418,7 @@ class V2ActionWindow(Base):
 class V2AbilityInstance(Base):
     __tablename__ = "v2_ability_instances"
     __table_args__ = (
-        UniqueConstraint(
-            "game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"
-        ),
+        UniqueConstraint("game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"),
     )
 
     ability_instance_id: Mapped[str] = mapped_column(String(48), primary_key=True)

@@ -6,7 +6,7 @@ import {
   SearchOutlined,
   SoundOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
 import Button from "antd/es/button";
 import Descriptions from "antd/es/descriptions";
@@ -14,6 +14,7 @@ import Drawer from "antd/es/drawer";
 import Empty from "antd/es/empty";
 import Flex from "antd/es/flex";
 import Input from "antd/es/input";
+import Modal from "antd/es/modal";
 import Select from "antd/es/select";
 import Space from "antd/es/space";
 import Switch from "antd/es/switch";
@@ -29,7 +30,8 @@ import {
   AdminLoading,
   AdminPage,
 } from "@/components/admin/AdminPage";
-import { readV2GameRecord } from "@/v2/game-records/api";
+import { useAdminSession } from "@/features/auth/session-context";
+import { readV2GameRecord, stopV2Game } from "@/v2/game-records/api";
 import {
   buildV2Timeline,
   formatClock,
@@ -48,6 +50,14 @@ import type { V2GameRecordDetail } from "@/v2/game-records/types";
 
 type CategoryFilter = "all" | "model" | "milestone";
 type StatusFilter = "all" | "running" | "succeeded" | "failed";
+const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
+const ACTIVE_STATES = new Set([
+  "waiting_to_start",
+  "ready",
+  "generating",
+  "broadcasting",
+  "finalizing",
+]);
 
 export default function V2GameRecordDetailPage() {
   const navigate = useNavigate();
@@ -89,6 +99,8 @@ function V2GameRecordWorkspace({
   game: V2GameRecordDetail;
   onBack: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const { session } = useAdminSession();
   const timeline = useMemo(() => buildV2Timeline(game), [game]);
   const phases = useMemo(
     () => groupV2Phases(timeline, game.phase_id),
@@ -104,6 +116,25 @@ function V2GameRecordWorkspace({
   const [search, setSearch] = useState("");
   const [rawDataOpen, setRawDataOpen] = useState(false);
   const [requestDrawerOpen, setRequestDrawerOpen] = useState(false);
+  const [stopDialogOpen, setStopDialogOpen] = useState(false);
+  const [stopReason, setStopReason] = useState(DEFAULT_STOP_REASON);
+  const stopMutation = useMutation({
+    mutationFn: () =>
+      stopV2Game(
+        game.game_id,
+        stopReason.trim(),
+        session?.csrf_token ?? "",
+      ),
+    onSuccess: async () => {
+      setStopDialogOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: v2GameRecordKeys.detail(game.game_id),
+        }),
+        queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
+      ]);
+    },
+  });
 
   const actorOptions = useMemo(
     () => [
@@ -165,6 +196,13 @@ function V2GameRecordWorkspace({
   const selected = timeline.find((item) => item.id === selectedId) ?? null;
 
   const run = game.runs.find((item) => item.run_id === game.current_run_id);
+  const canControl =
+    session?.permissions.includes("*") ||
+    session?.permissions.includes("runs.control");
+  const canStop =
+    canControl &&
+    ACTIVE_STATES.has(game.status) &&
+    run?.stop_requested_at === null;
   const duration = run?.started_at
     ? Math.max(
         0,
@@ -208,8 +246,35 @@ function V2GameRecordWorkspace({
             }
           />
         </section>
-        <Button onClick={onBack}>返回列表</Button>
+        <Space>
+          {canStop ? (
+            <Button
+              danger
+              onClick={() => {
+                stopMutation.reset();
+                setStopReason(DEFAULT_STOP_REASON);
+                setStopDialogOpen(true);
+              }}
+            >
+              打断整局
+            </Button>
+          ) : null}
+          <Button onClick={onBack}>返回列表</Button>
+        </Space>
       </header>
+
+      {game.status === "canceled" || run?.stop_requested_at ? (
+        <Alert
+          message={
+            game.status === "canceled"
+              ? "对局已由管理员打断"
+              : "打断请求已提交"
+          }
+          description="模型与语音流不会继续推进；移动端会停止当前播放并进入安全终态。"
+          showIcon
+          type="warning"
+        />
+      ) : null}
 
       <section aria-label="流程筛选" className="v2-record-toolbar">
         <Select
@@ -306,6 +371,51 @@ function V2GameRecordWorkspace({
         onClose={() => setRawDataOpen(false)}
         open={rawDataOpen}
       />
+      <Modal
+        cancelText="取消"
+        confirmLoading={stopMutation.isPending}
+        destroyOnHidden
+        okButtonProps={{
+          danger: true,
+          disabled: stopReason.trim().length < 3,
+        }}
+        okText="确认打断"
+        onCancel={() => {
+          if (!stopMutation.isPending) setStopDialogOpen(false);
+        }}
+        onOk={() => stopMutation.mutate()}
+        open={stopDialogOpen}
+        title="确认打断整局"
+      >
+        <Typography.Paragraph>
+          此操作不会删除记录，但会立即停止新的模型请求、关闭当前模型/TTS
+          流，并让普通直播和上帝视角停止播放。
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">
+          对局 {game.game_id} · 运行 {game.current_run_id}
+        </Typography.Paragraph>
+        <Typography.Text strong>操作原因</Typography.Text>
+        <Input.TextArea
+          aria-label="操作原因"
+          disabled={stopMutation.isPending}
+          maxLength={500}
+          onChange={(event) => setStopReason(event.target.value)}
+          rows={3}
+          value={stopReason}
+        />
+        {stopMutation.isError ? (
+          <Alert
+            message="打断请求未成功"
+            description={
+              isAdminApiError(stopMutation.error)
+                ? stopMutation.error.message
+                : "暂时无法打断对局，请稍后重试。"
+            }
+            showIcon
+            type="error"
+          />
+        ) : null}
+      </Modal>
     </AdminPage>
   );
 }

@@ -43,9 +43,7 @@ class _WorkingNight:
     poisoned_target: str | None = None
 
 
-GroupHandler = Callable[
-    [V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]
-]
+GroupHandler = Callable[[V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]]
 
 
 class V2NightEngine:
@@ -71,6 +69,7 @@ class V2NightEngine:
         broadcaster: V2BroadcastPort,
     ) -> V2PhaseTransition | None:
         try:
+            self._actions.check_cancellation(game_id)
             state = self._repository.start_night(game_id)
             working = _WorkingNight()
             await broadcaster.broadcast_json(
@@ -84,10 +83,12 @@ class V2NightEngine:
             )
             groups = _activation_groups(state.snapshot)
             for group in groups:
+                self._actions.check_cancellation(game_id)
                 handler = self._handlers.get(group)
                 if handler is None:
                     raise V2NightError(f"unsupported_activation_group:{group}")
                 await handler(state, broadcaster, working)
+                self._actions.check_cancellation(game_id)
                 await broadcaster.broadcast_json(
                     night_progress(
                         game_id=state.game_id,
@@ -97,6 +98,7 @@ class V2NightEngine:
                     ),
                     audience="public",
                 )
+            self._actions.check_cancellation(game_id)
             resolution = self._repository.resolve_night(
                 state=state,
                 attack_target=working.attack_target,
@@ -132,7 +134,9 @@ class V2NightEngine:
                 audience="public",
             )
             await broadcaster.broadcast_json(game_phase_changed(resolution.transition))
-            death_names = [state.player(item["player_id"]).display_name for item in resolution.deaths]
+            death_names = [
+                state.player(item["player_id"]).display_name for item in resolution.deaths
+            ]
             dawn_ok = await self._actions.run_judge_speech(
                 game_id=game_id,
                 broadcaster=broadcaster,
@@ -176,6 +180,7 @@ class V2NightEngine:
                 for hunter_id in self._repository.hunter_reactions(game_id)
                 if hunter_id not in resolved_hunters
             ):
+                self._actions.check_cancellation(game_id)
                 hunter_id = pending_hunters[0]
                 resolved_hunters.add(hunter_id)
                 await self._run_hunter_response(
@@ -183,6 +188,7 @@ class V2NightEngine:
                     hunter_id=hunter_id,
                     broadcaster=broadcaster,
                 )
+            self._actions.check_cancellation(game_id)
             winner = self._repository.current_winner(game_id)
             if winner is not None:
                 current_phase_state = self._repository.current_phase_state(game_id)
@@ -202,6 +208,7 @@ class V2NightEngine:
                 )
                 if not completed_ok:
                     raise V2NightError("game_completed_announcement_failed")
+            self._actions.check_cancellation(game_id)
             final_transition = self._repository.finish_night(game_id=game_id)
             await broadcaster.broadcast_json(game_phase_changed(final_transition))
             match = self._repository.match_state(game_id)
@@ -255,7 +262,9 @@ class V2NightEngine:
         working: _WorkingNight,
     ) -> None:
         ability_id = "werewolf.attack"
-        wolves = [player for player in state.players if player.alive and player.role_key == "werewolf"]
+        wolves = [
+            player for player in state.players if player.alive and player.role_key == "werewolf"
+        ]
         candidates = [
             player for player in state.players if player.alive and player.role_key != "werewolf"
         ]
@@ -390,8 +399,7 @@ class V2NightEngine:
         candidates = [
             player
             for player in state.players
-            if player.alive
-            and (state.round_no == 1 or player.player_id != previous_target)
+            if player.alive and (state.round_no == 1 or player.player_id != previous_target)
         ]
         await self._private_judge(
             state=state,
@@ -455,7 +463,9 @@ class V2NightEngine:
             )
             return
         candidates = [
-            player for player in state.players if player.alive and player.player_id != seer.player_id
+            player
+            for player in state.players
+            if player.alive and player.player_id != seer.player_id
         ]
         await self._private_judge(
             state=state,
@@ -540,7 +550,9 @@ class V2NightEngine:
     ) -> None:
         witch = _single_owner(state, "witch")
         configured = {
-            item["ability_id"] for item in state.snapshot["instances"] if item["activation_group"] == "witch"
+            item["ability_id"]
+            for item in state.snapshot["instances"]
+            if item["activation_group"] == "witch"
         }
         if witch is None or not witch.alive:
             for ability_id in sorted(configured):
@@ -630,9 +642,7 @@ class V2NightEngine:
                         {"available": False, "remaining": 0} if heal_used else None
                     ),
                 )
-                await self._ability_completed(
-                    state, broadcaster, "witch.heal", witch, decision
-                )
+                await self._ability_completed(state, broadcaster, "witch.heal", witch, decision)
         poison_state = self._repository.ability_state(
             game_id=state.game_id,
             ability_id="witch.poison",
@@ -759,7 +769,9 @@ class V2NightEngine:
             decision,
         )
         if decision.target_player_id is not None:
-            target = next(item for item in candidates if item.player_id == decision.target_player_id)
+            target = next(
+                item for item in candidates if item.player_id == decision.target_player_id
+            )
             self._repository.apply_hunter_shot(
                 state=reaction_state,
                 hunter_player_id=hunter_id,
@@ -924,11 +936,7 @@ class V2NightEngine:
 
 def _activation_groups(snapshot: dict[str, Any]) -> tuple[str, ...]:
     ordered = sorted(
-        (
-            item
-            for item in snapshot["instances"]
-            if item["window_type"] == "night"
-        ),
+        (item for item in snapshot["instances"] if item["window_type"] == "night"),
         key=lambda item: (item["order"], item["ability_instance_id"]),
     )
     groups: list[str] = []

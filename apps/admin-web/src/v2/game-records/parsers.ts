@@ -1,5 +1,6 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
+  V2GameControlResult,
   V2GamePresentation,
   V2GameRecordDetail,
   V2GameRecordEvent,
@@ -9,6 +10,20 @@ import type {
   V2ModelRequest,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
+
+export function parseV2GameControlResult(
+  value: unknown,
+): V2GameControlResult {
+  const record = object(value);
+  return {
+    action: oneOf(record.action, ["stop"] as const),
+    game_id: text(record.game_id),
+    run_id: text(record.run_id),
+    run_status: text(record.run_status),
+    stop_requested_at: date(record.stop_requested_at),
+    replayed: boolean(record.replayed),
+  };
+}
 
 export function parseV2GameRecordList(value: unknown): V2GameRecordList {
   const record = object(value);
@@ -72,6 +87,7 @@ function parseRun(value: unknown): V2GameRun {
     status: text(record.status),
     started_at: nullableDate(record.started_at),
     completed_at: record.completed_at === null ? null : date(record.completed_at),
+    stop_requested_at: nullableDate(record.stop_requested_at),
   };
 }
 
@@ -203,6 +219,11 @@ function nullableInteger(value: unknown, minimum: number): number | null {
 
 function nullableText(value: unknown): string | null {
   return value === null ? null : text(value);
+}
+
+function boolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw invalid();
+  return value;
 }
 
 function date(value: unknown): string {

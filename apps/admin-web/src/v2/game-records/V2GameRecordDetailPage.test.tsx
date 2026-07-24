@@ -15,6 +15,10 @@ import {
 
 import V2GameRecordDetailPage from "@/v2/game-records/V2GameRecordDetailPage";
 
+vi.mock("@/features/auth/session-context", () => ({
+  useAdminSession: () => ({ session: null }),
+}));
+
 const gameId = "v2_game_observable";
 const actionId = "v2_action_opening";
 const runId = "v2_run_observable";
@@ -44,6 +48,7 @@ const detail = {
       status: "awaiting_observation",
       started_at: occurredAt,
       completed_at: null,
+      stop_requested_at: null,
     },
   ],
   events: [

@@ -20,8 +20,10 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.judge_configuration import RuntimeJudgeConfiguration
 from app.main import create_application
+from app.models.admin import AuditEvent
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveRunRecord
+from app.models.user import User
 from app.v2.live_runtime import V2LiveRuntime, _GameChannel
 from app.v2.day_engine import V2DayEngine, _leaders
 from app.v2.match_repository import V2MatchRepository
@@ -35,6 +37,7 @@ from app.v2.models import (
     V2AbilityInstance,
     V2ActionWindow,
     V2EffectIntent,
+    V2GameControlRequest,
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
@@ -84,13 +87,18 @@ class FakeV2ModelClient:
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Any = None,
     ) -> V2ModelSpeech:
+        if check_cancellation is not None:
+            check_cancellation()
         self.call_count += 1
         self.contexts.append(action_context)
         if not self.release.is_set():
             released = await asyncio.to_thread(self.release.wait, 5)
             if not released:
                 raise RuntimeError("test model release timed out")
+        if check_cancellation is not None:
+            check_cancellation()
         assert action_context["influence"] == {
             "schema_version": 1,
             "status": "disabled",
@@ -140,7 +148,10 @@ class FakeV2ModelClient:
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Any = None,
     ) -> V2ModelDecision:
+        if check_cancellation is not None:
+            check_cancellation()
         self.call_count += 1
         self.contexts.append(action_context)
         self.decision_contexts.append(action_context)
@@ -175,6 +186,9 @@ class FakeV2TtsClient:
     def __init__(self) -> None:
         self.call_count = 0
         self.speakers: list[str | None] = []
+        self.first_chunk = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
 
     async def synthesize(
         self,
@@ -182,12 +196,20 @@ class FakeV2TtsClient:
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        check_cancellation: Any = None,
     ) -> AsyncIterator[bytes]:
         self.call_count += 1
         self.speakers.append(speaker)
         assert text.endswith(("。", "！", "？"))
         assert attempt_id.startswith("v2_tts_")
         yield PCM_CHUNK
+        self.first_chunk.set()
+        if not self.release.is_set():
+            released = await asyncio.to_thread(self.release.wait, 5)
+            if not released:
+                raise RuntimeError("test TTS release timed out")
+        if check_cancellation is not None:
+            check_cancellation()
         yield PCM_CHUNK
 
 
@@ -196,6 +218,9 @@ class _ScriptedDayActionEngine:
         self.targets = targets
         self.player_actions: list[str] = []
         self.judge_actions: list[str] = []
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
 
     async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision:
         self.player_actions.append(spec.actor_id)
@@ -954,10 +979,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         assert all(item.state == "closed" for item in presentations)
         assert len(voices) == 2
         assert all(item.state == "ready" and item.sample_count == 480 for item in voices)
-        assert all(
-            item.pcm_sha256 == hashlib.sha256(PCM_CHUNK * 2).hexdigest()
-            for item in voices
-        )
+        assert all(item.pcm_sha256 == hashlib.sha256(PCM_CHUNK * 2).hexdigest() for item in voices)
         for voice in voices:
             voice_path = voice_root / voice.storage_key
             assert voice_path.is_file()
@@ -1011,6 +1033,205 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
         assert audio.status_code == 200
         assert audio.headers["content-type"] == "audio/wav"
         assert audio.content[:4] == b"RIFF"
+
+
+def test_admin_operator_can_idempotently_stop_waiting_v2_game_without_private_leak(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post(
+        "/api/v2/games",
+        json=_lobby_create_request(),
+    ).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-stop-waiting-1",
+    )
+    reason = "人工发现异常，立即停止额度消耗"
+
+    stopped = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+        json={"reason": reason},
+        headers=headers,
+    )
+
+    assert stopped.status_code == 202, stopped.text
+    assert stopped.json() == {
+        "action": "stop",
+        "game_id": identifiers["game_id"],
+        "run_id": identifiers["run_id"],
+        "run_status": "canceled",
+        "stop_requested_at": stopped.json()["stop_requested_at"],
+        "replayed": False,
+    }
+    replayed = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+        json={"reason": reason},
+        headers=headers,
+    )
+    assert replayed.status_code == 200
+    assert replayed.json()["replayed"] is True
+    assert replayed.json()["run_status"] == "canceled"
+
+    public_snapshot = client.get(identifiers["snapshot_url"]).json()
+    assert public_snapshot["live_state"] == "canceled"
+    assert public_snapshot["current_presentation"] is None
+    assert reason not in json.dumps(public_snapshot, ensure_ascii=False)
+    god_snapshot = client.get(
+        identifiers["god_view_snapshot_url"],
+        headers={"Authorization": f"Bearer {identifiers['god_view_access_token']}"},
+    ).json()
+    assert god_snapshot["live_state"] == "canceled"
+    assert reason not in json.dumps(god_snapshot, ensure_ascii=False)
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and game.status == "canceled"
+        assert run is not None
+        assert run.status == "canceled"
+        assert run.stop_requested_at is not None
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == game.game_id)
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert [item.event_type for item in events][-2:] == [
+            "game_stop_requested",
+            "game_canceled",
+        ]
+        assert reason not in json.dumps(
+            [item.payload for item in events],
+            ensure_ascii=False,
+        )
+        assert db.scalar(select(func.count()).select_from(V2GameControlRequest)) == 1
+        audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.v2_game.stop",
+                AuditEvent.resource_id == game.game_id,
+            )
+        )
+        assert audit is not None
+        assert audit.reason == reason
+
+
+def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_state(
+    v2_context,
+) -> None:
+    client, session_factory, voice_root = v2_context
+    identifiers = client.post(
+        "/api/v2/games",
+        json=_lobby_create_request(),
+    ).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-stop-active-1",
+    )
+    tts_client = client.app.state.v2_test_tts_client
+    tts_client.release.clear()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("bytes") is not None:
+                break
+
+        stopped = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+            json={"reason": "当前语音异常，人工立即打断"},
+            headers=headers,
+        )
+        tts_client.release.set()
+        assert stopped.status_code == 202, stopped.text
+        assert stopped.json()["run_status"] == "canceled"
+
+        terminal = None
+        while terminal is None:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") == "canceled":
+                terminal = value
+        assert terminal["reason"] == "operator_interrupted"
+        assert "当前语音异常" not in json.dumps(terminal, ensure_ascii=False)
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None and game.status == "canceled"
+        presentations = list(
+            db.scalars(select(V2LivePresentation).where(V2LivePresentation.game_id == game.game_id))
+        )
+        voices = list(db.scalars(select(V2VoiceAsset).where(V2VoiceAsset.game_id == game.game_id)))
+        assert len(presentations) == 1
+        assert presentations[0].state == "canceled"
+        assert len(voices) == 1
+        assert voices[0].state == "canceled"
+        event_types = list(
+            db.scalars(
+                select(V2GameRecordEvent.event_type)
+                .where(V2GameRecordEvent.game_id == game.game_id)
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert "voice_recording_canceled" in event_types
+        assert "speech_interrupted" in event_types
+        assert "game_canceled" in event_types
+        assert "action_failed" not in event_types
+    assert client.app.state.v2_test_model_client.call_count == 1
+    assert not list(voice_root.rglob("*.tmp"))
+
+
+def test_admin_viewer_cannot_stop_v2_game(v2_context) -> None:
+    client, _session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json={"title": "只读权限"}).json()
+    session = client.post("/api/v1/admin/dev-login").json()
+
+    response = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+        json={"reason": "只读用户不应成功"},
+        headers={
+            "X-CSRF-Token": session["csrf_token"],
+            "Idempotency-Key": "v2-stop-viewer-1",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "admin_permission_denied"
+
+
+def test_admin_operator_cannot_stop_terminal_v2_game(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json={"title": "已结束对局"}).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and run is not None
+        game.status = "awaiting_observation"
+        run.status = "awaiting_observation"
+
+    response = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+        json={"reason": "不应覆盖已完成对局"},
+        headers=_operator_control_headers(
+            client,
+            session_factory,
+            idempotency_key="v2-stop-terminal-1",
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "admin_v2_game_not_active"
+    with session_factory() as db:
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert run is not None and run.stop_requested_at is None
 
 
 def test_executable_rule_runs_dynamic_first_night_without_leaking_private_actions(
@@ -1097,9 +1318,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert len(activations) >= 4
         assert all(item.status in {"completed", "skipped"} for item in activations)
         effects = list(
-            db.scalars(
-                select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id)
-            )
+            db.scalars(select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id))
         )
         assert {item.effect_type for item in effects} >= {
             "attack",
@@ -1108,9 +1327,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         }
         assert all(item.state == "resolved" for item in effects if item.effect_type != "shoot")
         facts = list(
-            db.scalars(
-                select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == game.game_id)
-            )
+            db.scalars(select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == game.game_id))
         )
         assert len(facts) >= 5
         assert sum(item.fact_type == "investigation_alignment" for item in facts) >= 1
@@ -1176,8 +1393,7 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             for context in model_client.contexts
         )
         assert any(
-            context["action_type"] == "sheriff_run"
-            for context in model_client.decision_contexts
+            context["action_type"] == "sheriff_run" for context in model_client.decision_contexts
         )
         instances = {
             item.ability_instance_id: item.ability_id
@@ -1191,23 +1407,17 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             )
         )
         heal = next(
-            item
-            for item in activations
-            if instances[item.ability_instance_id] == "witch.heal"
+            item for item in activations if instances[item.ability_instance_id] == "witch.heal"
         )
         poison = next(
-            item
-            for item in activations
-            if instances[item.ability_instance_id] == "witch.poison"
+            item for item in activations if instances[item.ability_instance_id] == "witch.poison"
         )
         assert heal.status == "completed"
         assert heal.decision["target_player_id"] is None
         assert poison.status == "completed"
         assert poison.decision["target_player_id"] is not None
         effects = list(
-            db.scalars(
-                select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id)
-            )
+            db.scalars(select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id))
         )
         attack = next(item for item in effects if item.effect_type == "attack")
         poison_effect = next(item for item in effects if item.effect_type == "poison")
@@ -1220,8 +1430,7 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             db.scalars(
                 select(V2GameRecordEvent).where(
                     V2GameRecordEvent.game_id == game.game_id,
-                    V2GameRecordEvent.event_type
-                    == "model_decision_target_normalized",
+                    V2GameRecordEvent.event_type == "model_decision_target_normalized",
                 )
             )
         )
@@ -1235,10 +1444,7 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             and event.payload["normalized_target_player_id"] is None
             for event in normalized_targets
         )
-    assert all(
-        context["influence"]["status"] == "disabled"
-        for context in model_client.contexts
-    )
+    assert all(context["influence"]["status"] == "disabled" for context in model_client.contexts)
 
 
 def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> None:
@@ -1380,9 +1586,7 @@ def test_complete_match_hunter_shot_chain_resolves_every_new_death(v2_context) -
         )
         first_hunter = next(item for item in assignments if item.role_key == "hunter")
         second_hunter = next(
-            item
-            for item in assignments
-            if item.role_key not in {"hunter", "werewolf"}
+            item for item in assignments if item.role_key not in {"hunter", "werewolf"}
         )
         final_target = next(
             item
@@ -1522,6 +1726,24 @@ def _ready_message(message_type: str) -> dict[str, Any]:
             "sample_rate": 24000,
             "channels": 1,
         },
+    }
+
+
+def _operator_control_headers(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    *,
+    idempotency_key: str,
+) -> dict[str, str]:
+    session = client.post("/api/v1/admin/dev-login")
+    assert session.status_code == 200, session.text
+    with session_factory.begin() as db:
+        user = db.scalar(select(User).where(User.email == "v2-admin@example.test"))
+        assert user is not None
+        user.admin_role = "operator"
+    return {
+        "X-CSRF-Token": session.json()["csrf_token"],
+        "Idempotency-Key": idempotency_key,
     }
 
 

@@ -57,6 +57,7 @@ class V2ModelPort(Protocol):
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelSpeech: ...
 
     async def generate_action_decision(
@@ -65,6 +66,7 @@ class V2ModelPort(Protocol):
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision: ...
 
 
@@ -75,6 +77,7 @@ class V2TtsPort(Protocol):
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]: ...
 
 
@@ -148,6 +151,9 @@ class V2ActionEngine:
         self._voice_root = voice_root
         self._sample_rate = sample_rate
         self._judge_configuration_provider = judge_configuration_provider
+
+    def check_cancellation(self, game_id: str) -> None:
+        self._repository.check_cancellation(game_id)
 
     async def run_opening_to_nightfall(
         self,
@@ -280,11 +286,16 @@ class V2ActionEngine:
         if claim is None:
             return None
         context["run_id"] = claim.run_id
+
+        def check_cancellation() -> None:
+            self._repository.check_cancellation(claim.game_id)
+
         identity: V2PresentationIdentity | None = None
         recorder: V2VoiceRecorder | None = None
         model_attempt_id: str | None = None
         model_request_completed = False
         try:
+            check_cancellation()
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,
@@ -314,9 +325,7 @@ class V2ActionEngine:
                         else None
                     ),
                     "judge_configuration_version": (
-                        judge_configuration.version
-                        if judge_configuration is not None
-                        else None
+                        judge_configuration.version if judge_configuration is not None else None
                     ),
                     "actor_kind": spec.actor_kind,
                     "actor_id": spec.actor_id,
@@ -330,6 +339,7 @@ class V2ActionEngine:
                     action_context=context,
                     attempt_id=model_attempt_id,
                     model_id=model_id,
+                    check_cancellation=check_cancellation,
                 )
                 original_target = model_decision.target_player_id
                 self._repository.append_event(
@@ -414,6 +424,7 @@ class V2ActionEngine:
                     action_context=context,
                     attempt_id=model_attempt_id,
                     model_id=model_id,
+                    check_cancellation=check_cancellation,
                 )
                 self._repository.append_event(
                     game_id=claim.game_id,
@@ -433,9 +444,7 @@ class V2ActionEngine:
                         "attempt_id": model_attempt_id,
                         "provider_request_id": speech.provider_request_id,
                         "raw_response": (
-                            speech.raw_response
-                            if speech.raw_response is not None
-                            else speech.text
+                            speech.raw_response if speech.raw_response is not None else speech.text
                         ),
                         "parsed_output": {"speech": speech.text},
                         "first_token_ms": speech.first_token_ms,
@@ -445,6 +454,7 @@ class V2ActionEngine:
                 model_request_completed = True
                 speech_text = speech.text
                 sentence_ms = speech.sentence_ms
+            check_cancellation()
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
             voice_asset_id = f"v2_voice_{uuid4().hex[:16]}"
@@ -460,12 +470,8 @@ class V2ActionEngine:
                 audience=spec.audience,
             )
             await broadcaster.set_current(identity, 0, audience=spec.audience)
-            await broadcaster.broadcast_json(
-                presentation_opened(identity), audience=spec.audience
-            )
-            await broadcaster.broadcast_json(
-                segment_committed(identity), audience=spec.audience
-            )
+            await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
+            await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,
@@ -484,9 +490,7 @@ class V2ActionEngine:
                     "sentence_ms": sentence_ms,
                     "speaker": speaker,
                     "judge_configuration_version": (
-                        judge_configuration.version
-                        if judge_configuration is not None
-                        else None
+                        judge_configuration.version if judge_configuration is not None else None
                     ),
                 },
             )
@@ -504,7 +508,9 @@ class V2ActionEngine:
                 text=speech_text,
                 attempt_id=tts_attempt_id,
                 speaker=speaker,
+                check_cancellation=check_cancellation,
             ):
+                check_cancellation()
                 sample_count = recorder.append(pcm)
                 if first_chunk:
                     first_chunk = False
@@ -546,6 +552,7 @@ class V2ActionEngine:
                 chunk_index += 1
             if first_chunk or official_end is None:
                 raise V2TtsError("tts_empty_audio")
+            check_cancellation()
             self._repository.mark_finalizing(
                 game_id=claim.game_id,
                 tts_attempt_id=tts_attempt_id,
@@ -571,8 +578,11 @@ class V2ActionEngine:
                 size_bytes=recorded.size_bytes,
             )
             remaining = official_end - time.monotonic()
-            if remaining > 0:
-                await asyncio.sleep(remaining)
+            while remaining > 0:
+                await asyncio.sleep(min(remaining, 0.1))
+                check_cancellation()
+                remaining = official_end - time.monotonic()
+            check_cancellation()
             self._repository.complete_action(
                 identity=identity,
                 final_chunk_index=chunk_index - 1,
@@ -603,6 +613,10 @@ class V2ActionEngine:
                     audience=spec.audience,
                 )
             return V2ActionResult(decision=model_decision)
+        except asyncio.CancelledError:
+            if recorder is not None:
+                recorder.abort()
+            raise
         except Exception as exc:
             if recorder is not None:
                 recorder.abort()

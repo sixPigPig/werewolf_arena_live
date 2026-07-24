@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.v2.action_engine import V2ActionEngine, V2BroadcastPort, V2SpeechSpec
@@ -34,6 +35,28 @@ class V2LiveFlowEngine:
 
     async def run(self, *, game_id: str, broadcaster: V2BroadcastPort) -> None:
         try:
+            await self._run_active(game_id=game_id, broadcaster=broadcaster)
+        except asyncio.CancelledError:
+            if not self._action_repository.stop_requested(game_id):
+                raise
+            result = self._action_repository.cancel_game(game_id)
+            await broadcaster.set_current(None, 0)
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=game_id,
+                    run_id=result.run_id,
+                    state="canceled",
+                    reason="operator_interrupted",
+                )
+            )
+
+    async def _run_active(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+    ) -> None:
+        try:
             opening_state = self._match_repository.snapshot(game_id)
         except V2RepositoryError:
             opening_setup = None
@@ -59,6 +82,7 @@ class V2LiveFlowEngine:
         )
         if not opening_ok:
             return
+        self._action_repository.check_cancellation(game_id)
         try:
             transition = self._action_repository.transition_to_first_night(game_id=game_id)
         except Exception as exc:
@@ -93,6 +117,7 @@ class V2LiveFlowEngine:
         phase_id = "first_night"
         round_no = 1
         while True:
+            self._action_repository.check_cancellation(game_id)
             if not await self._announce_nightfall(
                 game_id=game_id,
                 phase_id=phase_id,
@@ -107,6 +132,7 @@ class V2LiveFlowEngine:
             )
             if day_transition is None or day_transition.phase_state == "game_completed":
                 return
+            self._action_repository.check_cancellation(game_id)
             await self._day.resolve_pending_death_aftermath(
                 game_id=game_id,
                 broadcaster=broadcaster,
@@ -120,6 +146,7 @@ class V2LiveFlowEngine:
                 "failed",
             }:
                 return
+            self._action_repository.check_cancellation(game_id)
             phase_id = night_transition.phase_id
             round_no += 1
 

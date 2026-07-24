@@ -65,6 +65,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
     ) -> None:
         """Resolve public death consequences left by the preceding night."""
+        self._actions.check_cancellation(game_id)
         await self._resolve_death_aftermath(game_id=game_id, broadcaster=broadcaster)
 
     async def run(
@@ -74,6 +75,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
     ) -> V2PhaseTransition | None:
         try:
+            self._actions.check_cancellation(game_id)
             state = self._repository.snapshot(game_id)
             await broadcaster.broadcast_json(
                 day_progress(
@@ -163,6 +165,7 @@ class V2DayEngine:
                         broadcaster=broadcaster,
                     )
 
+            self._actions.check_cancellation(game_id)
             return await self._close_day(
                 game_id=game_id,
                 broadcaster=broadcaster,
@@ -225,6 +228,7 @@ class V2DayEngine:
         )
         if not ok:
             raise V2DayRuntimeError(f"{action_type}_failed")
+        self._actions.check_cancellation(state.game_id)
         transition = self._repository.record_phase_state(
             game_id=state.game_id,
             previous_phase_state=previous_state,
@@ -237,10 +241,12 @@ class V2DayEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         alive = [player for player in state.players if player.alive]
         candidates: list[V2MatchPlayer] = []
         for player in alive:
+            self._actions.check_cancellation(game_id)
             decision = await self._player_action(
                 game_id=game_id,
                 player=player,
@@ -267,7 +273,9 @@ class V2DayEngine:
 
         original_candidates = tuple(candidates)
         original_off_sheriff = [
-            player for player in alive if player.player_id not in {item.player_id for item in candidates}
+            player
+            for player in alive
+            if player.player_id not in {item.player_id for item in candidates}
         ]
         if not candidates:
             await self._destroy_badge(
@@ -278,6 +286,7 @@ class V2DayEngine:
             return
 
         for candidate in candidates:
+            self._actions.check_cancellation(game_id)
             decision = await self._player_action(
                 game_id=game_id,
                 player=candidate,
@@ -292,6 +301,7 @@ class V2DayEngine:
 
         remaining: list[V2MatchPlayer] = []
         for candidate in candidates:
+            self._actions.check_cancellation(game_id)
             decision = await self._player_action(
                 game_id=game_id,
                 player=candidate,
@@ -364,6 +374,7 @@ class V2DayEngine:
 
         tied = [item for item in remaining if item.player_id in set(leaders)]
         for candidate in tied:
+            self._actions.check_cancellation(game_id)
             decision = await self._player_action(
                 game_id=game_id,
                 player=candidate,
@@ -406,11 +417,13 @@ class V2DayEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> bool:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         order = await self._speech_order(state=state, broadcaster=broadcaster)
         rounds = max(1, int(state.rule.get("speech_rounds") or 1))
         for speech_round in range(1, rounds + 1):
             for player_id in order:
+                self._actions.check_cancellation(game_id)
                 current = self._repository.snapshot(game_id)
                 player = current.player(player_id)
                 if not player.alive:
@@ -443,6 +456,7 @@ class V2DayEngine:
         state: V2MatchSnapshot,
         broadcaster: V2BroadcastPort,
     ) -> list[str]:
+        self._actions.check_cancellation(state.game_id)
         alive = sorted((item for item in state.players if item.alive), key=lambda item: item.seat)
         if (
             str(state.rule.get("speech_policy") or "sequential") != "sheriff_directed"
@@ -472,9 +486,7 @@ class V2DayEngine:
         if start == right.player_id:
             ordered = alive[sheriff_index + 1 :] + alive[: sheriff_index + 1]
         else:
-            ordered = list(reversed(alive[:sheriff_index])) + list(
-                reversed(alive[sheriff_index:])
-            )
+            ordered = list(reversed(alive[:sheriff_index])) + list(reversed(alive[sheriff_index:]))
         result = [item.player_id for item in ordered]
         self._repository.append_event(
             game_id=state.game_id,
@@ -489,6 +501,7 @@ class V2DayEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> V2ExileResult | None:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         alive = [item for item in state.players if item.alive]
         voters = [item for item in alive if item.state.get("can_vote", True)]
@@ -512,6 +525,7 @@ class V2DayEngine:
                 )
                 return None
             for candidate in tied:
+                self._actions.check_cancellation(game_id)
                 decision = await self._player_action(
                     game_id=game_id,
                     player=candidate,
@@ -542,6 +556,7 @@ class V2DayEngine:
                 )
                 return None
 
+        self._actions.check_cancellation(game_id)
         target = state.player(leaders[0])
         result = self._repository.resolve_exile(game_id=game_id, player_id=target.player_id)
         objective = (
@@ -575,6 +590,7 @@ class V2DayEngine:
         exile: V2ExileResult,
         broadcaster: V2BroadcastPort,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         if exile.outcome != "eliminated":
             return
         state = self._repository.snapshot(game_id)
@@ -604,12 +620,14 @@ class V2DayEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         resolved_hunters: set[str] = set()
         while pending_hunters := tuple(
             hunter_id
             for hunter_id in self._repository.pending_hunters(game_id)
             if hunter_id not in resolved_hunters
         ):
+            self._actions.check_cancellation(game_id)
             hunter_id = pending_hunters[0]
             resolved_hunters.add(hunter_id)
             state = self._repository.snapshot(game_id)
@@ -658,6 +676,7 @@ class V2DayEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         sheriff_id = state.sheriff_player_id
         if sheriff_id is None or state.player(sheriff_id).alive:
@@ -708,9 +727,11 @@ class V2DayEngine:
         weighted: bool,
         context: dict[str, Any],
     ) -> dict[str, float]:
+        self._actions.check_cancellation(game_id)
         totals: dict[str, float] = defaultdict(float)
         state = self._repository.snapshot(game_id)
         for voter in voters:
+            self._actions.check_cancellation(game_id)
             eligible = [item for item in candidates if item.player_id != voter.player_id]
             if not eligible:
                 continue
@@ -777,16 +798,22 @@ class V2DayEngine:
         stage: str,
         pre_sheriff: bool = False,
     ) -> bool:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         if not bool(state.rule.get("werewolf_self_explosion_enabled")):
             return False
         for wolf in state.players:
-            if wolf.alive and wolf.role_key == "werewolf" and await self._offer_self_explosion(
-                game_id=game_id,
-                player=wolf,
-                broadcaster=broadcaster,
-                stage=stage,
-                pre_sheriff=pre_sheriff,
+            self._actions.check_cancellation(game_id)
+            if (
+                wolf.alive
+                and wolf.role_key == "werewolf"
+                and await self._offer_self_explosion(
+                    game_id=game_id,
+                    player=wolf,
+                    broadcaster=broadcaster,
+                    stage=stage,
+                    pre_sheriff=pre_sheriff,
+                )
             ):
                 return True
         return False
@@ -800,6 +827,7 @@ class V2DayEngine:
         stage: str,
         pre_sheriff: bool,
     ) -> bool:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         if not bool(state.rule.get("werewolf_self_explosion_enabled")):
             return False
@@ -828,6 +856,7 @@ class V2DayEngine:
         )
         if not exploded:
             return False
+        self._actions.check_cancellation(game_id)
         if pre_sheriff:
             outcome = self._repository.record_pre_sheriff_explosion(
                 game_id=game_id,
@@ -867,6 +896,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
         reason: str,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         self._repository.set_sheriff(game_id=game_id, player_id=player.player_id, reason=reason)
         state = self._repository.snapshot(game_id)
         if not await self._judge(
@@ -887,6 +917,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
         reason: str,
     ) -> None:
+        self._actions.check_cancellation(game_id)
         self._repository.set_sheriff(game_id=game_id, player_id=None, reason=reason)
         state = self._repository.snapshot(game_id)
         if not await self._judge(
@@ -907,6 +938,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
         reason: str,
     ) -> None:
+        self._actions.check_cancellation(state.game_id)
         current = self._repository.snapshot(state.game_id)
         if not await self._judge(
             state=current,
@@ -926,6 +958,7 @@ class V2DayEngine:
         reason: str,
         summarize: bool,
     ) -> V2PhaseTransition:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         winner = self._repository.current_winner(game_id)
         if winner is not None:
@@ -949,6 +982,7 @@ class V2DayEngine:
                 context={"public_history": list(state.public_history[-20:])},
             ):
                 raise V2DayRuntimeError("day_summary_failed")
+        self._actions.check_cancellation(game_id)
         transition = self._repository.finish_day(game_id=game_id, reason=reason)
         await broadcaster.broadcast_json(game_phase_changed(transition))
         current = self._repository.snapshot(game_id)
@@ -963,7 +997,11 @@ class V2DayEngine:
                         if transition.phase_state == "game_completed"
                         else "failed"
                     ),
-                    reason=(None if transition.phase_state == "game_completed" else "max_rounds_exceeded"),
+                    reason=(
+                        None
+                        if transition.phase_state == "game_completed"
+                        else "max_rounds_exceeded"
+                    ),
                 )
             )
         return transition
@@ -978,6 +1016,7 @@ class V2DayEngine:
         success_phase_state: str,
         context: dict[str, Any],
     ) -> bool:
+        self._actions.check_cancellation(state.game_id)
         return await self._actions.run_judge_speech(
             game_id=state.game_id,
             broadcaster=broadcaster,
@@ -1006,6 +1045,7 @@ class V2DayEngine:
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
     ) -> V2ModelDecision:
+        self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         decision = await self._actions.run_player_decision(
             game_id=game_id,

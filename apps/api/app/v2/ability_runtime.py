@@ -169,9 +169,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
 _ACTION_TO_ABILITY = {
     definition.action_name: definition.ability_id for definition in ABILITY_REGISTRY.values()
 }
-_NIGHT_ACTIONS = frozenset(
-    {"remove", "protect", "investigate", "witch_save", "witch_poison"}
-)
+_NIGHT_ACTIONS = frozenset({"remove", "protect", "investigate", "witch_save", "witch_poison"})
 
 
 def normalize_role_key(value: object) -> str:
@@ -266,9 +264,7 @@ def compile_ability_runtime_snapshot(
                 rule_set.get("werewolf_self_explosion_enabled")
             ),
             "exile_last_words_enabled": bool(rule_set.get("exile_last_words_enabled")),
-            "sheriff_badge_bomb_policy": str(
-                rule_set.get("sheriff_badge_bomb_policy") or "none"
-            ),
+            "sheriff_badge_bomb_policy": str(rule_set.get("sheriff_badge_bomb_policy") or "none"),
         },
         "policies": {
             "werewolf_consensus": {

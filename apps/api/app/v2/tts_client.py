@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 import json
 import struct
@@ -73,7 +73,9 @@ class V2TtsClient:
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]:
+        _check(check_cancellation)
         selected_speaker = (speaker or self._speaker).strip()
         if not all(
             (
@@ -105,7 +107,12 @@ class V2TtsClient:
                 timeout=8.0,
             )
             await _send_event(websocket, _START_CONNECTION, b"{}")
-            await _expect_event(websocket, _CONNECTION_STARTED, timeout=8.0)
+            await _expect_event(
+                websocket,
+                _CONNECTION_STARTED,
+                timeout=8.0,
+                check_cancellation=check_cancellation,
+            )
             session_payload = json.dumps(
                 {
                     "user": {"uid": "werewolf-arena-live-v2"},
@@ -124,7 +131,12 @@ class V2TtsClient:
                 separators=(",", ":"),
             ).encode()
             await _send_event(websocket, _START_SESSION, session_payload, session_id)
-            await _expect_event(websocket, _SESSION_STARTED, timeout=8.0)
+            await _expect_event(
+                websocket,
+                _SESSION_STARTED,
+                timeout=8.0,
+                check_cancellation=check_cancellation,
+            )
             session_started = True
             task_payload = json.dumps(
                 {
@@ -140,17 +152,18 @@ class V2TtsClient:
             await _send_event(websocket, _FINISH_SESSION, b"{}", session_id)
             received_audio = False
             while True:
+                _check(check_cancellation)
                 timeout = self._idle_seconds if received_audio else self._first_chunk_seconds
                 try:
-                    frame = await _receive(websocket, timeout=timeout)
+                    frame = await _receive(
+                        websocket,
+                        timeout=timeout,
+                        check_cancellation=check_cancellation,
+                    )
                 except V2TtsError as exc:
                     if exc.code != "tts_receive_timeout":
                         raise
-                    code = (
-                        "tts_audio_idle_timeout"
-                        if received_audio
-                        else "tts_first_audio_timeout"
-                    )
+                    code = "tts_audio_idle_timeout" if received_audio else "tts_first_audio_timeout"
                     raise V2TtsError(code) from exc
                 if frame.message_type == _AUDIO_SERVER:
                     if frame.payload:
@@ -201,8 +214,18 @@ async def _send_event(
     await websocket.send(_encode_event(event=event, payload=payload, session_id=session_id))
 
 
-async def _expect_event(websocket: Any, event: int, *, timeout: float) -> _TtsFrame:
-    frame = await _receive(websocket, timeout=timeout)
+async def _expect_event(
+    websocket: Any,
+    event: int,
+    *,
+    timeout: float,
+    check_cancellation: Callable[[], None] | None = None,
+) -> _TtsFrame:
+    frame = await _receive(
+        websocket,
+        timeout=timeout,
+        check_cancellation=check_cancellation,
+    )
     if frame.message_type == _ERROR:
         raise V2TtsError(f"tts_provider_error_{frame.error_code or 0}")
     if frame.message_type != _FULL_SERVER or frame.event != event:
@@ -210,14 +233,39 @@ async def _expect_event(websocket: Any, event: int, *, timeout: float) -> _TtsFr
     return frame
 
 
-async def _receive(websocket: Any, *, timeout: float) -> _TtsFrame:
+async def _receive(
+    websocket: Any,
+    *,
+    timeout: float,
+    check_cancellation: Callable[[], None] | None = None,
+) -> _TtsFrame:
+    task = asyncio.create_task(websocket.recv())
+    started = asyncio.get_running_loop().time()
     try:
-        data = await asyncio.wait_for(websocket.recv(), timeout=timeout)
-    except TimeoutError as exc:
-        raise V2TtsError("tts_receive_timeout") from exc
+        while True:
+            remaining = timeout - (asyncio.get_running_loop().time() - started)
+            if remaining <= 0:
+                raise V2TtsError("tts_receive_timeout")
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=min(remaining, 0.25),
+            )
+            if task in done:
+                data = task.result()
+                break
+            _check(check_cancellation)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     if not isinstance(data, bytes):
         raise V2TtsError("tts_text_frame_rejected")
     return _decode_frame(data)
+
+
+def _check(check_cancellation: Callable[[], None] | None) -> None:
+    if check_cancellation is not None:
+        check_cancellation()
 
 
 def _encode_event(*, event: int, payload: bytes, session_id: str | None) -> bytes:

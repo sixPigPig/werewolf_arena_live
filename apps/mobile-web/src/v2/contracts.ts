@@ -5,6 +5,7 @@ export type V2LiveState =
   | "broadcasting"
   | "finalizing"
   | "awaiting_observation"
+  | "canceled"
   | "failed";
 
 export type V2GamePhase = {
@@ -938,6 +939,7 @@ function liveState(value: unknown): V2LiveState {
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "canceled",
     "failed",
   ]);
 }

@@ -253,11 +253,7 @@ def current_presentation(
     audience: str = "player_public",
 ) -> V2LivePresentation | None:
     get_game(db, game_id)
-    allowed = (
-        ("all", "god_view")
-        if audience == "spectator_god_view"
-        else ("all", "public")
-    )
+    allowed = ("all", "god_view") if audience == "spectator_god_view" else ("all", "public")
     return db.scalar(
         select(V2LivePresentation)
         .where(
@@ -320,11 +316,7 @@ def god_view_role_assignments(db: Session, game_id: str) -> list[V2RoleAssignmen
 
 def player_state_map(db: Session, game_id: str) -> dict[str, V2PlayerState]:
     get_game(db, game_id)
-    states = list(
-        db.scalars(
-            select(V2PlayerState).where(V2PlayerState.game_id == game_id)
-        )
-    )
+    states = list(db.scalars(select(V2PlayerState).where(V2PlayerState.game_id == game_id)))
     result = {item.player_id: item for item in states}
     if len(result) != len(states):
         raise V2RoleAssignmentStateError("duplicate V2 player state")

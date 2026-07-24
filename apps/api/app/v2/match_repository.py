@@ -16,7 +16,7 @@ from app.v2.models import (
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2PhaseTransition, V2RepositoryError
+from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
 
 
 @dataclass(frozen=True)
@@ -123,11 +123,13 @@ class V2MatchRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             _append_event(db, game=game, event_type=event_type, payload=payload)
 
     def record_phase_state(self, *, game_id: str, previous_phase_state: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             transition = V2PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
@@ -159,6 +161,7 @@ class V2MatchRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if player_id is not None:
                 target = db.get(V2PlayerState, (game_id, player_id))
@@ -191,6 +194,7 @@ class V2MatchRepository:
     def record_pre_sheriff_explosion(self, *, game_id: str, player_id: str) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             match = _match(db, game)
             _kill(db, game=game, player_id=player_id, cause="werewolf_self_explosion")
             match.pre_sheriff_explosion_count += 1
@@ -221,6 +225,7 @@ class V2MatchRepository:
     def record_day_explosion(self, *, game_id: str, player_id: str, stage: str) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             _kill(db, game=game, player_id=player_id, cause="werewolf_self_explosion")
             _append_event(
                 db,
@@ -232,6 +237,7 @@ class V2MatchRepository:
     def resolve_exile(self, *, game_id: str, player_id: str) -> V2ExileResult:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             assignment = db.scalar(
                 select(V2RoleAssignment).where(
                     V2RoleAssignment.game_id == game_id,
@@ -277,6 +283,7 @@ class V2MatchRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             hunter = db.get(V2PlayerState, (game_id, hunter_id))
             if hunter is None or hunter.alive or hunter.death_cause == "witch_poison":
                 raise V2RepositoryError("hunter response is not eligible")
@@ -301,7 +308,9 @@ class V2MatchRepository:
         with self._session_factory() as db:
             rows = list(
                 db.execute(
-                    select(V2RoleAssignment.player_id, V2PlayerState.death_cause, V2PlayerState.state)
+                    select(
+                        V2RoleAssignment.player_id, V2PlayerState.death_cause, V2PlayerState.state
+                    )
                     .join(
                         V2PlayerState,
                         (V2PlayerState.game_id == V2RoleAssignment.game_id)
@@ -325,6 +334,7 @@ class V2MatchRepository:
     def finish_day(self, *, game_id: str, reason: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             match = _match(db, game)
             winner = _winner(db, game)
             previous_phase_id = game.phase_id
@@ -398,6 +408,7 @@ class V2MatchRepository:
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             game.status = "failed"
             game.phase_state = "failed"
             run = _run(db, game.current_run_id)
@@ -510,9 +521,7 @@ def _public_history(db: Session, game_id: str) -> tuple[dict[str, Any], ...]:
         )
     )
     rows.reverse()
-    return tuple(
-        {"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows
-    )
+    return tuple({"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows)
 
 
 def _winner(db: Session, game: V2GameRecord) -> str | None:
@@ -557,9 +566,7 @@ def _match(db: Session, game: V2GameRecord) -> V2MatchState:
 
 
 def _locked_game(db: Session, game_id: str) -> V2GameRecord:
-    game = db.scalar(
-        select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update()
-    )
+    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
     return game
@@ -570,6 +577,12 @@ def _run(db: Session, run_id: str) -> V2GameRun:
     if run is None:
         raise V2RepositoryError(f"unknown run {run_id}")
     return run
+
+
+def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:
+    run = _run(db, game.current_run_id)
+    if run.stop_requested_at is not None:
+        raise V2GameCanceled("V2 game was canceled by an administrator")
 
 
 def _append_event(

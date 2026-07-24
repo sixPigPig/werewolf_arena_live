@@ -24,7 +24,7 @@ from app.v2.models import (
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2PhaseTransition, V2RepositoryError
+from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
 
 
 @dataclass(frozen=True)
@@ -106,14 +106,17 @@ class V2NightRepository:
             round_no = _night_round_no(game.phase_id)
             if game.status != "ready" or game.phase_state != "nightfall_announced":
                 raise V2RepositoryError("night is not ready to start")
-            next_window_seq = int(
-                db.scalar(
-                    select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
-                        V2ActionWindow.game_id == game_id
+            next_window_seq = (
+                int(
+                    db.scalar(
+                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
+                            V2ActionWindow.game_id == game_id
+                        )
                     )
+                    or 0
                 )
-                or 0
-            ) + 1
+                + 1
+            )
             existing = db.scalar(
                 select(V2ActionWindow).where(
                     V2ActionWindow.game_id == game_id,
@@ -530,14 +533,17 @@ class V2NightRepository:
             game = _locked_game(db, state.game_id)
             if game.phase_id != f"day_{state.round_no}" or game.phase_state != "dawn_announced":
                 raise V2RepositoryError("dawn response is not ready")
-            next_window_seq = int(
-                db.scalar(
-                    select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
-                        V2ActionWindow.game_id == state.game_id
+            next_window_seq = (
+                int(
+                    db.scalar(
+                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
+                            V2ActionWindow.game_id == state.game_id
+                        )
                     )
+                    or 0
                 )
-                or 0
-            ) + 1
+                + 1
+            )
             window = V2ActionWindow(
                 window_id=f"v2_window_{uuid4().hex[:16]}",
                 game_id=state.game_id,
@@ -660,11 +666,15 @@ class V2NightRepository:
             match = db.get(V2MatchState, game_id)
             if match is None:
                 raise V2RepositoryError("V2 match state is missing")
-            next_state = "game_completed" if winner is not None else (
-                "sheriff_election_ready"
-                if bool(game.ability_snapshot.get("sheriff_enabled"))
-                and match.sheriff_badge_state == "pending"
-                else "public_day_ready"
+            next_state = (
+                "game_completed"
+                if winner is not None
+                else (
+                    "sheriff_election_ready"
+                    if bool(game.ability_snapshot.get("sheriff_enabled"))
+                    and match.sheriff_badge_state == "pending"
+                    else "public_day_ready"
+                )
             )
             game.phase_state = next_state
             next_live_state = "awaiting_observation" if winner is not None else "ready"
@@ -679,11 +689,11 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="game_completed",
-                        payload={
-                            "winner": winner,
-                            "reason": "deterministic_win_condition",
-                            "round_no": round_no,
-                        },
+                    payload={
+                        "winner": winner,
+                        "reason": "deterministic_win_condition",
+                        "round_no": round_no,
+                    },
                 )
             transition = V2PhaseTransition(
                 game_id=game.game_id,
@@ -748,8 +758,7 @@ class V2NightRepository:
                 )
             )
             return [
-                {"fact_type": row.fact_type, "payload": dict(row.payload or {})}
-                for row in rows
+                {"fact_type": row.fact_type, "payload": dict(row.payload or {})} for row in rows
             ]
 
     def public_history(self, game_id: str) -> list[dict[str, Any]]:
@@ -779,8 +788,7 @@ class V2NightRepository:
             )
             rows.reverse()
             return [
-                {"event_type": row.event_type, "payload": dict(row.payload or {})}
-                for row in rows
+                {"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows
             ]
 
     def current_players(self, game_id: str) -> tuple[V2NightPlayer, ...]:
@@ -807,9 +815,11 @@ class V2NightRepository:
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            run = _run(db, game.current_run_id)
+            if run.stop_requested_at is not None:
+                raise V2GameCanceled("V2 game was canceled by an administrator")
             game.status = "failed"
             game.phase_state = "failed"
-            run = _run(db, game.current_run_id)
             run.status = "failed"
             run.completed_at = _now()
             _append_event(
@@ -846,17 +856,9 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
                 seat=assignment.seat,
                 display_name=str(profile.get("name") or f"{assignment.seat}号玩家"),
                 role_key=assignment.role_key,
-                team=(
-                    "werewolves"
-                    if assignment.role_key == "werewolf"
-                    else "villagers"
-                ),
+                team=("werewolves" if assignment.role_key == "werewolf" else "villagers"),
                 alive=player_state.alive,
-                tts_speaker=(
-                    str(profile["tts_speaker"])
-                    if profile.get("tts_speaker")
-                    else None
-                ),
+                tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
                 model_id=(str(profile["model"]) if profile.get("model") else None),
                 persona={
                     key: profile[key]
@@ -920,11 +922,12 @@ def _effect_outcome(
 
 
 def _locked_game(db: Session, game_id: str) -> V2GameRecord:
-    game = db.scalar(
-        select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update()
-    )
+    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
+    run = _run(db, game.current_run_id)
+    if run.stop_requested_at is not None:
+        raise V2GameCanceled("V2 game was canceled by an administrator")
     return game
 
 

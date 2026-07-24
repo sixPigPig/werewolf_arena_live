@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import time
@@ -78,6 +79,7 @@ class V2ModelClient:
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelSpeech:
         raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
             action_context=action_context,
@@ -85,6 +87,7 @@ class V2ModelClient:
             max_output_tokens=256,
             input_builder=_model_input,
             model_id=model_id,
+            check_cancellation=check_cancellation,
         )
         return V2ModelSpeech(
             text=_required_speech(raw, error_code="model_empty_speech"),
@@ -100,6 +103,7 @@ class V2ModelClient:
         action_context: dict[str, Any],
         attempt_id: str,
         model_id: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision:
         raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
             action_context=action_context,
@@ -107,6 +111,7 @@ class V2ModelClient:
             max_output_tokens=256,
             input_builder=_decision_model_input,
             model_id=model_id,
+            check_cancellation=check_cancellation,
         )
         target_player_id, normalized_speech = _decision_fields(raw)
         return V2ModelDecision(
@@ -126,7 +131,9 @@ class V2ModelClient:
         max_output_tokens: int,
         input_builder: Any,
         model_id: str | None,
+        check_cancellation: Callable[[], None] | None,
     ) -> tuple[str, str, int, int]:
+        _check(check_cancellation)
         selected_model_id = self.resolve_model_id(model_id)
         if not self._api_key or not selected_model_id:
             raise V2ModelError("model_not_configured")
@@ -163,6 +170,7 @@ class V2ModelClient:
                     )
                     lines = response.aiter_lines().__aiter__()
                     while True:
+                        _check(check_cancellation)
                         elapsed = time.monotonic() - started
                         deadline = (
                             self._first_token_seconds
@@ -178,7 +186,11 @@ class V2ModelClient:
                             )
                             raise V2ModelError(code)
                         try:
-                            line = await asyncio.wait_for(anext(lines), timeout=remaining)
+                            line = await _next_with_cancellation(
+                                lines,
+                                timeout=remaining,
+                                check_cancellation=check_cancellation,
+                            )
                         except StopAsyncIteration:
                             break
                         except TimeoutError as exc:
@@ -220,6 +232,37 @@ class V2ModelClient:
         )
 
 
+async def _next_with_cancellation(
+    lines: Any,
+    *,
+    timeout: float,
+    check_cancellation: Callable[[], None] | None,
+) -> str:
+    task = asyncio.create_task(anext(lines))
+    started = time.monotonic()
+    try:
+        while True:
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise TimeoutError
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=min(remaining, 0.25),
+            )
+            if task in done:
+                return task.result()
+            _check(check_cancellation)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+def _check(check_cancellation: Callable[[], None] | None) -> None:
+    if check_cancellation is not None:
+        check_cancellation()
+
+
 def build_model_request_payload(
     action_context: dict[str, Any],
     *,
@@ -233,9 +276,7 @@ def build_model_request_payload(
         "max_output_tokens": max_output_tokens,
         "thinking": {"type": "disabled"},
         "input": (
-            _decision_model_input(action_context)
-            if decision
-            else _model_input(action_context)
+            _decision_model_input(action_context) if decision else _model_input(action_context)
         ),
     }
 
