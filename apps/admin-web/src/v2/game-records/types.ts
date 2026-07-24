@@ -29,6 +29,16 @@ export type V2GameRun = {
   status: string;
   started_at: string;
   completed_at: string | null;
+  stop_requested_at: string | null;
+};
+
+export type V2GameControlResult = {
+  action: "stop";
+  game_id: string;
+  run_id: string;
+  run_status: string;
+  stop_requested_at: string;
+  replayed: boolean;
 };
 
 export type V2GameRecordEvent = {

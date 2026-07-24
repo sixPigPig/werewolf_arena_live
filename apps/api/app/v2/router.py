@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Annotated, Literal
@@ -13,20 +14,29 @@ from fastapi import (
     Query,
     Request,
     Response,
+    status,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
+from app.admin.audit import record_audit_event
 from app.admin.rbac import AdminPermission
-from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
+from app.api.admin.dependencies import (
+    AdminPrincipal,
+    require_admin_csrf,
+    require_admin_permission,
+)
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.core.config import settings
 from app.db.session import get_db
 from app.v2.contracts import (
     AdminV2EventResponse,
     AdminV2GameDetailResponse,
+    AdminV2GameControlRequest,
+    AdminV2GameControlResponse,
     AdminV2GameListItem,
     AdminV2GameListResponse,
     AdminV2Pagination,
@@ -41,6 +51,14 @@ from app.v2.contracts import (
     V2GamePhaseResponse,
     V2GodViewIdentitySnapshotResponse,
     V2LiveSnapshotResponse,
+)
+from app.v2.control import (
+    V2GameControlError,
+    V2GameControlIdempotencyConflict,
+    V2GameControlNotActive,
+    V2GameControlNotFound,
+    V2GameStopAlreadyRequested,
+    request_v2_game_stop,
 )
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
@@ -72,6 +90,7 @@ from app.v2.service import (
 public_router = APIRouter()
 god_view_router = APIRouter()
 admin_router = APIRouter()
+logger = logging.getLogger(__name__)
 GAME_ID_PATTERN = r"v2_game_[0-9a-f]{16}"
 VOICE_ID_PATTERN = r"v2_voice_[0-9a-f]{16}"
 GOD_VIEW_WEBSOCKET_SUBPROTOCOL = "live-v2-god-view"
@@ -468,6 +487,110 @@ def read_admin_v2_game(
     )
 
 
+@admin_router.post(
+    "/games/{game_id}/stop",
+    response_model=AdminV2GameControlResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def stop_admin_v2_game(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    request_body: AdminV2GameControlRequest,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=8, max_length=160),
+    ],
+) -> AdminV2GameControlResponse:
+    if AdminPermission.RUNS_CONTROL not in principal.permissions:
+        raise AdminAPIProblem(
+            status_code=403,
+            code="admin_permission_denied",
+            title="Permission denied",
+            detail="The 'runs.control' permission is required.",
+        )
+    try:
+        result = request_v2_game_stop(
+            db,
+            game_id=game_id,
+            actor_user_id=principal.user.id,
+            idempotency_key=idempotency_key,
+            reason=request_body.reason,
+        )
+        if not result.replayed:
+            record_audit_event(
+                db,
+                request=request,
+                actor_user_id=principal.user.id,
+                action="admin.v2_game.stop",
+                resource_type="v2_game",
+                resource_id=game_id,
+                result="success",
+                reason=request_body.reason,
+                before={
+                    "game_status": result.game.status,
+                    "run_status": result.run.status,
+                },
+                after={
+                    "stop_requested": True,
+                    "reason_code": "operator_interrupted",
+                },
+            )
+        db.commit()
+    except V2GameControlError as exc:
+        db.rollback()
+        _audit_v2_control_rejection(
+            db,
+            request=request,
+            principal=principal,
+            game_id=game_id,
+            reason=request_body.reason,
+            code=exc.code,
+        )
+        raise _v2_control_problem(exc) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise AdminAPIProblem(
+            status_code=409,
+            code="admin_idempotency_conflict",
+            title="Idempotency conflict",
+            detail="The idempotency key was accepted by another request.",
+        ) from exc
+
+    if result.replayed:
+        response.status_code = status.HTTP_200_OK
+    if not result.replayed or result.run.status != "canceled":
+        runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+        try:
+            await runtime.interrupt(game_id=game_id)
+        except Exception:
+            logger.exception(
+                "V2 stop request persisted but local runtime interruption failed",
+                extra={"game_id": game_id, "run_id": result.run.run_id},
+            )
+
+    db.expire_all()
+    run = db.get(type(result.run), result.run.run_id)
+    if run is None or run.stop_requested_at is None:
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_v2_game_control_unavailable",
+            title="V2 game control unavailable",
+            detail="The stop request was persisted but its run state could not be reloaded.",
+        )
+    _set_admin_headers(request, response)
+    return AdminV2GameControlResponse(
+        action="stop",
+        game_id=game_id,
+        run_id=run.run_id,
+        run_status=run.status,
+        stop_requested_at=run.stop_requested_at,
+        replayed=result.replayed,
+    )
+
+
 @admin_router.get("/games/{game_id}/voice-assets/{voice_asset_id}/audio")
 def read_admin_v2_voice_audio(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -522,6 +645,58 @@ def _set_admin_headers(request: Request, response: Response) -> None:
     response.headers["X-Request-ID"] = request_id_for(request)
 
 
+def _audit_v2_control_rejection(
+    db: Session,
+    *,
+    request: Request,
+    principal: AdminPrincipal,
+    game_id: str,
+    reason: str,
+    code: str,
+) -> None:
+    record_audit_event(
+        db,
+        request=request,
+        actor_user_id=principal.user.id,
+        action="admin.v2_game.stop",
+        resource_type="v2_game",
+        resource_id=game_id,
+        result="rejected",
+        reason=reason,
+        after={"code": code},
+    )
+    db.commit()
+
+
+def _v2_control_problem(exc: V2GameControlError) -> AdminAPIProblem:
+    if isinstance(exc, V2GameControlNotFound):
+        return AdminAPIProblem(
+            status_code=404,
+            code=exc.code,
+            title="V2 game not found",
+            detail="The requested V2 game does not exist.",
+        )
+    if isinstance(exc, V2GameControlIdempotencyConflict):
+        return AdminAPIProblem(
+            status_code=409,
+            code=exc.code,
+            title="Idempotency conflict",
+            detail="This idempotency key was already used for another control request.",
+        )
+    if isinstance(exc, V2GameStopAlreadyRequested):
+        detail = "A stop request is already pending for this V2 game."
+    elif isinstance(exc, V2GameControlNotActive):
+        detail = "Only an active V2 game can be stopped."
+    else:
+        detail = "The V2 game stop request was rejected."
+    return AdminAPIProblem(
+        status_code=409,
+        code=exc.code,
+        title="V2 game control rejected",
+        detail=detail,
+    )
+
+
 def _valid_game_id(game_id: str) -> bool:
     if not game_id.startswith("v2_game_") or len(game_id) != len("v2_game_") + 16:
         return False
@@ -557,6 +732,7 @@ def _live_state(
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "canceled",
     "failed",
 ]:
     if status in {
@@ -565,6 +741,7 @@ def _live_state(
         "broadcasting",
         "finalizing",
         "awaiting_observation",
+        "canceled",
     }:
         return status
     return "failed"

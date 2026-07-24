@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.v2.action_engine import V2ActionEngine, V2BroadcastPort, V2SpeechSpec
@@ -27,6 +28,28 @@ class V2LiveFlowEngine:
         self._first_night = first_night_engine
 
     async def run(self, *, game_id: str, broadcaster: V2BroadcastPort) -> None:
+        try:
+            await self._run_active(game_id=game_id, broadcaster=broadcaster)
+        except asyncio.CancelledError:
+            if not self._action_repository.stop_requested(game_id):
+                raise
+            result = self._action_repository.cancel_game(game_id)
+            await broadcaster.set_current(None, 0)
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=game_id,
+                    run_id=result.run_id,
+                    state="canceled",
+                    reason="operator_interrupted",
+                )
+            )
+
+    async def _run_active(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+    ) -> None:
         opening_ok = await self._actions.run_judge_speech(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -41,6 +64,7 @@ class V2LiveFlowEngine:
         )
         if not opening_ok:
             return
+        self._action_repository.check_cancellation(game_id)
         try:
             transition = self._action_repository.transition_to_first_night(game_id=game_id)
         except Exception as exc:
@@ -78,6 +102,7 @@ class V2LiveFlowEngine:
         )
         if not nightfall_ok:
             return
+        self._action_repository.check_cancellation(game_id)
         if not execute_first_night:
             return
         await self._first_night.run(game_id=game_id, broadcaster=broadcaster)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.models import (
     V2AbilityActivation,
+    V2ActionWindow,
+    V2EffectIntent,
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
@@ -18,6 +21,10 @@ from app.v2.models import (
 
 
 class V2RepositoryError(RuntimeError):
+    pass
+
+
+class V2GameCanceled(asyncio.CancelledError):
     pass
 
 
@@ -59,6 +66,13 @@ class V2PresentationIdentity:
     audience: str = "all"
 
 
+@dataclass(frozen=True)
+class V2CancellationResult:
+    run_id: str
+    status: str
+    changed: bool
+
+
 class V2ActionRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -75,6 +89,7 @@ class V2ActionRepository:
     ) -> V2ActionClaim | None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             if (
                 game.status != "ready"
                 or game.phase_id != expected_phase_id
@@ -122,6 +137,7 @@ class V2ActionRepository:
     ) -> int:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             event = _append_event(
                 db,
                 game=game,
@@ -147,6 +163,7 @@ class V2ActionRepository:
         storage_key = f"{claim.game_id}/{voice_asset_id}.wav"
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
+            _raise_if_stop_requested(db, game)
             if game.status != "generating":
                 raise V2RepositoryError(f"cannot open presentation from {game.status}")
             presentation_seq = game.last_presentation_seq + 1
@@ -250,6 +267,7 @@ class V2ActionRepository:
     def mark_finalizing(self, *, game_id: str, tts_attempt_id: str, sample_count: int) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             game.status = "finalizing"
             _run(db, game.current_run_id).status = "finalizing"
             _append_event(
@@ -271,6 +289,7 @@ class V2ActionRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, identity.game_id)
+            _raise_if_stop_requested(db, game)
             voice = db.get(V2VoiceAsset, identity.voice_asset_id)
             if voice is None or voice.state != "writing":
                 raise V2RepositoryError("voice asset is not writable")
@@ -316,6 +335,7 @@ class V2ActionRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, identity.game_id)
+            _raise_if_stop_requested(db, game)
             presentation = db.get(
                 V2LivePresentation,
                 (identity.game_id, identity.presentation_seq),
@@ -372,6 +392,7 @@ class V2ActionRepository:
     def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             if (
                 game.status != "ready"
                 or game.phase_id != "opening"
@@ -413,6 +434,7 @@ class V2ActionRepository:
     ) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
             run = _run(db, game.current_run_id)
             game.status = "failed"
             game.phase_state = "failed"
@@ -440,6 +462,7 @@ class V2ActionRepository:
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
+            _raise_if_stop_requested(db, game)
             game.status = "failed"
             game.phase_state = "failed"
             run = _run(db, claim.run_id)
@@ -480,6 +503,147 @@ class V2ActionRepository:
                 },
             )
 
+    def check_cancellation(self, game_id: str) -> None:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            _raise_if_stop_requested(db, game)
+
+    def stop_requested(self, game_id: str) -> bool:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            run = _run(db, game.current_run_id)
+            return run.stop_requested_at is not None
+
+    def cancel_game(self, game_id: str) -> V2CancellationResult:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            run = _run(db, game.current_run_id)
+            if run.stop_requested_at is None:
+                raise V2RepositoryError("game cancellation was not requested")
+            if game.status == "canceled":
+                return V2CancellationResult(
+                    run_id=run.run_id,
+                    status=run.status,
+                    changed=False,
+                )
+            if game.status in {"completed", "failed"}:
+                return V2CancellationResult(
+                    run_id=run.run_id,
+                    status=run.status,
+                    changed=False,
+                )
+
+            canceled_at = _now()
+            interrupted_presentations = list(
+                db.scalars(
+                    select(V2LivePresentation).where(
+                        V2LivePresentation.game_id == game.game_id,
+                        V2LivePresentation.state == "active",
+                    )
+                )
+            )
+            canceled_voice_count = 0
+            for presentation in interrupted_presentations:
+                presentation.state = "canceled"
+                presentation.closed_at = canceled_at
+                if presentation.voice_asset_id is not None:
+                    voice = db.get(V2VoiceAsset, presentation.voice_asset_id)
+                    if voice is not None and voice.state == "writing":
+                        voice.state = "canceled"
+                        voice.completed_at = canceled_at
+                        canceled_voice_count += 1
+                        _append_event(
+                            db,
+                            game=game,
+                            run_id=run.run_id,
+                            event_type="voice_recording_canceled",
+                            payload={
+                                "action_id": presentation.action_id,
+                                "voice_asset_id": voice.voice_asset_id,
+                                "reason_code": "operator_interrupted",
+                            },
+                        )
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="speech_interrupted",
+                    payload={
+                        "action_id": presentation.action_id,
+                        "presentation_id": presentation.presentation_id,
+                        "speech_id": presentation.speech_id,
+                        "reason_code": "operator_interrupted",
+                    },
+                )
+
+            open_activations = list(
+                db.scalars(
+                    select(V2AbilityActivation).where(
+                        V2AbilityActivation.game_id == game.game_id,
+                        V2AbilityActivation.status == "open",
+                    )
+                )
+            )
+            for activation in open_activations:
+                activation.status = "canceled"
+                activation.skip_reason = "operator_interrupted"
+                activation.closed_at = canceled_at
+                activation.result = {"reason_code": "operator_interrupted"}
+
+            open_windows = list(
+                db.scalars(
+                    select(V2ActionWindow).where(
+                        V2ActionWindow.game_id == game.game_id,
+                        V2ActionWindow.state == "open",
+                    )
+                )
+            )
+            for window in open_windows:
+                window.state = "canceled"
+                window.closed_at = canceled_at
+                window.result = {"reason_code": "operator_interrupted"}
+
+            pending_effects = list(
+                db.scalars(
+                    select(V2EffectIntent).where(
+                        V2EffectIntent.game_id == game.game_id,
+                        V2EffectIntent.state == "pending",
+                    )
+                )
+            )
+            for effect in pending_effects:
+                effect.state = "canceled"
+                effect.resolved_at = canceled_at
+
+            game.status = "canceled"
+            run.status = "canceled"
+            run.completed_at = canceled_at
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="game_canceled",
+                payload={
+                    "reason_code": "operator_interrupted",
+                    "interrupted_presentation_count": len(
+                        interrupted_presentations
+                    ),
+                    "canceled_voice_count": canceled_voice_count,
+                    "canceled_activation_count": len(open_activations),
+                    "canceled_window_count": len(open_windows),
+                    "canceled_effect_count": len(pending_effects),
+                },
+            )
+            return V2CancellationResult(
+                run_id=run.run_id,
+                status=run.status,
+                changed=True,
+            )
+
 
 def _locked_game(db: Session, game_id: str) -> V2GameRecord:
     game = db.scalar(
@@ -495,6 +659,12 @@ def _run(db: Session, run_id: str) -> V2GameRun:
     if run is None:
         raise V2RepositoryError(f"unknown run {run_id}")
     return run
+
+
+def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:
+    run = _run(db, game.current_run_id)
+    if run.stop_requested_at is not None:
+        raise V2GameCanceled("V2 game was canceled by an administrator")
 
 
 def _append_event(

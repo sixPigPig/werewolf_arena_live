@@ -1,6 +1,7 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
   V2GamePresentation,
+  V2GameControlResult,
   V2GameRecordDetail,
   V2GameRecordEvent,
   V2GameRecordList,
@@ -8,6 +9,20 @@ import type {
   V2GameRun,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
+
+export function parseV2GameControlResult(
+  value: unknown,
+): V2GameControlResult {
+  const record = object(value);
+  return {
+    action: literal(record.action, ["stop"]),
+    game_id: text(record.game_id),
+    run_id: text(record.run_id),
+    run_status: text(record.run_status),
+    stop_requested_at: date(record.stop_requested_at),
+    replayed: boolean(record.replayed),
+  };
+}
 
 export function parseV2GameRecordList(value: unknown): V2GameRecordList {
   const record = object(value);
@@ -69,6 +84,7 @@ function parseRun(value: unknown): V2GameRun {
     status: text(record.status),
     started_at: date(record.started_at),
     completed_at: record.completed_at === null ? null : date(record.completed_at),
+    stop_requested_at: nullableDate(record.stop_requested_at),
   };
 }
 
@@ -168,6 +184,19 @@ function date(value: unknown): string {
 
 function nullableDate(value: unknown): string | null {
   return value === null ? null : date(value);
+}
+
+function boolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw invalid();
+  return value;
+}
+
+function literal<const T extends string>(
+  value: unknown,
+  values: readonly T[],
+): T {
+  if (!values.includes(value as T)) throw invalid();
+  return value as T;
 }
 
 function invalid() {

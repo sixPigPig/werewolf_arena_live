@@ -12,6 +12,7 @@ V2LiveState = Literal[
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "canceled",
     "failed",
 ]
 V2GamePhaseId = Literal["legacy", "opening", "first_night", "day_1"]
@@ -365,6 +366,30 @@ class AdminV2RunResponse(BaseModel):
     status: str
     started_at: datetime
     completed_at: datetime | None
+    stop_requested_at: datetime | None
+
+
+class AdminV2GameControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("reason must contain at least 3 characters")
+        return normalized
+
+
+class AdminV2GameControlResponse(BaseModel):
+    action: Literal["stop"]
+    game_id: str
+    run_id: str
+    run_status: str
+    stop_requested_at: datetime
+    replayed: bool
 
 
 class AdminV2EventResponse(BaseModel):

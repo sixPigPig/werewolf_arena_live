@@ -32,6 +32,7 @@ from app.v2.public_projection import (
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
+from app.v2.protocol import live_state
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
 from app.v2.service import (
     current_presentation,
@@ -125,6 +126,14 @@ class _GameChannel:
     async def disconnect(self, subscriber_id: str) -> None:
         async with self._lock:
             self._subscribers.pop(subscriber_id, None)
+
+    async def interrupt(self) -> None:
+        async with self._lock:
+            task = self._task
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def broadcast_json(
         self,
@@ -238,6 +247,24 @@ class V2LiveRuntime:
         subscriber_id: str,
     ) -> None:
         await channel.disconnect(subscriber_id)
+
+    async def interrupt(self, *, game_id: str) -> str:
+        async with self._channels_lock:
+            channel = self._channels.get(game_id)
+        if channel is not None:
+            await channel.interrupt()
+        result = self._repository.cancel_game(game_id)
+        if result.changed and channel is not None:
+            await channel.set_current(None, 0)
+            await channel.broadcast_json(
+                live_state(
+                    game_id=game_id,
+                    run_id=result.run_id,
+                    state="canceled",
+                    reason="operator_interrupted",
+                )
+            )
+        return result.status
 
     def snapshot(
         self,
@@ -380,6 +407,7 @@ def _live_state(status: str) -> str:
         "broadcasting",
         "finalizing",
         "awaiting_observation",
+        "canceled",
         "failed",
     }:
         return status

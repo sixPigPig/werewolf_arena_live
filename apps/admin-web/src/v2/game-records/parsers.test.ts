@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseV2GameControlResult,
   parseV2GameRecordDetail,
   parseV2GameRecordList,
 } from "@/v2/game-records/parsers";
@@ -48,6 +49,7 @@ describe("V2 game record parsers", () => {
           status: "awaiting_observation",
           started_at: item.created_at,
           completed_at: null,
+          stop_requested_at: null,
         },
       ],
       events: [
@@ -123,6 +125,26 @@ describe("V2 game record parsers", () => {
       state: "ready",
       sample_count: 43200,
       duration_ms: 1800,
+    });
+  });
+
+  it("parses an idempotent V2 stop result", () => {
+    expect(
+      parseV2GameControlResult({
+        action: "stop",
+        game_id: item.game_id,
+        run_id: item.current_run_id,
+        run_status: "canceled",
+        stop_requested_at: "2026-07-25T10:00:00Z",
+        replayed: false,
+      }),
+    ).toEqual({
+      action: "stop",
+      game_id: item.game_id,
+      run_id: item.current_run_id,
+      run_status: "canceled",
+      stop_requested_at: "2026-07-25T10:00:00Z",
+      replayed: false,
     });
   });
 

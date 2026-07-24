@@ -64,6 +64,7 @@ class V2FirstNightEngine:
 
     async def run(self, *, game_id: str, broadcaster: V2BroadcastPort) -> None:
         try:
+            self._actions.check_cancellation(game_id)
             state = self._repository.start_first_night(game_id)
             working = _WorkingNight()
             await broadcaster.broadcast_json(
@@ -77,10 +78,12 @@ class V2FirstNightEngine:
             )
             groups = _activation_groups(state.snapshot)
             for group in groups:
+                self._actions.check_cancellation(game_id)
                 handler = self._handlers.get(group)
                 if handler is None:
                     raise V2FirstNightError(f"unsupported_activation_group:{group}")
                 await handler(state, broadcaster, working)
+                self._actions.check_cancellation(game_id)
                 await broadcaster.broadcast_json(
                     night_progress(
                         game_id=state.game_id,
@@ -90,6 +93,7 @@ class V2FirstNightEngine:
                     ),
                     audience="public",
                 )
+            self._actions.check_cancellation(game_id)
             resolution = self._repository.resolve_night(
                 state=state,
                 attack_target=working.attack_target,
@@ -164,11 +168,13 @@ class V2FirstNightEngine:
                 audience="public",
             )
             for hunter_id in self._repository.hunter_reactions(game_id):
+                self._actions.check_cancellation(game_id)
                 await self._run_hunter_response(
                     state=state,
                     hunter_id=hunter_id,
                     broadcaster=broadcaster,
                 )
+            self._actions.check_cancellation(game_id)
             final_transition = self._repository.finish_first_night(game_id=game_id)
             await broadcaster.broadcast_json(game_phase_changed(final_transition))
             await broadcaster.broadcast_json(

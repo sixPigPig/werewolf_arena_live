@@ -23,7 +23,7 @@ from app.v2.models import (
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2PhaseTransition, V2RepositoryError
+from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
 
 
 @dataclass(frozen=True)
@@ -637,9 +637,13 @@ class V2NightRepository:
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            run = _run(db, game.current_run_id)
+            if run.stop_requested_at is not None:
+                raise V2GameCanceled(
+                    "V2 game was canceled by an administrator"
+                )
             game.status = "failed"
             game.phase_state = "failed"
-            run = _run(db, game.current_run_id)
             run.status = "failed"
             run.completed_at = _now()
             _append_event(

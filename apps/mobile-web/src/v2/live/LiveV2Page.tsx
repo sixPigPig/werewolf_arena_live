@@ -53,6 +53,8 @@ export function LiveV2Page() {
         setPublicPlayers(snapshot.public_players);
         setRoleAssignment(snapshot.public_role_assignment);
         setGamePhase(snapshot.game_phase);
+        setLiveState(snapshot.live_state);
+        setRunId(snapshot.run_id);
         setRosterState("ready");
       })
       .catch((reason) => {
@@ -105,6 +107,14 @@ export function LiveV2Page() {
               setRoleAssignment(message.public_role_assignment);
               setRosterState("ready");
               setRosterError(null);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                player.stop();
+                socket.close();
+                return;
+              }
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
               if (message.current_presentation) player.begin(message.current_presentation);
@@ -132,6 +142,14 @@ export function LiveV2Page() {
             }
             if (message.type === "live.state_changed") {
               setLiveState(message.live_state);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                player.stop();
+                socket.close();
+                return;
+              }
               if (message.live_state === "failed") {
                 terminalRef.current = true;
                 player.stop();
@@ -334,7 +352,7 @@ export function LiveV2Page() {
         </Link>
       ) : null}
 
-      {connectionState === "idle" ? (
+      {connectionState === "idle" && liveState !== "canceled" ? (
         <section className="mobile-live-v2-stage">
           <span>实时对局</span>
           <blockquote>点击后解锁音频；法官播报、玩家决策和语音都将在对应动作发生时实时生成。</blockquote>
@@ -364,7 +382,9 @@ export function LiveV2Page() {
             <div><dt>speech</dt><dd>{presentation.speech_id} · segment {presentation.segment_index}</dd></div>
           </dl>
         </section>
-      ) : connectionState !== "idle" && !error ? (
+      ) : connectionState !== "idle" &&
+        liveState !== "canceled" &&
+        !error ? (
         <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
       ) : null}
 
@@ -386,6 +406,13 @@ export function LiveV2Page() {
 
       {liveState === "awaiting_observation" ? (
         <p className="mobile-status-banner" role="status">当前验收切片已实时完成；所有已播语音均已分别保存，流程停在下一行动窗口之前。</p>
+      ) : null}
+
+      {liveState === "canceled" ? (
+        <section className="mobile-live-v2-error" role="alert">
+          <strong>本局已由管理员终止</strong>
+          <p>当前字幕与语音播放已停止，不会追播或恢复已打断的内容。</p>
+        </section>
       ) : null}
 
       {error ? (
@@ -418,6 +445,7 @@ function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string
   }
   if (state === "finalizing") return "语音播报完成，正在校验并保存 V2 语音资产...";
   if (state === "awaiting_observation") return "当前流程已完成，等待本步验收";
+  if (state === "canceled") return "本局已由管理员终止";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";
 }
