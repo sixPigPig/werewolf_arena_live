@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,7 +71,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(snapshot("ready", null)), {
+      new Response(JSON.stringify(snapshot("waiting_to_start", null)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -95,7 +95,11 @@ describe("LiveV2Page", () => {
     expect(screen.getByText(/普通直播不会展示任何座位对应的角色或阵营/)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(sourceStart).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "进入实时直播" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "进入实时观赛" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
+    ).toHaveAttribute("data-connection-state", "idle");
+    expect(screen.getByText(/只接收当前与未来内容/)).toBeInTheDocument();
   });
 
   it("shows the frozen public rule before starting any realtime action", async () => {
@@ -127,7 +131,7 @@ describe("LiveV2Page", () => {
     renderPage();
 
     expect(FakeWebSocket.instances).toHaveLength(0);
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     expect(socket.url.endsWith(`/api/v2/live/games/${gameId}/ws`)).toBe(true);
@@ -222,8 +226,8 @@ describe("LiveV2Page", () => {
       socket.emitJson(state("awaiting_observation"));
     });
 
-    expect(await screen.findByText("天黑，请闭眼")).toBeInTheDocument();
-    expect(screen.getByText(/当前验收切片已实时完成/)).toBeInTheDocument();
+    expect((await screen.findAllByText("第 1 夜")).length).toBeGreaterThan(0);
+    expect(screen.getByText("直播已停在当前时刻")).toBeInTheDocument();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(sourceStart).toHaveBeenCalledTimes(2);
     expect(copyToChannel).toHaveBeenCalledTimes(2);
@@ -232,7 +236,7 @@ describe("LiveV2Page", () => {
 
   it("does not replay a completed sentence after reconnect", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
 
@@ -242,7 +246,7 @@ describe("LiveV2Page", () => {
     });
 
     expect(
-      await screen.findByText(/当前验收切片已实时完成/),
+      await screen.findByText("直播已停在当前时刻"),
     ).toBeInTheDocument();
     expect(sourceStart).not.toHaveBeenCalled();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
@@ -250,7 +254,7 @@ describe("LiveV2Page", () => {
 
   it("labels a public player presentation with the frozen display name", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -277,14 +281,22 @@ describe("LiveV2Page", () => {
         segment_index: 0,
         text: "我选择不开枪。",
       });
+      socket.emitJson(state("broadcasting"));
+      socket.emitBinary(audioFrame(0, 0));
     });
 
     expect(await screen.findByRole("region", { name: "阿青" })).toBeInTheDocument();
+    expect(screen.getByText("我选择不开枪。")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
+    ).toHaveAttribute("data-live-state", "broadcasting");
+    expect(document.querySelector(".mobile-v2-theater.is-audio-active")).not.toBeNull();
+    expect(sourceStart).toHaveBeenCalledTimes(1);
   });
 
   it("shows only safe night progress and public dawn deaths", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时直播" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -321,8 +333,147 @@ describe("LiveV2Page", () => {
     });
 
     expect(await screen.findByText("阿青 · 已死亡")).toBeInTheDocument();
-    expect(screen.getByText("黎明结算完成")).toBeInTheDocument();
+    expect(screen.getAllByText("第 1 天").length).toBeGreaterThan(0);
     expect(screen.queryByText(/狼人袭击/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "1号 阿青，已公开死亡" }),
+    ).toHaveClass("is-dead", "is-reacting");
+    const publicStage = screen.getByRole("region", {
+      name: "Live V2 实时演出舞台",
+    });
+    expect(within(publicStage).queryByText("狼人")).not.toBeInTheDocument();
+    expect(within(publicStage).queryByText("村民")).not.toBeInTheDocument();
+  });
+
+  it("keeps later-round rhythm, public sheriff state, and the final winner on stage", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("game.phase_changed"),
+        phase_seq: 6,
+        previous_phase_id: "night_2",
+        phase_id: "day_2",
+        phase_state: "public_discussion_open",
+      });
+      socket.emitJson({
+        ...base("match.state_changed"),
+        round_no: 2,
+        sheriff_player_id: "profile-1",
+        sheriff_badge_state: "held",
+        winner: null,
+      });
+      socket.emitJson({
+        ...base("day.progress_changed"),
+        round_no: 2,
+        stage: "discussion_round_1",
+      });
+    });
+
+    expect(screen.getAllByText("第 2 天").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("存活玩家正在依次公开发言").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("listitem", { name: "1号 阿青，警长" }),
+    ).toHaveClass("is-sheriff");
+    expect(document.querySelector(".mobile-v2-theater.is-vote")).not.toBeNull();
+
+    act(() => {
+      socket.emitJson({
+        ...base("game.phase_changed"),
+        phase_seq: 7,
+        previous_phase_id: "day_2",
+        phase_id: "day_2",
+        phase_state: "game_completed",
+      });
+      socket.emitJson({
+        ...base("match.state_changed"),
+        round_no: 2,
+        sheriff_player_id: "profile-1",
+        sheriff_badge_state: "held",
+        winner: "villagers",
+      });
+      socket.emitJson(state("awaiting_observation"));
+    });
+
+    expect(await screen.findByText("好人阵营获胜")).toBeInTheDocument();
+    expect(screen.getByText(/正式落幕/)).toBeInTheDocument();
+    expect(document.querySelector(".mobile-v2-theater.is-terminal")).not.toBeNull();
+  });
+
+  it("fails closed if a private death cause reaches the public theater", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("player.state_changed"),
+        player_id: "profile-2",
+        alive: false,
+        cause: "werewolf_attack",
+      });
+    });
+
+    expect(
+      await screen.findByText("普通观众连接收到私密死亡原因，连接已关闭"),
+    ).toBeInTheDocument();
+    expect(socket.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("presents an operator stop as an interrupted stage without enabling replay", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("live.state_changed"),
+        live_state: "failed",
+        reason: "operator stop",
+      });
+    });
+
+    expect(await screen.findByText("运营已中断本局")).toBeInTheDocument();
+    expect(screen.getByText(/只会接收当前和未来内容/)).toBeInTheDocument();
+    expect(screen.queryByText("回放")).not.toBeInTheDocument();
+  });
+
+  it("presents a failed snapshot as a terminal realtime stage without replay", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(snapshot("failed", null)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("实时演出未能继续")).toBeInTheDocument();
+    expect(screen.getByText(/仍只接收当前和未来内容/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新接入当前直播" })).toBeInTheDocument();
+    expect(screen.queryByText("回放")).not.toBeInTheDocument();
   });
 });
 
@@ -353,6 +504,12 @@ function snapshot(
       liveState === "awaiting_observation"
         ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
         : { phase_seq: 1, phase_id: "opening", phase_state: "opening_ready" },
+    match_state: {
+      round_no: 1,
+      sheriff_player_id: null,
+      sheriff_badge_state: "disabled",
+      winner: null,
+    },
     latest_presentation_seq: presentation ? 1 : 0,
     public_rule: {
       rule_id: "classic_2",

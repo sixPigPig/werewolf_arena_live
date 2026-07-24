@@ -7,6 +7,7 @@ import {
   parseV2ServerMessage,
   type V2GamePhase,
   type V2LiveState,
+  type V2MatchState,
   type V2Presentation,
   type V2PublicPlayerSeat,
   type V2PublicRoleAssignmentStatus,
@@ -17,9 +18,18 @@ import {
   readGodViewAccessToken,
 } from "../god-view/access";
 import { V2PcmPlayer } from "../V2PcmPlayer";
+import {
+  V2LiveTheater,
+  type V2ConnectionState,
+} from "./V2LiveTheater";
 
-type ConnectionState = "idle" | "connecting" | "connected" | "failed";
 type RosterState = "loading" | "ready" | "failed";
+type NightProgress =
+  | "night_started"
+  | "actions_in_progress"
+  | "night_resolved"
+  | "dawn_announced"
+  | null;
 
 export function LiveV2Page() {
   const { gameId = "" } = useParams();
@@ -28,10 +38,13 @@ export function LiveV2Page() {
   const playerRef = useRef<V2PcmPlayer | null>(null);
   const presentationRef = useRef<V2Presentation | null>(null);
   const terminalRef = useRef(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
+  const audioPulseTimerRef = useRef<number | null>(null);
+  const deathReactionTimerRef = useRef<number | null>(null);
+  const [connectionState, setConnectionState] =
+    useState<V2ConnectionState>("idle");
   const [liveState, setLiveState] = useState<V2LiveState | null>(null);
   const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [matchState, setMatchState] = useState<V2MatchState | null>(null);
   const [presentation, setPresentation] = useState<V2Presentation | null>(null);
   const [publicPlayers, setPublicPlayers] = useState<V2PublicPlayerSeat[]>([]);
   const [publicRule, setPublicRule] = useState<V2PublicRuleSnapshot | null>(null);
@@ -40,9 +53,12 @@ export function LiveV2Page() {
   const [rosterState, setRosterState] = useState<RosterState>("loading");
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [nightProgress, setNightProgress] = useState<
-    "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced" | null
-  >(null);
+  const [nightProgress, setNightProgress] = useState<NightProgress>(null);
+  const [dayProgress, setDayProgress] = useState<string | null>(null);
+  const [audioActive, setAudioActive] = useState(false);
+  const [reactingPlayerIds, setReactingPlayerIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     let active = true;
@@ -53,12 +69,16 @@ export function LiveV2Page() {
         setPublicPlayers(snapshot.public_players);
         setRoleAssignment(snapshot.public_role_assignment);
         setGamePhase(snapshot.game_phase);
+        setMatchState(snapshot.match_state);
+        setLiveState(snapshot.live_state);
         setRosterState("ready");
       })
       .catch((reason) => {
         if (!active) return;
         setRosterState("failed");
-        setRosterError(reason instanceof Error ? reason.message : "无法读取本局座位快照");
+        setRosterError(
+          reason instanceof Error ? reason.message : "无法读取本局座位快照",
+        );
       });
     return () => {
       active = false;
@@ -69,16 +89,51 @@ export function LiveV2Page() {
     return () => {
       terminalRef.current = true;
       socketRef.current?.close();
+      if (audioPulseTimerRef.current !== null) {
+        window.clearTimeout(audioPulseTimerRef.current);
+      }
+      if (deathReactionTimerRef.current !== null) {
+        window.clearTimeout(deathReactionTimerRef.current);
+      }
       const player = playerRef.current;
       playerRef.current = null;
       if (player) void player.close();
     };
   }, []);
 
+  function revealPublicDeaths(playerIds: string[]) {
+    const dead = new Set(playerIds);
+    setPublicPlayers((current) =>
+      current.map((player) =>
+        dead.has(player.player_id) ? { ...player, alive: false } : player,
+      ),
+    );
+    setReactingPlayerIds(dead);
+    if (deathReactionTimerRef.current !== null) {
+      window.clearTimeout(deathReactionTimerRef.current);
+    }
+    deathReactionTimerRef.current = window.setTimeout(() => {
+      setReactingPlayerIds(new Set());
+      deathReactionTimerRef.current = null;
+    }, 1800);
+  }
+
+  function showAudioPulse() {
+    setAudioActive(true);
+    if (audioPulseTimerRef.current !== null) {
+      window.clearTimeout(audioPulseTimerRef.current);
+    }
+    audioPulseTimerRef.current = window.setTimeout(() => {
+      setAudioActive(false);
+      audioPulseTimerRef.current = null;
+    }, 420);
+  }
+
   async function enterLive() {
     socketRef.current?.close();
     if (playerRef.current) await playerRef.current.close();
     terminalRef.current = false;
+    setAudioActive(false);
     setError(null);
     setConnectionState("connecting");
     presentationRef.current = null;
@@ -96,10 +151,10 @@ export function LiveV2Page() {
         try {
           if (typeof event.data === "string") {
             const message = parseV2ServerMessage(event.data);
-            setRunId(message.run_id);
             if (message.type === "live.snapshot") {
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
+              setMatchState(message.match_state);
               setPublicRule(message.public_rule);
               setPublicPlayers(message.public_players);
               setRoleAssignment(message.public_role_assignment);
@@ -107,7 +162,9 @@ export function LiveV2Page() {
               setRosterError(null);
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
-              if (message.current_presentation) player.begin(message.current_presentation);
+              if (message.current_presentation) {
+                player.begin(message.current_presentation);
+              }
               if (!readySent) {
                 socket.send(
                   JSON.stringify({
@@ -134,11 +191,13 @@ export function LiveV2Page() {
               setLiveState(message.live_state);
               if (message.live_state === "failed") {
                 terminalRef.current = true;
+                setAudioActive(false);
                 player.stop();
                 setError(message.reason ?? "V2 实时动作失败");
               }
               if (message.live_state === "awaiting_observation") {
                 terminalRef.current = true;
+                setAudioActive(false);
               }
               return;
             }
@@ -154,16 +213,41 @@ export function LiveV2Page() {
               setNightProgress(message.stage);
               return;
             }
+            if (message.type === "day.progress_changed") {
+              setDayProgress(message.stage);
+              return;
+            }
+            if (message.type === "match.state_changed") {
+              setMatchState({
+                round_no: message.round_no,
+                sheriff_player_id: message.sheriff_player_id,
+                sheriff_badge_state: message.sheriff_badge_state,
+                winner: message.winner,
+              });
+              return;
+            }
+            if (message.type === "player.state_changed") {
+              if (message.cause !== null) {
+                throw new Error("普通观众连接收到私密死亡原因，连接已关闭");
+              }
+              if (message.alive) {
+                setPublicPlayers((current) =>
+                  current.map((player) =>
+                    player.player_id === message.player_id
+                      ? { ...player, alive: true }
+                      : player,
+                  ),
+                );
+              } else {
+                revealPublicDeaths([message.player_id]);
+              }
+              return;
+            }
             if (message.type === "ability.progress_changed") {
               throw new Error("普通观众连接收到私密能力投影，连接已关闭");
             }
             if (message.type === "dawn.result_announced") {
-              const dead = new Set(message.dead_player_ids);
-              setPublicPlayers((current) =>
-                current.map((player) =>
-                  dead.has(player.player_id) ? { ...player, alive: false } : player,
-                ),
-              );
+              revealPublicDeaths(message.dead_player_ids);
               return;
             }
             if (message.type === "god_view.night_resolved") {
@@ -183,6 +267,7 @@ export function LiveV2Page() {
               };
               presentationRef.current = current;
               setPresentation(current);
+              setAudioActive(false);
               player.begin(current);
               return;
             }
@@ -207,15 +292,20 @@ export function LiveV2Page() {
             }
             if (message.type === "presentation.failed") {
               terminalRef.current = true;
+              setAudioActive(false);
               player.stop();
               setLiveState("failed");
               setError(`${message.failure_kind}: ${message.failure_code}`);
               return;
             }
             if (message.type === "presentation.closed") {
-              if (presentationRef.current?.presentation_id === message.presentation_id) {
+              if (
+                presentationRef.current?.presentation_id ===
+                message.presentation_id
+              ) {
                 presentationRef.current = null;
                 setPresentation(null);
+                setAudioActive(false);
                 player.stop();
               }
               return;
@@ -225,10 +315,13 @@ export function LiveV2Page() {
             throw new Error("V2 收到未知二进制类型");
           }
           player.push(decodeV2AudioFrame(event.data));
+          showAudioPulse();
         } catch (reason) {
           terminalRef.current = true;
+          setAudioActive(false);
           player.stop();
           setLiveState("failed");
+          setConnectionState("failed");
           setError(reason instanceof Error ? reason.message : "V2 实时协议错误");
           socket.close();
         }
@@ -240,6 +333,7 @@ export function LiveV2Page() {
       socket.onclose = () => {
         if (!terminalRef.current) {
           setConnectionState("failed");
+          setAudioActive(false);
           setError("V2 实时连接已断开；重新进入只会接收当前和未来内容");
         }
       };
@@ -249,194 +343,193 @@ export function LiveV2Page() {
     }
   }
 
+  const processLabel = liveProcessLabel(
+    connectionState,
+    liveState,
+    gamePhase,
+    nightProgress,
+    dayProgress,
+  );
+
   return (
-    <main className={`mobile-page mobile-live-v2-page${gamePhase?.phase_id === "first_night" ? " is-first-night" : ""}`}>
-      <header className="mobile-live-v2-heading">
-        <span>LIVE V2 · REALTIME</span>
-        <h1>Live V2</h1>
-        <small>{gameId}</small>
-      </header>
+    <main
+      className={[
+        "mobile-page",
+        "mobile-live-v2-page",
+        isNightPhase(gamePhase) ? "is-night" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <h1 className="mobile-sr-only">Live V2</h1>
 
-      <section className="mobile-live-v2-rule" aria-labelledby="v2-rule-heading">
-        <header>
-          <div>
-            <span>冻结规则</span>
-            <h2 id="v2-rule-heading">{publicRule?.name ?? "规则快照"}</h2>
-          </div>
-          {publicRule ? <strong>v{publicRule.version}</strong> : null}
-        </header>
-        {rosterState === "loading" ? <p role="status">正在读取不可变规则快照...</p> : null}
-        {rosterState === "ready" && !publicRule ? <p>本对局没有大厅规则快照。</p> : null}
-        {publicRule ? (
-          <>
-            <p>{publicRule.player_count} 位玩家 · 最多 {publicRule.max_rounds} 轮</p>
-            <ul aria-label="本局角色构成">
-              {publicRule.roles.map((role) => (
-                <li key={role.role}><strong>{role.role}</strong><span>× {role.count}</span></li>
-              ))}
-            </ul>
-            <dl>
-              <div><dt>警长</dt><dd>{ruleFlagLabel(publicRule.sheriff_enabled)}</dd></div>
-              <div><dt>狼人自爆</dt><dd>{ruleFlagLabel(publicRule.werewolf_self_explosion_enabled)}</dd></div>
-              <div><dt>放逐遗言</dt><dd>{ruleFlagLabel(publicRule.exile_last_words_enabled)}</dd></div>
-            </dl>
-          </>
-        ) : null}
-      </section>
-
-      <section className="mobile-live-v2-roster" aria-labelledby="v2-roster-heading">
-        <header>
-          <h2 id="v2-roster-heading">本局座位</h2>
-          <span>{rosterState === "ready" ? `${publicPlayers.length} 位玩家` : "读取中"}</span>
-        </header>
-        {roleAssignment ? (
-          <div className={`mobile-live-v2-role-seal is-${roleAssignment.state}`}>
-            <strong>
-              {roleAssignment.state === "sealed"
-                ? `身份已私密封存 · ${roleAssignment.assigned_count} 人`
-                : "身份尚未分配"}
-            </strong>
-            <span>普通直播不会展示任何座位对应的角色或阵营。</span>
-          </div>
-        ) : null}
-        {rosterState === "loading" ? <p role="status">正在读取不可变玩家快照...</p> : null}
-        {rosterState === "failed" ? <p role="alert">{rosterError}</p> : null}
-        {rosterState === "ready" && publicPlayers.length === 0 ? (
-          <p>本对局没有大厅玩家快照。</p>
-        ) : null}
-        {publicPlayers.length > 0 ? (
-          <ol aria-label="本局玩家座位">
-            {publicPlayers.map((player) => (
-              <li key={player.player_id} className={player.alive ? undefined : "is-dead"}>
-                <span className="mobile-live-v2-seat-number">{player.seat}号</span>
-                <span className="mobile-live-v2-seat-avatar" aria-hidden="true">
-                  {player.avatar_url ? (
-                    <img src={player.avatar_url} alt="" />
-                  ) : (
-                    player.display_name.slice(0, 1)
-                  )}
-                </span>
-                <strong>{player.display_name}{player.alive ? "" : " · 已死亡"}</strong>
-              </li>
-            ))}
-          </ol>
-        ) : null}
-      </section>
+      <V2LiveTheater
+        audioActive={audioActive}
+        connectionState={connectionState}
+        error={error}
+        gamePhase={gamePhase}
+        liveState={liveState}
+        matchState={matchState}
+        onEnter={() => void enterLive()}
+        presentation={presentation}
+        processLabel={processLabel}
+        publicPlayers={publicPlayers}
+        reactingPlayerIds={reactingPlayerIds}
+        ruleName={publicRule?.name ?? "Live V2"}
+      />
 
       {godViewAccessToken ? (
         <Link
-          className="mobile-live-v2-god-link"
+          className="mobile-v2-god-link"
           to={godViewPageUrl(gameId, godViewAccessToken)}
         >
-          <span>全知观赛模式</span>
+          <span>持有全知凭证</span>
           <strong>进入上帝视角</strong>
-          <small>查看所有座位的真实角色与阵营</small>
         </Link>
       ) : null}
 
-      {connectionState === "idle" ? (
-        <section className="mobile-live-v2-stage">
-          <span>实时对局</span>
-          <blockquote>点击后解锁音频；法官播报、玩家决策和语音都将在对应动作发生时实时生成。</blockquote>
-          <button className="mobile-button mobile-button-primary" onClick={() => void enterLive()} type="button">
-            进入实时直播
-          </button>
-        </section>
-      ) : null}
-
-      {connectionState === "connecting" ? (
-        <p className="mobile-status-banner" role="status">正在建立 V2 实时连接...</p>
-      ) : null}
-
-      {presentation ? (
-        <section className="mobile-live-v2-stage" aria-labelledby="v2-actor-label">
-          <span id="v2-actor-label">
-            {presentation.actor.kind === "judge"
-              ? "法官"
-              : publicPlayerName(publicPlayers, presentation.actor.id)}
+      <details className="mobile-v2-live-details">
+        <summary>
+          <span>
+            <strong>本局资料</strong>
+            <small>规则与公开座位</small>
           </span>
-          <blockquote>{presentation.subtitle_text || "正在等待完整句子..."}</blockquote>
-          <p aria-live="polite" role="status">{liveLabel(liveState, gamePhase)}</p>
-          <dl>
-            <div><dt>run</dt><dd>{runId}</dd></div>
-            <div><dt>action</dt><dd>{presentation.action_id}</dd></div>
-            <div><dt>presentation</dt><dd>#{presentation.presentation_seq} · {presentation.presentation_id}</dd></div>
-            <div><dt>speech</dt><dd>{presentation.speech_id} · segment {presentation.segment_index}</dd></div>
-          </dl>
-        </section>
-      ) : connectionState !== "idle" && !error ? (
-        <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
-      ) : null}
+          <b>{rosterState === "ready" ? `${publicPlayers.length} 人` : "读取中"}</b>
+        </summary>
 
-      {gamePhase?.phase_id === "first_night" ? (
-        <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
-          <span>第一夜</span>
-          <strong>{gamePhase.phase_state === "night_running" ? "首夜能力正在实时执行" : "天黑，请闭眼"}</strong>
-          <small>{nightProgressLabel(nightProgress)}</small>
-        </section>
-      ) : null}
+        <div className="mobile-v2-live-details-body">
+          {roleAssignment ? (
+            <p className="mobile-v2-privacy-seal">
+              <strong>
+                {roleAssignment.state === "sealed"
+                  ? `身份已私密封存 · ${roleAssignment.assigned_count} 人`
+                  : "身份尚未分配"}
+              </strong>
+              <span>普通直播不会展示任何座位对应的角色或阵营，也不会公开私密死亡原因。</span>
+            </p>
+          ) : null}
 
-      {gamePhase?.phase_id === "day_1" ? (
-        <section className="mobile-live-v2-night" aria-label="当前游戏阶段">
-          <span>第一天</span>
-          <strong>{gamePhase.phase_state === "sheriff_election_ready" ? "等待警长竞选" : gamePhase.phase_state === "game_completed" ? "对局已结束" : "黎明结算完成"}</strong>
-          <small>首夜所有已配置能力已经结算，当前停在下一公开行动窗口之前。</small>
-        </section>
-      ) : null}
+          <section aria-labelledby="v2-rule-heading">
+            <header>
+              <h2 id="v2-rule-heading">{publicRule?.name ?? "规则快照"}</h2>
+              {publicRule ? <span>v{publicRule.version}</span> : null}
+            </header>
+            {publicRule ? (
+              <>
+                <p>
+                  {publicRule.player_count} 位玩家 · 最多 {publicRule.max_rounds} 轮
+                </p>
+                <ul aria-label="本局公开角色构成">
+                  {publicRule.roles.map((role) => (
+                    <li key={role.role}>
+                      <strong>{role.role}</strong>
+                      <span>× {role.count}</span>
+                    </li>
+                  ))}
+                </ul>
+                <dl>
+                  <div>
+                    <dt>警长</dt>
+                    <dd>{ruleFlagLabel(publicRule.sheriff_enabled)}</dd>
+                  </div>
+                  <div>
+                    <dt>狼人自爆</dt>
+                    <dd>{ruleFlagLabel(publicRule.werewolf_self_explosion_enabled)}</dd>
+                  </div>
+                  <div>
+                    <dt>放逐遗言</dt>
+                    <dd>{ruleFlagLabel(publicRule.exile_last_words_enabled)}</dd>
+                  </div>
+                </dl>
+              </>
+            ) : (
+              <p>{rosterState === "loading" ? "正在读取规则…" : "没有规则快照"}</p>
+            )}
+          </section>
 
-      {liveState === "awaiting_observation" ? (
-        <p className="mobile-status-banner" role="status">当前验收切片已实时完成；所有已播语音均已分别保存，流程停在下一行动窗口之前。</p>
-      ) : null}
-
-      {error ? (
-        <section className="mobile-live-v2-error" role="alert">
-          <strong>V2 实时直播失败</strong>
-          <p>{error}</p>
-          <button className="mobile-button" onClick={() => void enterLive()} type="button">重新连接当前直播</button>
-        </section>
-      ) : null}
-
-      <Link className="mobile-button" to="/games">返回对局大厅</Link>
+          <section aria-labelledby="v2-roster-heading">
+            <header>
+              <h2 id="v2-roster-heading">公开座位</h2>
+              <span>{publicPlayers.length} 位</span>
+            </header>
+            {rosterError ? <p role="alert">{rosterError}</p> : null}
+            <ol aria-label="本局公开玩家座位">
+              {publicPlayers.map((player) => (
+                <li
+                  key={player.player_id}
+                  className={player.alive ? undefined : "is-dead"}
+                >
+                  <span>{player.seat}号</span>
+                  <strong>
+                    {player.display_name}
+                    {player.alive ? "" : " · 已死亡"}
+                  </strong>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </div>
+      </details>
     </main>
   );
 }
 
-function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string {
-  const isNight = phase?.phase_id === "first_night";
-  if (state === "ready") return "音频已解锁，等待启动实时法官动作...";
-  if (state === "generating") {
-    if (phase?.phase_state === "night_running") return "首夜动作正在实时请求大模型...";
-    if (phase?.phase_id === "day_1") return "法官正在实时生成黎明播报...";
-    return isNight
-      ? "法官正在通过大模型实时生成入夜播报..."
-      : "法官正在通过大模型实时生成开场播报...";
+function liveProcessLabel(
+  connectionState: V2ConnectionState,
+  liveState: V2LiveState | null,
+  phase: V2GamePhase | null,
+  nightProgress: NightProgress,
+  dayProgress: string | null,
+): string {
+  if (liveState === "failed") return "实时演出已停止";
+  if (liveState === "awaiting_observation") return "本局实时流程已经停播";
+  if (connectionState === "idle") return "舞台已就位，等待观众入场";
+  if (connectionState === "connecting") return "正在连接当前实时进度";
+  if (liveState === "waiting_to_start") return "玩家与规则已冻结，等待开幕";
+  if (liveState === "finalizing") return "本句播完，正在保存同源语音";
+  if (liveState === "broadcasting") return "字幕与 PCM 正在同步播出";
+  if (liveState === "generating") {
+    if (isNightPhase(phase)) return "夜间动作正在实时生成";
+    if (isDayPhase(phase)) return dayProgressLabel(dayProgress);
+    return "法官正在生成开幕播报";
   }
-  if (state === "broadcasting") {
-    if (phase?.phase_state === "night_running") return "首夜动作语音正在实时播出";
-    if (phase?.phase_id === "day_1") return "黎明结果正在实时播报";
-    return isNight ? "法官入夜话术实时播报中" : "法官开场话术实时播报中";
-  }
-  if (state === "finalizing") return "语音播报完成，正在校验并保存 V2 语音资产...";
-  if (state === "awaiting_observation") return "当前流程已完成，等待本步验收";
-  if (state === "failed") return "本次实时动作已明确失败";
-  return "正在读取当前实时状态...";
+  if (isNightPhase(phase)) return nightProgressLabel(nightProgress);
+  if (isDayPhase(phase)) return dayProgressLabel(dayProgress);
+  return "声音已解锁，等待下一幕";
 }
 
-function nightProgressLabel(
-  stage: "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced" | null,
-): string {
-  if (stage === "night_started") return "首夜行动窗口已经打开。";
-  if (stage === "actions_in_progress") return "私密能力正在依规则执行；普通观众只接收安全进度。";
-  if (stage === "night_resolved") return "首夜效果已由确定性规则结算，正在等待黎明播报。";
-  if (stage === "dawn_announced") return "黎明结果已公开播报。";
-  return "等待首夜实时行动开始。";
+function nightProgressLabel(stage: NightProgress): string {
+  if (stage === "night_started") return "夜间行动窗口已经打开";
+  if (stage === "actions_in_progress") return "私密能力执行中，普通观众仅接收安全进度";
+  if (stage === "night_resolved") return "夜间效果已结算，等待黎明公开";
+  if (stage === "dawn_announced") return "黎明结果已经公开";
+  return "夜幕中的下一项动作正在准备";
+}
+
+function dayProgressLabel(stage: string | null): string {
+  if (!stage || stage === "day_started") return "白天公开流程正在展开";
+  if (stage === "pre_sheriff_election") return "警长竞选即将开始";
+  if (stage === "before_exile_vote") return "发言结束，放逐投票即将开始";
+  if (stage.startsWith("discussion_round_")) return "存活玩家正在依次公开发言";
+  if (stage.includes("sheriff")) return "警长竞选与投票正在进行";
+  if (stage.includes("vote") || stage.includes("exile")) {
+    return "公开投票与放逐结算正在进行";
+  }
+  return "白天公开动作正在实时推进";
+}
+
+function isNightPhase(phase: V2GamePhase | null): boolean {
+  return (
+    phase?.phase_id === "first_night" ||
+    phase?.phase_id.startsWith("night_") === true
+  );
+}
+
+function isDayPhase(phase: V2GamePhase | null): boolean {
+  return phase?.phase_id.startsWith("day_") === true;
 }
 
 function ruleFlagLabel(value: boolean | null): string {
   if (value === null) return "未配置";
   return value ? "开启" : "关闭";
-}
-
-function publicPlayerName(players: V2PublicPlayerSeat[], playerId: string): string {
-  return players.find((player) => player.player_id === playerId)?.display_name ?? playerId;
 }

@@ -13,13 +13,13 @@ afterEach(() => {
 
 
 describe("createV2Game", () => {
-  it("posts the existing lobby snapshot and accepts only a V2 ready game", async () => {
+  it("posts the existing lobby snapshot and accepts only a waiting V2 game", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
           game_id: "v2_game_0123456789abcdef",
           run_id: "v2_run_0123456789abcdef",
-          status: "ready",
+          status: "waiting_to_start",
           snapshot_url:
             "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
           websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
@@ -145,8 +145,14 @@ describe("fetchV2GodViewIdentitySnapshot", () => {
           audience: "spectator_god_view",
           game_id: "v2_game_0123456789abcdef",
           run_id: "v2_run_0123456789abcdef",
-          live_state: "ready",
+          live_state: "waiting_to_start",
           game_phase: openingPhase(),
+          match_state: {
+            round_no: 1,
+            sheriff_player_id: null,
+            sheriff_badge_state: "disabled",
+            winner: null,
+          },
           server_time: "2026-07-22T12:00:00Z",
           rule: {
             rule_id: "classic_2",
@@ -219,6 +225,12 @@ describe("fetchV2LiveSnapshot", () => {
           run_id: "v2_run_0123456789abcdef",
           live_state: "ready",
           game_phase: openingPhase(),
+          match_state: {
+            round_no: 1,
+            sheriff_player_id: null,
+            sheriff_badge_state: "disabled",
+            winner: null,
+          },
           latest_presentation_seq: 0,
           server_time: "2026-07-22T12:00:00Z",
           public_rule: {

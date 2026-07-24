@@ -224,7 +224,7 @@ describe("GodViewPage", () => {
     });
 
     expect(await screen.findByText("天黑，请闭眼")).toBeInTheDocument();
-    expect(screen.getByText(/当前验收切片已实时完成/)).toBeInTheDocument();
+    expect(screen.getByText(/当前对局已停止/)).toBeInTheDocument();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(screen.getByText("狼人")).toBeInTheDocument();
     expect(screen.getByText("村民")).toBeInTheDocument();
@@ -255,7 +255,7 @@ describe("GodViewPage", () => {
       socket.emitJson(liveSnapshot("awaiting_observation", null));
     });
 
-    expect(await screen.findByText(/上帝视角正在等待本步验收/)).toBeInTheDocument();
+    expect(await screen.findByText(/当前对局已停止/)).toBeInTheDocument();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(sourceStart).not.toHaveBeenCalled();
   });
@@ -325,7 +325,7 @@ describe("GodViewPage", () => {
       });
     });
 
-    const progress = await screen.findByRole("region", { name: "首夜实时决策" });
+    const progress = await screen.findByRole("region", { name: "夜间实时决策" });
     expect(within(progress).getAllByText("狼人袭击")).toHaveLength(1);
     expect(within(progress).getByText("目标：白石")).toBeInTheDocument();
     expect(screen.getByText("已死亡 · 狼人袭击")).toBeInTheDocument();
@@ -349,11 +349,17 @@ function identitySnapshot() {
     audience: "spectator_god_view",
     game_id: gameId,
     run_id: "v2_run_0123456789abcdef",
-    live_state: "ready",
+    live_state: "waiting_to_start",
     game_phase: {
       phase_seq: 1,
       phase_id: "opening",
       phase_state: "opening_ready",
+    },
+    match_state: {
+      round_no: 1,
+      sheriff_player_id: null,
+      sheriff_badge_state: "disabled",
+      winner: null,
     },
     server_time: "2026-07-22T12:00:00Z",
     rule: {
