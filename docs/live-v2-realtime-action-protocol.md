@@ -1,12 +1,12 @@
 # Live V2 实时动作与能力驱动直播协议
 
-> 状态：开场播报与入夜播报已经实现并通过验收（2026-07-22）；第 17 节能力驱动运行时及首夜扩大切片已经进入独立 V2 代码实现，等待真实对局和用户观察验收。具备完整大厅快照的 6–12 人新对局不再停在 `nightfall_announced`，而是动态执行本局配置的首夜能力、黎明与阻塞死亡响应，再停在下一行动窗口之前；无完整能力快照的预览对局仍保留原两句停点。
+> 状态：开场、首夜和首日开场已经通过历史验收。2026-07-23 用户明确授权完整对局工作包；具备可执行冻结能力快照的 6–12 人新对局现在从首个观众 ready 开始，连续执行每个实时模型动作、同源 TTS、语音保存、夜晚、白天、警长、投票、死亡响应和胜负结算，直到 `game_completed` 或明确 `failed`。无完整能力快照的预览对局仍保留原两句停点。
 
 ## 1. 已验收基础切片（历史）
 
 打通一个可以由用户亲自观察的最小垂直切片：
 
-> Mobile 用户点击进入实时直播后，服务端先实时请求模型生成法官开场句，完成实时 TTS、官方音频时钟和独立语音保存；确定性地把阶段从 `opening` 推进到 `first_night` 后，再发起第二次真实模型与 TTS 请求，生成“天黑请闭眼”性质的入夜播报并保存第二份语音资产。此处描述的是已经验收的基础停点；当前扩大切片由第 17、18 节继续推进。
+> Mobile 用户点击进入实时观赛后，服务端先正式开局，再实时请求模型生成法官开场句，完成实时 TTS、官方音频时钟和独立语音保存；确定性地把阶段从 `opening` 推进到 `first_night` 后，再发起第二次真实模型与 TTS 请求，生成“天黑请闭眼”性质的入夜播报并保存第二份语音资产。此处描述的是已经验收的基础停点；当前扩大切片由第 17、18 节继续推进。
 
 两句话都不读取静态 `game_intro`，也不从旧对局、旧直播或 Replay 中获取。旧 V2 对局统一标记为 `legacy / legacy_frozen`，不得在升级后续跑本切片。
 
@@ -127,7 +127,8 @@ V2 不导入、不包装以下旧业务实现：
 
 | 当前状态 | 唯一输入 | 动作 | 下一状态 | 对外表现 |
 | --- | --- | --- | --- | --- |
-| `ready` | 首个已完成音频解锁的普通或上帝客户端发送各自的 ready 消息 | 创建 `action_id` 和 ActionContext | `model_streaming` | `live.state_changed: generating` |
+| `waiting_to_start` | 首个已完成音频解锁的普通或上帝客户端发送各自的 ready 消息 | 原子写入 `game_started` 和 `run.started_at` | `ready` | 返回开局后的当前受众 snapshot |
+| `ready` | 同一个首次 ready 已完成正式开局 | 创建 `action_id` 和 ActionContext | `model_streaming` | `live.state_changed: generating` |
 | `model_streaming` | 新 V2 模型客户端返回增量 | 仅在服务端累积和检查，不公开原始 token | `model_streaming` | 无公开字幕 |
 | `model_streaming` | 模型流结束且得到非空播报文本 | 持久化完整文本并封口 speech；不限制句数、标点、引号或排版 | `sentence_committed` | 依次发送 `presentation.opened`、`speech.segment_committed` |
 | `sentence_committed` | 新 V2 TTS 客户端返回首个有效 PCM 块 | 创建状态为 `writing` 的 `voice_asset_id`，同一 PCM 块同时送入 recorder 和 broadcaster | `audio_streaming` | 发送带相同展示标识的音频帧 |
@@ -139,7 +140,7 @@ V2 不导入、不包装以下旧业务实现：
 
 只有入夜动作的 `succeeded` 和任一动作的 `failed` 是本切片终态。开场动作成功后只能由确定性编排器创建已批准的入夜动作；不能由客户端按钮、模型输出或播放 ACK 决定是否推进。
 
-`client.ready` 和 `god_view.ready` 只是一次性启动门禁，用来确保浏览器已通过用户手势解锁音频；它们不是播放 ACK，不能在两个动作之间控制推进。两种 ready 汇聚到同一个按 `game_id` 唯一的串行编排任务。
+`client.ready` 和 `god_view.ready` 是正式开局的一次性启动门禁，用来确保浏览器已通过用户手势解锁音频。创建对局、读取普通快照、读取上帝身份或只打开页面都不得填写 `run.started_at`、写入 `game_started` 或请求模型/TTS。它们不是播放 ACK，不能在两个动作之间控制推进。两种 ready 汇聚到同一个按 `game_id` 唯一的串行编排任务。
 
 ### 7.2 游戏阶段状态
 
@@ -232,7 +233,7 @@ GET /api/v2/god-view/games/{game_id}/ws
   "game_id": "v2_game_...",
   "run_id": "v2_run_...",
   "server_time": "2026-07-22T12:00:00.000Z",
-  "live_state": "ready",
+  "live_state": "waiting_to_start",
   "game_phase": {
     "phase_seq": 1,
     "phase_id": "opening",
@@ -273,7 +274,7 @@ GET /api/v2/god-view/games/{game_id}/ws
 
 若重连时正在播报，`current_presentation` 只包含当前展示、当前字幕和加入时的 `join_sample_cursor`，不包含已经发送的音频块。若播报已经结束，则必须为 `null`。
 
-`public_players` 是创建对局时玩家快照的公开、不可变投影，必须按 `seat` 升序排列。每项只能包含 `seat`、`player_id`、`display_name` 和 `avatar_url`；角色、模型、人格、策略、提示词、TTS 配置以及其他内部字段不得进入普通直播协议。Mobile 可以在用户点击进入实时直播前通过 REST snapshot 展示这些座位；读取座位本身不得创建 action、请求模型或解锁音频。
+`public_players` 是创建对局时玩家快照的公开、不可变投影，必须按 `seat` 升序排列。每项只能包含 `seat`、`player_id`、`display_name` 和 `avatar_url`；角色、模型、人格、策略、提示词、TTS 配置以及其他内部字段不得进入普通直播协议。Mobile 可以在用户点击进入实时观赛前通过 REST snapshot 展示这些座位；读取座位本身不得创建 action、请求模型或解锁音频。
 
 `public_rule` 是创建时冻结规则的公开投影，只允许规则 ID、名称、版本、玩家人数、角色数量构成、最大轮数和公开玩法开关。规则 revision、内容哈希、阵容质量报告、内部 team/model group、提示词和未来玩家身份分配均不得进入普通直播协议。读取和展示规则快照不得创建 action 或推进游戏阶段。
 
@@ -289,7 +290,7 @@ GET /api/v2/god-view/games/{game_id}/ws
   "audience": "spectator_god_view",
   "game_id": "v2_game_...",
   "run_id": "v2_run_...",
-  "live_state": "ready",
+  "live_state": "waiting_to_start",
   "game_phase": {
     "phase_seq": 1,
     "phase_id": "opening",
@@ -341,7 +342,7 @@ GET /api/v2/god-view/games/{game_id}/ws
   "audience": "spectator_god_view",
   "game_id": "v2_game_...",
   "run_id": "v2_run_...",
-  "live_state": "ready",
+  "live_state": "waiting_to_start",
   "game_phase": {
     "phase_seq": 1,
     "phase_id": "opening",
@@ -373,7 +374,7 @@ GET /api/v2/god-view/games/{game_id}/ws
 
 上帝连接使用完全相同的音频能力字段，但 `type` 必须为 `god_view.ready`。服务端必须按连接受众验证消息类型，普通连接发送 `god_view.ready` 或上帝连接发送 `client.ready` 都要失败关闭。
 
-每条连接最多接受一次。首个满足条件的任一 ready 可以原子地启动本切片；后来连接的 ready 只标记该连接具备播放能力。重复消息幂等，任何并发连接都不得创建第二个 action。
+每条连接最多接受一次。首个满足条件的任一 ready 必须原子地把对局和 run 从 `waiting_to_start` 改为 `ready`，填写真实 `started_at`，并写入唯一 `game_started`；其 `trigger_audience` 为 `player_public` 或 `spectator_god_view`。后来连接的 ready 只标记该连接具备播放能力。重复消息幂等，任何并发连接都不得创建第二个 `game_started` 或 action。
 
 ### 9.5 `live.state_changed`：服务端到客户端
 
@@ -389,7 +390,7 @@ GET /api/v2/god-view/games/{game_id}/ws
 }
 ```
 
-本切片允许的传输状态为：`ready`、`generating`、`broadcasting`、`finalizing`、`awaiting_observation`、`failed`。
+本切片允许的传输状态为：`waiting_to_start`、`ready`、`generating`、`broadcasting`、`finalizing`、`awaiting_observation`、`failed`。
 
 ### 9.6 `game.phase_changed`：服务端到客户端
 
@@ -643,7 +644,7 @@ V2 使用全新语音资产记录，不复用旧 `voice_utterances`、`voice_aud
 ## 16. 基础切片用户观察清单（历史）
 
 1. 打开 Mobile V2 页面时，尚未点击前不会偷偷开始模型请求或播放。
-2. 点击“进入实时直播”后，页面先显示法官正在生成内容。
+2. 点击“进入实时观赛”后，页面先显示法官正在生成内容。
 3. 第一条字幕是本次真实模型生成的开场句，不是静态 `game_intro`，随后实时播放同源声音。
 4. 第一条声音完整结束后，页面切换到“第一夜”，再出现第二次真实模型生成的入夜字幕与声音。
 5. 第二条声音结束后页面显示“等待本步验收”，不出现狼人睁眼、狼人队友或选刀内容。
@@ -889,18 +890,53 @@ window_opened
 2. 上帝视角立即收到完整死亡原因和能力进度；普通直播只收到不含角色、目标或原因的安全进度。
 3. 法官使用新的实时模型请求生成黎明播报，只公开规则允许的死亡名单，并使用同源实时 TTS 保存语音。
 4. 处理所有阻塞死亡响应后重新计算胜负。
-5. 无警长规则停在 `day_1 / public_day_ready / awaiting_observation`。
-6. 有警长规则停在 `day_1 / sheriff_election_ready / awaiting_observation`。
+5. 无警长规则先进入 `day_1 / public_day_ready / ready`，交给首日窗口开启器。
+6. 有警长规则先进入 `day_1 / sheriff_election_ready / ready`，交给首日窗口开启器。
 7. 已满足胜负条件时停在 `day_1 / game_completed / awaiting_observation`。
 
-本验收包不开始白天发言、警长竞选或投票。
+首夜验收已经通过。非终局对局不再把上述 `*_ready` 当成人工停点，而是继续进入第 19 节的首日公开窗口开场；首夜能力、黎明结算和死亡响应仍保持原有语义。
 
 ### 18.3 当前证据面
 
 - V2 数据库独立保存 `ActionWindow`、`AbilityInstance`、`AbilityActivation`、`EffectIntent`、`KnowledgeFact` 和 `PlayerState`。
 - 每次真实玩家决定由一次模型请求同时产生结构化目标与自然发言；发言只要求是非空文本，允许多句话、换行、引号和自由口语表达。目标在打开字幕和 TTS 前通过候选允许列表验证。
 - V2 不设置句数、句末标点、最短/最长字符、Markdown 或引号质量闸门；只有响应无法解析、缺少必要决策字段、发言为空或目标违反确定性规则时才拒绝动作。
+- 每次法官动作实时读取法官配置中的 `model_provider`、`model_id`、`tts_speaker` 和 `version`；法官动作规格不得覆盖它们，实际值随 ActionContext、模型请求和 TTS 请求证据一起保存。
 - 所有被接受的法官和玩家发言都走同一个独立 V2 PCM 广播、官方时钟和语音保存生命周期。
 - presentation 和 voice asset 都保存 `activation_id` 与 `audience`；`god_view` 私密帧不会进入普通连接。
 - Admin V2 详情分别展示窗口、能力实例、激活与决策、效果、知识、玩家状态、展示和保存语音。
 - 弹幕影响入口继续存在于每个 ActionContext 中，当前固定为 `disabled`，不接收或伪造弹幕信号。
+
+## 19. 完整白天与整局主循环
+
+任意一夜完成且未触发胜负后，运行时只能根据冻结能力快照、整局状态和当前轮次选择白天窗口，不允许客户端、模型或页面自行选择分支：
+
+| 夜晚收口状态 | 新的法官实时动作 | 后续动作 |
+| --- | --- | --- |
+| `public_day_ready` | `judge_public_discussion_opening` | 公开发言、投票、PK、放逐与死亡响应 |
+| `sheriff_election_ready` | `judge_sheriff_election_opening` | 参选、竞选发言、退水、投票、PK，然后进入公开发言 |
+| `game_completed` | 不请求模型或 TTS | 保持终局状态 |
+
+每个法官和玩家动作都必须执行完整的模型、字幕、同源实时 TTS、官方音频时钟和语音保存生命周期。法官使用法官配置的模型与音色；玩家使用各自冻结配置的模型与音色。动作完成后持久化业务事件和 `game_phase_changed`、`match.state_changed` 或 `player.state_changed`，使普通与上帝客户端看到各自允许的信息。
+
+### 19.1 警长流程
+
+- 仅当冻结规则启用警长且警徽状态为 `pending` 时执行竞选。
+- 存活玩家依次决定参选；参选者实时发表竞选发言并可退水。
+- 只有最初未参选玩家拥有警上投票资格；唯一候选直接当选，无合法投票者或两轮仍平票则警徽流失。
+- 规则允许的警上自爆会立即中止当天；双爆撕警徽由 `sheriff_badge_bomb_policy` 决定。
+- 警长死亡后实时决定移交或撕毁警徽，并保存独立审计事件。
+
+### 19.2 发言、放逐与特殊角色
+
+- 发言顺序由冻结 `speech_policy` 决定；警长顺序模式由警长在相邻存活玩家中选择起点，不能由阶段执行器写死座位。
+- 每名存活玩家的发言和投票都是新的实时模型请求，输入包含合法公开历史和该玩家自己的私密知识。
+- 放逐按票重确定唯一最高票；警长票权使用冻结 `sheriff_vote_weight`。首轮平票进入 PK，PK 玩家不参与第二轮投票，第二轮仍平票则无人出局。
+- 白痴首次被放逐时翻牌存活并永久失去投票权；猎人非毒杀死亡时产生阻塞开枪响应，连锁击中另一猎人时继续结算到没有待处理响应。
+- 狼人自爆的“不爆”决定只投影上帝视角；实际自爆、公开死亡和当天中止向全部观众播报。
+
+### 19.3 胜负、轮次与终态
+
+每次夜间结算、放逐、自爆和死亡响应后都重新计算冻结胜负规则。未结束时，白天收口原子推进到 `night_{N+1} / nightfall_ready`；下一夜继续使用同一能力计划和持久化资源状态。满足胜负时，法官实时宣布获胜阵营，状态进入 `game_completed / awaiting_observation`，记录 `winner`、`completion_reason` 和 `run.completed_at`。达到 `max_rounds` 仍无胜负时必须明确进入 `failed / max_rounds_exceeded`，不得伪造平局或静默停止。
+
+普通直播只接收公开存活变化，不接收死亡原因、私密目标和能力结果；上帝视角接收完整原因与私密流水。任一普通连接收到私密字段，客户端必须 fail closed 并关闭连接。

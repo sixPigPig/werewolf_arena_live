@@ -7,7 +7,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.ability_runtime import ability_snapshot_hash, resolve_first_night
@@ -20,10 +20,11 @@ from app.v2.models import (
     V2GameRecordEvent,
     V2GameRun,
     V2KnowledgeFact,
+    V2MatchState,
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2PhaseTransition, V2RepositoryError
+from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,8 @@ class V2NightRuntimeState:
     run_id: str
     window_id: str
     window_seq: int
+    phase_id: str
+    round_no: int
     snapshot: dict[str, Any]
     players: tuple[V2NightPlayer, ...]
 
@@ -93,27 +96,35 @@ class V2NightRepository:
             ability_snapshot_hash(snapshot)
             return snapshot.get("execution_enabled") is True
 
-    def start_first_night(self, game_id: str) -> V2NightRuntimeState:
+    def start_night(self, game_id: str) -> V2NightRuntimeState:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             snapshot = game.ability_snapshot or {}
             digest = ability_snapshot_hash(snapshot)
             if snapshot.get("execution_enabled") is not True:
                 raise V2RepositoryError("ability runtime is not executable")
-            if (
-                game.status != "ready"
-                or game.phase_id != "first_night"
-                or game.phase_state != "nightfall_announced"
-            ):
-                raise V2RepositoryError("first night is not ready to start")
+            round_no = _night_round_no(game.phase_id)
+            if game.status != "ready" or game.phase_state != "nightfall_announced":
+                raise V2RepositoryError("night is not ready to start")
+            next_window_seq = (
+                int(
+                    db.scalar(
+                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
+                            V2ActionWindow.game_id == game_id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
             existing = db.scalar(
                 select(V2ActionWindow).where(
                     V2ActionWindow.game_id == game_id,
-                    V2ActionWindow.window_seq == 1,
+                    V2ActionWindow.window_seq == next_window_seq,
                 )
             )
             if existing is not None:
-                raise V2RepositoryError("first-night action window already exists")
+                raise V2RepositoryError("night action window already exists")
             plan = [
                 {
                     "ability_instance_id": item["ability_instance_id"],
@@ -128,7 +139,7 @@ class V2NightRepository:
                 window_id=f"v2_window_{uuid4().hex[:16]}",
                 game_id=game.game_id,
                 run_id=game.current_run_id,
-                window_seq=1,
+                window_seq=next_window_seq,
                 window_type="night",
                 state="open",
                 ability_snapshot_hash=digest,
@@ -146,8 +157,9 @@ class V2NightRepository:
                 event_type="action_window_opened",
                 payload={
                     "window_id": window.window_id,
-                    "window_seq": 1,
+                    "window_seq": next_window_seq,
                     "window_type": "night",
+                    "round_no": round_no,
                     "ability_snapshot_hash": digest,
                 },
             )
@@ -163,9 +175,14 @@ class V2NightRepository:
                 run_id=game.current_run_id,
                 window_id=window.window_id,
                 window_seq=window.window_seq,
+                phase_id=game.phase_id,
+                round_no=round_no,
                 snapshot=snapshot,
                 players=players,
             )
+
+    def start_first_night(self, game_id: str) -> V2NightRuntimeState:
+        return self.start_night(game_id)
 
     def open_activation(
         self,
@@ -437,7 +454,7 @@ class V2NightRepository:
             window.closed_at = _now()
             previous_phase_id = game.phase_id
             game.phase_seq += 1
-            game.phase_id = "day_1"
+            game.phase_id = f"day_{state.round_no}"
             game.phase_state = "dawn_announcement_ready"
             game.status = "ready"
             _run(db, game.current_run_id).status = "ready"
@@ -458,6 +475,15 @@ class V2NightRepository:
             _append_event(
                 db,
                 game=game,
+                event_type="dawn_public_result",
+                payload={
+                    "round_no": state.round_no,
+                    "dead_player_ids": [item["player_id"] for item in resolution.deaths],
+                },
+            )
+            _append_event(
+                db,
+                game=game,
                 event_type="game_phase_changed",
                 payload=_transition_payload(transition),
             )
@@ -471,7 +497,11 @@ class V2NightRepository:
     def hunter_reactions(self, game_id: str) -> tuple[str, ...]:
         with self._session_factory() as db:
             rows = db.execute(
-                select(V2RoleAssignment.player_id, V2PlayerState.death_cause)
+                select(
+                    V2RoleAssignment.player_id,
+                    V2PlayerState.death_cause,
+                    V2PlayerState.state,
+                )
                 .join(
                     V2PlayerState,
                     (V2PlayerState.game_id == V2RoleAssignment.game_id)
@@ -485,7 +515,11 @@ class V2NightRepository:
                 )
                 .order_by(V2RoleAssignment.seat)
             )
-            return tuple(player_id for player_id, _cause in rows)
+            return tuple(
+                player_id
+                for player_id, _cause, state in rows
+                if not (state or {}).get("hunter_response_resolved")
+            )
 
     def open_dawn_reaction_window(
         self,
@@ -497,13 +531,24 @@ class V2NightRepository:
             raise V2RepositoryError("hunter response is not configured")
         with self._session_factory.begin() as db:
             game = _locked_game(db, state.game_id)
-            if game.phase_id != "day_1" or game.phase_state != "dawn_announced":
+            if game.phase_id != f"day_{state.round_no}" or game.phase_state != "dawn_announced":
                 raise V2RepositoryError("dawn response is not ready")
+            next_window_seq = (
+                int(
+                    db.scalar(
+                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
+                            V2ActionWindow.game_id == state.game_id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
             window = V2ActionWindow(
                 window_id=f"v2_window_{uuid4().hex[:16]}",
                 game_id=state.game_id,
                 run_id=state.run_id,
-                window_seq=2,
+                window_seq=next_window_seq,
                 window_type="dawn_reaction",
                 state="open",
                 ability_snapshot_hash=ability_snapshot_hash(state.snapshot),
@@ -518,22 +563,25 @@ class V2NightRepository:
                 result={},
             )
             db.add(window)
+            window_id = window.window_id
             game.phase_state = "dawn_reactions_ready"
             _append_event(
                 db,
                 game=game,
                 event_type="action_window_opened",
                 payload={
-                    "window_id": window.window_id,
-                    "window_seq": 2,
+                    "window_id": window_id,
+                    "window_seq": next_window_seq,
                     "window_type": "dawn_reaction",
                 },
             )
         return V2NightRuntimeState(
             game_id=state.game_id,
             run_id=state.run_id,
-            window_id=window.window_id,
-            window_seq=2,
+            window_id=window_id,
+            window_seq=next_window_seq,
+            phase_id=f"day_{state.round_no}",
+            round_no=state.round_no,
             snapshot=state.snapshot,
             players=self.current_players(state.game_id),
         )
@@ -542,6 +590,7 @@ class V2NightRepository:
         self,
         *,
         state: V2NightRuntimeState,
+        hunter_player_id: str,
         target_player_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
@@ -552,6 +601,10 @@ class V2NightRepository:
             target.alive = False
             target.death_cause = "hunter_shot"
             target.death_window_seq = state.window_seq
+            hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
+            if hunter is None:
+                raise V2RepositoryError("hunter state is missing")
+            hunter.state = {**(hunter.state or {}), "hunter_response_resolved": True}
             _append_event(
                 db,
                 game=game,
@@ -559,14 +612,37 @@ class V2NightRepository:
                 payload={"effect_type": "shoot", "target_player_id": target_player_id},
             )
 
-    def finish_first_night(self, *, game_id: str) -> V2PhaseTransition:
+    def mark_hunter_response_resolved(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        hunter_player_id: str,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, state.game_id)
+            hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
+            if hunter is None:
+                raise V2RepositoryError("hunter state is missing")
+            hunter.state = {**(hunter.state or {}), "hunter_response_resolved": True}
+            _append_event(
+                db,
+                game=game,
+                event_type="death_response_resolved",
+                payload={
+                    "effect_type": "shoot_skipped",
+                    "hunter_player_id": hunter_player_id,
+                },
+            )
+
+    def finish_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
-            if game.phase_id != "day_1" or game.phase_state not in {
+            round_no = _day_round_no(game.phase_id)
+            if game.phase_state not in {
                 "dawn_announced",
                 "dawn_reactions_ready",
             }:
-                raise V2RepositoryError("first night is not ready to finish")
+                raise V2RepositoryError("night is not ready to finish")
             open_window = db.scalar(
                 select(V2ActionWindow).where(
                     V2ActionWindow.game_id == game_id,
@@ -587,29 +663,44 @@ class V2NightRepository:
                     },
                 )
             winner = _winner(db, game)
+            match = db.get(V2MatchState, game_id)
+            if match is None:
+                raise V2RepositoryError("V2 match state is missing")
             next_state = (
                 "game_completed"
                 if winner is not None
-                else str(game.ability_snapshot["next_windows"]["normal"])
+                else (
+                    "sheriff_election_ready"
+                    if bool(game.ability_snapshot.get("sheriff_enabled"))
+                    and match.sheriff_badge_state == "pending"
+                    else "public_day_ready"
+                )
             )
             game.phase_state = next_state
-            game.status = "awaiting_observation"
+            next_live_state = "awaiting_observation" if winner is not None else "ready"
+            game.status = next_live_state
             run = _run(db, game.current_run_id)
-            run.status = "awaiting_observation"
+            run.status = next_live_state
             if winner is not None:
+                match.winner = winner
+                match.completion_reason = "deterministic_win_condition"
                 run.completed_at = _now()
                 _append_event(
                     db,
                     game=game,
                     event_type="game_completed",
-                    payload={"winner": winner, "reason": "deterministic_win_condition"},
+                    payload={
+                        "winner": winner,
+                        "reason": "deterministic_win_condition",
+                        "round_no": round_no,
+                    },
                 )
             transition = V2PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
-                previous_phase_id="day_1",
-                phase_id="day_1",
+                previous_phase_id=game.phase_id,
+                phase_id=game.phase_id,
                 phase_state=next_state,
             )
             _append_event(
@@ -619,6 +710,86 @@ class V2NightRepository:
                 payload=_transition_payload(transition),
             )
             return transition
+
+    def finish_first_night(self, *, game_id: str) -> V2PhaseTransition:
+        return self.finish_night(game_id=game_id)
+
+    def current_winner(self, game_id: str) -> str | None:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            return _winner(db, game)
+
+    def match_state(self, game_id: str) -> dict[str, Any]:
+        with self._session_factory() as db:
+            match = db.get(V2MatchState, game_id)
+            if match is None:
+                raise V2RepositoryError("V2 match state is missing")
+            return {
+                "round_no": match.round_no,
+                "sheriff_player_id": match.sheriff_player_id,
+                "sheriff_badge_state": match.sheriff_badge_state,
+                "winner": match.winner,
+            }
+
+    def ability_state(self, *, game_id: str, ability_id: str) -> dict[str, Any]:
+        with self._session_factory() as db:
+            row = db.scalar(
+                select(V2AbilityInstance).where(
+                    V2AbilityInstance.game_id == game_id,
+                    V2AbilityInstance.ability_id == ability_id,
+                )
+            )
+            return dict(row.state or {}) if row is not None else {}
+
+    def player_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
+        with self._session_factory() as db:
+            rows = list(
+                db.scalars(
+                    select(V2KnowledgeFact)
+                    .where(
+                        V2KnowledgeFact.game_id == game_id,
+                        V2KnowledgeFact.owner_scope == "player",
+                        V2KnowledgeFact.owner_id == player_id,
+                        V2KnowledgeFact.fact_type != "action_context_projection",
+                    )
+                    .order_by(V2KnowledgeFact.created_at)
+                )
+            )
+            return [
+                {"fact_type": row.fact_type, "payload": dict(row.payload or {})} for row in rows
+            ]
+
+    def public_history(self, game_id: str) -> list[dict[str, Any]]:
+        public_types = {
+            "day_speech_committed",
+            "day_vote_committed",
+            "day_vote_resolved",
+            "player_exiled",
+            "idiot_revealed",
+            "werewolf_self_exploded",
+            "sheriff_elected",
+            "sheriff_badge_destroyed",
+            "hunter_response_resolved",
+            "dawn_public_result",
+        }
+        with self._session_factory() as db:
+            rows = list(
+                db.scalars(
+                    select(V2GameRecordEvent)
+                    .where(
+                        V2GameRecordEvent.game_id == game_id,
+                        V2GameRecordEvent.event_type.in_(public_types),
+                    )
+                    .order_by(V2GameRecordEvent.record_seq.desc())
+                    .limit(60)
+                )
+            )
+            rows.reverse()
+            return [
+                {"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows
+            ]
 
     def current_players(self, game_id: str) -> tuple[V2NightPlayer, ...]:
         with self._session_factory() as db:
@@ -634,12 +805,21 @@ class V2NightRepository:
                 raise V2RepositoryError(f"unknown game {game_id}")
             return game.last_presentation_seq
 
+    def current_phase_state(self, game_id: str) -> str:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            return game.phase_state
+
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
+            run = _run(db, game.current_run_id)
+            if run.stop_requested_at is not None:
+                raise V2GameCanceled("V2 game was canceled by an administrator")
             game.status = "failed"
             game.phase_state = "failed"
-            run = _run(db, game.current_run_id)
             run.status = "failed"
             run.completed_at = _now()
             _append_event(
@@ -676,17 +856,9 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
                 seat=assignment.seat,
                 display_name=str(profile.get("name") or f"{assignment.seat}号玩家"),
                 role_key=assignment.role_key,
-                team=(
-                    "werewolves"
-                    if assignment.role_key == "werewolf"
-                    else "villagers"
-                ),
+                team=("werewolves" if assignment.role_key == "werewolf" else "villagers"),
                 alive=player_state.alive,
-                tts_speaker=(
-                    str(profile["tts_speaker"])
-                    if profile.get("tts_speaker")
-                    else None
-                ),
+                tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
                 model_id=(str(profile["model"]) if profile.get("model") else None),
                 persona={
                     key: profile[key]
@@ -750,11 +922,12 @@ def _effect_outcome(
 
 
 def _locked_game(db: Session, game_id: str) -> V2GameRecord:
-    game = db.scalar(
-        select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update()
-    )
+    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
+    run = _run(db, game.current_run_id)
+    if run.stop_requested_at is not None:
+        raise V2GameCanceled("V2 game was canceled by an administrator")
     return game
 
 
@@ -798,3 +971,21 @@ def _transition_payload(transition: V2PhaseTransition) -> dict[str, Any]:
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def _night_round_no(phase_id: str) -> int:
+    if phase_id == "first_night":
+        return 1
+    if phase_id.startswith("night_") and phase_id[6:].isdigit():
+        round_no = int(phase_id[6:])
+        if round_no >= 2:
+            return round_no
+    raise V2RepositoryError("invalid V2 night phase id")
+
+
+def _day_round_no(phase_id: str) -> int:
+    if phase_id.startswith("day_") and phase_id[4:].isdigit():
+        round_no = int(phase_id[4:])
+        if round_no >= 1:
+            return round_no
+    raise V2RepositoryError("invalid V2 day phase id")

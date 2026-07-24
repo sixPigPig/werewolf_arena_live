@@ -160,6 +160,15 @@ export function LiveV2Page() {
               setRoleAssignment(message.public_role_assignment);
               setRosterState("ready");
               setRosterError(null);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                setAudioActive(false);
+                player.stop();
+                socket.close();
+                return;
+              }
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
               if (message.current_presentation) {
@@ -189,6 +198,15 @@ export function LiveV2Page() {
             }
             if (message.type === "live.state_changed") {
               setLiveState(message.live_state);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                setAudioActive(false);
+                player.stop();
+                socket.close();
+                return;
+              }
               if (message.live_state === "failed") {
                 terminalRef.current = true;
                 setAudioActive(false);
@@ -481,6 +499,7 @@ function liveProcessLabel(
   nightProgress: NightProgress,
   dayProgress: string | null,
 ): string {
+  if (liveState === "canceled") return "本局已由运营中断";
   if (liveState === "failed") return "实时演出已停止";
   if (liveState === "awaiting_observation") return "本局实时流程已经停播";
   if (connectionState === "idle") return "舞台已就位，等待观众入场";

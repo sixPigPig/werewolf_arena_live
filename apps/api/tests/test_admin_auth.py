@@ -237,6 +237,7 @@ def test_me_returns_configured_identity_permissions_and_existing_csrf_token(
         "runs.control",
         "games.read",
         "games.debug.read",
+        "v2_games.read",
         "players.read",
         "rules.read",
         "voice.read",

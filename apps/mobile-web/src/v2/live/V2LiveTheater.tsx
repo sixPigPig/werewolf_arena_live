@@ -171,7 +171,8 @@ export function V2LiveTheater({
             )}
             <strong>{terminal.title}</strong>
             <p>{terminal.description}</p>
-            {terminal.kind === "failed" || terminal.kind === "interrupted" ? (
+            {terminal.kind === "failed" ||
+            (terminal.kind === "interrupted" && liveState !== "canceled") ? (
               <button className="mobile-v2-stage-button is-secondary" onClick={onEnter} type="button">
                 重新接入当前直播
               </button>
@@ -317,7 +318,14 @@ function stageTone(
   liveState: V2LiveState | null,
   error: string | null,
 ): StageTone {
-  if (error || liveState === "failed" || phase?.phase_state === "failed") return "failed";
+  if (
+    error ||
+    liveState === "canceled" ||
+    liveState === "failed" ||
+    phase?.phase_state === "failed"
+  ) {
+    return "failed";
+  }
   if (liveState === "awaiting_observation" || phase?.phase_state === "game_completed") {
     return "terminal";
   }
@@ -349,6 +357,7 @@ function connectionLabel(
   connectionState: V2ConnectionState,
   liveState: V2LiveState | null,
 ): string {
+  if (liveState === "canceled") return "运营已中断";
   if (liveState === "awaiting_observation") return "已停播";
   if (liveState === "failed") return "演出异常";
   if (connectionState === "idle") return "未入场";
@@ -367,6 +376,13 @@ function terminalPresentation(
   matchState: V2MatchState | null,
   error: string | null,
 ): { kind: "complete" | "paused" | "interrupted" | "failed"; title: string; description: string } | null {
+  if (liveState === "canceled") {
+    return {
+      kind: "interrupted",
+      title: "本局已由管理员终止",
+      description: "当前字幕与语音已经停止，不会追播或恢复已打断的内容。",
+    };
+  }
   if (error) {
     const interrupted = /operator|运营|人工|中断|取消|cancel|stop/i.test(error);
     return interrupted

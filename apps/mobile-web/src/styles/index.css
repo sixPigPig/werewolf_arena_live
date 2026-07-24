@@ -253,8 +253,7 @@ textarea {
     #090b0e;
 }
 
-.mobile-live-v2-page.is-first-night,
-.mobile-god-view-page.is-first-night,
+.mobile-live-v2-page.is-night,
 .mobile-god-view-page.is-night {
   background:
     radial-gradient(circle at 50% 12%, rgb(45 63 116 / 34%), transparent 40%),

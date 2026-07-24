@@ -20,6 +20,7 @@ from app.v2.models import (
     V2GameRun,
     V2GodViewAccessGrant,
     V2LivePresentation,
+    V2MatchState,
     V2KnowledgeFact,
     V2PlayerState,
     V2RoleAssignment,
@@ -53,7 +54,7 @@ class V2GodViewUnavailable(RuntimeError):
     pass
 
 
-def create_ready_game(
+def create_waiting_game(
     db: Session,
     *,
     title: str,
@@ -86,7 +87,7 @@ def create_ready_game(
     game = V2GameRecord(
         game_id=game_id,
         title=title.strip(),
-        status="ready",
+        status="waiting_to_start",
         current_run_id=run_id,
         record_schema_version=1,
         last_record_seq=initial_record_seq,
@@ -103,7 +104,8 @@ def create_ready_game(
         run_id=run_id,
         game_id=game_id,
         attempt_no=1,
-        status="ready",
+        status="waiting_to_start",
+        started_at=None,
     )
     created = V2GameRecordEvent(
         game_id=game_id,
@@ -124,6 +126,15 @@ def create_ready_game(
     )
     db.add(game)
     db.flush()
+    if assignment_result is not None:
+        sheriff_enabled = bool((rule_snapshot or {}).get("rule_set", {}).get("sheriff_enabled"))
+        db.add(
+            V2MatchState(
+                game_id=game_id,
+                round_no=1,
+                sheriff_badge_state="pending" if sheriff_enabled else "disabled",
+            )
+        )
     db.add(
         V2GodViewAccessGrant(
             game_id=game_id,
@@ -230,6 +241,11 @@ def get_game(db: Session, game_id: str) -> V2GameRecord:
     return record
 
 
+def get_match_state(db: Session, game_id: str) -> V2MatchState | None:
+    get_game(db, game_id)
+    return db.get(V2MatchState, game_id)
+
+
 def current_presentation(
     db: Session,
     game_id: str,
@@ -237,11 +253,7 @@ def current_presentation(
     audience: str = "player_public",
 ) -> V2LivePresentation | None:
     get_game(db, game_id)
-    allowed = (
-        ("all", "god_view")
-        if audience == "spectator_god_view"
-        else ("all", "public")
-    )
+    allowed = ("all", "god_view") if audience == "spectator_god_view" else ("all", "public")
     return db.scalar(
         select(V2LivePresentation)
         .where(
@@ -304,11 +316,7 @@ def god_view_role_assignments(db: Session, game_id: str) -> list[V2RoleAssignmen
 
 def player_state_map(db: Session, game_id: str) -> dict[str, V2PlayerState]:
     get_game(db, game_id)
-    states = list(
-        db.scalars(
-            select(V2PlayerState).where(V2PlayerState.game_id == game_id)
-        )
-    )
+    states = list(db.scalars(select(V2PlayerState).where(V2PlayerState.game_id == game_id)))
     result = {item.player_id: item for item in states}
     if len(result) != len(states):
         raise V2RoleAssignmentStateError("duplicate V2 player state")
@@ -355,6 +363,7 @@ def game_detail(
     list[V2AbilityActivation],
     list[V2EffectIntent],
     list[V2KnowledgeFact],
+    V2MatchState | None,
 ]:
     game = get_game(db, game_id)
     runs = list(
@@ -427,6 +436,7 @@ def game_detail(
             .order_by(V2KnowledgeFact.created_at.asc())
         )
     )
+    match_state = db.get(V2MatchState, game_id)
     return (
         game,
         runs,
@@ -439,6 +449,7 @@ def game_detail(
         ability_activations,
         effect_intents,
         knowledge_facts,
+        match_state,
     )
 
 

@@ -5,6 +5,7 @@ export type V2LiveState =
   | "broadcasting"
   | "finalizing"
   | "awaiting_observation"
+  | "canceled"
   | "failed";
 
 export type V2GamePhase = {
@@ -475,7 +476,7 @@ export function parseV2GodViewIdentitySnapshotResponse(
     run_id: id(record.run_id, "v2_run_"),
     live_state: liveState(record.live_state),
     game_phase: gamePhase(record.game_phase),
-    match_state: record.match_state === null ? null : matchState(record.match_state),
+    match_state: record.match_state == null ? null : matchState(record.match_state),
     server_time: date(record.server_time),
     rule,
     players,
@@ -518,7 +519,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       live_state: liveState(snapshot.live_state),
       game_phase: gamePhase(snapshot.game_phase),
       match_state:
-        snapshot.match_state === null ? null : matchState(snapshot.match_state),
+        snapshot.match_state == null ? null : matchState(snapshot.match_state),
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       public_rule:
         snapshot.public_rule === null ? null : publicRule(snapshot.public_rule),
@@ -560,7 +561,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       live_state: liveState(snapshot.live_state),
       game_phase: gamePhase(snapshot.game_phase),
       match_state:
-        snapshot.match_state === null ? null : matchState(snapshot.match_state),
+        snapshot.match_state == null ? null : matchState(snapshot.match_state),
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       rule,
       players,
@@ -938,6 +939,7 @@ function liveState(value: unknown): V2LiveState {
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "canceled",
     "failed",
   ]);
 }

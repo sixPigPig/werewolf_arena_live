@@ -175,6 +175,59 @@ def god_view_night_resolution(
     )
 
 
+def player_state_changed(
+    *,
+    game_id: str,
+    run_id: str,
+    player_id: str,
+    alive: bool,
+    cause: str | None = None,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="player.state_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields={"player_id": player_id, "alive": alive, "cause": cause},
+    )
+
+
+def match_state_changed(
+    *,
+    game_id: str,
+    run_id: str,
+    round_no: int,
+    sheriff_player_id: str | None,
+    sheriff_badge_state: str,
+    winner: str | None = None,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="match.state_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields={
+            "round_no": round_no,
+            "sheriff_player_id": sheriff_player_id,
+            "sheriff_badge_state": sheriff_badge_state,
+            "winner": winner,
+        },
+    )
+
+
+def day_progress(
+    *,
+    game_id: str,
+    run_id: str,
+    round_no: int,
+    stage: str,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="day.progress_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields={"round_no": round_no, "stage": stage},
+    )
+
+
 def presentation_closed(
     identity: V2PresentationIdentity,
     *,

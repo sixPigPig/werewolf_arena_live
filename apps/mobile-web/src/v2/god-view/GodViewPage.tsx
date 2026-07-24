@@ -133,6 +133,14 @@ export function GodViewPage() {
               setSnapshot(message);
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                player.stop();
+                socket.close();
+                return;
+              }
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
               if (message.current_presentation) player.begin(message.current_presentation);
@@ -163,6 +171,14 @@ export function GodViewPage() {
             }
             if (message.type === "live.state_changed") {
               setLiveState(message.live_state);
+              if (message.live_state === "canceled") {
+                terminalRef.current = true;
+                presentationRef.current = null;
+                setPresentation(null);
+                player.stop();
+                socket.close();
+                return;
+              }
               if (message.live_state === "failed") {
                 terminalRef.current = true;
                 player.stop();
@@ -379,7 +395,7 @@ export function GodViewPage() {
         </p>
       ) : null}
 
-      {snapshot && connectionState === "idle" ? (
+      {snapshot && connectionState === "idle" && liveState !== "canceled" ? (
         <section className="mobile-god-view-stage">
           <span>全知实时观赛</span>
           <blockquote>身份已经解封。进入后将实时接收当前法官字幕与语音。</blockquote>
@@ -413,7 +429,9 @@ export function GodViewPage() {
             <div><dt>speech</dt><dd>{presentation.speech_id} · segment {presentation.segment_index}</dd></div>
           </dl>
         </section>
-      ) : connectionState === "connected" && !liveError ? (
+      ) : connectionState === "connected" &&
+        liveState !== "canceled" &&
+        !liveError ? (
         <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
       ) : null}
 
@@ -455,6 +473,13 @@ export function GodViewPage() {
             ? `完整对局已结束：${snapshot.match_state.winner === "villagers" ? "好人阵营" : "狼人阵营"}获胜。`
             : "当前对局已停止；私密与公开语音均已分别保存。"}
         </p>
+      ) : null}
+
+      {liveState === "canceled" ? (
+        <section className="mobile-live-v2-error" role="alert">
+          <strong>本局已由管理员终止</strong>
+          <p>上帝视角已停止当前字幕与语音，不会继续播放或补播。</p>
+        </section>
       ) : null}
 
       {liveError ? (
@@ -529,6 +554,7 @@ function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string
   }
   if (state === "finalizing") return "播报完成，正在校验并保存同源 V2 语音资产...";
   if (state === "awaiting_observation") return "完整对局已经结束";
+  if (state === "canceled") return "本局已由管理员终止";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";
 }

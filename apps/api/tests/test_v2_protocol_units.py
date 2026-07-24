@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.v2.model_client import (
     _decision_fields,
     _required_speech,
     _sse_data,
+    _next_with_cancellation,
 )
 from app.v2.protocol import V2LiveProtocolError, audio_frame
 from app.v2.public_projection import (
@@ -31,7 +33,7 @@ from app.v2.public_projection import (
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
-from app.v2.repository import V2PresentationIdentity
+from app.v2.repository import V2GameCanceled, V2PresentationIdentity
 from app.v2.role_assignment import V2RoleAssignmentError, assign_private_roles
 from app.v2.tts_client import (
     _AUDIO_SERVER,
@@ -41,6 +43,7 @@ from app.v2.tts_client import (
     _WITH_EVENT,
     _decode_frame,
     _encode_event,
+    _receive,
 )
 from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
 
@@ -80,12 +83,18 @@ def test_decision_fields_accept_multi_sentence_text_and_extra_fields() -> None:
 
 
 def test_decision_fields_keep_only_fundamental_failures() -> None:
-    with pytest.raises(V2QualityError, match="model_decision_invalid_json"):
-        _decision_fields("not json")
-    with pytest.raises(V2QualityError, match="model_decision_invalid_shape"):
-        _decision_fields('{"speech":"我先保留意见。"}')
-    with pytest.raises(V2QualityError, match="model_decision_invalid_target"):
-        _decision_fields('{"target_player_id":3,"speech":"我投三号。"}')
+    assert _decision_fields("我先保留意见，再听后面的发言。") == (
+        None,
+        "我先保留意见，再听后面的发言。",
+    )
+    assert _decision_fields('{"speech":"我先保留意见。"}') == (
+        None,
+        "我先保留意见。",
+    )
+    assert _decision_fields('{"target_player_id":3,"speech":"我投三号。"}') == (
+        None,
+        "我投三号。",
+    )
     with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
         _decision_fields('{"target_player_id":null,"speech":"  "}')
 
@@ -99,6 +108,43 @@ def test_sse_parser_rejects_malformed_provider_events() -> None:
     }
     with pytest.raises(V2ModelError, match="model_invalid_sse"):
         _sse_data("data: {")
+
+
+def test_model_stream_wait_checks_durable_cancellation() -> None:
+    async def delayed_lines():
+        await asyncio.sleep(5)
+        yield "data: [DONE]"
+
+    def check_cancellation() -> None:
+        raise V2GameCanceled("operator stop")
+
+    with pytest.raises(V2GameCanceled):
+        asyncio.run(
+            _next_with_cancellation(
+                delayed_lines().__aiter__(),
+                timeout=5,
+                check_cancellation=check_cancellation,
+            )
+        )
+
+
+def test_tts_receive_wait_checks_durable_cancellation() -> None:
+    class DelayedWebSocket:
+        async def recv(self) -> bytes:
+            await asyncio.sleep(5)
+            return b""
+
+    def check_cancellation() -> None:
+        raise V2GameCanceled("operator stop")
+
+    with pytest.raises(V2GameCanceled):
+        asyncio.run(
+            _receive(
+                DelayedWebSocket(),
+                timeout=5,
+                check_cancellation=check_cancellation,
+            )
+        )
 
 
 def test_public_player_projection_is_ordered_and_fail_closed() -> None:

@@ -10,6 +10,7 @@ const actionId = "v2_action_0123456789abcdef";
 const presentationId = "v2_pres_0123456789abcdef";
 const speechId = "v2_speech_0123456789abcdef";
 const sourceStart = vi.fn();
+const sourceStop = vi.fn();
 
 class FakeAudioContext {
   currentTime = 0;
@@ -25,7 +26,7 @@ class FakeAudioContext {
         buffer: null,
         connect: vi.fn(),
         start: sourceStart,
-        stop: vi.fn(),
+        stop: sourceStop,
         addEventListener: vi.fn(),
       }) as unknown as AudioBufferSourceNode,
   );
@@ -67,6 +68,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   FakeWebSocket.instances = [];
   sourceStart.mockClear();
+  sourceStop.mockClear();
 });
 
 afterEach(() => {
@@ -99,6 +101,36 @@ describe("GodViewPage", () => {
     expect(new Headers(init.headers).get("Authorization")).toBe(
       `Bearer ${accessToken}`,
     );
+  });
+
+  it("shows a canceled identity snapshot as terminal without opening realtime", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...identitySnapshot(),
+            live_state: "canceled",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+    const webSocketMock = vi.fn();
+    vi.stubGlobal("WebSocket", webSocketMock);
+
+    renderPage(`#access_token=${accessToken}`);
+
+    expect(
+      await screen.findByText("本局已由管理员终止"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "进入上帝视角实时观赛" }),
+    ).not.toBeInTheDocument();
+    expect(webSocketMock).not.toHaveBeenCalled();
   });
 
   it("fails closed before any request when the credential is absent", async () => {
@@ -260,6 +292,66 @@ describe("GodViewPage", () => {
     expect(sourceStart).not.toHaveBeenCalled();
   });
 
+  it("stops God View audio without exposing the Admin reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(liveSnapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "这段全知播报会被打断。",
+      });
+      socket.emitBinary(audioFrame());
+      socket.emitJson({
+        ...state("canceled"),
+        reason: "operator_interrupted",
+      });
+    });
+
+    expect(
+      await screen.findByText("本局已由管理员终止"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/不会继续播放或补播/)).toBeInTheDocument();
+    expect(screen.queryByText("这段全知播报会被打断。")).toBeNull();
+    expect(screen.queryByText(/人工打断异常/)).toBeNull();
+    expect(socket.close).toHaveBeenCalled();
+    expect(sourceStop).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /重新连接/ })).toBeNull();
+  });
+
   it("shows private ability targets and deterministic death causes", async () => {
     vi.stubGlobal(
       "fetch",
@@ -330,6 +422,66 @@ describe("GodViewPage", () => {
     expect(within(progress).getByText("目标：白石")).toBeInTheDocument();
     expect(screen.getByText("已死亡 · 狼人袭击")).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: "阿青" })).toBeInTheDocument();
+  });
+
+  it("tracks later rounds, badge ownership, full death cause, and winner", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(liveSnapshot("ready", null));
+      socket.emitJson({
+        ...base("game.phase_changed"),
+        phase_seq: 5,
+        previous_phase_id: "day_1",
+        phase_id: "night_2",
+        phase_state: "night_running",
+      });
+      socket.emitJson({
+        ...base("match.state_changed"),
+        round_no: 2,
+        sheriff_player_id: "profile-1",
+        sheriff_badge_state: "held",
+        winner: null,
+      });
+      socket.emitJson({
+        ...base("player.state_changed"),
+        player_id: "profile-2",
+        alive: false,
+        cause: "exile",
+      });
+    });
+
+    expect(await screen.findByText("第 2 夜 · 全知模式")).toBeInTheDocument();
+    expect(screen.getByText(/第 2 轮 · 警长：阿青/)).toBeInTheDocument();
+    expect(screen.getByText("已死亡 · 投票放逐")).toBeInTheDocument();
+
+    act(() => {
+      socket.emitJson({
+        ...base("match.state_changed"),
+        round_no: 2,
+        sheriff_player_id: "profile-1",
+        sheriff_badge_state: "held",
+        winner: "werewolves",
+      });
+      socket.emitJson(state("awaiting_observation"));
+    });
+    expect(await screen.findByText(/完整对局已结束：狼人阵营获胜/)).toBeInTheDocument();
   });
 });
 

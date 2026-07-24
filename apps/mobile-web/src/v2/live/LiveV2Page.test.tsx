@@ -12,6 +12,7 @@ const presentationId = "v2_pres_0123456789abcdef";
 const speechId = "v2_speech_0123456789abcdef";
 
 const sourceStart = vi.fn();
+const sourceStop = vi.fn();
 const copyToChannel = vi.fn();
 
 class FakeAudioContext {
@@ -26,7 +27,7 @@ class FakeAudioContext {
         buffer: null,
         connect: vi.fn(),
         start: sourceStart,
-        stop: vi.fn(),
+        stop: sourceStop,
         addEventListener: vi.fn(),
       }) as unknown as AudioBufferSourceNode,
   );
@@ -65,6 +66,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   FakeWebSocket.instances = [];
   sourceStart.mockClear();
+  sourceStop.mockClear();
   copyToChannel.mockClear();
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -100,6 +102,28 @@ describe("LiveV2Page", () => {
       screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
     ).toHaveAttribute("data-connection-state", "idle");
     expect(screen.getByText(/只接收当前与未来内容/)).toBeInTheDocument();
+  });
+
+  it("shows a canceled REST snapshot as terminal without opening realtime", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(snapshot("canceled", null)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("本局已由管理员终止")).toBeInTheDocument();
+    expect(screen.getByText(/不会追播或恢复已打断的内容/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "进入实时观赛" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重新接入当前直播" }),
+    ).not.toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(sourceStart).not.toHaveBeenCalled();
   });
 
   it("shows the frozen public rule before starting any realtime action", async () => {
@@ -458,6 +482,53 @@ describe("LiveV2Page", () => {
     expect(await screen.findByText("运营已中断本局")).toBeInTheDocument();
     expect(screen.getByText(/只会接收当前和未来内容/)).toBeInTheDocument();
     expect(screen.queryByText("回放")).not.toBeInTheDocument();
+  });
+
+  it("stops the current presentation when the operator cancels the game", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "这段话会被管理员打断。",
+      });
+      socket.emitBinary(audioFrame(0, 0));
+      socket.emitJson({
+        ...state("canceled"),
+        reason: "operator_interrupted",
+      });
+    });
+
+    expect(await screen.findByText("本局已由管理员终止")).toBeInTheDocument();
+    expect(screen.getByText(/不会追播或恢复已打断的内容/)).toBeInTheDocument();
+    expect(screen.queryByText("这段话会被管理员打断。")).not.toBeInTheDocument();
+    expect(socket.close).toHaveBeenCalled();
+    expect(sourceStop).toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "重新接入当前直播" }),
+    ).not.toBeInTheDocument();
   });
 
   it("presents a failed snapshot as a terminal realtime stage without replay", async () => {
