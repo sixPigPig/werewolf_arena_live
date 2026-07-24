@@ -1,7 +1,7 @@
 """add live v2 game interruption
 
-Revision ID: 20260725_42
-Revises: 20260723_41
+Revision ID: 20260725_44
+Revises: 20260723_43
 Create Date: 2026-07-25
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260725_42"
-down_revision = "20260723_41"
+revision = "20260725_44"
+down_revision = "20260723_43"
 branch_labels = None
 depends_on = None
 

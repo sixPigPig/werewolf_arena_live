@@ -27,7 +27,7 @@ export type V2GameRun = {
   run_id: string;
   attempt_no: number;
   status: string;
-  started_at: string;
+  started_at: string | null;
   completed_at: string | null;
   stop_requested_at: string | null;
 };
@@ -92,12 +92,42 @@ export type V2VoiceAsset = {
   completed_at: string | null;
 };
 
+export type V2ModelRequest = {
+  attempt_id: string;
+  action_id: string;
+  run_id: string;
+  phase_id: string;
+  action_type: string;
+  actor_kind: string;
+  actor_id: string;
+  audience: string;
+  request_kind: string;
+  model_id: string | null;
+  model_provider: string | null;
+  judge_configuration_version: number | null;
+  status: "running" | "succeeded" | "failed";
+  request_payload: Record<string, unknown> | null;
+  input_source: "persisted" | "reconstructed" | "unavailable";
+  raw_response: string | null;
+  parsed_output: Record<string, unknown> | null;
+  output_source: "persisted" | "legacy_inferred" | "unavailable";
+  provider_request_id: string | null;
+  first_token_ms: number | null;
+  completed_ms: number | null;
+  failure_kind: string | null;
+  failure_code: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
 export type V2GameRecordDetail = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
   ability_snapshot: Record<string, unknown>;
+  match_state: Record<string, unknown> | null;
   runs: V2GameRun[];
   events: V2GameRecordEvent[];
+  model_requests: V2ModelRequest[];
   presentations: V2GamePresentation[];
   voice_assets: V2VoiceAsset[];
   player_states: Array<Record<string, unknown>>;

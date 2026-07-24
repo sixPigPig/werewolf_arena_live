@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
+import json
 import logging
 from pathlib import Path
 import time
@@ -39,6 +41,16 @@ logger = logging.getLogger(__name__)
 
 
 class V2ModelPort(Protocol):
+    def resolve_model_id(self, model_id: str | None = None) -> str: ...
+
+    def build_request_payload(
+        self,
+        *,
+        action_context: dict[str, Any],
+        decision: bool,
+        model_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
     async def generate_judge_sentence(
         self,
         *,
@@ -78,6 +90,15 @@ class V2BroadcastPort(Protocol):
     ) -> None: ...
 
     async def broadcast_bytes(self, value: bytes, *, audience: str = "all") -> None: ...
+
+    async def broadcast_audio(
+        self,
+        value: bytes,
+        *,
+        identity: V2PresentationIdentity,
+        next_sample_cursor: int,
+        audience: str = "all",
+    ) -> None: ...
 
     async def set_current(
         self,
@@ -122,7 +143,7 @@ class V2ActionEngine:
         tts_client: V2TtsPort,
         voice_root: Path,
         sample_rate: int,
-        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration] | None = None,
+        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration],
     ) -> None:
         self._repository = repository
         self._model_client = model_client
@@ -238,18 +259,22 @@ class V2ActionEngine:
         decision: bool,
     ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
-        judge_configuration = (
-            self._judge_configuration_provider()
-            if spec.actor_kind == "judge" and self._judge_configuration_provider is not None
-            else None
-        )
-        model_id = spec.model_id or (
-            judge_configuration.model_id if judge_configuration is not None else None
-        )
-        speaker = spec.speaker or (
-            judge_configuration.tts_speaker if judge_configuration is not None else None
-        )
+        judge_configuration = None
+        if spec.actor_kind == "judge":
+            judge_configuration = self._judge_configuration_provider()
+            model_id = judge_configuration.model_id
+            speaker = judge_configuration.tts_speaker
+        else:
+            model_id = spec.model_id
+            speaker = spec.speaker
         context = _action_context(game_id=game_id, action_id=action_id, spec=spec)
+        if judge_configuration is not None:
+            context["judge_configuration"] = {
+                "model_provider": judge_configuration.model_provider,
+                "model_id": judge_configuration.model_id,
+                "tts_speaker": judge_configuration.tts_speaker,
+                "version": judge_configuration.version,
+            }
         claim = self._repository.claim_action(
             game_id=game_id,
             action_id=action_id,
@@ -267,6 +292,8 @@ class V2ActionEngine:
 
         identity: V2PresentationIdentity | None = None
         recorder: V2VoiceRecorder | None = None
+        model_attempt_id: str | None = None
+        model_request_completed = False
         try:
             check_cancellation()
             await broadcaster.broadcast_json(
@@ -278,12 +305,32 @@ class V2ActionEngine:
                 audience=spec.audience,
             )
             model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
+            selected_model_id = self._model_client.resolve_model_id(model_id)
+            request_payload = self._model_client.build_request_payload(
+                action_context=context,
+                decision=decision,
+                model_id=model_id,
+            )
             self._repository.append_event(
                 game_id=claim.game_id,
                 event_type="model_request_started",
                 payload={
                     "action_id": claim.action_id,
                     "attempt_id": model_attempt_id,
+                    "request_kind": "decision" if decision else "speech",
+                    "model_id": selected_model_id,
+                    "model_provider": (
+                        judge_configuration.model_provider
+                        if judge_configuration is not None
+                        else None
+                    ),
+                    "judge_configuration_version": (
+                        judge_configuration.version if judge_configuration is not None else None
+                    ),
+                    "actor_kind": spec.actor_kind,
+                    "actor_id": spec.actor_id,
+                    "audience": spec.audience,
+                    "request_payload": request_payload,
                 },
             )
             model_decision: V2ModelDecision | None = None
@@ -294,17 +341,84 @@ class V2ActionEngine:
                     model_id=model_id,
                     check_cancellation=check_cancellation,
                 )
-                speech_text = model_decision.speech
-                provider_request_id = model_decision.provider_request_id
-                first_token_ms = model_decision.first_token_ms
-                sentence_ms = model_decision.completed_ms
+                original_target = model_decision.target_player_id
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="model_first_token_received",
+                    payload={
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "provider_request_id": model_decision.provider_request_id,
+                        "first_token_ms": model_decision.first_token_ms,
+                    },
+                )
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="model_response_received",
+                    payload={
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "provider_request_id": model_decision.provider_request_id,
+                        "raw_response": (
+                            model_decision.raw_response
+                            if model_decision.raw_response is not None
+                            else json.dumps(
+                                {
+                                    "target_player_id": original_target,
+                                    "speech": model_decision.speech,
+                                },
+                                ensure_ascii=False,
+                            )
+                        ),
+                        "parsed_output": {
+                            "target_player_id": original_target,
+                            "speech": model_decision.speech,
+                        },
+                        "first_token_ms": model_decision.first_token_ms,
+                        "completed_ms": model_decision.completed_ms,
+                    },
+                )
+                model_request_completed = True
+                normalized_target = original_target
+                normalization_reason: str | None = None
                 if spec.allowed_target_ids is None:
-                    raise V2RepositoryError("decision action has no target policy")
-                if model_decision.target_player_id is None:
+                    if normalized_target is not None:
+                        normalized_target = None
+                        normalization_reason = "targetless_action"
+                elif normalized_target is None:
                     if not spec.target_optional:
-                        raise V2QualityError("model_decision_target_required")
-                elif model_decision.target_player_id not in spec.allowed_target_ids:
-                    raise V2QualityError("model_decision_target_not_allowed")
+                        normalized_target = _fallback_target(
+                            action_id=claim.action_id,
+                            allowed_target_ids=spec.allowed_target_ids,
+                        )
+                        normalization_reason = "required_target_missing"
+                elif normalized_target not in spec.allowed_target_ids:
+                    normalized_target = (
+                        None
+                        if spec.target_optional
+                        else _fallback_target(
+                            action_id=claim.action_id,
+                            allowed_target_ids=spec.allowed_target_ids,
+                        )
+                    )
+                    normalization_reason = "target_not_allowed"
+                if normalization_reason is not None:
+                    model_decision = replace(
+                        model_decision,
+                        target_player_id=normalized_target,
+                    )
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_decision_target_normalized",
+                        payload={
+                            "action_id": claim.action_id,
+                            "original_target_player_id": original_target,
+                            "normalized_target_player_id": normalized_target,
+                            "reason": normalization_reason,
+                        },
+                    )
+                speech_text = model_decision.speech
+                sentence_ms = model_decision.completed_ms
             else:
                 speech = await self._model_client.generate_judge_sentence(
                     action_context=context,
@@ -312,21 +426,35 @@ class V2ActionEngine:
                     model_id=model_id,
                     check_cancellation=check_cancellation,
                 )
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="model_first_token_received",
+                    payload={
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "provider_request_id": speech.provider_request_id,
+                        "first_token_ms": speech.first_token_ms,
+                    },
+                )
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="model_response_received",
+                    payload={
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "provider_request_id": speech.provider_request_id,
+                        "raw_response": (
+                            speech.raw_response if speech.raw_response is not None else speech.text
+                        ),
+                        "parsed_output": {"speech": speech.text},
+                        "first_token_ms": speech.first_token_ms,
+                        "completed_ms": speech.sentence_ms,
+                    },
+                )
+                model_request_completed = True
                 speech_text = speech.text
-                provider_request_id = speech.provider_request_id
-                first_token_ms = speech.first_token_ms
                 sentence_ms = speech.sentence_ms
             check_cancellation()
-            self._repository.append_event(
-                game_id=claim.game_id,
-                event_type="model_first_token_received",
-                payload={
-                    "action_id": claim.action_id,
-                    "attempt_id": model_attempt_id,
-                    "provider_request_id": provider_request_id,
-                    "first_token_ms": first_token_ms,
-                },
-            )
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
             voice_asset_id = f"v2_voice_{uuid4().hex[:16]}"
@@ -342,12 +470,8 @@ class V2ActionEngine:
                 audience=spec.audience,
             )
             await broadcaster.set_current(identity, 0, audience=spec.audience)
-            await broadcaster.broadcast_json(
-                presentation_opened(identity), audience=spec.audience
-            )
-            await broadcaster.broadcast_json(
-                segment_committed(identity), audience=spec.audience
-            )
+            await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
+            await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,
@@ -364,6 +488,10 @@ class V2ActionEngine:
                     "action_id": claim.action_id,
                     "attempt_id": tts_attempt_id,
                     "sentence_ms": sentence_ms,
+                    "speaker": speaker,
+                    "judge_configuration_version": (
+                        judge_configuration.version if judge_configuration is not None else None
+                    ),
                 },
             )
             recorder = V2VoiceRecorder(
@@ -410,16 +538,17 @@ class V2ActionEngine:
                     sample_rate=self._sample_rate,
                     pcm=pcm,
                 )
-                await broadcaster.broadcast_bytes(packet, audience=spec.audience)
+                next_sample_cursor = sample_cursor + sample_count
+                await broadcaster.broadcast_audio(
+                    packet,
+                    identity=identity,
+                    next_sample_cursor=next_sample_cursor,
+                    audience=spec.audience,
+                )
                 now = time.monotonic()
                 duration = sample_count / self._sample_rate
                 official_end = max(official_end or now, now) + duration
-                sample_cursor += sample_count
-                await broadcaster.set_current(
-                    identity,
-                    sample_cursor,
-                    audience=spec.audience,
-                )
+                sample_cursor = next_sample_cursor
                 chunk_index += 1
             if first_chunk or official_end is None:
                 raise V2TtsError("tts_empty_audio")
@@ -492,6 +621,20 @@ class V2ActionEngine:
             if recorder is not None:
                 recorder.abort()
             failure_kind, failure_code = _failure(exc)
+            if model_attempt_id is not None and not model_request_completed:
+                try:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_request_failed",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "failure_kind": failure_kind,
+                            "failure_code": failure_code,
+                        },
+                    )
+                except Exception:
+                    logger.exception("Live V2 could not persist model request failure")
             logger.warning(
                 "Live V2 judge sentence failed",
                 extra={
@@ -570,6 +713,14 @@ def _action_context(
         "output_contract": {
             "kind": spec.output_kind,
             "language": "zh-CN",
+            "target_policy": (
+                {"mode": "none", "allowed_target_ids": []}
+                if spec.allowed_target_ids is None
+                else {
+                    "mode": "optional" if spec.target_optional else "required",
+                    "allowed_target_ids": list(spec.allowed_target_ids),
+                }
+            ),
         },
         "influence": {
             "schema_version": 1,
@@ -580,6 +731,13 @@ def _action_context(
         },
         **(spec.context or {}),
     }
+
+
+def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> str:
+    if not allowed_target_ids:
+        raise V2RepositoryError("required decision action has no allowed target")
+    digest = hashlib.sha256(action_id.encode()).digest()
+    return allowed_target_ids[int.from_bytes(digest[:8], "big") % len(allowed_target_ids)]
 
 
 def _failure(exc: Exception) -> tuple[str, str]:

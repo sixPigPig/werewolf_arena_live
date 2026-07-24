@@ -28,6 +28,7 @@ class V2ModelSpeech:
     provider_request_id: str
     first_token_ms: int
     sentence_ms: int
+    raw_response: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class V2ModelDecision:
     provider_request_id: str
     first_token_ms: int
     completed_ms: int
+    raw_response: str | None = None
 
 
 class V2ModelClient:
@@ -54,6 +56,22 @@ class V2ModelClient:
         self._model_id = model_id.strip()
         self._first_token_seconds = first_token_seconds
         self._total_seconds = total_seconds
+
+    def resolve_model_id(self, model_id: str | None = None) -> str:
+        return (model_id or self._model_id).strip()
+
+    def build_request_payload(
+        self,
+        *,
+        action_context: dict[str, Any],
+        decision: bool,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        return build_model_request_payload(
+            action_context,
+            decision=decision,
+            model_id=self.resolve_model_id(model_id),
+        )
 
     async def generate_judge_sentence(
         self,
@@ -76,6 +94,7 @@ class V2ModelClient:
             provider_request_id=provider_request_id,
             first_token_ms=first_token_ms,
             sentence_ms=completed_ms,
+            raw_response=raw,
         )
 
     async def generate_action_decision(
@@ -101,6 +120,7 @@ class V2ModelClient:
             provider_request_id=provider_request_id,
             first_token_ms=first_token_ms,
             completed_ms=completed_ms,
+            raw_response=raw,
         )
 
     async def _stream_text(
@@ -114,20 +134,19 @@ class V2ModelClient:
         check_cancellation: Callable[[], None] | None,
     ) -> tuple[str, str, int, int]:
         _check(check_cancellation)
-        selected_model_id = (model_id or self._model_id).strip()
+        selected_model_id = self.resolve_model_id(model_id)
         if not self._api_key or not selected_model_id:
             raise V2ModelError("model_not_configured")
         started = time.monotonic()
         first_token_at: float | None = None
         provider_request_id = attempt_id
         text = ""
-        payload = {
-            "model": selected_model_id,
-            "stream": True,
-            "max_output_tokens": max_output_tokens,
-            "thinking": {"type": "disabled"},
-            "input": input_builder(action_context),
-        }
+        payload = build_model_request_payload(
+            action_context,
+            decision=input_builder is _decision_model_input,
+            model_id=selected_model_id,
+            max_output_tokens=max_output_tokens,
+        )
         timeout = httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -244,6 +263,24 @@ def _check(check_cancellation: Callable[[], None] | None) -> None:
         check_cancellation()
 
 
+def build_model_request_payload(
+    action_context: dict[str, Any],
+    *,
+    decision: bool,
+    model_id: str,
+    max_output_tokens: int = 256,
+) -> dict[str, Any]:
+    return {
+        "model": model_id,
+        "stream": True,
+        "max_output_tokens": max_output_tokens,
+        "thinking": {"type": "disabled"},
+        "input": (
+            _decision_model_input(action_context) if decision else _model_input(action_context)
+        ),
+    }
+
+
 def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
     context_json = json.dumps(action_context, ensure_ascii=False, separators=(",", ":"))
     return [
@@ -283,9 +320,10 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                     "text": (
                         "你正在扮演一名狼人杀玩家。只根据给出的实时动作上下文做决定，"
                         "不得使用未提供的私密信息。输出一个 JSON 对象，其中包含"
-                        "target_player_id 和 speech 两个字段。target_player_id 必须是候选列表"
-                        "中的 player_id；允许放弃时可为 null。speech 是准备直接播报的自然"
-                        "中文，可以包含多句话。"
+                        "target_player_id 和 speech 两个字段。需要选择目标时，"
+                        "target_player_id 必须是候选列表中的 player_id；无需选择目标或"
+                        "允许放弃时可为 null。严格遵守 output_contract.target_policy；"
+                        "speech 是准备直接播报的自然中文，可以包含多句话。"
                     ),
                 }
             ],
@@ -335,16 +373,20 @@ def _decision_object(raw: str) -> dict[str, Any]:
 
 
 def _decision_fields(raw: str) -> tuple[str | None, str]:
-    value = _decision_object(raw)
-    if "target_player_id" not in value or "speech" not in value:
-        raise V2QualityError("model_decision_invalid_shape")
-    target_player_id = value["target_player_id"]
-    if target_player_id is not None and (
-        not isinstance(target_player_id, str) or not target_player_id.strip()
+    try:
+        value = _decision_object(raw)
+    except V2QualityError:
+        return None, _required_speech(
+            raw,
+            error_code="model_decision_invalid_speech",
+        )
+    target_player_id = value.get("target_player_id")
+    if target_player_id is not None and not (
+        isinstance(target_player_id, str) and target_player_id.strip()
     ):
-        raise V2QualityError("model_decision_invalid_target")
+        target_player_id = None
     speech = _required_speech(
-        value["speech"],
+        value.get("speech"),
         error_code="model_decision_invalid_speech",
     )
     return (target_player_id.strip() if target_player_id else None), speech

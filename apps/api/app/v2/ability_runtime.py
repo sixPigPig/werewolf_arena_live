@@ -169,9 +169,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
 _ACTION_TO_ABILITY = {
     definition.action_name: definition.ability_id for definition in ABILITY_REGISTRY.values()
 }
-_NIGHT_ACTIONS = frozenset(
-    {"remove", "protect", "investigate", "witch_save", "witch_poison"}
-)
+_NIGHT_ACTIONS = frozenset({"remove", "protect", "investigate", "witch_save", "witch_poison"})
 
 
 def normalize_role_key(value: object) -> str:
@@ -255,6 +253,19 @@ def compile_ability_runtime_snapshot(
         "rule_version": _required_text(rule_set.get("version"), "rule version"),
         "win_condition": str(rule_set.get("win_condition") or "wolves_gte_others"),
         "sheriff_enabled": bool(rule_set.get("sheriff_enabled")),
+        "day_actions": list(
+            rule_set.get("day_actions") or _derived_day_actions(rule_set, role_counts)
+        ),
+        "day_policies": {
+            "sheriff_vote_weight": float(rule_set.get("sheriff_vote_weight") or 1),
+            "speech_policy": str(rule_set.get("speech_policy") or "sequential"),
+            "speech_rounds": int(rule_set.get("speech_rounds") or 1),
+            "werewolf_self_explosion_enabled": bool(
+                rule_set.get("werewolf_self_explosion_enabled")
+            ),
+            "exile_last_words_enabled": bool(rule_set.get("exile_last_words_enabled")),
+            "sheriff_badge_bomb_policy": str(rule_set.get("sheriff_badge_bomb_policy") or "none"),
+        },
         "policies": {
             "werewolf_consensus": {
                 "rounds": 2,
@@ -333,6 +344,34 @@ def _derived_night_actions(role_counts: dict[str, int]) -> tuple[str, ...]:
         actions.append("investigate")
     if role_counts.get("witch"):
         actions.extend(("witch_save", "witch_poison"))
+    return tuple(actions)
+
+
+def _derived_day_actions(
+    rule_set: dict[str, Any],
+    role_counts: dict[str, int],
+) -> tuple[str, ...]:
+    actions: list[str] = []
+    if bool(rule_set.get("sheriff_enabled")):
+        actions.extend(
+            (
+                "sheriff_run",
+                "sheriff_speech",
+                "sheriff_withdraw",
+                "sheriff_vote",
+                "sheriff_pk_speech",
+                "sheriff_runoff_vote",
+                "speech_order",
+            )
+        )
+    if bool(rule_set.get("werewolf_self_explosion_enabled")):
+        actions.append("werewolf_self_explosion")
+    actions.extend(("debate", "vote"))
+    if bool(rule_set.get("exile_last_words_enabled", True)):
+        actions.append("exile_last_words")
+    if role_counts.get("hunter"):
+        actions.append("hunter_shoot")
+    actions.append("summarize")
     return tuple(actions)
 
 

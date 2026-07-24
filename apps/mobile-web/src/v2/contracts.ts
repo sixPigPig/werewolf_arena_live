@@ -1,4 +1,5 @@
 export type V2LiveState =
+  | "waiting_to_start"
   | "ready"
   | "generating"
   | "broadcasting"
@@ -9,7 +10,7 @@ export type V2LiveState =
 
 export type V2GamePhase = {
   phase_seq: number;
-  phase_id: "legacy" | "opening" | "first_night" | "day_1";
+  phase_id: string;
   phase_state:
     | "legacy_frozen"
     | "opening_ready"
@@ -22,8 +23,17 @@ export type V2GamePhase = {
     | "dawn_reactions_ready"
     | "public_day_ready"
     | "sheriff_election_ready"
+    | "public_discussion_open"
+    | "sheriff_election_open"
     | "game_completed"
     | "failed";
+};
+
+export type V2MatchState = {
+  round_no: number;
+  sheriff_player_id: string | null;
+  sheriff_badge_state: "disabled" | "pending" | "held" | "destroyed";
+  winner: "villagers" | "werewolves" | null;
 };
 
 export type V2LobbyRuleSnapshot = {
@@ -121,7 +131,7 @@ export type V2GameCreateRequest = {
 export type V2GameCreateResponse = {
   game_id: string;
   run_id: string;
-  status: "ready";
+  status: "waiting_to_start";
   snapshot_url: string;
   websocket_url: string;
   god_view_snapshot_url: string;
@@ -175,6 +185,7 @@ export type V2LiveSnapshot = {
   run_id: string;
   live_state: V2LiveState;
   game_phase: V2GamePhase;
+  match_state: V2MatchState | null;
   latest_presentation_seq: number;
   server_time: string;
   public_rule: V2PublicRuleSnapshot | null;
@@ -203,6 +214,7 @@ export type V2GodViewIdentitySnapshot = {
   run_id: string;
   live_state: V2LiveState;
   game_phase: V2GamePhase;
+  match_state: V2MatchState | null;
   server_time: string;
   rule: V2PublicRuleSnapshot | null;
   players: V2GodViewPlayerIdentity[];
@@ -217,6 +229,7 @@ export type V2GodViewLiveSnapshot = {
   run_id: string;
   live_state: V2LiveState;
   game_phase: V2GamePhase;
+  match_state: V2MatchState | null;
   latest_presentation_seq: number;
   server_time: string;
   rule: V2PublicRuleSnapshot | null;
@@ -310,6 +323,35 @@ export type V2GodViewNightResolved = {
   attack_prevented_by: string | null;
 };
 
+export type V2PlayerStateChanged = {
+  protocol_version: 1;
+  type: "player.state_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  player_id: string;
+  alive: boolean;
+  cause: string | null;
+};
+
+export type V2MatchStateChanged = V2MatchState & {
+  protocol_version: 1;
+  type: "match.state_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+};
+
+export type V2DayProgress = {
+  protocol_version: 1;
+  type: "day.progress_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
+  round_no: number;
+  stage: string;
+};
+
 export type V2PresentationClosed = {
   protocol_version: 1;
   type: "presentation.closed";
@@ -351,6 +393,9 @@ export type V2ServerMessage =
   | V2AbilityProgress
   | V2DawnResult
   | V2GodViewNightResolved
+  | V2PlayerStateChanged
+  | V2MatchStateChanged
+  | V2DayProgress
   | V2PresentationClosed
   | V2PresentationFailed;
 
@@ -387,7 +432,7 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
   return {
     game_id: id(record.game_id, "v2_game_"),
     run_id: id(record.run_id, "v2_run_"),
-    status: literal(record.status, ["ready"]),
+    status: literal(record.status, ["waiting_to_start"]),
     snapshot_url: apiPath(record.snapshot_url),
     websocket_url: apiPath(record.websocket_url),
     god_view_snapshot_url: godViewApiPath(record.god_view_snapshot_url),
@@ -414,6 +459,7 @@ export function parseV2GodViewIdentitySnapshotResponse(
     "run_id",
     "live_state",
     "game_phase",
+    "match_state",
     "server_time",
     "rule",
     "players",
@@ -430,6 +476,7 @@ export function parseV2GodViewIdentitySnapshotResponse(
     run_id: id(record.run_id, "v2_run_"),
     live_state: liveState(record.live_state),
     game_phase: gamePhase(record.game_phase),
+    match_state: record.match_state == null ? null : matchState(record.match_state),
     server_time: date(record.server_time),
     rule,
     players,
@@ -456,6 +503,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "run_id",
       "live_state",
       "game_phase",
+      "match_state",
       "latest_presentation_seq",
       "server_time",
       "public_rule",
@@ -470,6 +518,8 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       audience: literal(snapshot.audience, ["player_public"]),
       live_state: liveState(snapshot.live_state),
       game_phase: gamePhase(snapshot.game_phase),
+      match_state:
+        snapshot.match_state == null ? null : matchState(snapshot.match_state),
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       public_rule:
         snapshot.public_rule === null ? null : publicRule(snapshot.public_rule),
@@ -493,6 +543,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "run_id",
       "live_state",
       "game_phase",
+      "match_state",
       "latest_presentation_seq",
       "server_time",
       "rule",
@@ -509,6 +560,8 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       audience: literal(snapshot.audience, ["spectator_god_view"]),
       live_state: liveState(snapshot.live_state),
       game_phase: gamePhase(snapshot.game_phase),
+      match_state:
+        snapshot.match_state == null ? null : matchState(snapshot.match_state),
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       rule,
       players,
@@ -583,6 +636,30 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
         value.attack_prevented_by === null
           ? null
           : text(value.attack_prevented_by),
+    };
+  }
+  if (type === "player.state_changed") {
+    return {
+      ...base,
+      type,
+      player_id: text(value.player_id),
+      alive: boolean(value.alive),
+      cause: value.cause === null ? null : text(value.cause),
+    };
+  }
+  if (type === "match.state_changed") {
+    return {
+      ...base,
+      type,
+      ...matchState(value),
+    };
+  }
+  if (type === "day.progress_changed") {
+    return {
+      ...base,
+      type,
+      round_no: integer(value.round_no, 1),
+      stage: text(value.stage),
     };
   }
   if (type === "presentation.opened") {
@@ -698,6 +775,25 @@ function gamePhase(value: unknown): V2GamePhase {
     phase_seq: integer(record.phase_seq, 0),
     phase_id: phaseId(record.phase_id),
     phase_state: phaseState(record.phase_state),
+  };
+}
+
+function matchState(value: unknown): V2MatchState {
+  const record = object(value);
+  return {
+    round_no: integer(record.round_no, 1),
+    sheriff_player_id:
+      record.sheriff_player_id === null ? null : text(record.sheriff_player_id),
+    sheriff_badge_state: literal(record.sheriff_badge_state, [
+      "disabled",
+      "pending",
+      "held",
+      "destroyed",
+    ]),
+    winner:
+      record.winner === null
+        ? null
+        : literal(record.winner, ["villagers", "werewolves"]),
   };
 }
 
@@ -837,6 +933,7 @@ function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {
 
 function liveState(value: unknown): V2LiveState {
   return literal(value, [
+    "waiting_to_start",
     "ready",
     "generating",
     "broadcasting",
@@ -848,7 +945,18 @@ function liveState(value: unknown): V2LiveState {
 }
 
 function phaseId(value: unknown): V2GamePhase["phase_id"] {
-  return literal(value, ["legacy", "opening", "first_night", "day_1"]);
+  const result = text(value);
+  if (
+    result !== "legacy" &&
+    result !== "opening" &&
+    result !== "first_night" &&
+    !/^(day_[1-9]|day_1[0-9]|day_20|night_[2-9]|night_1[0-9]|night_20)$/.test(
+      result,
+    )
+  ) {
+    throw invalid();
+  }
+  return result;
 }
 
 function phaseState(value: unknown): V2GamePhase["phase_state"] {
@@ -864,6 +972,8 @@ function phaseState(value: unknown): V2GamePhase["phase_state"] {
     "dawn_reactions_ready",
     "public_day_ready",
     "sheriff_election_ready",
+    "public_discussion_open",
+    "sheriff_election_open",
     "game_completed",
     "failed",
   ]);

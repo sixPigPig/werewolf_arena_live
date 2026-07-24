@@ -74,7 +74,8 @@ describe("Admin V2 game control", () => {
     await user.click(
       await screen.findByRole("button", { name: "打断整局" }),
     );
-    const dialog = screen.getByRole("dialog", { name: "确认打断整局" });
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("确认打断整局")).toBeInTheDocument();
     expect(
       within(dialog).getByText(/立即停止新的模型请求、关闭当前模型\/TTS 流/),
     ).toBeInTheDocument();
@@ -139,6 +140,7 @@ function detail(stopped: boolean) {
     rule_snapshot: {},
     players_snapshot: [],
     ability_snapshot: {},
+    match_state: null,
     runs: [
       {
         run_id: runId,
@@ -150,6 +152,7 @@ function detail(stopped: boolean) {
       },
     ],
     events: [],
+    model_requests: [],
     presentations: [],
     voice_assets: [],
     player_states: [],

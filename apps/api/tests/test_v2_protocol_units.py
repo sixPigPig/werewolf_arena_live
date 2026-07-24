@@ -83,12 +83,18 @@ def test_decision_fields_accept_multi_sentence_text_and_extra_fields() -> None:
 
 
 def test_decision_fields_keep_only_fundamental_failures() -> None:
-    with pytest.raises(V2QualityError, match="model_decision_invalid_json"):
-        _decision_fields("not json")
-    with pytest.raises(V2QualityError, match="model_decision_invalid_shape"):
-        _decision_fields('{"speech":"我先保留意见。"}')
-    with pytest.raises(V2QualityError, match="model_decision_invalid_target"):
-        _decision_fields('{"target_player_id":3,"speech":"我投三号。"}')
+    assert _decision_fields("我先保留意见，再听后面的发言。") == (
+        None,
+        "我先保留意见，再听后面的发言。",
+    )
+    assert _decision_fields('{"speech":"我先保留意见。"}') == (
+        None,
+        "我先保留意见。",
+    )
+    assert _decision_fields('{"target_player_id":3,"speech":"我投三号。"}') == (
+        None,
+        "我投三号。",
+    )
     with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
         _decision_fields('{"target_player_id":null,"speech":"  "}')
 

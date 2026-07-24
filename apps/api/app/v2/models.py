@@ -62,6 +62,42 @@ class V2GameRecord(Base):
     )
 
 
+class V2MatchState(Base):
+    __tablename__ = "v2_match_states"
+
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    round_no: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    sheriff_player_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    sheriff_badge_state: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="disabled",
+        server_default="disabled",
+    )
+    pre_sheriff_explosion_count: Mapped[int] = mapped_column(
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    winner: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    completion_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class V2GameRun(Base):
     __tablename__ = "v2_game_runs"
     __table_args__ = (
@@ -77,10 +113,9 @@ class V2GameRun(Base):
     )
     attempt_no: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    started_at: Mapped[datetime] = mapped_column(
+    started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
+        nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -193,6 +228,8 @@ class V2GameRecordEvent(Base):
     __tablename__ = "v2_game_record_events"
     __table_args__ = (
         UniqueConstraint("game_id", "record_seq", name="uq_v2_game_events_record_seq"),
+        Index("ix_v2_game_events_run_id", "run_id"),
+        Index("ix_v2_game_events_event_type", "event_type"),
         Index("ix_v2_game_events_game_created", "game_id", "created_at"),
     )
 
@@ -207,9 +244,8 @@ class V2GameRecordEvent(Base):
         String(40),
         ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
-    event_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     payload_schema_version: Mapped[int] = mapped_column(
         nullable=False,
         default=1,
@@ -227,6 +263,11 @@ class V2LivePresentation(Base):
     __tablename__ = "v2_live_presentations"
     __table_args__ = (
         UniqueConstraint("presentation_id", name="uq_v2_presentations_id"),
+        Index("ix_v2_presentations_action_id", "action_id"),
+        Index("ix_v2_presentations_run_id", "run_id"),
+        Index("ix_v2_presentations_speech_id", "speech_id"),
+        Index("ix_v2_presentations_state", "state"),
+        Index("ix_v2_presentations_voice_asset_id", "voice_asset_id"),
         Index("ix_v2_presentations_game_state", "game_id", "state"),
     )
 
@@ -237,22 +278,21 @@ class V2LivePresentation(Base):
     )
     presentation_seq: Mapped[int] = mapped_column(primary_key=True)
     presentation_id: Mapped[str] = mapped_column(String(48), nullable=False)
-    action_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    action_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
     activation_id: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
     run_id: Mapped[str] = mapped_column(
         String(40),
         ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     phase_id: Mapped[str] = mapped_column(String(40), nullable=False)
     actor_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(80), nullable=False)
     audience: Mapped[str] = mapped_column(String(32), nullable=False, default="all")
-    speech_id: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    speech_id: Mapped[str] = mapped_column(String(48), nullable=False)
     segment_index: Mapped[int] = mapped_column(nullable=False)
     source_event_id: Mapped[int] = mapped_column(nullable=False)
-    state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
     subtitle_text: Mapped[str] = mapped_column(Text, nullable=False)
     subtitle_timings: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
@@ -263,7 +303,6 @@ class V2LivePresentation(Base):
         String(48),
         ForeignKey("v2_voice_assets.voice_asset_id", ondelete="SET NULL"),
         nullable=True,
-        index=True,
     )
     audio_asset_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     audio_mime_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -379,9 +418,7 @@ class V2ActionWindow(Base):
 class V2AbilityInstance(Base):
     __tablename__ = "v2_ability_instances"
     __table_args__ = (
-        UniqueConstraint(
-            "game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"
-        ),
+        UniqueConstraint("game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"),
     )
 
     ability_instance_id: Mapped[str] = mapped_column(String(48), primary_key=True)

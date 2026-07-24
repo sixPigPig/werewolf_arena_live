@@ -24,8 +24,14 @@ from app.models.admin import AuditEvent
 from app.models.game_session import GameSessionRecord
 from app.models.live import LiveRunRecord
 from app.models.user import User
-from app.v2.live_runtime import V2LiveRuntime
-from app.v2.model_client import V2ModelDecision, V2ModelSpeech
+from app.v2.live_runtime import V2LiveRuntime, _GameChannel
+from app.v2.day_engine import V2DayEngine, _leaders
+from app.v2.match_repository import V2MatchRepository
+from app.v2.model_client import (
+    V2ModelDecision,
+    V2ModelSpeech,
+    build_model_request_payload,
+)
 from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
@@ -38,6 +44,7 @@ from app.v2.models import (
     V2GodViewAccessGrant,
     V2LivePresentation,
     V2KnowledgeFact,
+    V2MatchState,
     V2PlayerState,
     V2RoleAssignment,
     V2RoleAssignmentBatch,
@@ -56,6 +63,23 @@ class FakeV2ModelClient:
         self.release.set()
         self.decision_contexts: list[dict[str, Any]] = []
         self.decline_action_types: set[str] = set()
+        self.unexpected_speech_target: str | None = None
+
+    def resolve_model_id(self, model_id: str | None = None) -> str:
+        return model_id or "test-default-model"
+
+    def build_request_payload(
+        self,
+        *,
+        action_context: dict[str, Any],
+        decision: bool,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        return build_model_request_payload(
+            action_context,
+            decision=decision,
+            model_id=self.resolve_model_id(model_id),
+        )
 
     async def generate_judge_sentence(
         self,
@@ -84,11 +108,27 @@ class FakeV2ModelClient:
         }
         assert attempt_id.startswith("v2_model_")
         assert model_id == "judge-configured-model"
+        assert action_context["judge_configuration"] == {
+            "model_provider": "agent_plan",
+            "model_id": "judge-configured-model",
+            "tts_speaker": "judge-configured-speaker",
+            "version": 1,
+        }
         text_by_action = {
             "judge_opening_speech": "欢迎来到这场实时狼人杀对局。",
             "judge_nightfall_announcement": "夜幕已经降临，请所有玩家闭眼。",
             "judge_dawn_announcement": "天亮了，请大家确认昨夜的结果。",
+            "judge_public_discussion_opening": "第一天白天讨论现在开始，请存活玩家准备发言。",
+            "judge_sheriff_election_opening": "第一天警长竞选现在开始，请存活玩家准备参选。",
             "judge_hunter_shot_announcement": "猎人的枪声已经带走一名玩家。",
+            "judge_exile_result": "放逐投票结果已经确定。",
+            "judge_no_exile": "本轮没有玩家被放逐。",
+            "judge_day_summary": "本日公开流程结束，即将进入夜晚。",
+            "judge_game_completed": "本局已经产生获胜阵营。",
+            "judge_sheriff_elected": "警长已经产生。",
+            "judge_sheriff_badge_destroyed": "本局警徽已经流失。",
+            "judge_sheriff_badge_result": "警徽去向已经确定。",
+            "judge_werewolf_self_explosion": "有玩家发动狼人自爆并出局。",
         }
         text = text_by_action.get(
             action_context["action_type"],
@@ -99,6 +139,7 @@ class FakeV2ModelClient:
             provider_request_id="provider-response-test",
             first_token_ms=12,
             sentence_ms=34,
+            raw_response=text,
         )
 
     async def generate_action_decision(
@@ -117,17 +158,27 @@ class FakeV2ModelClient:
         assert attempt_id.startswith("v2_model_")
         assert model_id is None
         candidates = action_context["candidates"]
-        target = (
-            None
-            if action_context["action_type"] in self.decline_action_types
-            else candidates[0]["player_id"] if candidates else None
-        )
+        if action_context["action_type"] in self.decline_action_types:
+            target = None
+        elif candidates:
+            target = candidates[0]["player_id"]
+        elif action_context["output_contract"]["kind"] == "public_speech":
+            target = self.unexpected_speech_target
+        else:
+            target = None
         return V2ModelDecision(
             target_player_id=target,
             speech="我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。",
             provider_request_id="provider-decision-test",
             first_token_ms=11,
             completed_ms=29,
+            raw_response=json.dumps(
+                {
+                    "target_player_id": target,
+                    "speech": "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。",
+                },
+                ensure_ascii=False,
+            ),
         )
 
 
@@ -160,6 +211,56 @@ class FakeV2TtsClient:
         if check_cancellation is not None:
             check_cancellation()
         yield PCM_CHUNK
+
+
+class _ScriptedDayActionEngine:
+    def __init__(self, targets: dict[str, str | None]) -> None:
+        self.targets = targets
+        self.player_actions: list[str] = []
+        self.judge_actions: list[str] = []
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
+
+    async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision:
+        self.player_actions.append(spec.actor_id)
+        return V2ModelDecision(
+            target_player_id=self.targets[spec.actor_id],
+            speech="我决定发动技能。",
+            provider_request_id="provider-scripted-decision",
+            first_token_ms=1,
+            completed_ms=2,
+        )
+
+    async def run_judge_speech(self, *, spec, **_kwargs) -> bool:
+        self.judge_actions.append(spec.action_type)
+        return True
+
+
+class _CollectingBroadcaster:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, dict[str, Any]]] = []
+
+    async def broadcast_json(self, value: dict[str, Any], *, audience: str = "all") -> None:
+        self.messages.append((audience, value))
+
+
+class _BlockingWebSocket:
+    def __init__(self, *, block_audio: bool = False) -> None:
+        self.block_audio = block_audio
+        self.audio_started = asyncio.Event()
+        self.release_audio = asyncio.Event()
+        self.json_messages: list[dict[str, Any]] = []
+        self.binary_messages: list[bytes] = []
+
+    async def send_json(self, value: dict[str, Any]) -> None:
+        self.json_messages.append(value)
+
+    async def send_bytes(self, value: bytes) -> None:
+        self.audio_started.set()
+        if self.block_audio:
+            await self.release_audio.wait()
+        self.binary_messages.append(value)
 
 
 @pytest.fixture
@@ -229,13 +330,13 @@ def test_v2_meta_is_independent_from_v1(v2_context) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "api_version": "v2",
-        "status": "realtime_first_night",
+        "status": "realtime_complete_match",
     }
     assert response.headers["cache-control"] == "no-store"
     assert client.get("/api/v1/health").status_code == 200
 
 
-def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
+def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -244,7 +345,7 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
 
     assert response.status_code == 201, response.text
     created = response.json()
-    assert created["status"] == "ready"
+    assert created["status"] == "waiting_to_start"
     assert created["game_id"].startswith("v2_game_")
     assert created["run_id"].startswith("v2_run_")
     assert created["websocket_url"].endswith(f"/{created['game_id']}/ws")
@@ -273,7 +374,7 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
             )
         )
         assert game is not None and game.title == "经典 8 人"
-        assert game.status == "ready"
+        assert game.status == "waiting_to_start"
         assert (game.phase_seq, game.phase_id, game.phase_state) == (
             1,
             "opening",
@@ -298,7 +399,8 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
             },
             {"seat": 2, "profile_id": "profile-2", "name": "白石"},
         ]
-        assert run is not None and run.status == "ready"
+        assert run is not None and run.status == "waiting_to_start"
+        assert run.started_at is None
         assert god_view_grant is not None
         assert (
             god_view_grant.token_sha256
@@ -394,6 +496,7 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
         "run_id",
         "live_state",
         "game_phase",
+        "match_state",
         "latest_presentation_seq",
         "server_time",
         "public_rule",
@@ -405,6 +508,13 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
         "phase_seq": 1,
         "phase_id": "opening",
         "phase_state": "opening_ready",
+    }
+    assert snapshot.json()["live_state"] == "waiting_to_start"
+    assert snapshot.json()["match_state"] == {
+        "round_no": 1,
+        "sheriff_player_id": None,
+        "sheriff_badge_state": "disabled",
+        "winner": None,
     }
     public_rule = snapshot.json()["public_rule"]
     assert public_rule == {
@@ -488,6 +598,7 @@ def test_existing_mobile_lobby_creates_one_ready_v2_game_with_snapshots(
         "run_id",
         "live_state",
         "game_phase",
+        "match_state",
         "server_time",
         "rule",
         "players",
@@ -553,13 +664,19 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
             assert god_socket.accepted_subprotocol == "live-v2-god-view"
             assert god_initial["type"] == "god_view.live_snapshot"
             assert god_initial["audience"] == "spectator_god_view"
+            assert public_initial["live_state"] == "waiting_to_start"
+            assert god_initial["live_state"] == "waiting_to_start"
             assert [item["role"] for item in god_initial["players"]]
             assert identifiers["god_view_access_token"] not in json.dumps(god_initial)
 
-            public_socket.send_json(_ready_message("client.ready"))
             god_socket.send_json(_ready_message("god_view.ready"))
-            assert public_socket.receive_json()["type"] == "live.snapshot"
-            assert god_socket.receive_json()["type"] == "god_view.live_snapshot"
+            god_started = god_socket.receive_json()
+            assert god_started["type"] == "god_view.live_snapshot"
+            assert god_started["live_state"] == "ready"
+            public_socket.send_json(_ready_message("client.ready"))
+            public_started = public_socket.receive_json()
+            assert public_started["type"] == "live.snapshot"
+            assert public_started["live_state"] == "generating"
             model_client.release.set()
 
             public_result = _receive_realtime_action(public_socket)
@@ -590,6 +707,27 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
         "judge_nightfall_announcement",
     ]
     with session_factory() as db:
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert run is not None and run.started_at is not None
+        started_event = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == identifiers["game_id"],
+                V2GameRecordEvent.event_type == "game_started",
+            )
+        )
+        assert started_event is not None
+        assert started_event.payload["trigger_audience"] == "spectator_god_view"
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "game_started",
+                )
+            )
+            == 1
+        )
         assert (
             db.scalar(
                 select(func.count())
@@ -626,6 +764,57 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
         assert [item["role"] for item in snapshot["players"]]
 
 
+def test_join_sample_cursor_is_atomic_with_audio_broadcast() -> None:
+    async def scenario() -> None:
+        channel = _GameChannel(
+            game_id="v2_game_0123456789abcdef",
+            snapshot_factory=lambda **values: {
+                "live_state": "failed",
+                "current_presentation": {
+                    "join_sample_cursor": values["sample_cursor"],
+                },
+            },
+            game_starter=lambda **_values: False,
+            engine=object(),  # type: ignore[arg-type]
+        )
+        first = _BlockingWebSocket(block_audio=True)
+        first_id = await channel.connect(  # type: ignore[arg-type]
+            first,
+            audience="player_public",
+        )
+        await channel.ready(first_id, _ready_message("client.ready"))
+        audio_task = asyncio.create_task(
+            channel.broadcast_audio(
+                b"first-frame",
+                identity=object(),  # type: ignore[arg-type]
+                next_sample_cursor=240,
+            )
+        )
+        await first.audio_started.wait()
+
+        second = _BlockingWebSocket()
+        join_task = asyncio.create_task(
+            channel.connect(second, audience="player_public")  # type: ignore[arg-type]
+        )
+        await asyncio.sleep(0)
+        assert not join_task.done()
+        first.release_audio.set()
+        await audio_task
+        second_id = await join_task
+
+        assert second.json_messages[0]["current_presentation"]["join_sample_cursor"] == 240
+        assert second.binary_messages == []
+        await channel.ready(second_id, _ready_message("client.ready"))
+        await channel.broadcast_audio(
+            b"second-frame",
+            identity=object(),  # type: ignore[arg-type]
+            next_sample_cursor=480,
+        )
+        assert second.binary_messages == [b"second-frame"]
+
+    asyncio.run(scenario())
+
+
 def test_v2_lobby_create_rejects_incomplete_or_duplicate_lineups(v2_context) -> None:
     client, _session_factory, _voice_root = v2_context
     incomplete = _lobby_create_request()
@@ -640,7 +829,7 @@ def test_v2_lobby_create_rejects_incomplete_or_duplicate_lineups(v2_context) -> 
     assert client.post("/api/v2/games", json=invalid_roles).status_code == 422
 
 
-def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_saved(
+def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
     v2_context,
 ) -> None:
     client, session_factory, voice_root = v2_context
@@ -651,7 +840,7 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
 
     snapshot = client.get(identifiers["snapshot_url"])
     assert snapshot.status_code == 200
-    assert snapshot.json()["live_state"] == "ready"
+    assert snapshot.json()["live_state"] == "waiting_to_start"
     assert snapshot.json()["game_phase"]["phase_state"] == "opening_ready"
     assert snapshot.json()["public_rule"] is None
     assert snapshot.json()["public_players"] == []
@@ -669,7 +858,7 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
     )
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
-        assert websocket.receive_json()["live_state"] == "ready"
+        assert websocket.receive_json()["live_state"] == "waiting_to_start"
         websocket.send_json(
             {
                 "protocol_version": 1,
@@ -681,7 +870,9 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
                 },
             }
         )
-        assert websocket.receive_json()["type"] == "live.snapshot"
+        started_snapshot = websocket.receive_json()
+        assert started_snapshot["type"] == "live.snapshot"
+        assert started_snapshot["live_state"] == "ready"
         result = _receive_realtime_action(websocket, include_audio_headers=True)
         assert result["committed_texts"] == [
             "欢迎来到这场实时狼人杀对局。",
@@ -744,11 +935,14 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
             "nightfall_announced",
         )
         assert run is not None and run.status == "awaiting_observation"
+        assert run.started_at is not None
         assert [item.event_type for item in events] == [
             "game_created",
+            "game_started",
             "action_opened",
             "model_request_started",
             "model_first_token_received",
+            "model_response_received",
             "speech_opened",
             "speech_segment_committed",
             "speech_sealed",
@@ -765,6 +959,7 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
             "action_opened",
             "model_request_started",
             "model_first_token_received",
+            "model_response_received",
             "speech_opened",
             "speech_segment_committed",
             "speech_sealed",
@@ -778,14 +973,13 @@ def test_first_ready_viewer_receives_opening_then_nightfall_and_both_voices_are_
             "speech_closed",
             "action_succeeded",
         ]
+        started_event = next(item for item in events if item.event_type == "game_started")
+        assert started_event.payload["trigger_audience"] == "player_public"
         assert [item.phase_id for item in presentations] == ["opening", "first_night"]
         assert all(item.state == "closed" for item in presentations)
         assert len(voices) == 2
         assert all(item.state == "ready" and item.sample_count == 480 for item in voices)
-        assert all(
-            item.pcm_sha256 == hashlib.sha256(PCM_CHUNK * 2).hexdigest()
-            for item in voices
-        )
+        assert all(item.pcm_sha256 == hashlib.sha256(PCM_CHUNK * 2).hexdigest() for item in voices)
         for voice in voices:
             voice_path = voice_root / voice.storage_key
             assert voice_path.is_file()
@@ -816,6 +1010,20 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
     body = detail.json()
+    assert len(body["model_requests"]) == 2
+    for model_request in body["model_requests"]:
+        assert model_request["status"] == "succeeded"
+        assert model_request["model_id"] == "judge-configured-model"
+        assert model_request["model_provider"] == "agent_plan"
+        assert model_request["request_payload"]["model"] == "judge-configured-model"
+        assert model_request["request_payload"]["input"][0]["role"] == "system"
+        assert model_request["raw_response"]
+        assert model_request["parsed_output"]["speech"]
+        assert model_request["input_source"] == "persisted"
+        assert model_request["output_source"] == "persisted"
+        assert model_request["provider_request_id"] == "provider-response-test"
+        assert model_request["first_token_ms"] == 12
+        assert model_request["completed_ms"] == 34
     assert len(body["voice_assets"]) == 2
     for voice in body["voice_assets"]:
         assert voice["state"] == "ready"
@@ -827,7 +1035,7 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
         assert audio.content[:4] == b"RIFF"
 
 
-def test_admin_operator_can_idempotently_stop_ready_v2_game_without_private_leak(
+def test_admin_operator_can_idempotently_stop_waiting_v2_game_without_private_leak(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -838,7 +1046,7 @@ def test_admin_operator_can_idempotently_stop_ready_v2_game_without_private_leak
     headers = _operator_control_headers(
         client,
         session_factory,
-        idempotency_key="v2-stop-ready-1",
+        idempotency_key="v2-stop-waiting-1",
     )
     reason = "人工发现异常，立即停止额度消耗"
 
@@ -899,12 +1107,7 @@ def test_admin_operator_can_idempotently_stop_ready_v2_game_without_private_leak
             [item.payload for item in events],
             ensure_ascii=False,
         )
-        assert (
-            db.scalar(
-                select(func.count()).select_from(V2GameControlRequest)
-            )
-            == 1
-        )
+        assert db.scalar(select(func.count()).select_from(V2GameControlRequest)) == 1
         audit = db.scalar(
             select(AuditEvent).where(
                 AuditEvent.action == "admin.v2_game.stop",
@@ -964,17 +1167,9 @@ def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_stat
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None and game.status == "canceled"
         presentations = list(
-            db.scalars(
-                select(V2LivePresentation).where(
-                    V2LivePresentation.game_id == game.game_id
-                )
-            )
+            db.scalars(select(V2LivePresentation).where(V2LivePresentation.game_id == game.game_id))
         )
-        voices = list(
-            db.scalars(
-                select(V2VoiceAsset).where(V2VoiceAsset.game_id == game.game_id)
-            )
-        )
+        voices = list(db.scalars(select(V2VoiceAsset).where(V2VoiceAsset.game_id == game.game_id)))
         assert len(presentations) == 1
         assert presentations[0].state == "canceled"
         assert len(voices) == 1
@@ -1010,6 +1205,33 @@ def test_admin_viewer_cannot_stop_v2_game(v2_context) -> None:
 
     assert response.status_code == 403
     assert response.json()["code"] == "admin_permission_denied"
+
+
+def test_admin_operator_cannot_stop_terminal_v2_game(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json={"title": "已结束对局"}).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and run is not None
+        game.status = "awaiting_observation"
+        run.status = "awaiting_observation"
+
+    response = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+        json={"reason": "不应覆盖已完成对局"},
+        headers=_operator_control_headers(
+            client,
+            session_factory,
+            idempotency_key="v2-stop-terminal-1",
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "admin_v2_game_not_active"
+    with session_factory() as db:
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert run is not None and run.stop_requested_at is None
 
 
 def test_executable_rule_runs_dynamic_first_night_without_leaking_private_actions(
@@ -1051,6 +1273,8 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         "夜幕已经降临，请所有玩家闭眼。",
     ]
     assert "天亮了，请大家确认昨夜的结果。" in public_texts
+    assert "第一天白天讨论现在开始，请存活玩家准备发言。" in public_texts
+    assert "第一天白天讨论现在开始，请存活玩家准备发言。" in god_texts
     assert "这项首夜能力现在开始实时执行。" not in public_texts
     assert "night.progress_changed" in public_types
     assert "ability.progress_changed" not in public_types
@@ -1060,12 +1284,24 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     assert "night.progress_changed" not in god_types
     assert "这项首夜能力现在开始实时执行。" in god_texts
     assert "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。" in god_texts
+    opening_context = next(
+        context
+        for context in client.app.state.v2_test_model_client.contexts
+        if context["action_type"] == "judge_opening_speech"
+    )
+    assert opening_context["game_setup"] == {
+        "rule_name": "动态首夜 6 人",
+        "player_count": 6,
+        "role_summary": None,
+        "max_rounds": 8,
+    }
 
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
         assert game.status == "awaiting_observation"
-        assert (game.phase_id, game.phase_state) == ("day_1", "public_day_ready")
+        assert game.phase_id.startswith("day_")
+        assert game.phase_state == "game_completed"
         windows = list(
             db.scalars(
                 select(V2ActionWindow)
@@ -1082,9 +1318,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert len(activations) >= 4
         assert all(item.status in {"completed", "skipped"} for item in activations)
         effects = list(
-            db.scalars(
-                select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id)
-            )
+            db.scalars(select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id))
         )
         assert {item.effect_type for item in effects} >= {
             "attack",
@@ -1093,12 +1327,10 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         }
         assert all(item.state == "resolved" for item in effects if item.effect_type != "shoot")
         facts = list(
-            db.scalars(
-                select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == game.game_id)
-            )
+            db.scalars(select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == game.game_id))
         )
         assert len(facts) >= 5
-        assert sum(item.fact_type == "investigation_alignment" for item in facts) == 1
+        assert sum(item.fact_type == "investigation_alignment" for item in facts) >= 1
         assert all(
             len(item.payload["normalized_sha256"]) == 64
             for item in facts
@@ -1114,15 +1346,23 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert {item.audience for item in presentations} == {"all", "god_view"}
         assert any(item.actor_kind == "player" for item in presentations)
         assert all(item.state == "closed" for item in presentations)
-        assert all(item.activation_id is not None for item in presentations if item.actor_kind == "player")
+        assert all(
+            item.activation_id is not None
+            for item in presentations
+            if item.actor_kind == "player"
+            and (item.phase_id == "first_night" or item.phase_id.startswith("night_"))
+        )
 
 
-def test_advanced_rule_executes_witch_policies_and_stops_before_sheriff_window(
+def test_advanced_rule_opens_sheriff_election_after_first_night(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
     model_client.decline_action_types.add("ability_witch.heal_decision")
+    model_client.decline_action_types.add("werewolf_self_explosion")
+    model_client.decline_action_types.add("exile_vote")
+    model_client.unexpected_speech_target = "model-added-irrelevant-target"
     created = client.post("/api/v2/games", json=_advanced_create_request())
     assert created.status_code == 201, created.text
     identifiers = created.json()
@@ -1138,7 +1378,7 @@ def test_advanced_rule_executes_witch_policies_and_stops_before_sheriff_window(
                 continue
             value = json.loads(message["text"])
             public_types.append(value["type"])
-            if value.get("live_state") == "awaiting_observation":
+            if value.get("live_state") in {"awaiting_observation", "failed"}:
                 break
 
     assert "ability.progress_changed" not in public_types
@@ -1146,9 +1386,14 @@ def test_advanced_rule_executes_witch_policies_and_stops_before_sheriff_window(
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
-        assert (game.phase_id, game.phase_state) == (
-            "day_1",
-            "sheriff_election_ready",
+        assert game.phase_id.startswith("day_")
+        assert game.phase_state == "game_completed"
+        assert any(
+            context["action_type"] == "judge_sheriff_election_opening"
+            for context in model_client.contexts
+        )
+        assert any(
+            context["action_type"] == "sheriff_run" for context in model_client.decision_contexts
         )
         instances = {
             item.ability_instance_id: item.ability_id
@@ -1162,23 +1407,17 @@ def test_advanced_rule_executes_witch_policies_and_stops_before_sheriff_window(
             )
         )
         heal = next(
-            item
-            for item in activations
-            if instances[item.ability_instance_id] == "witch.heal"
+            item for item in activations if instances[item.ability_instance_id] == "witch.heal"
         )
         poison = next(
-            item
-            for item in activations
-            if instances[item.ability_instance_id] == "witch.poison"
+            item for item in activations if instances[item.ability_instance_id] == "witch.poison"
         )
         assert heal.status == "completed"
         assert heal.decision["target_player_id"] is None
         assert poison.status == "completed"
         assert poison.decision["target_player_id"] is not None
         effects = list(
-            db.scalars(
-                select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id)
-            )
+            db.scalars(select(V2EffectIntent).where(V2EffectIntent.game_id == game.game_id))
         )
         attack = next(item for item in effects if item.effect_type == "attack")
         poison_effect = next(item for item in effects if item.effect_type == "poison")
@@ -1187,10 +1426,255 @@ def test_advanced_rule_executes_witch_policies_and_stops_before_sheriff_window(
             attack.target_player_id,
         }
         assert poison_effect.state == "resolved"
-    assert all(
-        context["influence"]["status"] == "disabled"
-        for context in model_client.contexts
+        normalized_targets = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                    V2GameRecordEvent.event_type == "model_decision_target_normalized",
+                )
+            )
+        )
+        assert any(
+            event.payload["reason"] == "required_target_missing"
+            and event.payload["normalized_target_player_id"] is not None
+            for event in normalized_targets
+        )
+        assert any(
+            event.payload["reason"] == "targetless_action"
+            and event.payload["normalized_target_player_id"] is None
+            for event in normalized_targets
+        )
+    assert all(context["influence"]["status"] == "disabled" for context in model_client.contexts)
+
+
+def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> None:
+    assert _leaders({"player-a": 1.0, "player-b": 1.0}) == [
+        "player-a",
+        "player-b",
+    ]
+    assert _leaders({"player-a": 1.0, "player-b": 1.5}) == ["player-b"]
+    assert _leaders({}) == []
+
+
+def test_complete_match_idiot_reveal_survives_and_loses_vote(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_advanced_create_request()).json()
+    repository = V2MatchRepository(session_factory)
+    with session_factory() as db:
+        idiot_id = db.scalar(
+            select(V2RoleAssignment.player_id).where(
+                V2RoleAssignment.game_id == created["game_id"],
+                V2RoleAssignment.role_key == "idiot",
+            )
+        )
+    assert idiot_id is not None
+
+    result = repository.resolve_exile(game_id=created["game_id"], player_id=idiot_id)
+
+    assert result.outcome == "idiot_revealed"
+    player = repository.snapshot(created["game_id"]).player(idiot_id)
+    assert player.alive is True
+    assert player.state["idiot_revealed"] is True
+    assert player.state["can_vote"] is False
+
+
+def test_complete_match_double_pre_sheriff_explosion_destroys_badge(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_advanced_create_request()).json()
+    repository = V2MatchRepository(session_factory)
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        assert game is not None and run is not None
+        game.ability_snapshot = {
+            **game.ability_snapshot,
+            "day_policies": {
+                **game.ability_snapshot["day_policies"],
+                "sheriff_badge_bomb_policy": "double",
+            },
+        }
+        game.phase_id = "day_1"
+        game.phase_state = "sheriff_election_open"
+        game.status = "ready"
+        run.status = "ready"
+        wolf_ids = list(
+            db.scalars(
+                select(V2RoleAssignment.player_id)
+                .where(
+                    V2RoleAssignment.game_id == created["game_id"],
+                    V2RoleAssignment.role_key == "werewolf",
+                )
+                .order_by(V2RoleAssignment.seat)
+                .limit(2)
+            )
+        )
+    assert len(wolf_ids) == 2
+
+    first = repository.record_pre_sheriff_explosion(
+        game_id=created["game_id"], player_id=wolf_ids[0]
     )
+    second = repository.record_pre_sheriff_explosion(
+        game_id=created["game_id"], player_id=wolf_ids[1]
+    )
+
+    snapshot = repository.snapshot(created["game_id"])
+    assert first == "election_interrupted"
+    assert second == "badge_destroyed"
+    assert snapshot.pre_sheriff_explosion_count == 2
+    assert snapshot.sheriff_badge_state == "destroyed"
+    assert all(not snapshot.player(player_id).alive for player_id in wolf_ids)
+
+
+def test_complete_match_badge_transfer_has_distinct_audit_event(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_advanced_create_request()).json()
+    repository = V2MatchRepository(session_factory)
+    with session_factory() as db:
+        wolf_ids = list(
+            db.scalars(
+                select(V2RoleAssignment.player_id)
+                .where(
+                    V2RoleAssignment.game_id == created["game_id"],
+                    V2RoleAssignment.role_key == "werewolf",
+                )
+                .order_by(V2RoleAssignment.seat)
+                .limit(2)
+            )
+        )
+    assert len(wolf_ids) == 2
+    repository.set_sheriff(
+        game_id=created["game_id"],
+        player_id=wolf_ids[0],
+        reason="elected_for_test",
+    )
+    repository.record_day_explosion(
+        game_id=created["game_id"],
+        player_id=wolf_ids[0],
+        stage="test",
+    )
+    repository.set_sheriff(
+        game_id=created["game_id"],
+        player_id=wolf_ids[1],
+        reason="dead_sheriff_badge_resolution",
+    )
+
+    with session_factory() as db:
+        event_row = db.scalar(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == created["game_id"],
+                V2GameRecordEvent.event_type == "sheriff_badge_transferred",
+            )
+            .order_by(V2GameRecordEvent.record_seq.desc())
+        )
+    assert event_row is not None
+    assert event_row.payload["from_player_id"] == wolf_ids[0]
+    assert event_row.payload["player_id"] == wolf_ids[1]
+
+
+def test_complete_match_hunter_shot_chain_resolves_every_new_death(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_advanced_create_request()).json()
+    repository = V2MatchRepository(session_factory)
+    with session_factory.begin() as db:
+        assignments = list(
+            db.scalars(
+                select(V2RoleAssignment)
+                .where(V2RoleAssignment.game_id == created["game_id"])
+                .order_by(V2RoleAssignment.seat)
+            )
+        )
+        first_hunter = next(item for item in assignments if item.role_key == "hunter")
+        second_hunter = next(
+            item for item in assignments if item.role_key not in {"hunter", "werewolf"}
+        )
+        final_target = next(
+            item
+            for item in assignments
+            if item.player_id not in {first_hunter.player_id, second_hunter.player_id}
+            and item.role_key != "werewolf"
+        )
+        second_hunter.role_key = "hunter"
+        second_hunter.role = "hunter"
+        first_hunter_id = first_hunter.player_id
+        second_hunter_id = second_hunter.player_id
+        final_target_id = final_target.player_id
+        first_state = db.get(
+            V2PlayerState,
+            (created["game_id"], first_hunter_id),
+        )
+        assert first_state is not None
+        first_state.alive = False
+        first_state.death_cause = "exile"
+
+    scripted_actions = _ScriptedDayActionEngine(
+        {
+            first_hunter_id: second_hunter_id,
+            second_hunter_id: final_target_id,
+        }
+    )
+    broadcaster = _CollectingBroadcaster()
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=scripted_actions,  # type: ignore[arg-type]
+    )
+
+    asyncio.run(
+        engine.resolve_pending_death_aftermath(
+            game_id=created["game_id"],
+            broadcaster=broadcaster,  # type: ignore[arg-type]
+        )
+    )
+
+    snapshot = repository.snapshot(created["game_id"])
+    assert scripted_actions.player_actions == [
+        first_hunter_id,
+        second_hunter_id,
+    ]
+    assert not snapshot.player(second_hunter_id).alive
+    assert not snapshot.player(final_target_id).alive
+    assert repository.pending_hunters(created["game_id"]) == ()
+    public_deaths = [
+        value
+        for audience, value in broadcaster.messages
+        if audience == "public" and value["type"] == "player.state_changed"
+    ]
+    assert [value["player_id"] for value in public_deaths] == [
+        second_hunter_id,
+        final_target_id,
+    ]
+    assert all(value["cause"] is None for value in public_deaths)
+
+
+def test_complete_match_max_rounds_fails_explicitly(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    repository = V2MatchRepository(session_factory)
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        match = db.get(V2MatchState, created["game_id"])
+        assert game is not None and run is not None and match is not None
+        game.phase_id = "day_8"
+        game.phase_state = "public_discussion_open"
+        game.status = "ready"
+        run.status = "ready"
+        match.round_no = 8
+
+    transition = repository.finish_day(
+        game_id=created["game_id"],
+        reason="day_actions_completed",
+    )
+
+    assert transition.phase_id == "day_8"
+    assert transition.phase_state == "failed"
+    with session_factory() as db:
+        match = db.get(V2MatchState, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        assert match is not None and run is not None
+        assert match.completion_reason == "max_rounds_exceeded"
+        assert run.status == "failed"
+        assert run.completed_at is not None
 
 
 def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
@@ -1229,7 +1713,7 @@ def _collect_until_observation(
         message_types.append(value["type"])
         if value["type"] == "speech.segment_committed":
             committed_texts.append(value["text"])
-        if value.get("live_state") == "awaiting_observation":
+        if value.get("live_state") in {"awaiting_observation", "failed"}:
             return
 
 
@@ -1254,9 +1738,7 @@ def _operator_control_headers(
     session = client.post("/api/v1/admin/dev-login")
     assert session.status_code == 200, session.text
     with session_factory.begin() as db:
-        user = db.scalar(
-            select(User).where(User.email == "v2-admin@example.test")
-        )
+        user = db.scalar(select(User).where(User.email == "v2-admin@example.test"))
         assert user is not None
         user.admin_role = "operator"
     return {

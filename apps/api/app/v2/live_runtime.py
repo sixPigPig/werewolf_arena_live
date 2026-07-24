@@ -21,12 +21,15 @@ from app.v2.contracts import (
     V2GamePhaseResponse,
     V2GodViewLiveSnapshotResponse,
     V2LiveSnapshotResponse,
+    V2MatchStateResponse,
 )
+from app.v2.day_engine import V2DayEngine
 from app.v2.god_view_projection import project_god_view_player_identities
-from app.v2.first_night_engine import V2FirstNightEngine
+from app.v2.first_night_engine import V2NightEngine
 from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
 from app.v2.night_repository import V2NightRepository
+from app.v2.match_repository import V2MatchRepository
 from app.v2.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
@@ -37,6 +40,7 @@ from app.v2.repository import V2ActionRepository, V2PresentationIdentity
 from app.v2.service import (
     current_presentation,
     get_game,
+    get_match_state,
     god_view_role_assignments,
     player_state_map,
     role_assignment_count,
@@ -78,10 +82,12 @@ class _GameChannel:
         *,
         game_id: str,
         snapshot_factory: Any,
+        game_starter: Callable[..., bool],
         engine: V2LiveFlowEngine,
     ) -> None:
         self.game_id = game_id
         self._snapshot_factory = snapshot_factory
+        self._game_starter = game_starter
         self._engine = engine
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, _Subscriber] = {}
@@ -111,9 +117,12 @@ class _GameChannel:
             _validate_ready(message, audience=subscriber.audience)
             if subscriber.ready:
                 return
-            await subscriber.websocket.send_json(self._snapshot(subscriber.audience))
             subscriber.ready = True
+            before_start = self._snapshot(subscriber.audience)
+            if before_start["live_state"] == "waiting_to_start":
+                self._game_starter(game_id=self.game_id, audience=subscriber.audience)
             snapshot = self._snapshot(subscriber.audience)
+            await subscriber.websocket.send_json(snapshot)
             if snapshot["live_state"] == "ready" and self._task is None:
                 self._task = asyncio.create_task(
                     self._engine.run(
@@ -145,6 +154,30 @@ class _GameChannel:
 
     async def broadcast_bytes(self, value: bytes, *, audience: str = "all") -> None:
         await self._broadcast(value, binary=True, audience=audience)
+
+    async def broadcast_audio(
+        self,
+        value: bytes,
+        *,
+        identity: V2PresentationIdentity,
+        next_sample_cursor: int,
+        audience: str = "all",
+    ) -> None:
+        async with self._lock:
+            targets = _audience_targets(audience)
+            failed: list[str] = []
+            for subscriber_id, subscriber in self._subscribers.items():
+                if not subscriber.ready or subscriber.audience not in targets:
+                    continue
+                try:
+                    await subscriber.websocket.send_bytes(value)
+                except Exception:
+                    failed.append(subscriber_id)
+            for subscriber_id in failed:
+                self._subscribers.pop(subscriber_id, None)
+            for target in targets:
+                self._current_identity[target] = identity
+                self._sample_cursor[target] = next_sample_cursor
 
     async def set_current(
         self,
@@ -195,11 +228,12 @@ class V2LiveRuntime:
         tts_client: V2TtsPort,
         voice_root: Path,
         sample_rate: int,
-        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration] | None = None,
+        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration],
     ) -> None:
         self._session_factory = session_factory
         self._repository = V2ActionRepository(session_factory)
         self._night_repository = V2NightRepository(session_factory)
+        self._match_repository = V2MatchRepository(session_factory)
         self._action_engine = V2ActionEngine(
             repository=self._repository,
             model_client=model_client,
@@ -208,15 +242,21 @@ class V2LiveRuntime:
             sample_rate=sample_rate,
             judge_configuration_provider=judge_configuration_provider,
         )
-        self._first_night_engine = V2FirstNightEngine(
+        self._first_night_engine = V2NightEngine(
             repository=self._night_repository,
+            action_engine=self._action_engine,
+        )
+        self._day_engine = V2DayEngine(
+            repository=self._match_repository,
             action_engine=self._action_engine,
         )
         self._engine = V2LiveFlowEngine(
             action_repository=self._repository,
             night_repository=self._night_repository,
+            match_repository=self._match_repository,
             action_engine=self._action_engine,
             first_night_engine=self._first_night_engine,
+            day_engine=self._day_engine,
         )
         self._channels: dict[str, _GameChannel] = {}
         self._channels_lock = asyncio.Lock()
@@ -275,6 +315,7 @@ class V2LiveRuntime:
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             game = get_game(db, game_id)
+            match = get_match_state(db, game_id)
             presentation = current_presentation(db, game_id, audience=audience)
             states = player_state_map(db, game_id)
             current = None
@@ -299,6 +340,7 @@ class V2LiveRuntime:
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
                     game_phase=_game_phase(game),
+                    match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
                     server_time=server_now(),
                     rule=project_public_rule_snapshot(game.rule_snapshot),
@@ -316,6 +358,7 @@ class V2LiveRuntime:
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
                     game_phase=_game_phase(game),
+                    match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
                     server_time=server_now(),
                     public_rule=project_public_rule_snapshot(game.rule_snapshot),
@@ -338,6 +381,7 @@ class V2LiveRuntime:
                 channel = _GameChannel(
                     game_id=game_id,
                     snapshot_factory=self.snapshot,
+                    game_starter=self._repository.start_game,
                     engine=self._engine,
                 )
                 self._channels[game_id] = channel
@@ -402,6 +446,7 @@ def _validate_ready(message: dict[str, Any], *, audience: V2Audience) -> None:
 
 def _live_state(status: str) -> str:
     if status in {
+        "waiting_to_start",
         "ready",
         "generating",
         "broadcasting",
@@ -419,4 +464,15 @@ def _game_phase(game: Any) -> V2GamePhaseResponse:
         phase_seq=game.phase_seq,
         phase_id=game.phase_id,
         phase_state=game.phase_state,
+    )
+
+
+def _match_state(match: Any) -> V2MatchStateResponse | None:
+    if match is None:
+        return None
+    return V2MatchStateResponse(
+        round_no=match.round_no,
+        sheriff_player_id=match.sheriff_player_id,
+        sheriff_badge_state=match.sheriff_badge_state,
+        winner=match.winner,
     )

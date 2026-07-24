@@ -1,12 +1,13 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
-  V2GamePresentation,
   V2GameControlResult,
+  V2GamePresentation,
   V2GameRecordDetail,
   V2GameRecordEvent,
   V2GameRecordList,
   V2GameRecordListItem,
   V2GameRun,
+  V2ModelRequest,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
 
@@ -15,7 +16,7 @@ export function parseV2GameControlResult(
 ): V2GameControlResult {
   const record = object(value);
   return {
-    action: literal(record.action, ["stop"]),
+    action: oneOf(record.action, ["stop"] as const),
     game_id: text(record.game_id),
     run_id: text(record.run_id),
     run_status: text(record.run_status),
@@ -45,8 +46,10 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     rule_snapshot: object(record.rule_snapshot),
     players_snapshot: array(record.players_snapshot).map(object),
     ability_snapshot: object(record.ability_snapshot),
+    match_state: record.match_state === null ? null : object(record.match_state),
     runs: array(record.runs).map(parseRun),
     events: array(record.events).map(parseEvent),
+    model_requests: array(record.model_requests).map(parseModelRequest),
     presentations: array(record.presentations).map(parsePresentation),
     voice_assets: array(record.voice_assets).map(parseVoiceAsset),
     player_states: array(record.player_states).map(object),
@@ -82,7 +85,7 @@ function parseRun(value: unknown): V2GameRun {
     run_id: text(record.run_id),
     attempt_no: integer(record.attempt_no, 1),
     status: text(record.status),
-    started_at: date(record.started_at),
+    started_at: nullableDate(record.started_at),
     completed_at: record.completed_at === null ? null : date(record.completed_at),
     stop_requested_at: nullableDate(record.stop_requested_at),
   };
@@ -148,6 +151,48 @@ function parseVoiceAsset(value: unknown): V2VoiceAsset {
   };
 }
 
+function parseModelRequest(value: unknown): V2ModelRequest {
+  const record = object(value);
+  return {
+    attempt_id: text(record.attempt_id),
+    action_id: text(record.action_id),
+    run_id: text(record.run_id),
+    phase_id: text(record.phase_id),
+    action_type: text(record.action_type),
+    actor_kind: text(record.actor_kind),
+    actor_id: text(record.actor_id),
+    audience: text(record.audience),
+    request_kind: text(record.request_kind),
+    model_id: nullableText(record.model_id),
+    model_provider: nullableText(record.model_provider),
+    judge_configuration_version: nullableInteger(
+      record.judge_configuration_version,
+      0,
+    ),
+    status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
+    request_payload:
+      record.request_payload === null ? null : object(record.request_payload),
+    input_source: oneOf(
+      record.input_source,
+      ["persisted", "reconstructed", "unavailable"] as const,
+    ),
+    raw_response: nullableText(record.raw_response),
+    parsed_output:
+      record.parsed_output === null ? null : object(record.parsed_output),
+    output_source: oneOf(
+      record.output_source,
+      ["persisted", "legacy_inferred", "unavailable"] as const,
+    ),
+    provider_request_id: nullableText(record.provider_request_id),
+    first_token_ms: nullableInteger(record.first_token_ms, 0),
+    completed_ms: nullableInteger(record.completed_ms, 0),
+    failure_kind: nullableText(record.failure_kind),
+    failure_code: nullableText(record.failure_code),
+    started_at: date(record.started_at),
+    completed_at: nullableDate(record.completed_at),
+  };
+}
+
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
   return value as Record<string, unknown>;
@@ -176,6 +221,11 @@ function nullableText(value: unknown): string | null {
   return value === null ? null : text(value);
 }
 
+function boolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw invalid();
+  return value;
+}
+
 function date(value: unknown): string {
   const result = text(value);
   if (!Number.isFinite(Date.parse(result))) throw invalid();
@@ -186,17 +236,17 @@ function nullableDate(value: unknown): string | null {
   return value === null ? null : date(value);
 }
 
-function boolean(value: unknown): boolean {
-  if (typeof value !== "boolean") throw invalid();
-  return value;
-}
-
-function literal<const T extends string>(
+function oneOf<const T extends readonly string[]>(
   value: unknown,
-  values: readonly T[],
-): T {
-  if (!values.includes(value as T)) throw invalid();
-  return value as T;
+  options: T,
+): T[number] {
+  if (
+    typeof value !== "string" ||
+    !(options as readonly string[]).includes(value)
+  ) {
+    throw invalid();
+  }
+  return value as T[number];
 }
 
 function invalid() {

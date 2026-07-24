@@ -19,11 +19,11 @@ from app.v2.models import (
 
 ACTIVE_V2_GAME_STATES = frozenset(
     {
+        "waiting_to_start",
         "ready",
         "generating",
         "broadcasting",
         "finalizing",
-        "awaiting_observation",
     }
 )
 
@@ -86,11 +86,7 @@ def request_v2_game_stop(
             replayed=True,
         )
 
-    game = db.scalar(
-        select(V2GameRecord)
-        .where(V2GameRecord.game_id == game_id)
-        .with_for_update()
-    )
+    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2GameControlNotFound
     run = db.get(V2GameRun, game.current_run_id)

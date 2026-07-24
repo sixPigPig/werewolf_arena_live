@@ -163,11 +163,7 @@ class V2TtsClient:
                 except V2TtsError as exc:
                     if exc.code != "tts_receive_timeout":
                         raise
-                    code = (
-                        "tts_audio_idle_timeout"
-                        if received_audio
-                        else "tts_first_audio_timeout"
-                    )
+                    code = "tts_audio_idle_timeout" if received_audio else "tts_first_audio_timeout"
                     raise V2TtsError(code) from exc
                 if frame.message_type == _AUDIO_SERVER:
                     if frame.payload:
