@@ -94,14 +94,20 @@ describe("LiveV2Page", () => {
     expect(screen.getByText("1号")).toBeInTheDocument();
     expect(screen.getByText("2号")).toBeInTheDocument();
     expect(screen.getByText("身份已私密封存 · 2 人")).toBeInTheDocument();
-    expect(screen.getByText(/普通直播不会展示任何座位对应的角色或阵营/)).toBeInTheDocument();
+    expect(screen.getByText(/导演全知会在对应私密场景按需展示身份/)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(sourceStart).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "进入实时观赛" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "以导演全知入场" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /导演全知.*默认推荐/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: /推理挑战.*自己破局/ }),
+    ).toHaveAttribute("aria-pressed", "false");
     expect(
       screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
-    ).toHaveAttribute("data-connection-state", "idle");
-    expect(screen.getByText(/只接收当前与未来内容/)).toBeInTheDocument();
+    ).toHaveAttribute("data-viewing-mode", "director");
+    expect(screen.getByText(/只接收当前与未来/)).toBeInTheDocument();
   });
 
   it("shows a canceled REST snapshot as terminal without opening realtime", async () => {
@@ -117,7 +123,7 @@ describe("LiveV2Page", () => {
     expect(await screen.findByText("本局已由管理员终止")).toBeInTheDocument();
     expect(screen.getByText(/不会追播或恢复已打断的内容/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "进入实时观赛" }),
+      screen.queryByRole("button", { name: "以导演全知入场" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "重新接入当前直播" }),
@@ -138,24 +144,98 @@ describe("LiveV2Page", () => {
     expect(sourceStart).not.toHaveBeenCalled();
   });
 
-  it("offers the separately credentialed God View without starting realtime", async () => {
+  it("does not expose the credentialed analysis console from mobile live", async () => {
     window.sessionStorage.setItem(`live-v2:god-view:${gameId}`, "a".repeat(43));
     renderPage();
 
-    const link = await screen.findByRole("link", { name: /进入上帝视角/ });
-    expect(link).toHaveAttribute(
-      "href",
-      `/v2/games/${gameId}/live/god#access_token=${"a".repeat(43)}`,
-    );
+    expect(await screen.findByText("演出正在此刻发生")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /进入上帝视角/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("持有全知凭证")).not.toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(sourceStart).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the directed live channel and follows private scenes without exposing diagnostics", async () => {
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "以导演全知入场" }),
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url.endsWith(`/api/v2/director/games/${gameId}/ws`)).toBe(
+      true,
+    );
+
+    act(() => {
+      socket.open();
+      socket.emitJson(directorSnapshot("ready"));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(socket.send.mock.calls[0][0]))).toEqual({
+      protocol_version: 1,
+      type: "director.ready",
+      audio: { encoding: "pcm_s16le", sample_rate: 24000, channels: 1 },
+    });
+
+    act(() => {
+      socket.emitJson({
+        ...base("director.scene_changed"),
+        scene_kind: "werewolves",
+        action_id: actionId,
+        action_type: "werewolf_kill_vote",
+        ability_id: "werewolf_kill",
+        actor_player_id: "profile-1",
+      });
+      socket.emitJson({
+        ...base("ability.progress_changed"),
+        ability_id: "werewolf_kill",
+        status: "selected",
+        actor_player_id: "profile-1",
+        target_player_id: "profile-2",
+        round_no: 1,
+      });
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        phase_id: "first_night",
+        actor: { kind: "player", id: "profile-1" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "```json\n{\"target_player_id\":\"profile-2\",\"speech\":\"今晚先试探白石。\"}\n```",
+      });
+    });
+
+    expect(await screen.findByText("狼人房间")).toBeInTheDocument();
+    expect(screen.getByText("阿青 → 白石")).toBeInTheDocument();
+    expect(screen.getByText("今晚先试探白石。")).toBeInTheDocument();
+    expect(screen.queryByText(/target_player_id/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
+    ).toHaveAttribute("data-viewing-mode", "director");
+    expect(
+      screen.getByText("狼人", { selector: ".mobile-v2-stage-subtitle em" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/model_request|prompt|provider/i)).not.toBeInTheDocument();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("plays the preview-only opening and nightfall in order", async () => {
     renderPage();
 
     expect(FakeWebSocket.instances).toHaveLength(0);
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     expect(socket.url.endsWith(`/api/v2/live/games/${gameId}/ws`)).toBe(true);
@@ -260,7 +340,7 @@ describe("LiveV2Page", () => {
 
   it("does not replay a completed sentence after reconnect", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
 
@@ -278,7 +358,7 @@ describe("LiveV2Page", () => {
 
   it("labels a public player presentation with the frozen display name", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -320,7 +400,7 @@ describe("LiveV2Page", () => {
 
   it("shows only safe night progress and public dawn deaths", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -371,7 +451,7 @@ describe("LiveV2Page", () => {
 
   it("keeps later-round rhythm, public sheriff state, and the final winner on stage", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -436,7 +516,7 @@ describe("LiveV2Page", () => {
 
   it("fails closed if a private death cause reaches the public theater", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -462,7 +542,7 @@ describe("LiveV2Page", () => {
 
   it("presents an operator stop as an interrupted stage without enabling replay", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -486,7 +566,7 @@ describe("LiveV2Page", () => {
 
   it("stops the current presentation when the operator cancels the game", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "进入实时观赛" }));
+    await enterChallenge();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -548,6 +628,17 @@ describe("LiveV2Page", () => {
   });
 });
 
+async function enterChallenge() {
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: /推理挑战.*自己破局/,
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "以推理挑战入场" }),
+  );
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -560,6 +651,71 @@ function renderPage() {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+}
+
+function directorSnapshot(liveState: string) {
+  return {
+    ...base("director.live_snapshot"),
+    api_version: "v2",
+    audience: "spectator_directed",
+    live_state: liveState,
+    game_phase: {
+      phase_seq: 2,
+      phase_id: "first_night",
+      phase_state: "night_running",
+    },
+    match_state: {
+      round_no: 1,
+      sheriff_player_id: null,
+      sheriff_badge_state: "disabled",
+      winner: null,
+    },
+    latest_presentation_seq: 0,
+    rule: {
+      rule_id: "classic_2",
+      name: "测试两人局",
+      version: "1",
+      player_count: 2,
+      roles: [
+        { role: "狼人", count: 1 },
+        { role: "村民", count: 1 },
+      ],
+      max_rounds: 8,
+      sheriff_enabled: false,
+      werewolf_self_explosion_enabled: true,
+      exile_last_words_enabled: true,
+    },
+    players: [
+      {
+        seat: 1,
+        player_id: "profile-1",
+        display_name: "阿青",
+        avatar_url: null,
+        role: "werewolf",
+        team: "werewolves",
+        alive: true,
+        death_cause: null,
+      },
+      {
+        seat: 2,
+        player_id: "profile-2",
+        display_name: "白石",
+        avatar_url: null,
+        role: "villager",
+        team: "villagers",
+        alive: true,
+        death_cause: null,
+      },
+    ],
+    current_scene: {
+      scene_kind: "nightfall",
+      action_id: null,
+      action_type: null,
+      ability_id: null,
+      actor_player_id: null,
+    },
+    current_presentation: null,
+  };
 }
 
 function snapshot(

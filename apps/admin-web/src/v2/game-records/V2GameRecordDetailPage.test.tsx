@@ -14,6 +14,7 @@ import {
 } from "react-router-dom";
 
 import V2GameRecordDetailPage from "@/v2/game-records/V2GameRecordDetailPage";
+import { liveRefreshInterval } from "@/v2/game-records/live-refresh";
 
 vi.mock("@/features/auth/session-context", () => ({
   useAdminSession: () => ({ session: null }),
@@ -41,6 +42,28 @@ const detail = {
   players_snapshot: [],
   ability_snapshot: { compiler_version: 1 },
   match_state: { day_number: 0, alive_player_ids: [] },
+  player_identities: [
+    {
+      seat: 1,
+      player_id: "profile-1",
+      display_name: "阿青",
+      avatar_url: null,
+      role: "seer",
+      team: "village",
+      alive: true,
+      death_cause: null,
+    },
+    {
+      seat: 2,
+      player_id: "profile-2",
+      display_name: "白石",
+      avatar_url: null,
+      role: "werewolf",
+      team: "werewolves",
+      alive: false,
+      death_cause: "exile",
+    },
+  ],
   runs: [
     {
       run_id: runId,
@@ -171,7 +194,8 @@ const detail = {
       segment_index: 0,
       source_event_id: 6,
       state: "closed",
-      subtitle_text: "夜幕将至，九位玩家请准备。",
+      subtitle_text:
+        '```json\n{"target_player_id":null,"speech":"夜幕将至，九位玩家请准备。"}\n```',
       voice_asset_id: null,
       audio_duration_ms: null,
       created_at: "2026-07-23T08:00:02Z",
@@ -180,9 +204,39 @@ const detail = {
   ],
   voice_assets: [],
   player_states: [],
-  action_windows: [],
-  ability_instances: [],
-  ability_activations: [],
+  action_windows: [
+    {
+      window_id: "v2_window_first_night",
+      run_id: runId,
+      window_seq: 1,
+      window_type: "night",
+      state: "closed",
+      plan: [],
+      result: {
+        peaceful: false,
+        deaths: [{ player_id: "profile-2", cause: "werewolf_attack" }],
+        attack_prevented_by: null,
+      },
+    },
+  ],
+  ability_instances: [
+    {
+      ability_instance_id: "v2_ability_seer",
+      ability_id: "seer.investigate",
+    },
+  ],
+  ability_activations: [
+    {
+      activation_id: "v2_activation_seer",
+      window_id: "v2_window_first_night",
+      ability_instance_id: "v2_ability_seer",
+      actor_player_id: "profile-1",
+      status: "completed",
+      skip_reason: null,
+      decision: { target_player_id: "profile-2" },
+      result: { alignment: "werewolves" },
+    },
+  ],
   effect_intents: [],
   knowledge_facts: [],
 };
@@ -263,6 +317,24 @@ describe("V2 game record detail workspace", () => {
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const livePanel = screen.getByRole("region", { name: "实时全知态势" });
+    expect(
+      within(livePanel).getByRole("heading", { name: /实时全知态势/ }),
+    ).toBeVisible();
+    expect(within(livePanel).getByText("完整身份总览")).toBeVisible();
+    expect(within(livePanel).getByText("预言家")).toBeVisible();
+    expect(within(livePanel).getByText("狼人")).toBeVisible();
+    expect(within(livePanel).getByText("投票放逐")).toBeVisible();
+    expect(within(livePanel).getByText("预言家查验")).toBeVisible();
+    expect(within(livePanel).getByText("1号 阿青 → 2号 白石")).toBeVisible();
+    expect(within(livePanel).getByText("查验为狼人阵营")).toBeVisible();
+    expect(
+      within(livePanel).getByText("出局：2号 白石（狼人袭击）"),
+    ).toBeVisible();
+    expect(
+      within(livePanel).getByText("夜幕将至，九位玩家请准备。"),
+    ).toBeVisible();
+    expect(within(livePanel).queryByText(/target_player_id/)).not.toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
@@ -303,5 +375,12 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("refreshes active games every two seconds and stops polling terminal games", () => {
+    expect(liveRefreshInterval("waiting_to_start")).toBe(2_000);
+    expect(liveRefreshInterval("broadcasting")).toBe(2_000);
+    expect(liveRefreshInterval("awaiting_observation")).toBe(false);
+    expect(liveRefreshInterval("canceled")).toBe(false);
   });
 });

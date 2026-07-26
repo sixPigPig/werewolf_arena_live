@@ -47,7 +47,6 @@ import {
   publicPlayerProfilesQueryKey,
 } from "../lib/player-profile-query-keys";
 import { createV2Game } from "../v2/api";
-import { saveGodViewAccessToken } from "../v2/god-view/access";
 
 export function GamesPage() {
   const navigate = useNavigate();
@@ -90,7 +89,6 @@ export function GamesPage() {
     mutationFn: (request: Parameters<typeof createV2Game>[0]) =>
       createV2Game(request),
     onSuccess: (game) => {
-      saveGodViewAccessToken(game.game_id, game.god_view_access_token);
       navigate(`/v2/games/${game.game_id}/live`);
     },
   });

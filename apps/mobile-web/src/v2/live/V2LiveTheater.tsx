@@ -1,8 +1,11 @@
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
+  Clapperboard,
   ChevronLeft,
   Crown,
+  Eye,
+  EyeOff,
   Gavel,
   Moon,
   Radio,
@@ -12,7 +15,11 @@ import {
 } from "lucide-react";
 
 import type {
+  V2AbilityProgress,
+  V2DirectorScene,
   V2GamePhase,
+  V2GodViewNightResolved,
+  V2GodViewPlayerIdentity,
   V2LiveState,
   V2MatchState,
   V2Presentation,
@@ -20,20 +27,27 @@ import type {
 } from "../contracts";
 
 export type V2ConnectionState = "idle" | "connecting" | "connected" | "failed";
+export type V2ViewingMode = "director" | "challenge";
 
 type V2LiveTheaterProps = {
   audioActive: boolean;
   connectionState: V2ConnectionState;
+  directorAbility: V2AbilityProgress | null;
+  directorPlayers: V2GodViewPlayerIdentity[];
+  directorResolution: V2GodViewNightResolved | null;
+  directorScene: V2DirectorScene | null;
   error: string | null;
   gamePhase: V2GamePhase | null;
   liveState: V2LiveState | null;
   matchState: V2MatchState | null;
   onEnter: () => void;
+  onViewingModeChange: (mode: V2ViewingMode) => void;
   presentation: V2Presentation | null;
   processLabel: string;
   publicPlayers: V2PublicPlayerSeat[];
   reactingPlayerIds: ReadonlySet<string>;
   ruleName: string;
+  viewingMode: V2ViewingMode;
 };
 
 type StageTone = "opening" | "night" | "day" | "vote" | "terminal" | "failed";
@@ -41,16 +55,22 @@ type StageTone = "opening" | "night" | "day" | "vote" | "terminal" | "failed";
 export function V2LiveTheater({
   audioActive,
   connectionState,
+  directorAbility,
+  directorPlayers,
+  directorResolution,
+  directorScene,
   error,
   gamePhase,
   liveState,
   matchState,
   onEnter,
+  onViewingModeChange,
   presentation,
   processLabel,
   publicPlayers,
   reactingPlayerIds,
   ruleName,
+  viewingMode,
 }: V2LiveTheaterProps) {
   const tone = stageTone(gamePhase, liveState, error);
   const activePlayer =
@@ -65,6 +85,13 @@ export function V2LiveTheater({
   const { left, right } = splitPlayers(publicPlayers);
   const terminal = terminalPresentation(liveState, matchState, error);
   const stageState = connectionLabel(connectionState, liveState);
+  const activeIdentity =
+    activePlayer === null
+      ? null
+      : directorPlayers.find(
+          (player) => player.player_id === activePlayer.player_id,
+        ) ?? null;
+  const abilityTargetId = directorAbility?.target_player_id ?? null;
 
   return (
     <section
@@ -80,6 +107,7 @@ export function V2LiveTheater({
       aria-label="Live V2 实时演出舞台"
       data-connection-state={connectionState}
       data-live-state={liveState ?? "unknown"}
+      data-viewing-mode={viewingMode}
     >
       <header className="mobile-v2-theater-top">
         <Link aria-label="返回对局大厅" className="mobile-v2-theater-back" to="/games">
@@ -87,7 +115,10 @@ export function V2LiveTheater({
         </Link>
         <div className="mobile-v2-theater-title">
           <strong>{ruleName}</strong>
-          <span>{phaseTitle(gamePhase, matchState)}</span>
+          <span>
+            {phaseTitle(gamePhase, matchState)} ·{" "}
+            {viewingMode === "director" ? "导演全知" : "推理挑战"}
+          </span>
         </div>
         <div className={`mobile-v2-theater-signal is-${connectionState}`}>
           <Radio aria-hidden="true" />
@@ -99,12 +130,21 @@ export function V2LiveTheater({
 
       <div className="mobile-v2-stage-world">
         <div className="mobile-v2-stage-atmosphere" aria-hidden="true" />
+        {viewingMode === "director" && connectionState !== "idle" ? (
+          <DirectorSceneRibbon
+            ability={directorAbility}
+            players={directorPlayers}
+            resolution={directorResolution}
+            scene={directorScene}
+          />
+        ) : null}
         <CastColumn
           activePlayerId={activePlayer?.player_id ?? null}
           matchState={matchState}
           players={left}
           reactingPlayerIds={reactingPlayerIds}
           side="left"
+          targetedPlayerId={abilityTargetId}
         />
 
         <article
@@ -132,10 +172,14 @@ export function V2LiveTheater({
           players={right}
           reactingPlayerIds={reactingPlayerIds}
           side="right"
+          targetedPlayerId={abilityTargetId}
         />
 
         <StageSubtitle
           actorName={actorName}
+          actorRole={
+            viewingMode === "director" ? activeIdentity?.role ?? null : null
+          }
           audioActive={audioActive}
           presentation={presentation}
           processLabel={processLabel}
@@ -144,9 +188,13 @@ export function V2LiveTheater({
         {connectionState === "idle" && !terminal ? (
           <div className="mobile-v2-stage-entry">
             <strong>演出正在此刻发生</strong>
-            <p>入场后只接收当前与未来内容，不会补播已经结束的片段。</p>
+            <p>选择你的观赛规则。入场后只接收当前与未来，不会补播。</p>
+            <ViewingModePicker
+              onChange={onViewingModeChange}
+              value={viewingMode}
+            />
             <button className="mobile-v2-stage-button" onClick={onEnter} type="button">
-              进入实时观赛
+              以{viewingMode === "director" ? "导演全知" : "推理挑战"}入场
             </button>
           </div>
         ) : null}
@@ -190,6 +238,7 @@ type CastColumnProps = {
   players: V2PublicPlayerSeat[];
   reactingPlayerIds: ReadonlySet<string>;
   side: "left" | "right";
+  targetedPlayerId: string | null;
 };
 
 function CastColumn({
@@ -198,6 +247,7 @@ function CastColumn({
   players,
   reactingPlayerIds,
   side,
+  targetedPlayerId,
 }: CastColumnProps) {
   return (
     <ol className={`mobile-v2-cast mobile-v2-cast-${side}`} aria-label={`${side === "left" ? "左" : "右"}侧玩家站位`}>
@@ -216,6 +266,7 @@ function CastColumn({
             className={[
               "mobile-v2-cast-member",
               activePlayerId === player.player_id ? "is-speaking" : "",
+              targetedPlayerId === player.player_id ? "is-targeted" : "",
               player.alive ? "is-alive" : "is-dead",
               reactingPlayerIds.has(player.player_id) ? "is-reacting" : "",
               isSheriff ? "is-sheriff" : "",
@@ -238,6 +289,7 @@ function CastColumn({
 
 type StageSubtitleProps = {
   actorName: string | null;
+  actorRole: string | null;
   audioActive: boolean;
   presentation: V2Presentation | null;
   processLabel: string;
@@ -245,6 +297,7 @@ type StageSubtitleProps = {
 
 function StageSubtitle({
   actorName,
+  actorRole,
   audioActive,
   presentation,
   processLabel,
@@ -252,7 +305,10 @@ function StageSubtitle({
   return (
     <footer className="mobile-v2-stage-subtitle" aria-live="polite">
       <div>
-        <strong>{actorName ?? "实时舞台"}</strong>
+        <strong>
+          {actorName ?? "实时舞台"}
+          {actorRole ? <em>{roleLabel(actorRole)}</em> : null}
+        </strong>
         <span className={audioActive ? "is-active" : undefined}>
           <Volume2 aria-hidden="true" />
           {audioActive ? "正在播放" : presentation ? "等待声音" : "候场"}
@@ -264,6 +320,147 @@ function StageSubtitle({
       </blockquote>
       <small>{processLabel}</small>
     </footer>
+  );
+}
+
+type ViewingModePickerProps = {
+  onChange: (mode: V2ViewingMode) => void;
+  value: V2ViewingMode;
+};
+
+function ViewingModePicker({ onChange, value }: ViewingModePickerProps) {
+  return (
+    <div
+      aria-label="选择观赛模式"
+      className="mobile-v2-viewing-modes"
+      role="group"
+    >
+      <button
+        aria-pressed={value === "director"}
+        className={value === "director" ? "is-selected" : undefined}
+        onClick={() => onChange("director")}
+        type="button"
+      >
+        <Eye aria-hidden="true" />
+        <span>
+          <strong>导演全知</strong>
+          <small>跟随私密场景，默认推荐</small>
+        </span>
+      </button>
+      <button
+        aria-pressed={value === "challenge"}
+        className={value === "challenge" ? "is-selected" : undefined}
+        onClick={() => onChange("challenge")}
+        type="button"
+      >
+        <EyeOff aria-hidden="true" />
+        <span>
+          <strong>推理挑战</strong>
+          <small>只看公开信息，自己破局</small>
+        </span>
+      </button>
+    </div>
+  );
+}
+
+type DirectorSceneRibbonProps = {
+  ability: V2AbilityProgress | null;
+  players: V2GodViewPlayerIdentity[];
+  resolution: V2GodViewNightResolved | null;
+  scene: V2DirectorScene | null;
+};
+
+function DirectorSceneRibbon({
+  ability,
+  players,
+  resolution,
+  scene,
+}: DirectorSceneRibbonProps) {
+  return (
+    <aside className="mobile-v2-director-scene" aria-live="polite">
+      <Clapperboard aria-hidden="true" />
+      <div>
+        <span>导演镜头</span>
+        <strong>{sceneLabel(scene)}</strong>
+        <small>{directorSceneSummary(ability, resolution, players, scene)}</small>
+      </div>
+    </aside>
+  );
+}
+
+function directorSceneSummary(
+  ability: V2AbilityProgress | null,
+  resolution: V2GodViewNightResolved | null,
+  players: V2GodViewPlayerIdentity[],
+  scene: V2DirectorScene | null,
+): string {
+  if (resolution?.deaths.length) {
+    return `夜间结算：${resolution.deaths
+      .map((death) => playerName(players, death.player_id))
+      .join("、")}`;
+  }
+  if (resolution?.attack_prevented_by) {
+    return `致命行动被${playerName(players, resolution.attack_prevented_by)}阻止`;
+  }
+  if (ability) {
+    const actor = ability.actor_player_id
+      ? playerName(players, ability.actor_player_id)
+      : roleLabel(scene?.ability_id ?? "");
+    const target = ability.target_player_id
+      ? playerName(players, ability.target_player_id)
+      : "未选择目标";
+    return `${actor} → ${target}`;
+  }
+  if (scene?.actor_player_id) {
+    const actor = players.find(
+      (player) => player.player_id === scene.actor_player_id,
+    );
+    return actor
+      ? `${actor.display_name} · ${roleLabel(actor.role)}正在行动`
+      : "私密行动正在此刻发生";
+  }
+  return scene?.scene_kind === "public_stage"
+    ? "所有观众正在观看同一个公开舞台"
+    : "镜头将跟随当前关键行动";
+}
+
+function playerName(
+  players: V2GodViewPlayerIdentity[],
+  playerId: string,
+): string {
+  return (
+    players.find((player) => player.player_id === playerId)?.display_name ??
+    playerId
+  );
+}
+
+function sceneLabel(scene: V2DirectorScene | null): string {
+  if (!scene) return "等待下一幕";
+  return {
+    opening: "开幕舞台",
+    public_stage: "公共舞台",
+    nightfall: "夜幕转场",
+    werewolves: "狼人房间",
+    guard: "守卫行动",
+    seer: "预言家查验",
+    witch: "女巫用药",
+    hunter: "猎人反击",
+    dawn: "黎明公布",
+    terminal: "终局舞台",
+  }[scene.scene_kind];
+}
+
+function roleLabel(role: string): string {
+  return (
+    {
+      werewolf: "狼人",
+      villager: "平民",
+      seer: "预言家",
+      witch: "女巫",
+      guard: "守卫",
+      hunter: "猎人",
+      judge: "法官",
+    }[role] ?? role
   );
 }
 

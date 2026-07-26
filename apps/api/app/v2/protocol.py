@@ -6,6 +6,7 @@ import struct
 from typing import Any
 
 from app.v2.repository import V2PhaseTransition, V2PresentationIdentity
+from app.v2.contracts import V2DirectorSceneResponse
 
 
 PROTOCOL_VERSION = 1
@@ -91,6 +92,20 @@ def game_phase_changed(transition: V2PhaseTransition) -> dict[str, Any]:
             "phase_id": transition.phase_id,
             "phase_state": transition.phase_state,
         },
+    )
+
+
+def director_scene_changed(
+    *,
+    game_id: str,
+    run_id: str,
+    scene: V2DirectorSceneResponse,
+) -> dict[str, Any]:
+    return control_message(
+        message_type="director.scene_changed",
+        game_id=game_id,
+        run_id=run_id,
+        fields=scene.model_dump(mode="json"),
     )
 
 

@@ -349,6 +349,10 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
     assert created["game_id"].startswith("v2_game_")
     assert created["run_id"].startswith("v2_run_")
     assert created["websocket_url"].endswith(f"/{created['game_id']}/ws")
+    assert created["director_snapshot_url"].endswith(
+        f"/{created['game_id']}/snapshot"
+    )
+    assert created["director_websocket_url"].endswith(f"/{created['game_id']}/ws")
     assert created["god_view_snapshot_url"].endswith(f"/{created['game_id']}/identity-snapshot")
     assert created["god_view_websocket_url"].endswith(f"/{created['game_id']}/ws")
     assert len(created["god_view_access_token"]) >= 32
@@ -573,6 +577,43 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         for player in public_players
     )
 
+    director = client.get(created["director_snapshot_url"])
+    assert director.status_code == 200, director.text
+    assert director.headers["cache-control"] == "private, no-store"
+    director_payload = director.json()
+    assert set(director_payload) == {
+        "protocol_version",
+        "type",
+        "api_version",
+        "audience",
+        "game_id",
+        "run_id",
+        "live_state",
+        "game_phase",
+        "match_state",
+        "latest_presentation_seq",
+        "server_time",
+        "rule",
+        "players",
+        "current_scene",
+        "current_presentation",
+    }
+    assert director_payload["type"] == "director.live_snapshot"
+    assert director_payload["audience"] == "spectator_directed"
+    assert director_payload["current_scene"] == {
+        "scene_kind": "opening",
+        "action_id": None,
+        "action_type": None,
+        "ability_id": None,
+        "actor_player_id": None,
+    }
+    assert [item["role"] for item in director_payload["players"]]
+    serialized_director = json.dumps(director_payload)
+    assert "private-model-id" not in serialized_director
+    assert "private personality prompt" not in serialized_director
+    assert "private-strategy" not in serialized_director
+    assert "private-speaker" not in serialized_director
+
     god_view_url = created["god_view_snapshot_url"]
     assert client.get(god_view_url).status_code == 403
     assert (
@@ -634,6 +675,26 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
     assert "private personality prompt" not in serialized_god_view
     assert "private-strategy" not in serialized_god_view
     assert "private-speaker" not in serialized_god_view
+
+
+def test_director_websocket_starts_with_its_own_ready_contract(v2_context) -> None:
+    client, _session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_lobby_create_request()).json()
+    model_client = client.app.state.v2_test_model_client
+    model_client.release.clear()
+
+    with client.websocket_connect(created["director_websocket_url"]) as socket:
+        initial = socket.receive_json()
+        assert initial["type"] == "director.live_snapshot"
+        assert initial["audience"] == "spectator_directed"
+        assert initial["live_state"] == "waiting_to_start"
+        assert [item["role"] for item in initial["players"]]
+
+        socket.send_json(_ready_message("director.ready"))
+        started = socket.receive_json()
+        assert started["type"] == "director.live_snapshot"
+        assert started["audience"] == "spectator_directed"
+        assert started["live_state"] == "ready"
 
 
 def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_context) -> None:
@@ -811,6 +872,51 @@ def test_join_sample_cursor_is_atomic_with_audio_broadcast() -> None:
             next_sample_cursor=480,
         )
         assert second.binary_messages == [b"second-frame"]
+
+    asyncio.run(scenario())
+
+
+def test_director_channel_receives_public_and_private_stage_events() -> None:
+    async def scenario() -> None:
+        channel = _GameChannel(
+            game_id="v2_game_0123456789abcdef",
+            snapshot_factory=lambda **values: {
+                "live_state": "failed",
+                "audience": values["audience"],
+            },
+            game_starter=lambda **_values: False,
+            engine=object(),  # type: ignore[arg-type]
+        )
+        public = _BlockingWebSocket()
+        director = _BlockingWebSocket()
+        god = _BlockingWebSocket()
+        public_id = await channel.connect(public, audience="player_public")  # type: ignore[arg-type]
+        director_id = await channel.connect(  # type: ignore[arg-type]
+            director,
+            audience="spectator_directed",
+        )
+        god_id = await channel.connect(god, audience="spectator_god_view")  # type: ignore[arg-type]
+        await channel.ready(public_id, _ready_message("client.ready"))
+        await channel.ready(director_id, _ready_message("director.ready"))
+        await channel.ready(god_id, _ready_message("god_view.ready"))
+        public.json_messages.clear()
+        director.json_messages.clear()
+        god.json_messages.clear()
+
+        public_event = {"type": "public"}
+        private_event = {"type": "private"}
+        director_event = {"type": "director"}
+        await channel.broadcast_json(public_event, audience="public")
+        await channel.broadcast_json(private_event, audience="god_view")
+        await channel.broadcast_json(director_event, audience="director")
+
+        assert public.json_messages == [public_event]
+        assert director.json_messages == [
+            public_event,
+            private_event,
+            director_event,
+        ]
+        assert god.json_messages == [private_event]
 
     asyncio.run(scenario())
 
@@ -1033,6 +1139,53 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
         assert audio.status_code == 200
         assert audio.headers["content-type"] == "audio/wav"
         assert audio.content[:4] == b"RIFF"
+
+
+def test_admin_v2_record_exposes_complete_private_identity_table(v2_context) -> None:
+    client, _session_factory, _voice_root = v2_context
+    identifiers = client.post(
+        "/api/v2/games",
+        json=_lobby_create_request(),
+    ).json()
+    session = client.post("/api/v1/admin/dev-login")
+    assert session.status_code == 200, session.text
+
+    detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
+
+    assert detail.status_code == 200, detail.text
+    identities = detail.json()["player_identities"]
+    assert len(identities) == 2
+    assert [
+        {
+            "seat": item["seat"],
+            "player_id": item["player_id"],
+            "display_name": item["display_name"],
+            "alive": item["alive"],
+            "death_cause": item["death_cause"],
+        }
+        for item in identities
+    ] == [
+        {
+            "seat": 1,
+            "player_id": "profile-1",
+            "display_name": "阿青",
+            "alive": True,
+            "death_cause": None,
+        },
+        {
+            "seat": 2,
+            "player_id": "profile-2",
+            "display_name": "白石",
+            "alive": True,
+            "death_cause": None,
+        },
+    ]
+    assert {item["role"] for item in identities} == {"villager", "werewolf"}
+    assert {item["team"] for item in identities} == {"village", "werewolves"}
+    serialized = json.dumps(identities)
+    assert "private-model-id" not in serialized
+    assert "private personality prompt" not in serialized
+    assert "private-speaker" not in serialized
 
 
 def test_admin_operator_can_idempotently_stop_waiting_v2_game_without_private_leak(

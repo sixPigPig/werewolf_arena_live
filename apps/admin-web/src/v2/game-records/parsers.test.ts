@@ -43,6 +43,18 @@ describe("V2 game record parsers", () => {
       players_snapshot: [],
       ability_snapshot: {},
       match_state: null,
+      player_identities: [
+        {
+          seat: 1,
+          player_id: "profile-1",
+          display_name: "阿青",
+          avatar_url: null,
+          role: "seer",
+          team: "village",
+          alive: true,
+          death_cause: null,
+        },
+      ],
       runs: [
         {
           run_id: item.current_run_id,
@@ -148,6 +160,12 @@ describe("V2 game record parsers", () => {
     });
 
     expect(result.events[0].record_seq).toBe(2);
+    expect(result.player_identities[0]).toMatchObject({
+      seat: 1,
+      display_name: "阿青",
+      role: "seer",
+      alive: true,
+    });
     expect(result.model_requests[0]).toMatchObject({
       model_id: "doubao-seed-2-0-lite-260215",
       input_source: "persisted",
@@ -204,6 +222,7 @@ describe("V2 game record parsers", () => {
       players_snapshot: [],
       ability_snapshot: {},
       match_state: null,
+      player_identities: [],
       runs: [{
         run_id: item.current_run_id,
         attempt_no: 1,

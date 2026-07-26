@@ -47,6 +47,7 @@ from app.v2.contracts import (
     V2ActorResponse,
     V2ApiMetaResponse,
     V2CurrentPresentationResponse,
+    V2DirectorLiveSnapshotResponse,
     V2GameCreateRequest,
     V2GameCreateResponse,
     V2GamePhaseResponse,
@@ -144,6 +145,8 @@ def create_v2_game(
         status=game.status,
         snapshot_url=f"/api/v2/live/games/{game.game_id}/snapshot",
         websocket_url=f"/api/v2/live/games/{game.game_id}/ws",
+        director_snapshot_url=f"/api/v2/director/games/{game.game_id}/snapshot",
+        director_websocket_url=f"/api/v2/director/games/{game.game_id}/ws",
         god_view_snapshot_url=(f"/api/v2/god-view/games/{game.game_id}/identity-snapshot"),
         god_view_websocket_url=f"/api/v2/god-view/games/{game.game_id}/ws",
         god_view_access_token=god_view_access_token,
@@ -203,6 +206,64 @@ def read_live_snapshot(
             else None
         ),
     )
+
+
+@public_router.get(
+    "/director/games/{game_id}/snapshot",
+    response_model=V2DirectorLiveSnapshotResponse,
+)
+def read_director_snapshot(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    request: Request,
+    response: Response,
+) -> V2DirectorLiveSnapshotResponse:
+    runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+    try:
+        payload = runtime.snapshot(game_id=game_id, audience="spectator_directed")
+    except V2RecordNotFound as exc:
+        raise HTTPException(status_code=404, detail="V2 game not found") from exc
+    except V2GodViewUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Director identity unavailable") from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Request-ID"] = request_id_for(request)
+    return V2DirectorLiveSnapshotResponse.model_validate(payload)
+
+
+@public_router.websocket("/director/games/{game_id}/ws")
+async def director_live_websocket(websocket: WebSocket, game_id: str) -> None:
+    if not _valid_game_id(game_id):
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+    runtime: V2LiveRuntime = websocket.app.state.v2_live_runtime
+    subscriber_id: str | None = None
+    channel = None
+    try:
+        subscriber_id, channel = await runtime.connect(
+            game_id=game_id,
+            websocket=websocket,
+            audience="spectator_directed",
+        )
+        while True:
+            message = await websocket.receive_json()
+            if not isinstance(message, dict):
+                raise V2ClientProtocolError("message_must_be_object")
+            await runtime.ready(
+                channel=channel,
+                subscriber_id=subscriber_id,
+                message=message,
+            )
+    except V2RecordNotFound:
+        await websocket.close(code=4404)
+    except V2GodViewUnavailable:
+        await websocket.close(code=4409)
+    except V2ClientProtocolError:
+        await websocket.close(code=4400)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if subscriber_id is not None and channel is not None:
+            await runtime.disconnect(channel=channel, subscriber_id=subscriber_id)
 
 
 @public_router.websocket("/live/games/{game_id}/ws")
@@ -372,6 +433,7 @@ def read_admin_v2_game(
             events,
             presentations,
             voices,
+            role_assignments,
             player_states,
             action_windows,
             ability_instances,
@@ -388,11 +450,21 @@ def read_admin_v2_game(
             detail="The requested V2 game record does not exist.",
         ) from exc
     _set_admin_headers(request, response)
+    player_identities = (
+        project_god_view_player_identities(
+            players_snapshot=game.players_snapshot,
+            assignments=role_assignments,
+            player_states={item.player_id: item for item in player_states},
+        )
+        if role_assignments
+        else []
+    )
     return AdminV2GameDetailResponse(
         **_admin_game_item(game).model_dump(),
         rule_snapshot=game.rule_snapshot,
         players_snapshot=game.players_snapshot,
         ability_snapshot=game.ability_snapshot,
+        player_identities=player_identities,
         match_state=(
             _record_fields(
                 match_state,

@@ -8,6 +8,7 @@ import type {
   V2GameRecordListItem,
   V2GameRun,
   V2ModelRequest,
+  V2PlayerIdentity,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
 
@@ -47,6 +48,7 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     players_snapshot: array(record.players_snapshot).map(object),
     ability_snapshot: object(record.ability_snapshot),
     match_state: record.match_state === null ? null : object(record.match_state),
+    player_identities: array(record.player_identities).map(parsePlayerIdentity),
     runs: array(record.runs).map(parseRun),
     events: array(record.events).map(parseEvent),
     model_requests: array(record.model_requests).map(parseModelRequest),
@@ -58,6 +60,20 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     ability_activations: array(record.ability_activations).map(object),
     effect_intents: array(record.effect_intents).map(object),
     knowledge_facts: array(record.knowledge_facts).map(object),
+  };
+}
+
+function parsePlayerIdentity(value: unknown): V2PlayerIdentity {
+  const record = object(value);
+  return {
+    seat: integer(record.seat, 1),
+    player_id: text(record.player_id),
+    display_name: text(record.display_name),
+    avatar_url: nullableText(record.avatar_url),
+    role: text(record.role),
+    team: nullableText(record.team),
+    alive: boolean(record.alive),
+    death_cause: nullableText(record.death_cause),
   };
 }
 

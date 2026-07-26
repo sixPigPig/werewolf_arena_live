@@ -120,11 +120,23 @@ export type V2ModelRequest = {
   completed_at: string | null;
 };
 
+export type V2PlayerIdentity = {
+  seat: number;
+  player_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  role: string;
+  team: string | null;
+  alive: boolean;
+  death_cause: string | null;
+};
+
 export type V2GameRecordDetail = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
   ability_snapshot: Record<string, unknown>;
   match_state: Record<string, unknown> | null;
+  player_identities: V2PlayerIdentity[];
   runs: V2GameRun[];
   events: V2GameRecordEvent[];
   model_requests: V2ModelRequest[];

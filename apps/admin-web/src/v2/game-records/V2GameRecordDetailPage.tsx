@@ -2,9 +2,11 @@ import {
   CheckCircleFilled,
   CloseCircleFilled,
   DatabaseOutlined,
+  EyeOutlined,
   LoadingOutlined,
   SearchOutlined,
   SoundOutlined,
+  SyncOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
@@ -33,6 +35,10 @@ import {
 import { useAdminSession } from "@/features/auth/session-context";
 import { readV2GameRecord, stopV2Game } from "@/v2/game-records/api";
 import {
+  isLiveV2StatusActive,
+  liveRefreshInterval,
+} from "@/v2/game-records/live-refresh";
+import {
   buildV2Timeline,
   formatClock,
   formatDuration,
@@ -46,18 +52,14 @@ import {
   ReadableModelOutput,
   ReadableRawEvents,
 } from "@/v2/game-records/request-presentation";
-import type { V2GameRecordDetail } from "@/v2/game-records/types";
+import type {
+  V2GameRecordDetail,
+  V2PlayerIdentity,
+} from "@/v2/game-records/types";
 
 type CategoryFilter = "all" | "model" | "milestone";
 type StatusFilter = "all" | "running" | "succeeded" | "failed";
 const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
-const ACTIVE_STATES = new Set([
-  "waiting_to_start",
-  "ready",
-  "generating",
-  "broadcasting",
-  "finalizing",
-]);
 
 export default function V2GameRecordDetailPage() {
   const navigate = useNavigate();
@@ -66,6 +68,9 @@ export default function V2GameRecordDetailPage() {
     enabled: Boolean(gameId),
     queryFn: ({ signal }) => readV2GameRecord(gameId, signal),
     queryKey: v2GameRecordKeys.detail(gameId),
+    refetchInterval: (currentQuery) =>
+      liveRefreshInterval(currentQuery.state.data?.status),
+    refetchIntervalInBackground: false,
   });
 
   if (query.isPending) {
@@ -87,17 +92,23 @@ export default function V2GameRecordDetailPage() {
   return (
     <V2GameRecordWorkspace
       game={query.data}
+      isRefreshing={query.isFetching}
       onBack={() => navigate("/v2/operations/games")}
+      refreshedAt={query.dataUpdatedAt}
     />
   );
 }
 
 function V2GameRecordWorkspace({
   game,
+  isRefreshing,
   onBack,
+  refreshedAt,
 }: {
   game: V2GameRecordDetail;
+  isRefreshing: boolean;
   onBack: () => void;
+  refreshedAt: number;
 }) {
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
@@ -201,7 +212,7 @@ function V2GameRecordWorkspace({
     session?.permissions.includes("runs.control");
   const canStop =
     canControl &&
-    ACTIVE_STATES.has(game.status) &&
+    isLiveV2StatusActive(game.status) &&
     run?.stop_requested_at === null;
   const duration = run?.started_at
     ? Math.max(
@@ -275,6 +286,13 @@ function V2GameRecordWorkspace({
           type="warning"
         />
       ) : null}
+
+      <OmniscientLivePanel
+        game={game}
+        isRefreshing={isRefreshing}
+        refreshedAt={refreshedAt}
+        timeline={timeline}
+      />
 
       <section aria-label="流程筛选" className="v2-record-toolbar">
         <Select
@@ -417,6 +435,279 @@ function V2GameRecordWorkspace({
         ) : null}
       </Modal>
     </AdminPage>
+  );
+}
+
+function OmniscientLivePanel({
+  game,
+  isRefreshing,
+  refreshedAt,
+  timeline,
+}: {
+  game: V2GameRecordDetail;
+  isRefreshing: boolean;
+  refreshedAt: number;
+  timeline: V2TimelineItem[];
+}) {
+  const identities = game.player_identities;
+  const identityById = new Map(
+    identities.map((identity) => [identity.player_id, identity]),
+  );
+  const currentAction =
+    [...timeline].reverse().find((item) => item.kind === "action") ?? null;
+  const latestPresentation = game.presentations.at(-1) ?? null;
+  const latestWindow =
+    [...game.action_windows]
+      .reverse()
+      .find((item) => recordText(item.window_type) === "night") ?? null;
+  const latestWindowId = recordText(latestWindow?.window_id);
+  const abilityByInstance = new Map(
+    game.ability_instances.map((item) => [
+      recordText(item.ability_instance_id),
+      {
+        abilityId: recordText(item.ability_id) ?? "unknown",
+        ownerId: recordText(item.owner_id),
+      },
+    ]),
+  );
+  const recentActivations = game.ability_activations
+    .filter(
+      (item) =>
+        latestWindowId === null ||
+        recordText(item.window_id) === latestWindowId,
+    )
+    .slice(-6)
+    .reverse();
+  const phaseLabel =
+    groupV2Phases(timeline, game.phase_id).find(
+      (phase) => phase.phaseId === game.phase_id,
+    )?.label ?? game.phase_id;
+  const currentActorId =
+    latestPresentation?.actor_kind === "player"
+      ? latestPresentation.actor_id
+      : currentAction?.actorKind === "player"
+        ? currentAction.actorId
+        : null;
+  const currentActor =
+    (currentActorId ? identityById.get(currentActorId)?.display_name : null) ??
+    (latestPresentation?.actor_kind === "judge" ? "法官" : null) ??
+    currentAction?.actorLabel ??
+    "等待下一位行动者";
+  const active = isLiveV2StatusActive(game.status);
+
+  return (
+    <section aria-label="实时全知态势" className="v2-omniscient-panel">
+      <header className="v2-omniscient-heading">
+        <div>
+          <Typography.Text className="ant-admin-page-kicker">
+            OMNISCIENT OPERATIONS
+          </Typography.Text>
+          <Typography.Title level={4}>
+            <EyeOutlined /> 实时全知态势
+          </Typography.Title>
+          <Typography.Paragraph>
+            身份、当前场景和私密行动仅向具备 V2 对局读取权限的后台用户展示。
+          </Typography.Paragraph>
+        </div>
+        <Space size={8}>
+          <Tag
+            color={isRefreshing ? "processing" : active ? "blue" : "default"}
+            icon={isRefreshing ? <SyncOutlined spin /> : undefined}
+          >
+            {isRefreshing
+              ? "正在同步"
+              : active
+                ? "每 2 秒自动更新"
+                : "终态数据"}
+          </Tag>
+          <Typography.Text type="secondary">
+            更新于 {formatClock(new Date(refreshedAt).toISOString())}
+          </Typography.Text>
+        </Space>
+      </header>
+
+      <div className="v2-live-overview-grid">
+        <LiveOverviewCard
+          detail={`${phaseLabel} · ${phaseStateLabel(game.phase_state)}`}
+          label="当前场景"
+          value={sceneLabel(game.phase_id, currentAction?.actionType ?? null)}
+        />
+        <LiveOverviewCard
+          detail={
+            currentAction
+              ? `${currentAction.label} · ${audienceLabel(currentAction.audience)}`
+              : "等待动作进入时间线"
+          }
+          label="当前行动者"
+          value={currentActor}
+        />
+        <LiveOverviewCard
+          detail={nightResolutionSummary(latestWindow, identityById)}
+          label="最近夜间结算"
+          value={nightWindowLabel(latestWindow)}
+        />
+      </div>
+
+      <div className="v2-live-detail-grid">
+        <section className="v2-live-identity-section">
+          <header>
+            <Typography.Title level={5}>完整身份总览</Typography.Title>
+            <Typography.Text type="secondary">
+              {identities.length
+                ? `${identities.filter((item) => item.alive).length}/${identities.length} 人存活`
+                : "身份尚未分配"}
+            </Typography.Text>
+          </header>
+          {identities.length ? (
+            <div className="v2-identity-table-wrap">
+              <table className="v2-identity-table">
+                <thead>
+                  <tr>
+                    <th>座位</th>
+                    <th>玩家</th>
+                    <th>身份</th>
+                    <th>阵营</th>
+                    <th>状态</th>
+                    <th>出局原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {identities.map((identity) => (
+                    <tr key={identity.player_id}>
+                      <td>{identity.seat} 号</td>
+                      <td>
+                        <strong>{identity.display_name}</strong>
+                        <small>{identity.player_id}</small>
+                      </td>
+                      <td>
+                        <Tag color={roleColor(identity.role)}>
+                          {roleLabel(identity.role)}
+                        </Tag>
+                      </td>
+                      <td>{teamLabel(identity.team)}</td>
+                      <td>
+                        <span
+                          className={
+                            identity.alive
+                              ? "v2-player-life is-alive"
+                              : "v2-player-life is-dead"
+                          }
+                        >
+                          {identity.alive ? "存活" : "已出局"}
+                        </span>
+                      </td>
+                      <td>{deathCauseLabel(identity.death_cause)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty
+              description="当前记录没有可展示的身份分配"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+        </section>
+
+        <section className="v2-live-private-section">
+          <header>
+            <Typography.Title level={5}>最近私密行动</Typography.Title>
+            <Typography.Text type="secondary">
+              {latestWindow
+                ? `${nightWindowLabel(latestWindow)} · ${windowStateLabel(
+                    recordText(latestWindow.state),
+                  )}`
+                : "尚无夜间行动窗口"}
+            </Typography.Text>
+          </header>
+          {recentActivations.length ? (
+            <ol className="v2-private-action-list">
+              {recentActivations.map((activation, index) => {
+                const ability =
+                  abilityByInstance.get(
+                    recordText(activation.ability_instance_id),
+                  ) ?? { abilityId: "unknown", ownerId: null };
+                const actorId =
+                  recordText(activation.actor_player_id) ?? ability.ownerId;
+                const decision = recordObject(activation.decision);
+                const targetId = recordText(decision.target_player_id);
+                return (
+                  <li
+                    key={
+                      recordText(activation.activation_id) ??
+                      `${ability.abilityId}-${index}`
+                    }
+                  >
+                    <span>
+                      <strong>{abilityLabel(ability.abilityId)}</strong>
+                      <small>
+                        {playerLabel(actorId, identityById)}
+                        {" → "}
+                        {targetId
+                          ? playerLabel(targetId, identityById)
+                          : "未选择目标"}
+                      </small>
+                    </span>
+                    <Tag
+                      color={
+                        recordText(activation.status) === "completed"
+                          ? "success"
+                          : recordText(activation.status) === "open"
+                            ? "processing"
+                            : "default"
+                      }
+                    >
+                      {activationResultLabel(activation)}
+                    </Tag>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <Empty
+              description="等待首个私密行动"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+          <div className="v2-current-subtitle">
+            <Typography.Text type="secondary">最近现场发言</Typography.Text>
+            <Typography.Paragraph>
+              {latestPresentation
+                ? displaySubtitleText(latestPresentation.subtitle_text)
+                : "暂无已保存发言"}
+            </Typography.Paragraph>
+            {latestPresentation ? (
+              <Typography.Text type="secondary">
+                {latestPresentation.actor_kind === "judge"
+                  ? "法官"
+                  : playerLabel(latestPresentation.actor_id, identityById)}
+                {" · "}
+                {audienceLabel(latestPresentation.audience)}
+              </Typography.Text>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function LiveOverviewCard({
+  detail,
+  label,
+  value,
+}: {
+  detail: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <article className="v2-live-overview-card">
+      <Typography.Text type="secondary">{label}</Typography.Text>
+      <Typography.Text strong>{value}</Typography.Text>
+      <Typography.Text type="secondary">{detail}</Typography.Text>
+    </article>
   );
 }
 
@@ -925,6 +1216,7 @@ function statusLabel(status: string) {
     running: "进行中",
     succeeded: "成功",
     failed: "失败",
+    canceled: "已中止",
   };
   return labels[status] ?? status;
 }
@@ -951,4 +1243,232 @@ function phaseStatus(
 ): "running" | "succeeded" | "failed" {
   if (failureCount > 0) return "failed";
   return isCurrent ? "running" : "succeeded";
+}
+
+function sceneLabel(phaseId: string, actionType: string | null): string {
+  const action = (actionType ?? "").toLowerCase();
+  if (action.includes("game_completed")) return "终局舞台";
+  if (action.includes("werewolf")) return "狼人房间";
+  if (action.includes("guard")) return "守卫行动";
+  if (action.includes("seer")) return "预言家查验";
+  if (action.includes("witch")) return "女巫用药";
+  if (action.includes("hunter")) return "猎人行动";
+  if (action.includes("dawn")) return "黎明公布";
+  if (phaseId === "first_night" || phaseId.startsWith("night_")) {
+    return "夜间行动";
+  }
+  if (phaseId.startsWith("day_")) return "公共舞台";
+  return "开幕舞台";
+}
+
+function phaseStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    opening_ready: "等待开幕",
+    opening_completed: "开幕完成",
+    nightfall_ready: "等待入夜",
+    nightfall_announced: "夜幕已宣布",
+    night_running: "夜间行动中",
+    dawn_announcement_ready: "等待天亮播报",
+    dawn_announced: "天亮已公布",
+    dawn_reactions_ready: "黎明技能处理中",
+    sheriff_election_ready: "等待警长竞选",
+    public_day_ready: "等待白天流程",
+    public_discussion_open: "白天讨论中",
+    public_discussion_completed: "白天讨论完成",
+    exile_vote_open: "放逐投票中",
+    exile_resolved: "放逐已结算",
+    game_completed: "对局结束",
+    failed: "运行失败",
+    canceled: "已中止",
+  };
+  return labels[state] ?? state;
+}
+
+function nightWindowLabel(
+  window: Record<string, unknown> | null,
+): string {
+  if (!window) return "尚未开始";
+  const sequence = recordNumber(window.window_seq);
+  return sequence === null ? "夜间行动窗口" : `第 ${sequence} 个夜间窗口`;
+}
+
+function nightResolutionSummary(
+  window: Record<string, unknown> | null,
+  identities: Map<string, V2PlayerIdentity>,
+): string {
+  if (!window) return "等待夜间行动开始";
+  if (recordText(window.state) === "open") return "行动仍在进行，结算尚未产生";
+  const result = recordObject(window.result);
+  if (result.peaceful === true) {
+    const preventedBy = recordText(result.attack_prevented_by);
+    return preventedBy
+      ? `平安夜 · 袭击被${preventionLabel(preventedBy)}阻止`
+      : "平安夜";
+  }
+  const deaths = Array.isArray(result.deaths)
+    ? result.deaths
+        .map(recordObject)
+        .map((death) => {
+          const playerId = recordText(death.player_id);
+          if (!playerId) return null;
+          const cause = deathCauseLabel(recordText(death.cause));
+          return `${playerLabel(playerId, identities)}（${cause}）`;
+        })
+        .filter((item): item is string => item !== null)
+    : [];
+  return deaths.length ? `出局：${deaths.join("、")}` : "窗口已关闭，暂无死亡记录";
+}
+
+function preventionLabel(value: string): string {
+  const labels: Record<string, string> = {
+    guard: "守卫",
+    protect: "守卫",
+    heal: "女巫解药",
+    guard_and_heal: "同守同救",
+  };
+  return labels[value] ?? value;
+}
+
+function windowStateLabel(state: string | null): string {
+  if (state === "open") return "进行中";
+  if (state === "closed") return "已结算";
+  return state ?? "未知状态";
+}
+
+function abilityLabel(value: string): string {
+  const labels: Record<string, string> = {
+    "werewolf.attack": "狼人袭击",
+    "guard.protect": "守卫守护",
+    "seer.investigate": "预言家查验",
+    "witch.heal": "女巫解药",
+    "witch.poison": "女巫毒药",
+    "hunter.death_shot": "猎人开枪",
+  };
+  return labels[value] ?? value;
+}
+
+function activationResultLabel(activation: Record<string, unknown>): string {
+  const status = recordText(activation.status);
+  if (status === "open") return "进行中";
+  if (status === "skipped") {
+    const reason = recordText(activation.skip_reason);
+    return reason ? `跳过 · ${skipReasonLabel(reason)}` : "已跳过";
+  }
+  const result = recordObject(activation.result);
+  const alignment = recordText(result.alignment);
+  if (alignment) return `查验为${teamLabel(alignment)}`;
+  if (result.consensus_reached === true) return "已达成袭击共识";
+  if (result.consensus_reached === false) return "未达成袭击共识";
+  if (result.heal_used === true) return "已使用解药";
+  if (result.heal_used === false) return "未使用解药";
+  if (result.poison_used === true) return "已使用毒药";
+  if (result.poison_used === false) return "未使用毒药";
+  if (result.shot_used === true) return "已发动技能";
+  if (result.shot_used === false) return "放弃发动";
+  if (result.effect === "protect_registered") return "守护已登记";
+  return status === "completed" ? "已完成" : status ?? "未知";
+}
+
+function skipReasonLabel(value: string): string {
+  const labels: Record<string, string> = {
+    owner_not_alive: "角色已出局",
+    heal_already_used: "解药已使用",
+    poison_already_used: "毒药已使用",
+    heal_poison_mutually_exclusive: "同夜不可同时用药",
+    no_eligible_target: "没有合法目标",
+  };
+  return labels[value] ?? value;
+}
+
+function playerLabel(
+  playerId: string | null,
+  identities: Map<string, V2PlayerIdentity>,
+): string {
+  if (!playerId) return "系统";
+  const identity = identities.get(playerId);
+  return identity
+    ? `${identity.seat}号 ${identity.display_name}`
+    : playerId;
+}
+
+function roleLabel(value: string): string {
+  const labels: Record<string, string> = {
+    werewolf: "狼人",
+    villager: "村民",
+    seer: "预言家",
+    guard: "守卫",
+    witch: "女巫",
+    hunter: "猎人",
+    idiot: "白痴",
+  };
+  return labels[value] ?? value;
+}
+
+function roleColor(value: string): string {
+  if (value === "werewolf") return "red";
+  if (value === "villager") return "default";
+  return "blue";
+}
+
+function teamLabel(value: string | null): string {
+  const labels: Record<string, string> = {
+    werewolf: "狼人阵营",
+    werewolves: "狼人阵营",
+    village: "好人阵营",
+    villagers: "好人阵营",
+  };
+  return value ? (labels[value] ?? value) : "未记录";
+}
+
+function deathCauseLabel(value: string | null): string {
+  const labels: Record<string, string> = {
+    werewolf_attack: "狼人袭击",
+    poison: "女巫毒杀",
+    exile: "投票放逐",
+    hunter_shot: "猎人带走",
+    self_explosion: "狼人自爆",
+  };
+  return value ? (labels[value] ?? value) : "—";
+}
+
+function recordObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function recordText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function recordNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function displaySubtitleText(value: string): string {
+  const trimmed = value.trim();
+  const fenced =
+    /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)?.[1] ?? trimmed;
+  try {
+    const parsed: unknown = JSON.parse(fenced);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "speech" in parsed &&
+      typeof parsed.speech === "string" &&
+      parsed.speech.trim()
+    ) {
+      return parsed.speech.trim();
+    }
+  } catch {
+    const partialSpeech = /"speech"\s*:\s*"([\s\S]*)/.exec(fenced)?.[1];
+    if (partialSpeech) {
+      return partialSpeech
+        .replace(/"\s*}\s*$/, "")
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, "\n")
+        .trim();
+    }
+  }
+  return value;
 }

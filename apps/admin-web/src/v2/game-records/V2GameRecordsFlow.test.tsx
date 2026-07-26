@@ -141,6 +141,7 @@ function detail(stopped: boolean) {
     players_snapshot: [],
     ability_snapshot: {},
     match_state: null,
+    player_identities: [],
     runs: [
       {
         run_id: runId,

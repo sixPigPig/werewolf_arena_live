@@ -787,7 +787,7 @@ describe("GamesPage", () => {
       window.sessionStorage.getItem(
         "live-v2:god-view:v2_game_0123456789abcdef",
       ),
-    ).toBe("a".repeat(43));
+    ).toBeNull();
   });
 
   it("requires a second tap before clearing assigned seats", async () => {

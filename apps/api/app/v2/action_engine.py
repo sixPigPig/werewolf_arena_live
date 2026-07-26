@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.judge_configuration import RuntimeJudgeConfiguration
+from app.v2.director_projection import project_director_scene
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
@@ -21,6 +22,7 @@ from app.v2.model_client import (
 from app.v2.protocol import (
     V2LiveProtocolError,
     audio_frame,
+    director_scene_changed,
     live_state,
     game_phase_changed,
     presentation_closed,
@@ -296,6 +298,18 @@ class V2ActionEngine:
         model_request_completed = False
         try:
             check_cancellation()
+            await broadcaster.broadcast_json(
+                director_scene_changed(
+                    game_id=claim.game_id,
+                    run_id=claim.run_id,
+                    scene=project_director_scene(
+                        phase_id=spec.phase_id,
+                        phase_state=spec.required_phase_state,
+                        action_context=context,
+                    ),
+                ),
+                audience="director",
+            )
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,

@@ -134,6 +134,8 @@ export type V2GameCreateResponse = {
   status: "waiting_to_start";
   snapshot_url: string;
   websocket_url: string;
+  director_snapshot_url: string;
+  director_websocket_url: string;
   god_view_snapshot_url: string;
   god_view_websocket_url: string;
   god_view_access_token: string;
@@ -203,6 +205,44 @@ export type V2GodViewPlayerIdentity = {
   team: string | null;
   alive: boolean;
   death_cause: string | null;
+};
+
+export type V2DirectorSceneKind =
+  | "opening"
+  | "public_stage"
+  | "nightfall"
+  | "werewolves"
+  | "guard"
+  | "seer"
+  | "witch"
+  | "hunter"
+  | "dawn"
+  | "terminal";
+
+export type V2DirectorScene = {
+  scene_kind: V2DirectorSceneKind;
+  action_id: string | null;
+  action_type: string | null;
+  ability_id: string | null;
+  actor_player_id: string | null;
+};
+
+export type V2DirectorLiveSnapshot = {
+  protocol_version: 1;
+  type: "director.live_snapshot";
+  api_version: "v2";
+  audience: "spectator_directed";
+  game_id: string;
+  run_id: string;
+  live_state: V2LiveState;
+  game_phase: V2GamePhase;
+  match_state: V2MatchState | null;
+  latest_presentation_seq: number;
+  server_time: string;
+  rule: V2PublicRuleSnapshot | null;
+  players: V2GodViewPlayerIdentity[];
+  current_scene: V2DirectorScene;
+  current_presentation: V2Presentation | null;
 };
 
 export type V2GodViewIdentitySnapshot = {
@@ -289,6 +329,14 @@ export type V2NightProgress = {
   server_time: string;
   stage: "night_started" | "actions_in_progress" | "night_resolved" | "dawn_announced";
   latest_presentation_seq: number;
+};
+
+export type V2DirectorSceneChanged = V2DirectorScene & {
+  protocol_version: 1;
+  type: "director.scene_changed";
+  game_id: string;
+  run_id: string;
+  server_time: string;
 };
 
 export type V2AbilityProgress = {
@@ -384,7 +432,9 @@ export type V2PresentationFailed = {
 
 export type V2ServerMessage =
   | V2LiveSnapshot
+  | V2DirectorLiveSnapshot
   | V2GodViewLiveSnapshot
+  | V2DirectorSceneChanged
   | V2PresentationOpened
   | V2SegmentCommitted
   | V2StateChanged
@@ -425,6 +475,8 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
     "status",
     "snapshot_url",
     "websocket_url",
+    "director_snapshot_url",
+    "director_websocket_url",
     "god_view_snapshot_url",
     "god_view_websocket_url",
     "god_view_access_token",
@@ -435,6 +487,8 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
     status: literal(record.status, ["waiting_to_start"]),
     snapshot_url: apiPath(record.snapshot_url),
     websocket_url: apiPath(record.websocket_url),
+    director_snapshot_url: apiPath(record.director_snapshot_url),
+    director_websocket_url: apiPath(record.director_websocket_url),
     god_view_snapshot_url: godViewApiPath(record.god_view_snapshot_url),
     god_view_websocket_url: godViewApiPath(record.god_view_websocket_url),
     god_view_access_token: godViewAccessToken(record.god_view_access_token),
@@ -444,6 +498,14 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
 export function parseV2LiveSnapshotResponse(value: unknown): V2LiveSnapshot {
   const message = parseV2ServerMessage(JSON.stringify(value));
   if (message.type !== "live.snapshot") throw invalid();
+  return message;
+}
+
+export function parseV2DirectorLiveSnapshotResponse(
+  value: unknown,
+): V2DirectorLiveSnapshot {
+  const message = parseV2ServerMessage(JSON.stringify(value));
+  if (message.type !== "director.live_snapshot") throw invalid();
   return message;
 }
 
@@ -533,6 +595,46 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
           : presentation(snapshot.current_presentation),
     };
   }
+  if (type === "director.live_snapshot") {
+    const snapshot = exactObject(value, [
+      "protocol_version",
+      "type",
+      "api_version",
+      "audience",
+      "game_id",
+      "run_id",
+      "live_state",
+      "game_phase",
+      "match_state",
+      "latest_presentation_seq",
+      "server_time",
+      "rule",
+      "players",
+      "current_scene",
+      "current_presentation",
+    ]);
+    const rule = snapshot.rule === null ? null : publicRule(snapshot.rule);
+    const players = godViewPlayers(snapshot.players);
+    if (rule !== null && rule.player_count !== players.length) throw invalid();
+    return {
+      ...base,
+      type,
+      api_version: literal(snapshot.api_version, ["v2"]),
+      audience: literal(snapshot.audience, ["spectator_directed"]),
+      live_state: liveState(snapshot.live_state),
+      game_phase: gamePhase(snapshot.game_phase),
+      match_state:
+        snapshot.match_state == null ? null : matchState(snapshot.match_state),
+      latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      rule,
+      players,
+      current_scene: directorScene(snapshot.current_scene),
+      current_presentation:
+        snapshot.current_presentation === null
+          ? null
+          : presentation(snapshot.current_presentation),
+    };
+  }
   if (type === "god_view.live_snapshot") {
     const snapshot = exactObject(value, [
       "protocol_version",
@@ -569,6 +671,31 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
         snapshot.current_presentation === null
           ? null
           : presentation(snapshot.current_presentation),
+    };
+  }
+  if (type === "director.scene_changed") {
+    const scene = exactObject(value, [
+      "protocol_version",
+      "type",
+      "game_id",
+      "run_id",
+      "server_time",
+      "scene_kind",
+      "action_id",
+      "action_type",
+      "ability_id",
+      "actor_player_id",
+    ]);
+    return {
+      ...base,
+      type,
+      ...directorScene({
+        scene_kind: scene.scene_kind,
+        action_id: scene.action_id,
+        action_type: scene.action_type,
+        ability_id: scene.ability_id,
+        actor_player_id: scene.actor_player_id,
+      }),
     };
   }
   if (type === "live.state_changed") {
@@ -887,6 +1014,35 @@ function publicRoleAssignmentStatus(value: unknown): V2PublicRoleAssignmentStatu
     throw invalid();
   }
   return { state, assigned_count: assignedCount };
+}
+
+function directorScene(value: unknown): V2DirectorScene {
+  const record = exactObject(value, [
+    "scene_kind",
+    "action_id",
+    "action_type",
+    "ability_id",
+    "actor_player_id",
+  ]);
+  return {
+    scene_kind: literal(record.scene_kind, [
+      "opening",
+      "public_stage",
+      "nightfall",
+      "werewolves",
+      "guard",
+      "seer",
+      "witch",
+      "hunter",
+      "dawn",
+      "terminal",
+    ]),
+    action_id: record.action_id === null ? null : text(record.action_id),
+    action_type: record.action_type === null ? null : text(record.action_type),
+    ability_id: record.ability_id === null ? null : text(record.ability_id),
+    actor_player_id:
+      record.actor_player_id === null ? null : text(record.actor_player_id),
+  };
 }
 
 function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {

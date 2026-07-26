@@ -18,6 +18,18 @@ V2LiveState = Literal[
 ]
 V2GamePhaseId = str
 V2GamePhaseState = str
+V2DirectorSceneKind = Literal[
+    "opening",
+    "public_stage",
+    "nightfall",
+    "werewolves",
+    "guard",
+    "seer",
+    "witch",
+    "hunter",
+    "dawn",
+    "terminal",
+]
 
 
 class V2ApiMetaResponse(BaseModel):
@@ -283,6 +295,36 @@ class V2GodViewPlayerIdentityResponse(BaseModel):
     death_cause: str | None = Field(default=None, max_length=40)
 
 
+class V2DirectorSceneResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_kind: V2DirectorSceneKind
+    action_id: str | None = Field(default=None, max_length=40)
+    action_type: str | None = Field(default=None, max_length=120)
+    ability_id: str | None = Field(default=None, max_length=120)
+    actor_player_id: str | None = Field(default=None, max_length=80)
+
+
+class V2DirectorLiveSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal[1] = 1
+    type: Literal["director.live_snapshot"] = "director.live_snapshot"
+    api_version: Literal["v2"] = "v2"
+    audience: Literal["spectator_directed"] = "spectator_directed"
+    game_id: str
+    run_id: str
+    live_state: V2LiveState
+    game_phase: V2GamePhaseResponse
+    match_state: V2MatchStateResponse | None
+    latest_presentation_seq: int = Field(ge=0)
+    server_time: datetime
+    rule: V2PublicRuleSnapshotResponse | None
+    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
+    current_scene: V2DirectorSceneResponse
+    current_presentation: V2CurrentPresentationResponse | None
+
+
 class V2GodViewIdentitySnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -327,6 +369,8 @@ class V2GameCreateResponse(BaseModel):
     status: Literal["waiting_to_start"]
     snapshot_url: str
     websocket_url: str
+    director_snapshot_url: str
+    director_websocket_url: str
     god_view_snapshot_url: str
     god_view_websocket_url: str
     god_view_access_token: str = Field(min_length=32, max_length=128)
@@ -475,6 +519,7 @@ class AdminV2GameDetailResponse(AdminV2GameListItem):
     players_snapshot: list[dict[str, Any]]
     ability_snapshot: dict[str, Any]
     match_state: dict[str, Any] | None
+    player_identities: list[V2GodViewPlayerIdentityResponse]
     runs: list[AdminV2RunResponse]
     events: list[AdminV2EventResponse]
     model_requests: list[AdminV2ModelRequestResponse]

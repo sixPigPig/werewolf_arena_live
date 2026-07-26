@@ -253,7 +253,12 @@ def current_presentation(
     audience: str = "player_public",
 ) -> V2LivePresentation | None:
     get_game(db, game_id)
-    allowed = ("all", "god_view") if audience == "spectator_god_view" else ("all", "public")
+    if audience == "spectator_directed":
+        allowed = ("all", "public", "god_view")
+    elif audience == "spectator_god_view":
+        allowed = ("all", "god_view")
+    else:
+        allowed = ("all", "public")
     return db.scalar(
         select(V2LivePresentation)
         .where(
@@ -264,6 +269,26 @@ def current_presentation(
         .order_by(V2LivePresentation.presentation_seq.desc())
         .limit(1)
     )
+
+
+def current_action_context(db: Session, game_id: str) -> dict[str, Any] | None:
+    game = get_game(db, game_id)
+    if game.status not in {"generating", "broadcasting", "finalizing"}:
+        return None
+    event = db.scalar(
+        select(V2GameRecordEvent)
+        .where(
+            V2GameRecordEvent.game_id == game_id,
+            V2GameRecordEvent.run_id == game.current_run_id,
+            V2GameRecordEvent.event_type == "action_opened",
+        )
+        .order_by(V2GameRecordEvent.record_seq.desc())
+        .limit(1)
+    )
+    if event is None or not isinstance(event.payload, dict):
+        return None
+    context = event.payload.get("context")
+    return context if isinstance(context, dict) else None
 
 
 def role_assignment_count(db: Session, game_id: str) -> int | None:
@@ -357,6 +382,7 @@ def game_detail(
     list[V2GameRecordEvent],
     list[V2LivePresentation],
     list[V2VoiceAsset],
+    list[V2RoleAssignment],
     list[V2PlayerState],
     list[V2ActionWindow],
     list[V2AbilityInstance],
@@ -392,6 +418,13 @@ def game_detail(
             select(V2VoiceAsset)
             .where(V2VoiceAsset.game_id == game_id)
             .order_by(V2VoiceAsset.created_at.asc(), V2VoiceAsset.voice_asset_id.asc())
+        )
+    )
+    role_assignments = list(
+        db.scalars(
+            select(V2RoleAssignment)
+            .where(V2RoleAssignment.game_id == game_id)
+            .order_by(V2RoleAssignment.seat.asc())
         )
     )
     player_states = list(
@@ -443,6 +476,7 @@ def game_detail(
         events,
         presentations,
         voices,
+        role_assignments,
         player_states,
         action_windows,
         ability_instances,

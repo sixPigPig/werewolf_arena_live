@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createV2Game,
+  fetchV2DirectorLiveSnapshot,
   fetchV2GodViewIdentitySnapshot,
   fetchV2LiveSnapshot,
 } from "./api";
@@ -23,6 +24,10 @@ describe("createV2Game", () => {
           snapshot_url:
             "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
           websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
+          director_snapshot_url:
+            "/api/v2/director/games/v2_game_0123456789abcdef/snapshot",
+          director_websocket_url:
+            "/api/v2/director/games/v2_game_0123456789abcdef/ws",
           god_view_snapshot_url:
             "/api/v2/god-view/games/v2_game_0123456789abcdef/identity-snapshot",
           god_view_websocket_url:
@@ -73,6 +78,9 @@ describe("createV2Game", () => {
 
     expect(result.game_id).toBe("v2_game_0123456789abcdef");
     expect(result.god_view_access_token).toBe("a".repeat(43));
+    expect(result.director_websocket_url).toBe(
+      "/api/v2/director/games/v2_game_0123456789abcdef/ws",
+    );
     expect(result.god_view_websocket_url).toBe(
       "/api/v2/god-view/games/v2_game_0123456789abcdef/ws",
     );
@@ -131,6 +139,68 @@ describe("createV2Game", () => {
         },
       }),
     ).rejects.toThrow("V2 实时直播协议无效");
+  });
+});
+
+describe("fetchV2DirectorLiveSnapshot", () => {
+  it("accepts the contextual identity projection without a God View token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          type: "director.live_snapshot",
+          api_version: "v2",
+          audience: "spectator_directed",
+          game_id: "v2_game_0123456789abcdef",
+          run_id: "v2_run_0123456789abcdef",
+          live_state: "ready",
+          game_phase: openingPhase(),
+          match_state: {
+            round_no: 1,
+            sheriff_player_id: null,
+            sheriff_badge_state: "disabled",
+            winner: null,
+          },
+          latest_presentation_seq: 0,
+          server_time: "2026-07-22T12:00:00Z",
+          rule: null,
+          players: [
+            {
+              seat: 1,
+              player_id: "profile-1",
+              display_name: "阿青",
+              avatar_url: null,
+              role: "werewolf",
+              team: "werewolves",
+              alive: true,
+              death_cause: null,
+            },
+          ],
+          current_scene: {
+            scene_kind: "opening",
+            action_id: null,
+            action_type: null,
+            ability_id: null,
+            actor_player_id: null,
+          },
+          current_presentation: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = await fetchV2DirectorLiveSnapshot(
+      "v2_game_0123456789abcdef",
+    );
+
+    expect(snapshot.audience).toBe("spectator_directed");
+    expect(snapshot.players[0].role).toBe("werewolf");
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("Authorization"))
+      .toBe(false);
+    expect(new URL(String(fetchMock.mock.calls[0][0])).pathname).toBe(
+      "/api/v2/director/games/v2_game_0123456789abcdef/snapshot",
+    );
   });
 });
 

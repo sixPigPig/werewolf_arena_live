@@ -10,6 +10,7 @@ import wave
 
 import pytest
 
+from app.v2.director_projection import project_director_scene
 from app.v2.god_view_access import (
     issue_god_view_access_token,
     verify_god_view_access_token,
@@ -26,6 +27,7 @@ from app.v2.model_client import (
     _sse_data,
     _next_with_cancellation,
 )
+from app.v2.live_runtime import _audience_targets
 from app.v2.protocol import V2LiveProtocolError, audio_frame
 from app.v2.public_projection import (
     V2PublicProjectionError,
@@ -62,6 +64,57 @@ def _identity() -> V2PresentationIdentity:
         storage_key="v2_game_0000000000000001/v2_voice_0000000000000001.wav",
         subtitle_text="欢迎来到这场实时狼人杀对局。",
     )
+
+
+def test_directed_audience_merges_public_and_private_stage_events_only() -> None:
+    assert _audience_targets("all") == (
+        "player_public",
+        "spectator_directed",
+        "spectator_god_view",
+    )
+    assert _audience_targets("public") == (
+        "player_public",
+        "spectator_directed",
+    )
+    assert _audience_targets("god_view") == (
+        "spectator_directed",
+        "spectator_god_view",
+    )
+    assert _audience_targets("director") == ("spectator_directed",)
+
+
+def test_director_scene_projection_exposes_context_without_raw_action_data() -> None:
+    scene = project_director_scene(
+        phase_id="first_night",
+        phase_state="night_running",
+        action_context={
+            "action_id": "v2_action_0000000000000001",
+            "action_type": "seer_check",
+            "ability_id": "seer_check",
+            "actor": {"kind": "player", "id": "player-3"},
+            "prompt": "must-not-leak",
+            "model_id": "must-not-leak",
+            "private_state": {"must": "not-leak"},
+        },
+    )
+
+    assert scene.model_dump(mode="json") == {
+        "scene_kind": "seer",
+        "action_id": "v2_action_0000000000000001",
+        "action_type": "seer_check",
+        "ability_id": "seer_check",
+        "actor_player_id": "player-3",
+    }
+    public_scene = project_director_scene(
+        phase_id="day_2",
+        phase_state="public_discussion_open",
+        action_context={
+            "action_id": "v2_action_0000000000000002",
+            "action_type": "werewolf_self_explosion",
+            "actor": {"kind": "player", "id": "player-5"},
+        },
+    )
+    assert public_scene.scene_kind == "public_stage"
 
 
 def test_speech_validation_only_requires_non_empty_text() -> None:

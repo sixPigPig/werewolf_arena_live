@@ -1,9 +1,11 @@
 import {
   parseV2GameCreateResponse,
+  parseV2DirectorLiveSnapshotResponse,
   parseV2GodViewIdentitySnapshotResponse,
   parseV2LiveSnapshotResponse,
   type V2GameCreateRequest,
   type V2GameCreateResponse,
+  type V2DirectorLiveSnapshot,
   type V2GodViewIdentitySnapshot,
   type V2LiveSnapshot,
 } from "./contracts";
@@ -33,6 +35,19 @@ export async function fetchV2LiveSnapshot(gameId: string): Promise<V2LiveSnapsho
   return parseV2LiveSnapshotResponse(await response.json());
 }
 
+export async function fetchV2DirectorLiveSnapshot(
+  gameId: string,
+): Promise<V2DirectorLiveSnapshot> {
+  const path = `/api/v2/director/games/${encodeURIComponent(gameId)}/snapshot`;
+  const response = await fetch(resolveV2HttpUrl(path), {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`V2 导演直播快照读取失败 (${response.status})`);
+  }
+  return parseV2DirectorLiveSnapshotResponse(await response.json());
+}
+
 export async function fetchV2GodViewIdentitySnapshot(
   gameId: string,
   accessToken: string,
@@ -55,6 +70,17 @@ export function resolveV2WebSocketUrl(gameId: string): string {
   const base = configured || window.location.origin;
   const url = new URL(
     `/api/v2/live/games/${encodeURIComponent(gameId)}/ws`,
+    base,
+  );
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+export function resolveV2DirectorWebSocketUrl(gameId: string): string {
+  const configured = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
+  const base = configured || window.location.origin;
+  const url = new URL(
+    `/api/v2/director/games/${encodeURIComponent(gameId)}/ws`,
     base,
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

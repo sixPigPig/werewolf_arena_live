@@ -18,12 +18,14 @@ from app.v2.action_engine import V2ActionEngine, V2ModelPort, V2TtsPort
 from app.v2.contracts import (
     V2ActorResponse,
     V2CurrentPresentationResponse,
+    V2DirectorLiveSnapshotResponse,
     V2GamePhaseResponse,
     V2GodViewLiveSnapshotResponse,
     V2LiveSnapshotResponse,
     V2MatchStateResponse,
 )
 from app.v2.day_engine import V2DayEngine
+from app.v2.director_projection import project_director_scene
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.first_night_engine import V2NightEngine
 from app.v2.flow_engine import V2LiveFlowEngine
@@ -39,6 +41,7 @@ from app.v2.protocol import live_state
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
 from app.v2.service import (
     current_presentation,
+    current_action_context,
     get_game,
     get_match_state,
     god_view_role_assignments,
@@ -56,16 +59,18 @@ class V2ClientProtocolError(RuntimeError):
     pass
 
 
-V2Audience = Literal["player_public", "spectator_god_view"]
+V2Audience = Literal["player_public", "spectator_directed", "spectator_god_view"]
 
 
 def _audience_targets(value: str) -> tuple[V2Audience, ...]:
     if value == "all":
-        return ("player_public", "spectator_god_view")
+        return ("player_public", "spectator_directed", "spectator_god_view")
     if value == "public":
-        return ("player_public",)
+        return ("player_public", "spectator_directed")
     if value == "god_view":
-        return ("spectator_god_view",)
+        return ("spectator_directed", "spectator_god_view")
+    if value == "director":
+        return ("spectator_directed",)
     raise V2ClientProtocolError("invalid_server_audience")
 
 
@@ -94,10 +99,12 @@ class _GameChannel:
         self._task: asyncio.Task[None] | None = None
         self._current_identity: dict[V2Audience, V2PresentationIdentity | None] = {
             "player_public": None,
+            "spectator_directed": None,
             "spectator_god_view": None,
         }
         self._sample_cursor: dict[V2Audience, int] = {
             "player_public": 0,
+            "spectator_directed": 0,
             "spectator_god_view": 0,
         }
 
@@ -334,7 +341,29 @@ class V2LiveRuntime:
                     subtitle_text=presentation.subtitle_text,
                     join_sample_cursor=sample_cursor,
                 )
-            if audience == "spectator_god_view":
+            if audience == "spectator_directed":
+                response = V2DirectorLiveSnapshotResponse(
+                    game_id=game.game_id,
+                    run_id=game.current_run_id,
+                    live_state=_live_state(game.status),
+                    game_phase=_game_phase(game),
+                    match_state=_match_state(match),
+                    latest_presentation_seq=game.last_presentation_seq,
+                    server_time=server_now(),
+                    rule=project_public_rule_snapshot(game.rule_snapshot),
+                    players=project_god_view_player_identities(
+                        players_snapshot=game.players_snapshot,
+                        assignments=god_view_role_assignments(db, game.game_id),
+                        player_states=states,
+                    ),
+                    current_scene=project_director_scene(
+                        phase_id=game.phase_id,
+                        phase_state=game.phase_state,
+                        action_context=current_action_context(db, game.game_id),
+                    ),
+                    current_presentation=current,
+                )
+            elif audience == "spectator_god_view":
                 response = V2GodViewLiveSnapshotResponse(
                     game_id=game.game_id,
                     run_id=game.current_run_id,
@@ -433,7 +462,11 @@ def _runtime_judge_configuration(config: Settings) -> RuntimeJudgeConfiguration:
 
 
 def _validate_ready(message: dict[str, Any], *, audience: V2Audience) -> None:
-    expected_type = "god_view.ready" if audience == "spectator_god_view" else "client.ready"
+    expected_type = {
+        "player_public": "client.ready",
+        "spectator_directed": "director.ready",
+        "spectator_god_view": "god_view.ready",
+    }[audience]
     if message.get("protocol_version") != 1 or message.get("type") != expected_type:
         raise V2ClientProtocolError("invalid_ready_message")
     audio = message.get("audio")
