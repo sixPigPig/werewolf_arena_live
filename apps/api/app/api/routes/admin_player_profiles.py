@@ -44,6 +44,7 @@ from app.api.routes.player_profiles import (
 )
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import (
     PlayerProfileNotFound,
@@ -72,7 +73,6 @@ from app.werewolf.player_presets import (
     STRATEGY_LABELS,
     STRATEGY_PRESETS,
 )
-from app.werewolf.providers import configured_model_options
 from app.werewolf.speech_delivery import (
     DELIVERY_MAPPING_VERSION,
     compile_context_texts,
@@ -388,16 +388,42 @@ def list_profiles(
 def get_profile_options(
     request: Request,
     response: Response,
+    db: Annotated[Session, Depends(get_db)],
     _principal: Annotated[
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.PLAYERS_READ)),
     ],
 ) -> AdminPlayerProfileOptionsResponse:
     _set_private_headers(request, response)
+    try:
+        model_configurations = list(
+            db.scalars(
+                select(ModelConfigurationRecord)
+                .where(
+                    ModelConfigurationRecord.available.is_(True),
+                    ModelConfigurationRecord.enabled.is_(True),
+                )
+                .order_by(
+                    ModelConfigurationRecord.is_default.desc(),
+                    ModelConfigurationRecord.provider,
+                    ModelConfigurationRecord.model_id,
+                )
+            )
+        )
+    except RecoverableDatabaseError as exc:
+        raise _database_unavailable() from exc
     return AdminPlayerProfileOptionsResponse(
         models=[
-            {"id": option["id"], "label": option["label"], "description": ""}
-            for option in configured_model_options()
+            {
+                "provider": item.provider,
+                "model_id": item.model_id,
+                "label": (
+                    f"{_model_provider_label(item.provider)} · "
+                    f"{item.display_name or item.model_id}"
+                ),
+                "description": item.description or "",
+            }
+            for item in model_configurations
         ],
         personalities=[
             {
@@ -505,7 +531,6 @@ def create_profile(
             gender=request_body.gender,
             dialect=request_body.tts_dialect,
         )
-        _ensure_configured_model(request_body.model)
         profile = create_player_profile(
             db,
             values=request_body.model_dump(),
@@ -593,8 +618,6 @@ def update_profile(
                 dialect=updates.get("tts_dialect", existing.tts_dialect),
                 current_dialect=existing.tts_dialect,
             )
-        if "model" in updates and updates["model"] != existing.model:
-            _ensure_configured_model(str(updates["model"]))
         if existing.status == "published" or "featured" in updates:
             _require_extra_permission(principal, AdminPermission.PLAYERS_PUBLISH)
         before = audit_player_profile_snapshot(existing)
@@ -869,12 +892,11 @@ def _require_extra_permission(
         )
 
 
-def _ensure_configured_model(model: str) -> None:
-    configured_models = {option["id"] for option in configured_model_options()}
-    if model not in configured_models:
-        raise PlayerProfileValidationError(
-            "The selected model is not configured for this deployment."
-        )
+def _model_provider_label(provider: str) -> str:
+    return {
+        "agent_plan": "火山方舟 Agent Plan",
+        "deepseek": "DeepSeek 官方 API",
+    }.get(provider, provider)
 
 
 def _record_failed_create(
@@ -897,6 +919,7 @@ def _record_failed_create(
         reason=reason,
         after={
             "display_name": request_body.display_name,
+            "model_provider": request_body.model_provider,
             "model": request_body.model,
             "target_status": "draft",
         },

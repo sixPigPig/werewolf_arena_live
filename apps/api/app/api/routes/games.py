@@ -183,6 +183,7 @@ class CreatePlayerConfigRequest(BaseModel):
     profile_id: str | None = Field(default=None, min_length=1, max_length=36)
     name: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    model_provider: str | None = Field(default=None, min_length=1, max_length=32)
     model: str | None = Field(default=None, min_length=1, max_length=120)
     personality_id: str | None = Field(default=None, min_length=1, max_length=40)
     personality: str | None = None

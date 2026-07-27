@@ -22,6 +22,7 @@ function profile(
     id,
     owner_user_id: null,
     display_name,
+    model_provider: "deepseek",
     model: "deepseek-chat",
     personality_id: "balanced",
     personality_text: "",

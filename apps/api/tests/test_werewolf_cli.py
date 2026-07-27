@@ -473,6 +473,7 @@ def test_import_player_profiles_command_is_idempotent(tmp_path, capsys, monkeypa
                     {
                         "id": "legacy-profile",
                         "display_name": "旧档玩家",
+                        "model_provider": "deepseek",
                         "model": "deepseek-v4-flash",
                         "personality_id": "cautious",
                         "personality_text": "先听后判。",
@@ -556,6 +557,7 @@ def test_import_player_profiles_command_rolls_back_database_failure(
                     {
                         "id": "legacy-profile",
                         "display_name": "旧档玩家",
+                        "model_provider": "deepseek",
                         "model": "deepseek-v4-flash",
                     }
                 ],
@@ -623,6 +625,7 @@ def test_migrate_player_avatar_assets_command_imports_legacy_files(
                 id="legacy-profile",
                 owner_user_id=None,
                 display_name="旧图玩家",
+                model_provider="deepseek",
                 model="deepseek-v4-flash",
                 personality_id="balanced",
                 personality_text="稳健推进。",
@@ -678,6 +681,7 @@ def test_migrate_player_avatar_assets_command_reuses_and_counts_missing_files(
                     id=profile_id,
                     owner_user_id=None,
                     display_name=profile_id,
+                    model_provider="deepseek",
                     model="deepseek-v4-flash",
                     personality_id="balanced",
                     personality_text="稳健推进。",
@@ -725,6 +729,7 @@ def test_import_player_profiles_maps_legacy_system_avatar_to_asset_id(
                     {
                         "id": "legacy-system-profile",
                         "display_name": "内设旧图",
+                        "model_provider": "deepseek",
                         "model": "deepseek-v4-flash",
                         "appearance_id": "default",
                         "avatar_image_url": "/player-avatars/gothic-female-1.png",

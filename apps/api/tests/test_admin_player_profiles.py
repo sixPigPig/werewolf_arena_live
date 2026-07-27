@@ -31,6 +31,7 @@ from app.models.live import (
     VoiceMaterializationJobRecord,
     VoiceUtteranceRecord,
 )
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import PlayerProfileVersionConflict
 from app.player_profiles.service import update_player_profile
@@ -71,6 +72,22 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminProfilesContext, 
     )
     Base.metadata.create_all(engine)
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with testing_session.begin() as db:
+        for index, option in enumerate(configured_model_options()):
+            db.add(
+                ModelConfigurationRecord(
+                    provider=option["provider"],
+                    model_id=option["model_id"],
+                    source_model_id=option["model_id"],
+                    display_name=option["model_id"],
+                    available=True,
+                    enabled=True,
+                    is_default=index == 0,
+                    supports_thinking=True,
+                    parameter_values={"thinking": "default"},
+                    source_details={"source": "test"},
+                )
+            )
 
     def override_get_db() -> Generator[Session, None, None]:
         with testing_session() as db:
@@ -97,7 +114,19 @@ def _login(
 
 
 def _model_name() -> str:
-    return configured_model_options()[0]["id"]
+    return configured_model_options()[0]["model_id"]
+
+
+def _model_provider() -> str:
+    return configured_model_options()[0]["provider"]
+
+
+def _model_label() -> str:
+    provider_label = {
+        "deepseek": "DeepSeek 官方 API",
+        "agent_plan": "火山方舟 Agent Plan",
+    }.get(_model_provider(), _model_provider())
+    return f"{provider_label} · {_model_name()}"
 
 
 class StubAiDraftProvider:
@@ -166,7 +195,11 @@ def _create_draft(
     response = context.client.post(
         "/api/v1/admin/player-profiles",
         headers={"X-CSRF-Token": csrf_token},
-        json={"display_name": display_name, "model": _model_name()},
+        json={
+            "display_name": display_name,
+            "model_provider": _model_provider(),
+            "model": _model_name(),
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -252,6 +285,7 @@ def test_admin_create_is_draft_and_uses_exact_safe_response_contract(
         headers={"X-CSRF-Token": csrf_token, "X-Request-ID": "profiles-create-1"},
         json={
             "display_name": "  雾夜司南  ",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             "short_description": "冷静盘票",
         },
@@ -262,6 +296,8 @@ def test_admin_create_is_draft_and_uses_exact_safe_response_contract(
     assert response.headers["x-request-id"] == "profiles-create-1"
     payload = response.json()
     assert payload["display_name"] == "雾夜司南"
+    assert payload["model_provider"] == _model_provider()
+    assert payload["model"] == _model_name()
     assert payload["status"] == "draft"
     assert payload["version"] == 1
     assert payload["published_at"] is None
@@ -305,6 +341,7 @@ def test_admin_update_accepts_an_existing_database_avatar(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "display_name": "纪衡",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             "appearance_id": "gothic-male-2",
             "avatar_asset_id": "system-gothic-male-2",
@@ -355,6 +392,7 @@ def test_admin_create_rejects_forbidden_mass_assignment_fields(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "display_name": "越权字段测试",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             forbidden_field: value,
         },
@@ -377,11 +415,19 @@ def test_admin_create_rejects_unconfigured_model_and_missing_csrf(
     invalid_model = context.client.post(
         "/api/v1/admin/player-profiles",
         headers={"X-CSRF-Token": csrf_token},
-        json={"display_name": "未知模型", "model": "not-configured-model"},
+        json={
+            "display_name": "未知模型",
+            "model_provider": _model_provider(),
+            "model": "not-configured-model",
+        },
     )
     missing_csrf = context.client.post(
         "/api/v1/admin/player-profiles",
-        json={"display_name": "无 CSRF", "model": _model_name()},
+        json={
+            "display_name": "无 CSRF",
+            "model_provider": _model_provider(),
+            "model": _model_name(),
+        },
     )
 
     assert invalid_model.status_code == 422
@@ -404,6 +450,7 @@ def test_admin_create_rejects_unconfigured_model_and_missing_csrf(
     )
     assert failures[0].after == {
         "display_name": "未知模型",
+        "model_provider": _model_provider(),
         "model": "not-configured-model",
         "target_status": "draft",
     }
@@ -640,6 +687,7 @@ def test_admin_rejects_new_profile_speaker_without_delivery_context_capability(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "display_name": "不兼容音色",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             "tts_speaker": speaker,
         },
@@ -742,6 +790,7 @@ def test_admin_rejects_invalid_gender_speaker_dialect_combinations(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "display_name": "组合校验",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             **values,
         },
@@ -762,6 +811,7 @@ def test_admin_persists_supported_tts2_dialect_and_tracks_voice_version(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "display_name": "四川口音玩家",
+            "model_provider": _model_provider(),
             "model": _model_name(),
             "gender": "female",
             "tts_speaker": "zh_female_vv_uranus_bigtts",
@@ -978,14 +1028,29 @@ def test_mapper_version_rejects_a_real_two_session_lost_update(tmp_path) -> None
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with factory() as seed:
-        seed.add(
-            VirtualPlayerProfile(
-                id="concurrent-profile",
-                display_name="并发玩家",
-                model="legacy-model",
-                status="published",
-                published_at=datetime.now(UTC),
-            )
+        seed.add_all(
+            [
+                ModelConfigurationRecord(
+                    provider=_model_provider(),
+                    model_id=_model_name(),
+                    source_model_id=_model_name(),
+                    display_name=_model_name(),
+                    available=True,
+                    enabled=True,
+                    is_default=True,
+                    supports_thinking=True,
+                    parameter_values={"thinking": "default"},
+                    source_details={"source": "test"},
+                ),
+                VirtualPlayerProfile(
+                    id="concurrent-profile",
+                    display_name="并发玩家",
+                    model_provider=_model_provider(),
+                    model=_model_name(),
+                    status="published",
+                    published_at=datetime.now(UTC),
+                ),
+            ]
         )
         seed.commit()
 
@@ -1093,11 +1158,21 @@ def test_options_and_role_permission_matrix(
     create_as_viewer = context.client.post(
         "/api/v1/admin/player-profiles",
         headers={"X-CSRF-Token": viewer_csrf},
-        json={"display_name": "Viewer", "model": _model_name()},
+        json={
+            "display_name": "Viewer",
+            "model_provider": _model_provider(),
+            "model": _model_name(),
+        },
     )
 
     assert options.status_code == 200
     assert options.json()["models"]
+    assert options.json()["models"][0] == {
+        "provider": _model_provider(),
+        "model_id": _model_name(),
+        "label": _model_label(),
+        "description": "",
+    }
     assert options.json()["personalities"]
     assert options.json()["appearances"]
     assert options.json()["strategies"]
@@ -1231,7 +1306,7 @@ def test_published_update_needs_publish_permission_in_addition_to_write(
     assert persisted.short_description == ""
 
 
-def test_admin_can_preserve_an_existing_unconfigured_model_but_cannot_change_to_one(
+def test_admin_requires_an_existing_unconfigured_model_to_be_replaced(
     context: AdminProfilesContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1241,6 +1316,7 @@ def test_admin_can_preserve_an_existing_unconfigured_model_but_cannot_change_to_
             VirtualPlayerProfile(
                 id="legacy-model-profile",
                 display_name="旧模型玩家",
+                model_provider="retired_provider",
                 model="retired-model",
                 status="published",
                 published_at=datetime.now(UTC),
@@ -1257,16 +1333,22 @@ def test_admin_can_preserve_an_existing_unconfigured_model_but_cannot_change_to_
             "short_description": "保留旧模型并更新说明",
         },
     )
-    changed = context.client.patch(
+    repaired = context.client.patch(
         "/api/v1/admin/player-profiles/legacy-model-profile",
         headers={"X-CSRF-Token": csrf_token},
-        json={"expected_version": 2, "model": "another-retired-model"},
+        json={
+            "expected_version": 1,
+            "model_provider": _model_provider(),
+            "model": _model_name(),
+        },
     )
 
-    assert unchanged.status_code == 200
-    assert unchanged.json()["version"] == 2
-    assert changed.status_code == 422
-    assert changed.json()["code"] == "admin_player_profile_invalid"
+    assert unchanged.status_code == 422
+    assert unchanged.json()["code"] == "admin_player_profile_invalid"
+    assert repaired.status_code == 200
+    assert repaired.json()["version"] == 2
+    assert repaired.json()["model_provider"] == _model_provider()
+    assert repaired.json()["model"] == _model_name()
     with context.session_factory() as db:
         failed_update = db.scalar(
             select(AuditEvent).where(
@@ -1291,6 +1373,7 @@ def test_public_response_is_published_only_and_recursively_omits_internal_fields
                 VirtualPlayerProfile(
                     id="published-profile",
                     display_name="公开玩家",
+                    model_provider="legacy",
                     model="legacy-model",
                     personality_id="balanced",
                     personality_text="公开人格",
@@ -1307,6 +1390,7 @@ def test_public_response_is_published_only_and_recursively_omits_internal_fields
                 VirtualPlayerProfile(
                     id="draft-profile",
                     display_name="草稿玩家",
+                    model_provider="legacy",
                     model="legacy-model",
                     status="draft",
                     published_at=None,
@@ -1348,6 +1432,7 @@ def test_admin_never_returns_legacy_external_avatar_url(
             VirtualPlayerProfile(
                 id="external-avatar-profile",
                 display_name="旧外链头像",
+                model_provider="legacy",
                 model="legacy-model",
                 avatar_image_url="https://tracker.example/avatar.png",
                 status="published",
@@ -1372,6 +1457,7 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
             VirtualPlayerProfile(
                 id="legacy-profile",
                 display_name="兼容玩家",
+                model_provider="legacy",
                 model="legacy-model",
                 status="published",
                 published_at=datetime.now(UTC),
@@ -1381,7 +1467,11 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
 
     create = context.client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "匿名创建", "model": "legacy-model"},
+        json={
+            "display_name": "匿名创建",
+            "model_provider": "legacy",
+            "model": "legacy-model",
+        },
     )
     content_patch = context.client.patch(
         "/api/v1/player-profiles/legacy-profile",
@@ -1430,6 +1520,7 @@ def test_admin_ai_draft_requires_permission_csrf_and_audits_success(
             VirtualPlayerProfile(
                 id="existing-ai-name",
                 display_name="夜枭",
+                model_provider="legacy",
                 model="legacy-model",
                 status="draft",
                 published_at=None,
@@ -1513,6 +1604,7 @@ def test_legacy_delete_soft_archives_when_explicitly_enabled(
             VirtualPlayerProfile(
                 id="legacy-delete-profile",
                 display_name="待兼容删除",
+                model_provider="legacy",
                 model="legacy-model",
                 status="published",
                 published_at=datetime.now(UTC),

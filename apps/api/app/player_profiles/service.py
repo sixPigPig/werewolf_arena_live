@@ -10,6 +10,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import (
     PlayerProfileNotFound,
@@ -40,6 +41,7 @@ PlayerProfileSort = Literal[
 _EDITABLE_PROFILE_FIELDS = frozenset(
     {
         "display_name",
+        "model_provider",
         "model",
         "personality_id",
         "personality_text",
@@ -200,6 +202,11 @@ def create_player_profile(
     personality_id = str(data.get("personality_id") or "balanced")
     appearance_id = str(data.get("appearance_id") or "default")
     _validate_presets(personality_id, appearance_id, str(data.get("strategy_profile") or "balanced"))
+    _ensure_model_configuration(
+        db,
+        provider=str(data.get("model_provider") or ""),
+        model=str(data.get("model") or ""),
+    )
 
     avatar_asset_id = _optional_string(data.get("avatar_asset_id"))
     avatar_image_url = str(data.get("avatar_image_url") or "")
@@ -230,6 +237,7 @@ def create_player_profile(
         id=str(uuid.uuid4()),
         owner_user_id=None,
         display_name=str(data["display_name"]),
+        model_provider=str(data["model_provider"]),
         model=str(data["model"]),
         personality_id=personality_id,
         personality_text=str(data.get("personality_text") or "")
@@ -308,6 +316,11 @@ def update_player_profile(
     appearance_id = str(data.get("appearance_id", profile.appearance_id))
     strategy_profile = str(data.get("strategy_profile", profile.strategy_profile))
     _validate_presets(personality_id, appearance_id, strategy_profile)
+    _ensure_model_configuration(
+        db,
+        provider=str(data.get("model_provider", profile.model_provider)),
+        model=str(data.get("model", profile.model)),
+    )
     voice_fields = {
         "gender",
         "tts_speaker",
@@ -371,6 +384,23 @@ def update_player_profile(
     profile.updated_at = datetime.now(UTC)
     _flush_with_conflict(db, profile)
     return profile
+
+
+def _ensure_model_configuration(
+    db: Session,
+    *,
+    provider: str,
+    model: str,
+) -> None:
+    configuration = db.get(ModelConfigurationRecord, (provider, model))
+    if (
+        configuration is None
+        or not configuration.available
+        or not configuration.enabled
+    ):
+        raise PlayerProfileValidationError(
+            "The selected model is not configured for this deployment."
+        )
 
 
 def publish_player_profile(

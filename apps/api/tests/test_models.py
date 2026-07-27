@@ -242,6 +242,7 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "id",
         "owner_user_id",
         "display_name",
+        "model_provider",
         "model",
         "personality_id",
         "personality_text",
@@ -288,6 +289,7 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.owner_user_id.foreign_keys
     assert table.c.owner_user_id.index is True
     assert table.c.display_name.nullable is False
+    _assert_string_column(table.c.model_provider, length=32, nullable=False)
     assert table.c.model.nullable is False
     assert table.c.personality_id.nullable is False
     assert table.c.appearance_id.nullable is False
@@ -322,6 +324,17 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "ix_virtual_player_profiles_status_updated_at",
         ["status", "updated_at", "id"],
     )
+    _assert_index(
+        table,
+        "ix_virtual_player_profiles_status_model",
+        ["status", "model_provider", "model"],
+    )
+    assert any(
+        constraint.name == "fk_virtual_player_profiles_model_configuration"
+        and [column.name for column in constraint.columns]
+        == ["model_provider", "model"]
+        for constraint in table.foreign_key_constraints
+    )
 
 
 def test_virtual_player_profile_tag_append_is_persisted() -> None:
@@ -332,6 +345,7 @@ def test_virtual_player_profile_tag_append_is_persisted() -> None:
         profile = VirtualPlayerProfile(
             id="profile-1",
             display_name="控场位",
+            model_provider="deepseek",
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="稳健推进",
@@ -363,6 +377,7 @@ def test_virtual_player_profile_rich_list_appends_are_persisted() -> None:
         profile = VirtualPlayerProfile(
             id="profile-1",
             display_name="控场位",
+            model_provider="deepseek",
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="稳健推进",

@@ -2,6 +2,7 @@ import type { PlayerConfig } from "../types";
 
 export type LineupPlayerProfile = {
   id: string;
+  model_provider: string;
   model: string;
   personality_id: string;
   favorite?: boolean;

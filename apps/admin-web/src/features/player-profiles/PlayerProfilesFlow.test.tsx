@@ -515,6 +515,7 @@ describe("admin player profile flow", () => {
 const serverProfile: AdminPlayerProfile = {
   id: "server-profile",
   display_name: "服务器玩家",
+  model_provider: "deepseek",
   model: "deepseek-v4-flash",
   personality_id: "analytical",
   personality_text: "重视票型。",
@@ -548,7 +549,13 @@ const serverProfile: AdminPlayerProfile = {
 };
 
 const contractOptions = {
-  models: [{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }],
+  models: [
+    {
+      provider: "deepseek",
+      model_id: "deepseek-v4-flash",
+      label: "DeepSeek V4 Flash",
+    },
+  ],
   personalities: [
     { id: "analytical", label: "分析", description: "重视票型。" },
   ],

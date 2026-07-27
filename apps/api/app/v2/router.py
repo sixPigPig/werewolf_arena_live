@@ -33,6 +33,7 @@ from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.core.config import settings
 from app.db.session import get_db
 from app.judge_configuration import build_judge_voice_snapshot, runtime_judge_configuration
+from app.models.model_configuration import ModelConfigurationRecord
 from app.v2.contracts import (
     AdminV2EventResponse,
     AdminV2GameDetailResponse,
@@ -131,9 +132,32 @@ def create_v2_game(
             "lineup_quality_report": lobby.lineup_quality_report.model_dump(mode="json"),
             "rule_set": lobby.rule_set.model_dump(mode="json", exclude_none=True),
         }
-        players_snapshot = [
-            item.model_dump(mode="json", exclude_none=True) for item in lobby.player_configs
-        ]
+        players_snapshot = []
+        for item in lobby.player_configs:
+            model_configuration = db.get(
+                ModelConfigurationRecord,
+                (item.model_provider, item.model),
+            )
+            if (
+                model_configuration is None
+                or not model_configuration.available
+                or not model_configuration.enabled
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Player model is not enabled: "
+                        f"{item.model_provider}/{item.model}"
+                    ),
+                )
+            player_snapshot = item.model_dump(mode="json", exclude_none=True)
+            player_snapshot["model_parameters"] = dict(
+                model_configuration.parameter_values or {}
+            )
+            player_snapshot["model_configuration_updated_at"] = (
+                model_configuration.updated_at.isoformat()
+            )
+            players_snapshot.append(player_snapshot)
     game, run, god_view_access_token = create_waiting_game(
         db,
         title=body.title,

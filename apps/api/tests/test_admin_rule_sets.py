@@ -225,6 +225,7 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                 VirtualPlayerProfile(
                     id=f"published-profile-{index}",
                     display_name=f"Published {index}",
+                    model_provider="deepseek",
                     model="test-model",
                     status="published",
                     published_at=now,
@@ -235,6 +236,7 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
             VirtualPlayerProfile(
                 id="draft-profile",
                 display_name="Draft",
+                model_provider="deepseek",
                 model="test-model",
                 status="draft",
                 published_at=None,
@@ -246,6 +248,7 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
             VirtualPlayerProfile(
                 id="deleted-published-profile",
                 display_name="Deleted published profile",
+                model_provider="deepseek",
                 model="test-model",
                 status="published",
                 published_at=now,

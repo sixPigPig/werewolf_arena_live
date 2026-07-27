@@ -44,6 +44,7 @@ from app.models.live import (
     VoiceAudioChunkRecord,
     VoiceUtteranceRecord,
 )
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
@@ -83,6 +84,21 @@ engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base.metadata.create_all(engine)
+with TestingSessionLocal.begin() as session:
+    session.add(
+        ModelConfigurationRecord(
+            provider="deepseek",
+            model_id="deepseek-v4-flash",
+            source_model_id="deepseek-v4-flash",
+            display_name="deepseek-v4-flash",
+            available=True,
+            enabled=True,
+            is_default=True,
+            supports_thinking=True,
+            parameter_values={"thinking": "default"},
+            source_details={"source": "test"},
+        )
+    )
 
 client = TestClient(app)
 
@@ -164,6 +180,7 @@ def test_game_profile_selection_only_uses_published_profiles() -> None:
                 VirtualPlayerProfile(
                     id="published-for-game",
                     display_name="公开玩家",
+                    model_provider="deepseek",
                     model="model-a",
                     status="published",
                     published_at=datetime.now(UTC),
@@ -172,6 +189,7 @@ def test_game_profile_selection_only_uses_published_profiles() -> None:
                 VirtualPlayerProfile(
                     id="draft-for-game",
                     display_name="草稿玩家",
+                    model_provider="deepseek",
                     model="model-a",
                     status="draft",
                     published_at=None,
@@ -180,6 +198,7 @@ def test_game_profile_selection_only_uses_published_profiles() -> None:
                 VirtualPlayerProfile(
                     id="archived-for-game",
                     display_name="归档玩家",
+                    model_provider="deepseek",
                     model="model-a",
                     status="archived",
                     published_at=datetime.now(UTC),
@@ -214,6 +233,7 @@ def test_game_profile_config_drops_unmanaged_external_avatar_url() -> None:
             VirtualPlayerProfile(
                 id="external-avatar-for-game",
                 display_name="旧外链头像玩家",
+                model_provider="deepseek",
                 model="model-a",
                 avatar_image_url="https://tracker.example/avatar.png",
                 status="published",
@@ -289,6 +309,7 @@ def add_virtual_profiles(
                 VirtualPlayerProfile(
                     id=profile_id,
                     display_name=f"虚拟玩家{index}",
+                    model_provider="deepseek",
                     model="profile-model",
                     personality_id=(
                         personalities[(index - 1) % len(personalities)] if diverse else "balanced"
@@ -833,12 +854,27 @@ def test_list_model_options_returns_configured_models(monkeypatch: pytest.Monkey
     assert response.status_code == 200
     assert response.json() == {
         "models": [
-            *[
-                {"id": model, "label": f"火山方舟 Agent Plan · {model}"}
-                for model in ARK_AGENT_PLAN_MODELS
-            ],
-            {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
-            {"id": "qwen-test", "label": "Qwen · qwen-test"},
+                *[
+                    {
+                        "id": model,
+                        "provider": "agent_plan",
+                        "model_id": model,
+                        "label": f"火山方舟 Agent Plan · {model}",
+                    }
+                    for model in ARK_AGENT_PLAN_MODELS
+                ],
+                {
+                    "id": "deepseek-test",
+                    "provider": "deepseek",
+                    "model_id": "deepseek-test",
+                    "label": "DeepSeek · deepseek-test",
+                },
+                {
+                    "id": "qwen-test",
+                    "provider": "qwen",
+                    "model_id": "qwen-test",
+                    "label": "Qwen · qwen-test",
+                },
         ]
     }
 
@@ -858,13 +894,28 @@ def test_list_model_options_prefers_default_model(monkeypatch: pytest.MonkeyPatc
     assert response.status_code == 200
     assert response.json() == {
         "models": [
-            {"id": "minimax-m3", "label": "火山方舟 Agent Plan · minimax-m3"},
+            {
+                "id": "minimax-m3",
+                "provider": "agent_plan",
+                "model_id": "minimax-m3",
+                "label": "火山方舟 Agent Plan · minimax-m3",
+            },
             *[
-                {"id": model, "label": f"火山方舟 Agent Plan · {model}"}
+                {
+                    "id": model,
+                    "provider": "agent_plan",
+                    "model_id": model,
+                    "label": f"火山方舟 Agent Plan · {model}",
+                }
                 for model in ARK_AGENT_PLAN_MODELS
                 if model != "minimax-m3"
             ],
-            {"id": "deepseek-test", "label": "DeepSeek · deepseek-test"},
+            {
+                "id": "deepseek-test",
+                "provider": "deepseek",
+                "model_id": "deepseek-test",
+                "label": "DeepSeek · deepseek-test",
+            },
         ]
     }
 
@@ -883,9 +934,7 @@ def test_list_model_options_falls_back_to_default_without_keys(
     response = client.get("/api/v1/games/model-options")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "models": [{"id": "deepseek-v4-flash", "label": "默认模型 · deepseek-v4-flash"}]
-    }
+    assert response.json() == {"models": []}
 
 
 def test_create_game_run_accepts_rule_set_id(
@@ -2342,6 +2391,7 @@ def test_create_game_run_resolves_profile_configs(
             VirtualPlayerProfile(
                 id="profile-alpha",
                 display_name="控场位",
+                model_provider="deepseek",
                 model="profile-model",
                 personality_id="cautious",
                 personality_text="谨慎控场，避免过早暴露身份。",
@@ -2405,8 +2455,9 @@ def test_create_game_run_resolves_profile_configs(
     assert snapshot == {
         "seat": 2,
         "profile_id": "profile-alpha",
-        "name": "覆盖名",
-        "model": "profile-model",
+            "name": "覆盖名",
+            "model_provider": "deepseek",
+            "model": "profile-model",
         "personality_id": "aggressive",
         "personality": expected_personality,
         "appearance_id": "crimson",
@@ -2472,6 +2523,7 @@ def test_game_run_player_config_composes_rich_profile_prompt(
         "/api/v1/player-profiles",
         json={
             "display_name": "控场样本",
+            "model_provider": "deepseek",
             "model": "deepseek-v4-flash",
             "personality_id": "analytical",
             "personality_text": "先找矛盾，再给站边。",
@@ -2525,6 +2577,7 @@ def test_game_run_player_config_keeps_explicit_personality_text_override(
         "/api/v1/player-profiles",
         json={
             "display_name": "覆盖样本",
+            "model_provider": "deepseek",
             "model": "deepseek-v4-flash",
             "personality_id": "analytical",
             "personality_text": "先找矛盾，再给站边。",
@@ -2644,6 +2697,7 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                 "seat": 2,
                 "profile_id": "profile-alpha",
                 "name": "控场位",
+                "model_provider": "deepseek",
                 "model": "profile-model",
                 "personality_id": "cautious",
                 "personality": "谨慎控场。",
@@ -2707,9 +2761,10 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     assert payload["player_configs"] == [
         {
             "seat": 2,
-            "profile_id": "profile-alpha",
-            "name": "控场位",
-            "model": "profile-model",
+                "profile_id": "profile-alpha",
+                "name": "控场位",
+                "model_provider": "deepseek",
+                "model": "profile-model",
             "personality_id": "cautious",
             "personality": "谨慎控场。",
             "appearance_id": "moonlit",

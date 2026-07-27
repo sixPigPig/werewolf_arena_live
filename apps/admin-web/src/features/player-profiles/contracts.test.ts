@@ -20,6 +20,7 @@ import type {
 export const contractProfile: AdminPlayerProfile = {
   id: "profile-1",
   display_name: "暮鸦归票",
+  model_provider: "deepseek",
   model: "deepseek-v4-flash",
   personality_id: "analytical",
   personality_text: "重视票型。",
@@ -54,6 +55,7 @@ export const contractProfile: AdminPlayerProfile = {
 
 const createRequest: CreatePlayerProfileRequest = {
   display_name: contractProfile.display_name,
+  model_provider: contractProfile.model_provider,
   model: contractProfile.model,
   personality_id: contractProfile.personality_id,
   personality_text: contractProfile.personality_text,

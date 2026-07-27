@@ -355,9 +355,9 @@ function ModelConfigurationForm({
           </ModelParameterField>
           <NumberField
             defaultValue={model.parameters.max_tokens}
-            description="限制模型单次响应最多生成的 token 数。实际输出上限会取这里与游戏运行预算中的较小值；留空则只使用游戏预算。"
+            description={`限制模型单次响应最多生成的 token 数。当前模型上限为 ${model.max_output_tokens_limit.toLocaleString()}；实际值还会受游戏运行预算限制。`}
             label="最大输出 tokens"
-            max={384000}
+            max={model.max_output_tokens_limit}
             min={1}
             name="max_tokens"
             step={1}
@@ -411,6 +411,8 @@ function ModelConfigurationForm({
           </p>
         ) : model.provider === "deepseek" && samplingDisabled ? (
           <p className="model-parameter-note">DeepSeek 官方说明：思考开启（含默认值）时，Temperature、Top P 与两类 penalty 不生效，保存时会自动清空。</p>
+        ) : model.provider === "agent_plan" ? (
+          <p className="model-parameter-note">Temperature 与 Top P 建议只配置一个；两类 penalty 仅用于 Chat 调用，V2 Responses 请求不会发送。</p>
         ) : (
           <p className="model-parameter-note">Temperature 与 Top P 建议只配置一个；留空表示继续使用游戏动作自己的动态值。</p>
         )}

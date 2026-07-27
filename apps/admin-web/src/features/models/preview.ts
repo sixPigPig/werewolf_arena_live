@@ -63,7 +63,13 @@ function previewModel(
       presence_penalty: null,
     },
     reasoning_effort_options:
-      provider === "deepseek" ? ["high", "max"] : ["low", "medium", "high"],
+      provider === "deepseek"
+        ? ["high", "max"]
+        : ["minimal", "low", "medium", "high"],
+    max_output_tokens_limit:
+      provider === "agent_plan" && modelId.startsWith("glm-5-2-")
+        ? 131072
+        : 384000,
     docs_url:
       provider === "deepseek"
         ? "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode"

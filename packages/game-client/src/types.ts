@@ -36,6 +36,8 @@ export type RuleSetsResponse = {
 
 export type ModelOption = {
   id: string;
+  provider: string;
+  model_id: string;
   label: string;
 };
 
@@ -446,6 +448,7 @@ export type VirtualPlayerProfile = {
   id: string;
   owner_user_id: number | null;
   display_name: string;
+  model_provider: string;
   model: string;
   personality_id: string;
   personality_text: string;
@@ -479,6 +482,7 @@ export type PlayerProfilesResponse = {
 export type PublicPlayerProfile = {
   id: string;
   display_name: string;
+  model_provider: string;
   model: string;
   personality_id: string;
   personality_text: string;
@@ -568,6 +572,7 @@ export type PlayerProfileAiDraftResponse = {
 
 export type PlayerProfileRequest = {
   display_name: string;
+  model_provider: string;
   model: string;
   personality_id?: string;
   personality_text?: string;
@@ -593,6 +598,7 @@ export type PlayerProfileRequest = {
 
 export const DEFAULT_PLAYER_PROFILE_DRAFT: PlayerProfileRequest = {
   display_name: "",
+  model_provider: "",
   model: "",
   personality_id: "balanced",
   personality_text: "",
@@ -622,6 +628,7 @@ export type PlayerConfig = {
   seat: number;
   profile_id?: string | null;
   name?: string | null;
+  model_provider?: string | null;
   model?: string | null;
   personality_id?: string;
   personality?: string;

@@ -18,6 +18,7 @@ export function inputFromProfile(
   }
   return cloneInput({
     display_name: profile.display_name,
+    model_provider: profile.model_provider,
     model: profile.model,
     personality_id: profile.personality_id,
     personality_text: profile.personality_text,
@@ -47,6 +48,7 @@ export function cleanPlayerProfileInput(
   return {
     ...value,
     display_name: value.display_name.trim(),
+    model_provider: value.model_provider.trim(),
     model: value.model.trim(),
     personality_id: value.personality_id.trim(),
     personality_text: value.personality_text.trim(),
@@ -79,7 +81,7 @@ export function validatePlayerProfileInput(
   } else if (value.display_name.trim().length > 80) {
     errors.display_name = "玩家名称不能超过 80 个字符";
   }
-  if (!value.model.trim()) {
+  if (!value.model_provider.trim() || !value.model.trim()) {
     errors.model = "请选择默认模型";
   } else if (value.model.trim().length > 120) {
     errors.model = "模型标识不能超过 120 个字符";

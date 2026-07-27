@@ -487,7 +487,16 @@ export function GamesPage() {
           return;
         }
         const completePlayerConfigs = validatedConfigs.flatMap((config) =>
-          config.profile_id ? [{ ...config, profile_id: config.profile_id }] : [],
+          config.profile_id && config.model_provider && config.model
+            ? [
+                {
+                  ...config,
+                  profile_id: config.profile_id,
+                  model_provider: config.model_provider,
+                  model: config.model,
+                },
+              ]
+            : [],
         );
         if (completePlayerConfigs.length !== selectedRuleSet.player_count) {
           setValidationError("阵容快照不完整，请重新检查玩家座位");

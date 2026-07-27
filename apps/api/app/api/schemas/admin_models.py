@@ -41,6 +41,7 @@ class AdminModelItem(BaseModel):
     assigned_profile_count: int
     parameters: AdminModelParameters
     reasoning_effort_options: list[str]
+    max_output_tokens_limit: int
     docs_url: str
     updated_at: datetime
 

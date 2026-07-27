@@ -68,6 +68,7 @@ def _seed_dashboard(session_factory: sessionmaker[Session]) -> dict[str, str]:
                 VirtualPlayerProfile(
                     id="profile-night-owl",
                     display_name="夜枭",
+                    model_provider="deepseek",
                     model="model-a",
                     status="draft",
                     published_at=None,
@@ -75,6 +76,7 @@ def _seed_dashboard(session_factory: sessionmaker[Session]) -> dict[str, str]:
                 VirtualPlayerProfile(
                     id="profile-wolf-shadow",
                     display_name="狼影",
+                    model_provider="deepseek",
                     model="model-a",
                     status="published",
                     published_at=now,

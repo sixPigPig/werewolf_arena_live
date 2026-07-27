@@ -32,6 +32,7 @@ function buildProfile(
   const { display_name, id, ...profileOverrides } = overrides;
 
   return {
+    model_provider: overrides.model_provider ?? "deepseek",
     model: overrides.model ?? "test-model",
     personality_id: overrides.personality_id ?? "balanced",
     personality_text: "",

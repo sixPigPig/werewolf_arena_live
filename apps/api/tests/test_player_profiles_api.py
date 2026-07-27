@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -29,6 +30,30 @@ engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base.metadata.create_all(engine)
+TEST_MODEL_PROVIDER = "deepseek"
+TEST_MODEL_IDS = (
+    "deepseek-v4-flash",
+    "gpt-4.1-mini",
+    "model-a",
+    "model-b",
+    "model-c",
+)
+with TestingSessionLocal.begin() as session:
+    for index, model_id in enumerate(TEST_MODEL_IDS):
+        session.add(
+            ModelConfigurationRecord(
+                provider=TEST_MODEL_PROVIDER,
+                model_id=model_id,
+                source_model_id=model_id,
+                display_name=model_id,
+                available=True,
+                enabled=True,
+                is_default=index == 0,
+                supports_thinking=True,
+                parameter_values={"thinking": "default"},
+                source_details={"source": "test"},
+            )
+        )
 
 
 def override_get_db() -> Generator[Session, None, None]:
@@ -243,6 +268,7 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "  控场位  ",
+            "model_provider": f"  {TEST_MODEL_PROVIDER}  ",
             "model": "  gpt-4.1-mini  ",
             "personality_id": "cautious",
             "appearance_id": "moonlit",
@@ -273,7 +299,11 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
 def test_create_profile_returns_rich_character_defaults() -> None:
     response = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "默认玩家", "model": "deepseek-v4-flash"},
+        json={
+            "display_name": "默认玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "deepseek-v4-flash",
+        },
     )
 
     assert response.status_code == 201
@@ -464,6 +494,7 @@ def test_create_profile_binds_system_avatar_from_appearance_id() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "内设形象玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "gothic-female-2",
         },
@@ -496,6 +527,7 @@ def test_create_profile_normalizes_legacy_system_avatar_url() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "旧系统形象玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "default",
             "avatar_image_url": "/player-avatars/gothic-male-1.png",
@@ -518,6 +550,7 @@ def test_create_profile_rejects_legacy_file_url_even_when_appearance_is_set() ->
         "/api/v1/player-profiles",
         json={
             "display_name": "显式旧头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "gothic-male-1",
             "avatar_image_url": "/api/v1/player-profiles/avatar/legacy.png",
@@ -537,6 +570,7 @@ def test_create_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "缺失旧头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "avatar_image_url": "/api/v1/player-profiles/avatar/missing.png",
             "avatar_image_mime": "image/png",
@@ -555,6 +589,7 @@ def test_create_profile_rejects_missing_explicit_legacy_url_before_appearance() 
         "/api/v1/player-profiles",
         json={
             "display_name": "缺失显式旧头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "gothic-male-1",
             "avatar_image_url": "/api/v1/player-profiles/avatar/missing.png",
@@ -574,6 +609,7 @@ def test_create_profile_preserves_explicit_external_avatar_url_before_appearance
         "/api/v1/player-profiles",
         json={
             "display_name": "外部头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "gothic-female-2",
             "avatar_image_url": "https://example.test/avatar.png",
@@ -611,6 +647,7 @@ def test_create_profile_binds_database_avatar_asset_from_explicit_url() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "URL 绑定头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "appearance_id": "gothic-male-1",
             "avatar_image_url": "/api/v1/player-profiles/avatar-assets/uploaded-url-only-avatar",
@@ -627,7 +664,11 @@ def test_create_profile_binds_database_avatar_asset_from_explicit_url() -> None:
 def test_patch_profile_binds_database_avatar_asset_id() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待绑定头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待绑定头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
     upload_response = client.post(
         "/api/v1/player-profiles/avatar",
@@ -662,7 +703,11 @@ def test_patch_profile_binds_database_avatar_asset_id() -> None:
 def test_patch_profile_binds_database_avatar_asset_from_explicit_url() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待 URL 绑定头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待 URL 绑定头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
     upload_response = client.post(
         "/api/v1/player-profiles/avatar",
@@ -695,7 +740,11 @@ def test_patch_profile_binds_database_avatar_asset_from_explicit_url() -> None:
 def test_patch_profile_clears_database_avatar_asset_when_set_to_null() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待清空头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待清空头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
     uploaded = client.post(
         "/api/v1/player-profiles/avatar",
@@ -734,7 +783,11 @@ def test_patch_profile_clears_database_avatar_asset_when_set_to_null() -> None:
 def test_patch_profile_normalizes_legacy_system_avatar_url() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待更新系统头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待更新系统头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
 
     patch_response = client.patch(
@@ -758,7 +811,11 @@ def test_patch_profile_normalizes_legacy_system_avatar_url() -> None:
 def test_patch_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待更新缺失头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待更新缺失头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
 
     patch_response = client.patch(
@@ -779,7 +836,11 @@ def test_patch_profile_rejects_missing_legacy_uploaded_avatar_file() -> None:
 def test_patch_profile_rejects_legacy_file_url() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待迁移旧头像玩家", "model": "gpt-4.1-mini"},
+        json={
+            "display_name": "待迁移旧头像玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "gpt-4.1-mini",
+        },
     ).json()
 
     patch_response = client.patch(
@@ -803,6 +864,7 @@ def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> Non
             id="profile-with-missing-legacy-avatar",
             owner_user_id=None,
             display_name="旧头像字段玩家",
+            model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
@@ -865,6 +927,7 @@ def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> No
             id="profile-with-db-avatar-to-preserve",
             owner_user_id=None,
             display_name="DB 头像字段玩家",
+            model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
@@ -929,6 +992,7 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
             id="profile-with-stale-avatar-url",
             owner_user_id=None,
             display_name="旧 URL 玩家",
+            model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
@@ -978,11 +1042,19 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
 def test_list_profiles_keeps_default_order_after_profile_updates() -> None:
     created_a = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "A", "model": "model-a"},
+        json={
+            "display_name": "A",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-a",
+        },
     ).json()
     created_b = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "B", "model": "model-b"},
+        json={
+            "display_name": "B",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-b",
+        },
     ).json()
 
     updated_a = client.patch(
@@ -1004,15 +1076,27 @@ def test_patch_favorite_moves_profile_when_legacy_favorite_flag_is_enabled(
     monkeypatch.setattr(settings, "legacy_player_profile_favorite_writes_enabled", True)
     created_a = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "A", "model": "model-a"},
+        json={
+            "display_name": "A",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-a",
+        },
     ).json()
     created_b = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "B", "model": "model-b"},
+        json={
+            "display_name": "B",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-b",
+        },
     ).json()
     created_c = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "C", "model": "model-c"},
+        json={
+            "display_name": "C",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-c",
+        },
     ).json()
 
     favorite_response = client.patch(
@@ -1055,7 +1139,11 @@ def test_patch_favorite_moves_profile_when_legacy_favorite_flag_is_enabled(
 def test_patch_favorite_is_disabled_by_default() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "A", "model": "model-a"},
+        json={
+            "display_name": "A",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "model-a",
+        },
     ).json()
 
     response = client.patch(
@@ -1074,6 +1162,7 @@ def test_get_patch_delete_profile() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "Scout",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "personality_id": "balanced",
             "personality_text": "custom text",
@@ -1119,6 +1208,7 @@ def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None
         "/api/v1/player-profiles",
         json={
             "display_name": "Scout",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "gpt-4.1-mini",
             "personality_id": "balanced",
             "personality_text": "custom text",
@@ -1171,7 +1261,10 @@ def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None
     ],
 )
 def test_create_profile_validation_errors(payload: dict, expected_detail: str | None) -> None:
-    response = client.post("/api/v1/player-profiles", json=payload)
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={"model_provider": TEST_MODEL_PROVIDER, **payload},
+    )
 
     assert response.status_code == 422
     if expected_detail is not None:
@@ -1186,7 +1279,11 @@ def test_create_profile_validation_errors(payload: dict, expected_detail: str | 
         (
             "post",
             "/api/v1/player-profiles",
-            {"display_name": "数据库玩家", "model": "deepseek-v4-flash"},
+            {
+                "display_name": "数据库玩家",
+                "model_provider": TEST_MODEL_PROVIDER,
+                "model": "deepseek-v4-flash",
+            },
         ),
         (
             "patch",
@@ -1211,7 +1308,7 @@ def test_profile_api_returns_503_when_database_is_unavailable(
     assert response.json() == {"detail": "Player profile database unavailable"}
 
 
-def test_player_profile_file_store_reads_old_payload_with_rich_defaults(
+def test_player_profile_file_store_rejects_payload_without_model_provider(
     tmp_path,
 ) -> None:
     path = tmp_path / "player_profiles.json"
@@ -1233,21 +1330,7 @@ def test_player_profile_file_store_reads_old_payload_with_rich_defaults(
     )
     store = PlayerProfileFileStore(path)
 
-    legacy = store.get_profile("legacy-profile")
-
-    assert legacy is not None
-    assert legacy.short_description == ""
-    assert legacy.background_story == ""
-    assert legacy.speaking_style == ""
-    assert legacy.catchphrases == []
-    assert legacy.strategy_profile == "balanced"
-    assert legacy.risk_tolerance == 3
-    assert legacy.bluffing_tendency == 3
-    assert legacy.trust_tendency == 3
-    assert legacy.leadership_tendency == 3
-    assert legacy.talkativeness == 3
-    assert legacy.example_messages == []
-    assert legacy.favorite is False
+    assert store.get_profile("legacy-profile") is None
 
 
 def test_create_profile_persists_rich_character_settings() -> None:
@@ -1255,6 +1338,7 @@ def test_create_profile_persists_rich_character_settings() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "夜谈控场",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "short_description": "沉稳控场，喜欢先盘逻辑再给站边。",
             "background_story": "长期观察圆桌局的复盘型玩家。",
@@ -1287,6 +1371,7 @@ def test_create_profile_normalizes_rich_character_lists() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "去重玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "catchphrases": [" 我先盘票型 ", "", "我先盘票型", " 这里不急 "],
             "example_messages": [" 先听后置位补充。 ", "", "先听后置位补充。", " 票型先记下来。 "],
@@ -1311,6 +1396,7 @@ def test_create_profile_rejects_non_string_rich_character_list_items(payload: di
         "/api/v1/player-profiles",
         json={
             "display_name": "非字符串列表玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             **payload,
         },
@@ -1324,6 +1410,7 @@ def test_create_profile_rejects_invalid_strategy_profile() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "越界玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "strategy_profile": "unknown",
         },
@@ -1337,6 +1424,7 @@ def test_create_profile_rejects_invalid_numeric_slider_value() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "滑杆越界玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "strategy_profile": "balanced",
             "risk_tolerance": 6,
@@ -1351,6 +1439,7 @@ def test_create_profile_rejects_too_long_background_story() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "背景过长玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "background_story": "啊" * 1201,
         },
@@ -1362,7 +1451,11 @@ def test_create_profile_rejects_too_long_background_story() -> None:
 def test_update_profile_rejects_too_long_speaking_style() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "发言风格过长玩家", "model": "deepseek-v4-flash"},
+        json={
+            "display_name": "发言风格过长玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "deepseek-v4-flash",
+        },
     ).json()
 
     response = client.patch(
@@ -1378,6 +1471,7 @@ def test_create_profile_rejects_more_than_6_catchphrases() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "口头禅太多",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "catchphrases": [f"口头禅{index}" for index in range(7)],
         },
@@ -1392,6 +1486,7 @@ def test_create_profile_rejects_catchphrase_longer_than_40_characters() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "长口头禅玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "catchphrases": [long_catchphrase],
         },
@@ -1412,6 +1507,7 @@ def test_create_profile_rejects_invalid_example_messages(example_messages: list[
         "/api/v1/player-profiles",
         json={
             "display_name": "示例发言越界",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
             "example_messages": example_messages,
         },
@@ -1426,6 +1522,7 @@ def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
         "/api/v1/player-profiles",
         json={
             "display_name": "长口头禅更新玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
         },
     ).json()
@@ -1441,7 +1538,11 @@ def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
 def test_patch_profile_persists_rich_character_settings() -> None:
     created = client.post(
         "/api/v1/player-profiles",
-        json={"display_name": "待更新玩家", "model": "deepseek-v4-flash"},
+        json={
+            "display_name": "待更新玩家",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "deepseek-v4-flash",
+        },
     ).json()
 
     patch_response = client.patch(

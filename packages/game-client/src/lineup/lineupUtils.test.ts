@@ -18,6 +18,7 @@ function profile(
   return {
     id: "profile-1",
     display_name: "冷静的阿夜",
+    model_provider: "deepseek",
     model: "DeepSeek",
     personality_id: "balanced",
     personality_text: "",
@@ -197,12 +198,14 @@ describe("lineupUtils", () => {
       [
         {
           id: "legacy-favorite",
+          model_provider: "deepseek",
           model: "DeepSeek",
           personality_id: "balanced",
           favorite: true,
         },
         {
           id: "legacy-regular",
+          model_provider: "deepseek",
           model: "DeepSeek",
           personality_id: "balanced",
           favorite: false,

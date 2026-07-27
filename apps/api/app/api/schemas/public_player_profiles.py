@@ -8,6 +8,7 @@ from app.api.schemas.common import PaginationResponse
 class PublicPlayerProfileResponse(BaseModel):
     id: str
     display_name: str
+    model_provider: str
     model: str
     personality_id: str
     personality_text: str

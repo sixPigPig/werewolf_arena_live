@@ -43,8 +43,16 @@ const PREVIEW_ALLOWED_DELIVERY_CUES = [
 
 const PREVIEW_OPTIONS: PlayerProfileOptions = {
   models: [
-    { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
-    { id: "doubao-seed-1-8-251228", label: "Doubao Seed 1.8" },
+    {
+      provider: "deepseek",
+      model_id: "deepseek-v4-flash",
+      label: "DeepSeek V4 Flash",
+    },
+    {
+      provider: "agent_plan",
+      model_id: "doubao-seed-1-8-251228",
+      label: "Doubao Seed 1.8",
+    },
   ],
   personalities: [
     { id: "balanced", label: "均衡", description: "稳健观察，按证据推进。" },
@@ -126,6 +134,7 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
   fixtureProfile({
     id: "preview-draft-1",
     display_name: "雾灯听风",
+    model_provider: "agent_plan",
     model: "doubao-seed-1-8-251228",
     personality_id: "balanced",
     strategy_profile: "pressure_attacker",
@@ -404,6 +413,7 @@ function fixtureProfile(
   return {
     id: "preview-profile",
     display_name: "预览玩家",
+    model_provider: "deepseek",
     model: "deepseek-v4-flash",
     personality_id: "analytical",
     personality_text: "重视票型、发言顺序和行为一致性。",

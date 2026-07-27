@@ -49,6 +49,10 @@ function parseModel(value: unknown): AdminModel {
       record.reasoning_effort_options,
       "reasoning_effort_options",
     ).map((item) => requiredString(item, "reasoning_effort")),
+    max_output_tokens_limit: requiredNumber(
+      record.max_output_tokens_limit,
+      "max_output_tokens_limit",
+    ),
     docs_url: requiredString(record.docs_url, "docs_url"),
     updated_at: requiredString(record.updated_at, "updated_at"),
   };

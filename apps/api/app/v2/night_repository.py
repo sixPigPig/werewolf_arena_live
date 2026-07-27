@@ -36,7 +36,9 @@ class V2NightPlayer:
     team: str
     alive: bool
     tts_speaker: str | None
+    model_provider: str
     model_id: str | None
+    model_parameters: dict[str, Any]
     persona: dict[str, Any]
 
 
@@ -874,7 +876,9 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
                 team=("werewolves" if assignment.role_key == "werewolf" else "villagers"),
                 alive=player_state.alive,
                 tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
-                model_id=(str(profile["model"]) if profile.get("model") else None),
+                model_provider=str(profile["model_provider"]),
+                model_id=str(profile["model"]),
+                model_parameters=dict(profile.get("model_parameters") or {}),
                 persona={
                     key: profile[key]
                     for key in (

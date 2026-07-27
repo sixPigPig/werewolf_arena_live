@@ -87,6 +87,7 @@ function buildProfile(
   const { display_name, id, ...profileOverrides } = overrides;
 
   return {
+    model_provider: overrides.model_provider ?? "deepseek",
     model: overrides.model ?? "test-model",
     personality_id: overrides.personality_id ?? "balanced",
     personality_text: "",
@@ -162,9 +163,13 @@ function buildLineupPreview(
 
   const requiredStyleBucketCount = playerCount >= 8 ? 4 : playerCount >= 6 ? 3 : 2;
   return {
-    player_configs: [...configsBySeat.values()].sort(
-      (left, right) => left.seat - right.seat,
-    ),
+    player_configs: [...configsBySeat.values()]
+      .map((config) => ({
+        ...config,
+        model_provider: config.model_provider ?? "deepseek",
+        model: config.model ?? "test-model",
+      }))
+      .sort((left, right) => left.seat - right.seat),
     lineup_quality_report: {
       schema_version: 1,
       policy_mode: "repair",
@@ -772,8 +777,18 @@ describe("GamesPage", () => {
           max_rounds: 8,
           allow_lineup_quality_warnings: false,
           player_configs: [
-            { seat: 1, profile_id: expect.any(String) },
-            { seat: 2, profile_id: expect.any(String) },
+            {
+              seat: 1,
+              profile_id: expect.any(String),
+              model_provider: "deepseek",
+              model: "test-model",
+            },
+            {
+              seat: 2,
+              profile_id: expect.any(String),
+              model_provider: "deepseek",
+              model: "test-model",
+            },
           ],
         }),
       });

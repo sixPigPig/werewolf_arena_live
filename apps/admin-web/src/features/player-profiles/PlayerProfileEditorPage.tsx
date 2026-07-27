@@ -57,6 +57,10 @@ const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
 
 type TransitionAction = "archive" | "publish" | "restore";
 
+function modelOptionValue(provider: string, modelId: string) {
+  return `${provider}:${modelId}`;
+}
+
 const TRANSITION_COPY: Record<
   TransitionAction,
   { title: string; description: string; actionLabel: string }
@@ -182,7 +186,8 @@ function PlayerProfileEditor({
     "players.ai_generate",
   );
   const defaults = {
-    model: options.models[0]?.id ?? "",
+    model_provider: options.models[0]?.provider ?? "",
+    model: options.models[0]?.model_id ?? "",
     personality_id: options.personalities[0]?.id ?? "balanced",
     strategy_profile: options.strategies[0]?.id ?? "balanced",
     appearance_id: options.appearances[0]?.id ?? "default",
@@ -263,9 +268,19 @@ function PlayerProfileEditor({
     { capture: true },
   );
 
-  const modelOptions = options.models.some((item) => item.id === draft.model)
+  const modelOptions = options.models.some(
+    (item) =>
+      item.provider === draft.model_provider && item.model_id === draft.model,
+  )
     ? options.models
-    : [{ id: draft.model, label: `当前模型 · ${draft.model}` }, ...options.models];
+    : [
+        {
+          provider: draft.model_provider,
+          model_id: draft.model,
+          label: `当前模型 · ${draft.model_provider} · ${draft.model}`,
+        },
+        ...options.models,
+      ];
   const selectedAppearance = options.appearances.find(
     (item) => item.id === draft.appearance_id,
   );
@@ -657,12 +672,24 @@ function PlayerProfileEditor({
                   <Select
                     aria-label="默认模型"
                     aria-invalid={Boolean(formErrors.model)}
-                    onChange={(value) => updateDraft("model", value)}
+                    onChange={(value) => {
+                      const selected = modelOptions.find(
+                        (option) =>
+                          modelOptionValue(option.provider, option.model_id) === value,
+                      );
+                      if (selected) {
+                        setDraft((current) => ({
+                          ...current,
+                          model_provider: selected.provider,
+                          model: selected.model_id,
+                        }));
+                      }
+                    }}
                     options={modelOptions.map((option) => ({
                       label: option.label,
-                      value: option.id,
+                      value: modelOptionValue(option.provider, option.model_id),
                     }))}
-                    value={draft.model}
+                    value={modelOptionValue(draft.model_provider, draft.model)}
                   />
                 </Field>
                 <Field label="角色性别" error={formErrors.gender} required>

@@ -31,12 +31,14 @@ class PlayerConfig:
     base_delivery_instruction: str = ""
     voice_enabled: bool = True
     voice_config_version: int = 1
+    model_provider: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "seat": self.seat,
             "profile_id": self.profile_id,
             "name": self.name,
+            "model_provider": self.model_provider,
             "model": self.model,
             "personality_id": self.personality_id,
             "personality": self.personality,
@@ -104,6 +106,11 @@ def player_config_from_profile(
             _override_string(overrides, "name")
             or _override_string(overrides, "display_name")
             or _profile_string(profile, "display_name")
+            or ""
+        ),
+        model_provider=(
+            _override_string(overrides, "model_provider")
+            or _profile_string(profile, "model_provider")
             or ""
         ),
         model=_override_string(overrides, "model") or _profile_string(profile, "model") or "",
@@ -189,6 +196,7 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         seat=int(data["seat"]),
         profile_id=clean_optional_string(data.get("profile_id")),
         name=clean_optional_string(data.get("name")) or "",
+        model_provider=clean_optional_string(data.get("model_provider")) or "",
         model=clean_optional_string(data.get("model")) or "",
         personality_id=clean_optional_string(data.get("personality_id")) or "balanced",
         personality=clean_optional_string(data.get("personality")) or "",

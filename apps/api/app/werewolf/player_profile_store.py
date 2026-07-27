@@ -12,6 +12,7 @@ class StoredPlayerProfile:
     id: str
     owner_user_id: int | None
     display_name: str
+    model_provider: str
     model: str
     personality_id: str
     personality_text: str
@@ -71,8 +72,9 @@ class PlayerProfileFileStore:
 def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None:
     profile_id = _optional_string(payload.get("id"))
     display_name = _optional_string(payload.get("display_name") or payload.get("name"))
+    model_provider = _optional_string(payload.get("model_provider"))
     model = _optional_string(payload.get("model"))
-    if profile_id is None or display_name is None or model is None:
+    if profile_id is None or display_name is None or model_provider is None or model is None:
         return None
 
     personality_id = _optional_string(payload.get("personality_id")) or "balanced"
@@ -85,6 +87,7 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         id=profile_id,
         owner_user_id=_optional_int(payload.get("owner_user_id")),
         display_name=display_name,
+        model_provider=model_provider,
         model=model,
         personality_id=personality_id,
         personality_text=str(

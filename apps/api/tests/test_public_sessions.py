@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.public import PublicSession, UserFavoritePlayerProfile
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -95,9 +96,22 @@ def _seed_profiles(context: PublicTestContext) -> None:
     with context.session_factory() as db:
         db.add_all(
             [
+                ModelConfigurationRecord(
+                    provider="deepseek",
+                    model_id="test-model",
+                    source_model_id="test-model",
+                    display_name="test-model",
+                    available=True,
+                    enabled=True,
+                    is_default=True,
+                    supports_thinking=True,
+                    parameter_values={"thinking": "default"},
+                    source_details={"source": "test"},
+                ),
                 VirtualPlayerProfile(
                     id="published-profile",
                     display_name="已发布玩家",
+                    model_provider="deepseek",
                     model="test-model",
                     status="published",
                     published_at=now,
@@ -109,6 +123,7 @@ def _seed_profiles(context: PublicTestContext) -> None:
                 VirtualPlayerProfile(
                     id="draft-profile",
                     display_name="草稿玩家",
+                    model_provider="deepseek",
                     model="test-model",
                     status="draft",
                     published_at=None,
@@ -116,6 +131,7 @@ def _seed_profiles(context: PublicTestContext) -> None:
                 VirtualPlayerProfile(
                     id="archived-profile",
                     display_name="归档玩家",
+                    model_provider="deepseek",
                     model="test-model",
                     status="archived",
                     published_at=now - timedelta(days=1),

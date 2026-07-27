@@ -14,6 +14,7 @@ from app.models.model_configuration import ModelConfigurationRecord
 class RuntimeModelConfiguration:
     provider: str
     model_id: str
+    supports_thinking: bool
     parameters: dict[str, Any]
 
 
@@ -83,5 +84,6 @@ def runtime_configuration_for_model(
     return RuntimeModelConfiguration(
         provider=record.provider,
         model_id=record.model_id,
+        supports_thinking=record.supports_thinking,
         parameters=dict(record.parameter_values or {}),
     )

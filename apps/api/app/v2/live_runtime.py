@@ -427,9 +427,10 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
     return V2LiveRuntime(
         session_factory=SessionLocal,
         model_client=V2ModelClient(
-            api_key=config.live_v2_model_api_key,
-            base_url=config.live_v2_model_base_url,
-            model_id=config.live_v2_model_id,
+            agent_plan_api_key=config.live_v2_agent_plan_api_key,
+            agent_plan_base_url=config.live_v2_agent_plan_base_url,
+            deepseek_api_key=config.live_v2_deepseek_api_key,
+            deepseek_base_url=config.live_v2_deepseek_base_url,
             first_token_seconds=config.live_v2_model_first_token_seconds,
             total_seconds=config.live_v2_model_total_seconds,
         ),

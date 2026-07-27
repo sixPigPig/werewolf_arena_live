@@ -24,12 +24,14 @@ from app.models.admin import AuditEvent
 from app.models.game_session import GameSessionRecord
 from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.live import LiveRunRecord
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.user import User
 from app.v2.live_runtime import V2LiveRuntime, _GameChannel
 from app.v2.day_engine import V2DayEngine, _leaders
 from app.v2.match_repository import V2MatchRepository
 from app.v2.model_client import (
     V2ModelDecision,
+    V2ModelTarget,
     build_model_request_payload,
 )
 from app.v2.models import (
@@ -76,20 +78,32 @@ class FakeV2ModelClient:
         self.decline_action_types: set[str] = set()
         self.unexpected_speech_target: str | None = None
 
-    def resolve_model_id(self, model_id: str | None = None) -> str:
-        return model_id or "test-default-model"
+    def resolve_model_target(
+        self,
+        *,
+        model_provider: str,
+        model_id: str,
+        model_parameters: dict[str, Any],
+    ) -> V2ModelTarget:
+        assert model_provider == "agent_plan"
+        return V2ModelTarget(
+            provider=model_provider,
+            model_id=model_id,
+            parameters=dict(model_parameters),
+        )
 
     def build_request_payload(
         self,
         *,
         action_context: dict[str, Any],
         decision: bool,
-        model_id: str | None = None,
+        target: V2ModelTarget,
     ) -> dict[str, Any]:
         return build_model_request_payload(
             action_context,
             decision=decision,
-            model_id=self.resolve_model_id(model_id),
+            model_id=target.model_id,
+            parameters=target.parameters,
         )
 
     async def generate_action_decision(
@@ -97,7 +111,7 @@ class FakeV2ModelClient:
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        model_id: str | None = None,
+        target: V2ModelTarget,
         check_cancellation: Any = None,
     ) -> V2ModelDecision:
         if check_cancellation is not None:
@@ -106,7 +120,8 @@ class FakeV2ModelClient:
         self.contexts.append(action_context)
         self.decision_contexts.append(action_context)
         assert attempt_id.startswith("v2_model_")
-        assert model_id is None
+        assert target.provider == "agent_plan"
+        assert target.model_id in {"private-model-id", "test-model"}
         candidates = action_context["candidates"]
         if action_context["action_type"] in self.decline_action_types:
             target = None
@@ -243,6 +258,22 @@ def v2_context(
 
     Base.metadata.create_all(engine)
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with testing_session.begin() as db:
+        for model_id in ("private-model-id", "test-model"):
+            db.add(
+                ModelConfigurationRecord(
+                    provider="agent_plan",
+                    model_id=model_id,
+                    source_model_id=model_id,
+                    display_name=model_id,
+                    available=True,
+                    enabled=True,
+                    is_default=model_id == "test-model",
+                    supports_thinking=True,
+                    parameter_values={"thinking": "disabled"},
+                    source_details={"source": "test"},
+                )
+            )
 
     def override_get_db() -> Generator[Session, None, None]:
         with testing_session() as db:
@@ -352,19 +383,39 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "random_tts_speakers": [],
             "configuration_version": 0,
         }
-        assert game.players_snapshot == [
+        assert [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "model_configuration_updated_at"
+            }
+            for item in game.players_snapshot
+        ] == [
             {
                 "seat": 1,
                 "profile_id": "profile-1",
                 "name": "阿青",
+                "model_provider": "agent_plan",
                 "model": "private-model-id",
+                "model_parameters": {"thinking": "disabled"},
                 "personality": "private personality prompt",
                 "avatar_image_url": "/api/v1/public/player-profiles/profile-1/avatar",
                 "strategy_profile": "private-strategy",
                 "tts_speaker": "private-speaker",
             },
-            {"seat": 2, "profile_id": "profile-2", "name": "白石"},
+            {
+                "seat": 2,
+                "profile_id": "profile-2",
+                "name": "白石",
+                "model_provider": "agent_plan",
+                "model": "test-model",
+                "model_parameters": {"thinking": "disabled"},
+            },
         ]
+        assert all(
+            item["model_configuration_updated_at"]
+            for item in game.players_snapshot
+        )
         assert run is not None and run.status == "waiting_to_start"
         assert run.started_at is None
         assert god_view_grant is not None
@@ -2191,13 +2242,20 @@ def _lobby_create_request() -> dict[str, Any]:
                     "seat": 1,
                     "profile_id": "profile-1",
                     "name": "阿青",
+                    "model_provider": "agent_plan",
                     "model": "private-model-id",
                     "personality": "private personality prompt",
                     "avatar_image_url": "/api/v1/public/player-profiles/profile-1/avatar",
                     "strategy_profile": "private-strategy",
                     "tts_speaker": "private-speaker",
                 },
-                {"seat": 2, "profile_id": "profile-2", "name": "白石"},
+                {
+                    "seat": 2,
+                    "profile_id": "profile-2",
+                    "name": "白石",
+                    "model_provider": "agent_plan",
+                    "model": "test-model",
+                },
             ],
             "lineup_quality_report": {
                 "schema_version": 1,
@@ -2245,6 +2303,8 @@ def _six_player_create_request() -> dict[str, Any]:
                     "seat": seat,
                     "profile_id": f"dynamic-player-{seat}",
                     "name": f"玩家{seat}",
+                    "model_provider": "agent_plan",
+                    "model": "test-model",
                     "personality": f"这是玩家{seat}的独立性格。",
                     "tts_speaker": f"speaker-{seat}",
                 }
@@ -2302,6 +2362,8 @@ def _advanced_create_request() -> dict[str, Any]:
                     "seat": seat,
                     "profile_id": f"advanced-player-{seat}",
                     "name": f"进阶玩家{seat}",
+                    "model_provider": "agent_plan",
+                    "model": "test-model",
                     "personality": f"进阶玩家{seat}会独立权衡风险。",
                     "tts_speaker": f"speaker-{seat}",
                 }

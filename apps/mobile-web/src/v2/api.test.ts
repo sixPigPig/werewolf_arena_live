@@ -56,8 +56,18 @@ describe("createV2Game", () => {
         seed: null,
         max_rounds: 8,
         player_configs: [
-          { seat: 1, profile_id: "profile-1" },
-          { seat: 2, profile_id: "profile-2" },
+          {
+            seat: 1,
+            profile_id: "profile-1",
+            model_provider: "deepseek",
+            model: "test-model",
+          },
+          {
+            seat: 2,
+            profile_id: "profile-2",
+            model_provider: "deepseek",
+            model: "test-model",
+          },
         ],
         lineup_quality_report: {
           schema_version: 1 as const,
@@ -123,7 +133,14 @@ describe("createV2Game", () => {
           rule_set_revision_id: null,
           seed: null,
           max_rounds: 8,
-          player_configs: [{ seat: 1, profile_id: "profile-1" }],
+          player_configs: [
+            {
+              seat: 1,
+              profile_id: "profile-1",
+              model_provider: "deepseek",
+              model: "test-model",
+            },
+          ],
           lineup_quality_report: {
             schema_version: 1,
             policy_mode: "observe",

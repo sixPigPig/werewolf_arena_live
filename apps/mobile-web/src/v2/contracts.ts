@@ -75,7 +75,8 @@ export type V2LobbyPlayerSnapshot = {
   seat: number;
   profile_id: string;
   name?: string | null;
-  model?: string | null;
+  model_provider: string;
+  model: string;
   personality_id?: string;
   personality?: string;
   appearance_id?: string;

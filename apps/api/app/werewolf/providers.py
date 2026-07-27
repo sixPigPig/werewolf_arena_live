@@ -241,7 +241,15 @@ class OpenAICompatibleProvider:
         budget_max_tokens = call_options.max_output_tokens if call_options is not None else None
         max_tokens = _minimum_optional_int(configured_max_tokens, budget_max_tokens)
         if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+            if (
+                self.config.env_prefix == "ARK_AGENT_PLAN"
+                and runtime_configuration is not None
+                and runtime_configuration.supports_thinking
+                and thinking != "disabled"
+            ):
+                payload["max_completion_tokens"] = max_tokens
+            else:
+                payload["max_tokens"] = max_tokens
         if thinking in {"enabled", "disabled"}:
             payload["thinking"] = {"type": thinking}
         reasoning_effort = parameters.get("reasoning_effort")
@@ -624,32 +632,49 @@ def _split_model_names(value: str) -> tuple[str, ...]:
 
 def configured_model_options() -> list[dict[str, str]]:
     default_model = default_model_name()
+    runtime_default = runtime_default_model()
     configured_options: list[dict[str, str]] = []
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
         if not _has_api_key(config):
             continue
 
+        provider = _catalog_provider_name(config)
         configured_names = _configured_model_names(config) or (config.default_model,)
         configured_options.extend(
             {
                 "id": model_name,
+                "provider": provider,
+                "model_id": model_name,
                 "label": f"{config.name} · {model_name}",
             }
             for model_name in configured_names
         )
 
-    options_by_id = {option["id"]: option for option in configured_options}
-    default_option = options_by_id.get(
-        default_model,
-        {"id": default_model, "label": f"默认模型 · {default_model}"},
+    default_option = next(
+        (
+            option
+            for option in configured_options
+            if option["model_id"] == default_model
+            and (
+                runtime_default is None
+                or runtime_default[1] != default_model
+                or (option["provider"], option["model_id"]) == runtime_default
+            )
+        ),
+        None,
     )
-    options = [default_option]
-    seen = {default_model}
+    options = [default_option] if default_option is not None else []
+    seen = (
+        {(default_option["provider"], default_option["model_id"])}
+        if default_option is not None
+        else set()
+    )
     for option in configured_options:
-        if option["id"] in seen:
+        key = (option["provider"], option["model_id"])
+        if key in seen:
             continue
         options.append(option)
-        seen.add(option["id"])
+        seen.add(key)
     return options
 
 

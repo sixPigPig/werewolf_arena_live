@@ -13,6 +13,7 @@ function buildProfile(
   return {
     id,
     display_name: id,
+    model_provider: "deepseek",
     model: "test-model",
     personality_id: "balanced",
     personality_text: "沉稳控场",

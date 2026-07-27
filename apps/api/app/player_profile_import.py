@@ -79,6 +79,7 @@ def _database_profile(
         id=profile.id,
         owner_user_id=profile.owner_user_id,
         display_name=profile.display_name,
+        model_provider=profile.model_provider,
         model=profile.model,
         personality_id=profile.personality_id,
         personality_text=profile.personality_text,

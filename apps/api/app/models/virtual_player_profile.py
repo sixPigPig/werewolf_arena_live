@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     JSON,
     String,
@@ -71,7 +72,14 @@ class VirtualPlayerProfile(Base):
         Index(
             "ix_virtual_player_profiles_status_model",
             "status",
+            "model_provider",
             "model",
+        ),
+        ForeignKeyConstraint(
+            ["model_provider", "model"],
+            ["model_configurations.provider", "model_configurations.model_id"],
+            name="fk_virtual_player_profiles_model_configuration",
+            ondelete="RESTRICT",
         ),
         Index(
             "ix_virtual_player_profiles_status_personality",
@@ -89,6 +97,7 @@ class VirtualPlayerProfile(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(120), nullable=False)
     personality_id: Mapped[str] = mapped_column(String(40), nullable=False, default="balanced")
     personality_text: Mapped[str] = mapped_column(Text, nullable=False, default="")

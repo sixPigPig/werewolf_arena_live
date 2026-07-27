@@ -36,6 +36,7 @@ export type AdminModel = {
   assigned_profile_count: number;
   parameters: ModelParameters;
   reasoning_effort_options: string[];
+  max_output_tokens_limit: number;
   docs_url: string;
   updated_at: string;
 };

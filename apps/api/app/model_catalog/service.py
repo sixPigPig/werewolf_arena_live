@@ -28,6 +28,8 @@ ThinkingMode = Literal["default", "enabled", "disabled"]
 ARK_DOCS_URL = "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01"
 DEEPSEEK_MODELS_URL = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
 DEEPSEEK_THINKING_URL = "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode"
+GLM_5_2_MAX_OUTPUT_TOKENS = 131_072
+DEFAULT_MAX_OUTPUT_TOKENS = 384_000
 
 
 class ModelCatalogUnavailable(RuntimeError):
@@ -72,6 +74,7 @@ class CatalogModelItem:
     assigned_profile_count: int
     parameters: dict[str, Any]
     reasoning_effort_options: tuple[str, ...]
+    max_output_tokens_limit: int
     docs_url: str
     updated_at: datetime
 
@@ -250,7 +253,7 @@ def update_model_configuration(
         raise LookupError("model configuration not found")
     if enabled and not record.available:
         raise ValueError("an unavailable model cannot be enabled")
-    assigned_count = _assigned_profile_counts(db).get(model_id, 0)
+    assigned_count = _assigned_profile_counts(db).get((provider, model_id), 0)
     if not enabled and assigned_count:
         raise ModelConfigurationConflict(
             f"{assigned_count} player profiles still use this model."
@@ -259,9 +262,16 @@ def update_model_configuration(
         raise ModelConfigurationConflict("Select another default model before disabling this one.")
     if record.is_default and not is_default:
         raise ModelConfigurationConflict("Select another model as default instead of clearing it.")
+    supports_thinking = record.supports_thinking or (
+        (record.source_details or {}).get("bootstrap") == "environment"
+        and _bootstrap_supports_thinking(provider, model_id)
+    )
+    if supports_thinking and not record.supports_thinking:
+        record.supports_thinking = True
     normalized_parameters = validate_parameter_values(
         provider=provider,
-        supports_thinking=record.supports_thinking,
+        model_id=model_id,
+        supports_thinking=supports_thinking,
         values=parameters,
     )
     if is_default:
@@ -286,6 +296,7 @@ class ModelConfigurationConflict(RuntimeError):
 def validate_parameter_values(
     *,
     provider: ModelProviderName,
+    model_id: str,
     supports_thinking: bool,
     values: dict[str, Any],
 ) -> dict[str, Any]:
@@ -309,7 +320,10 @@ def validate_parameter_values(
     reasoning_effort = values.get("reasoning_effort")
     if thinking == "disabled" and reasoning_effort is not None:
         raise ValueError("reasoning_effort must be empty when thinking is disabled")
-    effort_options = _reasoning_effort_options(provider, supports_thinking)
+    effort_options = _reasoning_effort_options(
+        provider,
+        supports_thinking,
+    )
     if reasoning_effort is not None and reasoning_effort not in effort_options:
         raise ValueError(
             f"reasoning_effort must be one of: {', '.join(effort_options)}"
@@ -325,8 +339,12 @@ def validate_parameter_values(
     if max_tokens is not None:
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
             raise ValueError("max_tokens must be an integer")
-        if not 1 <= max_tokens <= 384_000:
-            raise ValueError("max_tokens must be between 1 and 384000")
+        max_output_tokens_limit = _max_output_tokens_limit(provider, model_id)
+        if not 1 <= max_tokens <= max_output_tokens_limit:
+            raise ValueError(
+                "max_tokens must be between 1 and "
+                f"{max_output_tokens_limit}"
+            )
         normalized["max_tokens"] = max_tokens
     sampling_parameters = {
         "temperature",
@@ -358,6 +376,10 @@ def bootstrap_environment_catalog(db: Session) -> None:
     for provider_name, config in providers:
         for model_id in environment_model_names(config):
             record = db.get(ModelConfigurationRecord, (provider_name, model_id))
+            bootstrap_supports_thinking = _bootstrap_supports_thinking(
+                provider_name,
+                model_id,
+            )
             if record is None:
                 record = ModelConfigurationRecord(
                     provider=provider_name,
@@ -368,9 +390,7 @@ def bootstrap_environment_catalog(db: Session) -> None:
                     available=True,
                     enabled=True,
                     is_default=not has_default and model_id == default_model,
-                    supports_thinking=(
-                        provider_name == "deepseek" or model_id.startswith("doubao-seed-2")
-                    ),
+                    supports_thinking=bootstrap_supports_thinking,
                     parameter_values={"thinking": "default"},
                     source_details={"bootstrap": "environment"},
                     last_synced_at=None,
@@ -380,6 +400,9 @@ def bootstrap_environment_catalog(db: Session) -> None:
                 db.add(record)
                 if record.is_default:
                     has_default = 1
+            elif (record.source_details or {}).get("bootstrap") == "environment":
+                record.supports_thinking = bootstrap_supports_thinking
+                record.updated_at = now
 
 
 def _sync_discovered_models(
@@ -457,11 +480,18 @@ def _snapshot_from_database(
             is_default=record.is_default,
             selected_by_source=bool((record.source_details or {}).get("selected")),
             supports_thinking=record.supports_thinking,
-            assigned_profile_count=assignment_counts.get(record.model_id, 0),
+            assigned_profile_count=assignment_counts.get(
+                (record.provider, record.model_id),
+                0,
+            ),
             parameters=dict(record.parameter_values or {"thinking": "default"}),
             reasoning_effort_options=_reasoning_effort_options(
                 record.provider,  # type: ignore[arg-type]
                 record.supports_thinking,
+            ),
+            max_output_tokens_limit=_max_output_tokens_limit(
+                record.provider,  # type: ignore[arg-type]
+                record.model_id,
             ),
             docs_url=DEEPSEEK_THINKING_URL if record.provider == "deepseek" else ARK_DOCS_URL,
             updated_at=record.updated_at,
@@ -515,13 +545,20 @@ def _source_state(
     )
 
 
-def _assigned_profile_counts(db: Session) -> dict[str, int]:
+def _assigned_profile_counts(db: Session) -> dict[tuple[str, str], int]:
     return {
-        model_id: count
-        for model_id, count in db.execute(
-            select(VirtualPlayerProfile.model, func.count())
+        (provider, model_id): count
+        for provider, model_id, count in db.execute(
+            select(
+                VirtualPlayerProfile.model_provider,
+                VirtualPlayerProfile.model,
+                func.count(),
+            )
             .where(VirtualPlayerProfile.status != "archived")
-            .group_by(VirtualPlayerProfile.model)
+            .group_by(
+                VirtualPlayerProfile.model_provider,
+                VirtualPlayerProfile.model,
+            )
         )
     }
 
@@ -532,7 +569,34 @@ def _reasoning_effort_options(
 ) -> tuple[str, ...]:
     if not supports_thinking:
         return ()
-    return ("high", "max") if provider == "deepseek" else ("low", "medium", "high")
+    if provider == "deepseek":
+        return ("high", "max")
+    return ("minimal", "low", "medium", "high")
+
+
+def _bootstrap_supports_thinking(
+    provider: ModelProviderName,
+    model_id: str,
+) -> bool:
+    if provider == "deepseek":
+        return True
+    normalized = model_id.lower()
+    return normalized.startswith(
+        (
+            "doubao-seed-2",
+            "glm-5-2-",
+            "minimax-m3",
+        )
+    )
+
+
+def _max_output_tokens_limit(
+    provider: ModelProviderName,
+    model_id: str,
+) -> int:
+    if provider == "agent_plan" and model_id.lower().startswith("glm-5-2-"):
+        return GLM_5_2_MAX_OUTPUT_TOKENS
+    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _copy_optional_number(

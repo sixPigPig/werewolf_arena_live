@@ -10,6 +10,7 @@ def admin_player_profile_snapshot(profile: VirtualPlayerProfile) -> dict[str, ob
     return {
         "id": profile.id,
         "display_name": profile.display_name,
+        "model_provider": profile.model_provider,
         "model": profile.model,
         "personality_id": profile.personality_id,
         "personality_text": profile.personality_text,
@@ -55,6 +56,7 @@ def public_player_profile_snapshot(profile: VirtualPlayerProfile) -> dict[str, o
     return {
         "id": profile.id,
         "display_name": profile.display_name,
+        "model_provider": profile.model_provider,
         "model": profile.model,
         "personality_id": profile.personality_id,
         "personality_text": profile.personality_text,

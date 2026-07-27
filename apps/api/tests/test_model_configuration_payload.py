@@ -23,6 +23,7 @@ def test_agent_plan_runtime_configuration_is_applied_to_chat_payload(monkeypatch
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
+            supports_thinking=True,
             parameters={
                 "thinking": "enabled",
                 "reasoning_effort": "high",
@@ -54,7 +55,8 @@ def test_agent_plan_runtime_configuration_is_applied_to_chat_payload(monkeypatch
     assert requests[0]["thinking"] == {"type": "enabled"}
     assert requests[0]["reasoning_effort"] == "high"
     assert requests[0]["top_p"] == 0.9
-    assert requests[0]["max_tokens"] == 512
+    assert requests[0]["max_completion_tokens"] == 512
+    assert "max_tokens" not in requests[0]
     assert requests[0]["frequency_penalty"] == 0.1
     assert requests[0]["presence_penalty"] == 0.2
 
@@ -71,6 +73,7 @@ def test_deepseek_thinking_payload_omits_ignored_sampling_parameters(monkeypatch
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
+            supports_thinking=True,
             parameters={
                 "thinking": "enabled",
                 "reasoning_effort": "max",
@@ -109,6 +112,7 @@ def test_runtime_payload_omits_stored_reasoning_effort_when_thinking_is_disabled
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
+            supports_thinking=True,
             parameters={
                 "thinking": "disabled",
                 "reasoning_effort": "medium",

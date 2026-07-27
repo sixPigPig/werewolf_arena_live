@@ -23,6 +23,7 @@ from app.v2.model_context import (
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
+    V2ModelTarget,
     V2QualityError,
 )
 from app.v2.protocol import (
@@ -49,14 +50,20 @@ logger = logging.getLogger(__name__)
 
 
 class V2ModelPort(Protocol):
-    def resolve_model_id(self, model_id: str | None = None) -> str: ...
+    def resolve_model_target(
+        self,
+        *,
+        model_provider: str,
+        model_id: str,
+        model_parameters: dict[str, Any],
+    ) -> V2ModelTarget: ...
 
     def build_request_payload(
         self,
         *,
         action_context: dict[str, Any],
         decision: bool,
-        model_id: str | None = None,
+        target: V2ModelTarget,
     ) -> dict[str, Any]: ...
 
     async def generate_action_decision(
@@ -64,7 +71,7 @@ class V2ModelPort(Protocol):
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        model_id: str | None = None,
+        target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision: ...
 
@@ -120,7 +127,9 @@ class V2SpeechSpec:
     actor_id: str = "judge"
     audience: str = "all"
     speaker: str | None = None
+    model_provider: str | None = None
     model_id: str | None = None
+    model_parameters: dict[str, Any] | None = None
     activation_id: str | None = None
     output_kind: str = "public_speech"
     context: dict[str, Any] | None = None
@@ -265,6 +274,7 @@ class V2ActionEngine:
             model_id = None
             speaker = judge_configuration.tts_speaker
         else:
+            model_provider = spec.model_provider
             model_id = spec.model_id
             speaker = spec.speaker
         context = _action_context(game_id=game_id, action_id=action_id, spec=spec)
@@ -341,7 +351,13 @@ class V2ActionEngine:
                 )
             else:
                 model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
-                selected_model_id = self._model_client.resolve_model_id(model_id)
+                if model_provider is None or model_id is None:
+                    raise V2ModelError("model_not_configured")
+                model_target = self._model_client.resolve_model_target(
+                    model_provider=model_provider,
+                    model_id=model_id,
+                    model_parameters=spec.model_parameters or {},
+                )
                 model_context = project_model_action_context(
                     context,
                     players=spec.model_players,
@@ -349,7 +365,7 @@ class V2ActionEngine:
                 request_payload = self._model_client.build_request_payload(
                     action_context=model_context,
                     decision=decision,
-                    model_id=model_id,
+                    target=model_target,
                 )
                 self._repository.append_event(
                     game_id=claim.game_id,
@@ -358,8 +374,9 @@ class V2ActionEngine:
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
                         "request_kind": "decision" if decision else "speech",
-                        "model_id": selected_model_id,
-                        "model_provider": None,
+                        "model_id": model_target.model_id,
+                        "model_provider": model_target.provider,
+                        "model_parameters": dict(model_target.parameters),
                         "judge_configuration_version": None,
                         "actor_kind": spec.actor_kind,
                         "actor_id": spec.actor_id,
@@ -370,7 +387,7 @@ class V2ActionEngine:
                 model_decision = await self._model_client.generate_action_decision(
                     action_context=model_context,
                     attempt_id=model_attempt_id,
-                    model_id=model_id,
+                    target=model_target,
                     check_cancellation=check_cancellation,
                 )
                 original_target = model_decision.target_player_id

@@ -85,6 +85,7 @@ def _normalize_limited_strings(value: list[str], *, max_items: int, max_length: 
 
 class PlayerProfileBase(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
+    model_provider: str = Field(min_length=1, max_length=32)
     model: str = Field(min_length=1, max_length=120)
     personality_id: str = Field(default="balanced", min_length=1, max_length=40)
     personality_text: str = ""
@@ -109,6 +110,7 @@ class PlayerProfileBase(BaseModel):
 
     @field_validator(
         "display_name",
+        "model_provider",
         "model",
         "personality_id",
         "personality_text",
@@ -162,6 +164,7 @@ class CreatePlayerProfileRequest(PlayerProfileBase):
 
 class UpdatePlayerProfileRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    model_provider: str | None = Field(default=None, min_length=1, max_length=32)
     model: str | None = Field(default=None, min_length=1, max_length=120)
     personality_id: str | None = Field(default=None, min_length=1, max_length=40)
     personality_text: str | None = None
@@ -193,6 +196,7 @@ class UpdatePlayerProfileRequest(BaseModel):
             field_name
             for field_name in (
                 "display_name",
+                "model_provider",
                 "model",
                 "personality_id",
                 "personality_text",
@@ -222,6 +226,7 @@ class UpdatePlayerProfileRequest(BaseModel):
 
     @field_validator(
         "display_name",
+        "model_provider",
         "model",
         "personality_id",
         "personality_text",
@@ -277,6 +282,7 @@ class PlayerProfileResponse(BaseModel):
     id: str
     owner_user_id: int | None
     display_name: str
+    model_provider: str
     model: str
     personality_id: str
     personality_text: str

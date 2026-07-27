@@ -96,18 +96,35 @@ class Settings(BaseSettings):
     ark_tts_sample_rate: int = 24000
     ark_tts_judge_asset_audio_format: str = "mp3"
     ark_tts_judge_asset_sample_rate: int = 24000
-    live_v2_model_api_key: str = Field(
+    live_v2_agent_plan_api_key: str = Field(
         default="",
-        validation_alias=AliasChoices("LIVE_V2_MODEL_API_KEY", "ARK_AGENT_PLAN_API_KEY"),
+        validation_alias=AliasChoices(
+            "LIVE_V2_AGENT_PLAN_API_KEY",
+            "ARK_AGENT_PLAN_API_KEY",
+            "ARK_API_KEY",
+        ),
     )
-    live_v2_model_base_url: str = Field(
+    live_v2_agent_plan_base_url: str = Field(
         default="https://ark.cn-beijing.volces.com/api/plan/v3",
         validation_alias=AliasChoices(
-            "LIVE_V2_MODEL_BASE_URL",
+            "LIVE_V2_AGENT_PLAN_BASE_URL",
             "ARK_AGENT_PLAN_BASE_URL",
         ),
     )
-    live_v2_model_id: str = "doubao-seed-2-0-lite-260215"
+    live_v2_deepseek_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "LIVE_V2_DEEPSEEK_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ),
+    )
+    live_v2_deepseek_base_url: str = Field(
+        default="https://api.deepseek.com",
+        validation_alias=AliasChoices(
+            "LIVE_V2_DEEPSEEK_BASE_URL",
+            "DEEPSEEK_BASE_URL",
+        ),
+    )
     live_v2_model_first_token_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
     live_v2_model_total_seconds: float = Field(default=30.0, ge=0.1, le=180.0)
     live_v2_tts_enabled: bool = Field(

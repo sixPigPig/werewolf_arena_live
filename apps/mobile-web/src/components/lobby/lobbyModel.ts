@@ -68,6 +68,9 @@ export function normalizePlayerConfigs(
     .map((config) => {
       const normalized: PlayerConfig = { seat: config.seat };
       if (config.profile_id) normalized.profile_id = config.profile_id;
+      if (config.model_provider?.trim()) {
+        normalized.model_provider = config.model_provider.trim();
+      }
       if (config.model?.trim()) normalized.model = config.model.trim();
       if (config.personality_id) normalized.personality_id = config.personality_id;
       if (config.appearance_id) normalized.appearance_id = config.appearance_id;

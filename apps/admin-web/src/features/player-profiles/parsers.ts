@@ -84,6 +84,7 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
   return {
     id: requiredString(record.id, "id"),
     display_name: requiredString(record.display_name, "display_name"),
+    model_provider: requiredString(record.model_provider, "model_provider"),
     model: requiredString(record.model, "model"),
     personality_id: requiredString(record.personality_id, "personality_id"),
     personality_text: stringValue(record.personality_text),
@@ -277,12 +278,26 @@ export function parsePlayerProfileOptions(value: unknown): PlayerProfileOptions 
   const record = recordValue(value);
   const constraints = recordValue(record.constraints);
   return {
-    models: optionArray(record.models, false).map(({ id, label }) => ({ id, label })),
+    models: modelOptionArray(record.models),
     personalities: optionArray(record.personalities),
     appearances: appearanceArray(record.appearances),
     strategies: optionArray(record.strategies),
     constraints: parseConstraints(constraints),
   };
+}
+
+function modelOptionArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw invalidContract("模型选项列表格式无效");
+  }
+  return value.map((item) => {
+    const record = recordValue(item);
+    return {
+      provider: requiredString(record.provider, "model.provider"),
+      model_id: requiredString(record.model_id, "model.model_id"),
+      label: requiredString(record.label, "model.label"),
+    };
+  });
 }
 
 export function parsePlayerTtsSpeakerOptions(

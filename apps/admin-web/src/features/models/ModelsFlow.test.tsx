@@ -153,6 +153,8 @@ describe("model management flow", () => {
 
     const thinking = within(model!).getByLabelText("Thinking");
     const reasoningEffort = within(model!).getByLabelText("Reasoning effort");
+    expect(thinking).not.toBeDisabled();
+    expect(reasoningEffort).not.toBeDisabled();
     await selectAntdOption(user, reasoningEffort, "medium");
     await selectAntdOption(user, thinking, "关闭");
 

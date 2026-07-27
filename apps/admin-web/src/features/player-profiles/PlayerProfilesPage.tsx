@@ -138,7 +138,7 @@ export default function PlayerProfilesPage() {
                 { label: "全部模型", value: "" },
                 ...(optionsQuery.data?.models.map((option) => ({
                   label: option.label,
-                  value: option.id,
+                  value: option.model_id,
                 })) ?? []),
               ]}
               value={params.model ?? ""}

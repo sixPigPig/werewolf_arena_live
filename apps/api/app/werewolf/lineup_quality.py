@@ -384,6 +384,7 @@ def _config_for_seat(
         candidate,
         seat=seat,
         name=existing.name or candidate.name,
+        model_provider=existing.model_provider or candidate.model_provider,
         model=existing.model or candidate.model,
     )
 

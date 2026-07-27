@@ -33,36 +33,90 @@ class V2ModelDecision:
     raw_response: str | None = None
 
 
+@dataclass(frozen=True)
+class V2ModelTarget:
+    provider: str
+    model_id: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _ProviderRoute:
+    api_key: str
+    url: str
+    protocol: str
+
+
 class V2ModelClient:
     def __init__(
         self,
         *,
-        api_key: str,
-        base_url: str,
-        model_id: str,
+        agent_plan_api_key: str,
+        agent_plan_base_url: str,
+        deepseek_api_key: str,
+        deepseek_base_url: str,
         first_token_seconds: float,
         total_seconds: float,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._api_key = api_key.strip()
-        self._url = f"{base_url.rstrip('/')}/responses"
-        self._model_id = model_id.strip()
+        self._routes = {
+            "agent_plan": _ProviderRoute(
+                api_key=agent_plan_api_key.strip(),
+                url=f"{agent_plan_base_url.rstrip('/')}/responses",
+                protocol="responses",
+            ),
+            "deepseek": _ProviderRoute(
+                api_key=deepseek_api_key.strip(),
+                url=f"{deepseek_base_url.rstrip('/')}/chat/completions",
+                protocol="chat_completions",
+            ),
+        }
         self._first_token_seconds = first_token_seconds
         self._total_seconds = total_seconds
+        self._transport = transport
 
-    def resolve_model_id(self, model_id: str | None = None) -> str:
-        return (model_id or self._model_id).strip()
+    def resolve_model_target(
+        self,
+        *,
+        model_provider: str,
+        model_id: str,
+        model_parameters: dict[str, Any],
+    ) -> V2ModelTarget:
+        provider = model_provider.strip()
+        selected_model_id = model_id.strip()
+        if not provider or not selected_model_id:
+            raise V2ModelError("model_not_configured")
+        route = self._routes.get(provider)
+        if route is None:
+            raise V2ModelError("model_provider_not_configured")
+        if not route.api_key:
+            raise V2ModelError("model_provider_credentials_missing")
+        return V2ModelTarget(
+            provider=provider,
+            model_id=selected_model_id,
+            parameters=dict(model_parameters),
+        )
 
     def build_request_payload(
         self,
         *,
         action_context: dict[str, Any],
         decision: bool,
-        model_id: str | None = None,
+        target: V2ModelTarget,
     ) -> dict[str, Any]:
-        return build_model_request_payload(
+        route = self._routes[target.provider]
+        if route.protocol == "responses":
+            return build_model_request_payload(
+                action_context,
+                decision=decision,
+                model_id=target.model_id,
+                parameters=target.parameters,
+            )
+        return build_chat_completions_request_payload(
             action_context,
             decision=decision,
-            model_id=self.resolve_model_id(model_id),
+            model_id=target.model_id,
+            parameters=target.parameters,
         )
 
     async def generate_action_decision(
@@ -70,15 +124,15 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        model_id: str | None = None,
+        target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision:
         raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
             action_context=action_context,
             attempt_id=attempt_id,
             max_output_tokens=256,
-            input_builder=_decision_model_input,
-            model_id=model_id,
+            decision=True,
+            target=target,
             check_cancellation=check_cancellation,
         )
         target_player_id, normalized_speech = _decision_fields(raw)
@@ -97,32 +151,44 @@ class V2ModelClient:
         action_context: dict[str, Any],
         attempt_id: str,
         max_output_tokens: int,
-        input_builder: Any,
-        model_id: str | None,
+        decision: bool,
+        target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None,
     ) -> tuple[str, str, int, int]:
         _check(check_cancellation)
-        selected_model_id = self.resolve_model_id(model_id)
-        if not self._api_key or not selected_model_id:
-            raise V2ModelError("model_not_configured")
+        route = self._routes[target.provider]
         started = time.monotonic()
         first_token_at: float | None = None
         provider_request_id = attempt_id
         text = ""
-        payload = build_model_request_payload(
-            action_context,
-            decision=input_builder is _decision_model_input,
-            model_id=selected_model_id,
-            max_output_tokens=max_output_tokens,
+        payload = (
+            build_model_request_payload(
+                action_context,
+                decision=decision,
+                model_id=target.model_id,
+                max_output_tokens=max_output_tokens,
+                parameters=target.parameters,
+            )
+            if route.protocol == "responses"
+            else build_chat_completions_request_payload(
+                action_context,
+                decision=decision,
+                model_id=target.model_id,
+                max_output_tokens=max_output_tokens,
+                parameters=target.parameters,
+            )
         )
         timeout = httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                transport=self._transport,
+            ) as client:
                 async with client.stream(
                     "POST",
-                    self._url,
+                    route.url,
                     headers={
-                        "Authorization": f"Bearer {self._api_key}",
+                        "Authorization": f"Bearer {route.api_key}",
                         "Content-Type": "application/json",
                         "Accept": "text/event-stream",
                     },
@@ -171,20 +237,18 @@ class V2ModelClient:
                         event = _sse_data(line)
                         if event is None:
                             continue
-                        response_object = event.get("response")
-                        if isinstance(response_object, dict):
-                            candidate_id = response_object.get("id")
-                            if isinstance(candidate_id, str) and candidate_id:
-                                provider_request_id = candidate_id
-                        if event.get("type") == "response.output_text.delta":
-                            delta = event.get("delta")
-                            if not isinstance(delta, str) or not delta:
-                                continue
+                        candidate_id, delta, failed = _provider_event(
+                            event,
+                            protocol=route.protocol,
+                        )
+                        if candidate_id:
+                            provider_request_id = candidate_id
+                        if failed:
+                            raise V2ModelError("model_provider_failed")
+                        if delta:
                             if first_token_at is None:
                                 first_token_at = time.monotonic()
                             text += delta
-                        if event.get("type") in {"response.failed", "error"}:
-                            raise V2ModelError("model_provider_failed")
         except V2ModelError:
             raise
         except (httpx.HTTPError, OSError) as exc:
@@ -198,6 +262,37 @@ class V2ModelClient:
             round((first_token_at - started) * 1000),
             round((completed - started) * 1000),
         )
+
+
+def _provider_event(
+    event: dict[str, Any],
+    *,
+    protocol: str,
+) -> tuple[str | None, str | None, bool]:
+    if protocol == "responses":
+        response_object = event.get("response")
+        candidate_id = (
+            response_object.get("id")
+            if isinstance(response_object, dict)
+            and isinstance(response_object.get("id"), str)
+            else None
+        )
+        delta = (
+            event.get("delta")
+            if event.get("type") == "response.output_text.delta"
+            and isinstance(event.get("delta"), str)
+            else None
+        )
+        return candidate_id, delta, event.get("type") in {"response.failed", "error"}
+
+    candidate_id = event.get("id") if isinstance(event.get("id"), str) else None
+    choices = event.get("choices")
+    delta: str | None = None
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        delta_object = choices[0].get("delta")
+        if isinstance(delta_object, dict) and isinstance(delta_object.get("content"), str):
+            delta = delta_object["content"]
+    return candidate_id, delta, "error" in event
 
 
 async def _next_with_cancellation(
@@ -237,16 +332,93 @@ def build_model_request_payload(
     decision: bool,
     model_id: str,
     max_output_tokens: int = 256,
+    parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    configured = dict(parameters or {})
+    payload: dict[str, Any] = {
         "model": model_id,
         "stream": True,
-        "max_output_tokens": max_output_tokens,
-        "thinking": {"type": "disabled"},
+        "max_output_tokens": _effective_max_tokens(configured, max_output_tokens),
         "input": (
             _decision_model_input(action_context) if decision else _model_input(action_context)
         ),
     }
+    _apply_common_parameters(
+        payload,
+        configured,
+        include_penalties=False,
+    )
+    return payload
+
+
+def build_chat_completions_request_payload(
+    action_context: dict[str, Any],
+    *,
+    decision: bool,
+    model_id: str,
+    max_output_tokens: int = 256,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    configured = dict(parameters or {})
+    response_input = (
+        _decision_model_input(action_context) if decision else _model_input(action_context)
+    )
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "stream": True,
+        "max_tokens": _effective_max_tokens(configured, max_output_tokens),
+        "messages": [
+            {
+                "role": item["role"],
+                "content": "\n".join(
+                    content["text"]
+                    for content in item["content"]
+                    if isinstance(content, dict) and isinstance(content.get("text"), str)
+                ),
+            }
+            for item in response_input
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    _apply_common_parameters(
+        payload,
+        configured,
+        include_penalties=True,
+    )
+    if configured.get("thinking", "default") != "disabled":
+        payload.pop("temperature", None)
+        payload.pop("top_p", None)
+        payload.pop("frequency_penalty", None)
+        payload.pop("presence_penalty", None)
+    return payload
+
+
+def _effective_max_tokens(parameters: dict[str, Any], requested: int) -> int:
+    configured = parameters.get("max_tokens")
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        return min(configured, requested)
+    return requested
+
+
+def _apply_common_parameters(
+    payload: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    include_penalties: bool,
+) -> None:
+    thinking = parameters.get("thinking", "default")
+    if thinking in {"enabled", "disabled"}:
+        payload["thinking"] = {"type": thinking}
+    reasoning_effort = parameters.get("reasoning_effort")
+    if thinking != "disabled" and isinstance(reasoning_effort, str) and reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    parameter_names = ["temperature", "top_p"]
+    if include_penalties:
+        parameter_names.extend(("frequency_penalty", "presence_penalty"))
+    for parameter in parameter_names:
+        value = parameters.get(parameter)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            payload[parameter] = value
 
 
 def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:

@@ -17,6 +17,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
 from app.model_catalog.service import DiscoveredModel
+from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
 
@@ -65,6 +66,15 @@ class FakeAgentPlanCatalogClient:
                 supports_thinking=True,
                 source_details={"selected": False, "plan": "agent-plan"},
             ),
+            DiscoveredModel(
+                provider="agent_plan",
+                model_id="glm-5-2-260617",
+                source_model_id="glm-5-2-260601",
+                display_name="glm-5-2-260617",
+                description="GLM-5.2 deep-thinking model",
+                supports_thinking=True,
+                source_details={"selected": False, "plan": "agent-plan"},
+            ),
         ]
 
 
@@ -80,7 +90,10 @@ def model_admin_client(
     monkeypatch.setattr(settings, "admin_session_cookie_name", "models_admin_session")
     monkeypatch.setattr(settings, "admin_session_cookie_secure", False)
     monkeypatch.setattr(settings, "public_session_cookie_secure", False)
-    monkeypatch.setenv("ARK_AGENT_PLAN_MODELS", "agent-fast")
+    monkeypatch.setenv(
+        "ARK_AGENT_PLAN_MODELS",
+        "agent-fast,glm-5-2-260617",
+    )
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "agent-fast")
 
@@ -121,6 +134,46 @@ def test_model_catalog_requires_admin_session(model_admin_client) -> None:
     assert response.status_code == 401
 
 
+def test_environment_bootstrap_repairs_glm_thinking_capability(
+    model_admin_client,
+) -> None:
+    client, session_factory = model_admin_client
+    with session_factory() as db:
+        db.add(
+            ModelConfigurationRecord(
+                provider="agent_plan",
+                model_id="glm-5-2-260617",
+                source_model_id="glm-5-2-260617",
+                display_name="glm-5-2-260617",
+                available=True,
+                enabled=True,
+                supports_thinking=False,
+                parameter_values={"thinking": "default"},
+                source_details={"bootstrap": "environment"},
+            )
+        )
+        db.commit()
+
+    _login(client)
+    listed = client.get("/api/v1/admin/models")
+    assert listed.status_code == 200, listed.text
+    glm = next(
+        item
+        for item in listed.json()["models"]
+        if item["provider"] == "agent_plan"
+        and item["model_id"] == "glm-5-2-260617"
+    )
+    assert glm["supports_thinking"] is True
+
+    with session_factory() as db:
+        repaired = db.get(
+            ModelConfigurationRecord,
+            ("agent_plan", "glm-5-2-260617"),
+        )
+        assert repaired is not None
+        assert repaired.supports_thinking is True
+
+
 def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     model_admin_client,
 ) -> None:
@@ -132,9 +185,24 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     listed_payload = listed.json()
     assert {item["model_id"] for item in listed_payload["models"]} >= {
         "agent-fast",
+        "glm-5-2-260617",
         "deepseek-v4-flash",
         "deepseek-v4-pro",
     }
+    bootstrapped_glm = next(
+        item
+        for item in listed_payload["models"]
+        if item["provider"] == "agent_plan"
+        and item["model_id"] == "glm-5-2-260617"
+    )
+    assert bootstrapped_glm["supports_thinking"] is True
+    assert bootstrapped_glm["reasoning_effort_options"] == [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    ]
+    assert bootstrapped_glm["max_output_tokens_limit"] == 131_072
     deepseek_source = next(
         source for source in listed_payload["sources"] if source["provider"] == "deepseek"
     )
@@ -149,13 +217,53 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     agent_models = [
         item for item in synced.json()["models"] if item["provider"] == "agent_plan"
     ]
-    assert [item["model_id"] for item in agent_models] == ["agent-fast", "agent-pro"]
+    assert [item["model_id"] for item in agent_models] == [
+        "agent-fast",
+        "agent-pro",
+        "glm-5-2-260617",
+    ]
     assert next(item for item in agent_models if item["model_id"] == "agent-fast")[
         "enabled"
     ]
     assert not next(item for item in agent_models if item["model_id"] == "agent-pro")[
         "enabled"
     ]
+
+
+def test_glm_5_2_accepts_documented_reasoning_and_output_limit(
+    model_admin_client,
+) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    accepted = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "minimal",
+                "max_tokens": 131_072,
+            },
+        },
+    )
+    assert accepted.status_code == 204, accepted.text
+
+    rejected = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "max_tokens": 131_073,
+            },
+        },
+    )
+    assert rejected.status_code == 422
+    assert "max_tokens must be between 1 and 131072" in rejected.text
 
 
 def test_model_configuration_updates_default_and_provider_parameters(
@@ -261,6 +369,7 @@ def test_disabling_a_model_used_by_active_profiles_is_rejected(model_admin_clien
             VirtualPlayerProfile(
                 id="profile-agent-fast",
                 display_name="Agent Fast Player",
+                model_provider="agent_plan",
                 model="agent-fast",
                 status="published",
             )

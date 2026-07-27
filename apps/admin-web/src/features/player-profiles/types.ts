@@ -5,6 +5,7 @@ export type PlayerTtsDialect = "sichuan" | "shaanxi" | "northeast";
 export type AdminPlayerProfile = {
   id: string;
   display_name: string;
+  model_provider: string;
   model: string;
   personality_id: string;
   personality_text: string;
@@ -76,6 +77,7 @@ export type PlayerProfileListParams = {
 
 export type PlayerProfileEditableFields = {
   display_name: string;
+  model_provider: string;
   model: string;
   personality_id: string;
   personality_text: string;
@@ -106,7 +108,12 @@ export type PlayerProfileEditableFields = {
 
 export type AdminPlayerProfileAiDraft = Omit<
   PlayerProfileEditableFields,
-  "appearance_id" | "avatar_asset_id" | "featured" | "gender" | "model"
+  | "appearance_id"
+  | "avatar_asset_id"
+  | "featured"
+  | "gender"
+  | "model_provider"
+  | "model"
 >;
 
 export type CreatePlayerProfileRequest = PlayerProfileEditableFields;
@@ -176,7 +183,7 @@ export type PlayerProfileConstraints = {
 };
 
 export type PlayerProfileOptions = {
-  models: Array<{ id: string; label: string }>;
+  models: Array<{ provider: string; model_id: string; label: string }>;
   personalities: PlayerProfileOption[];
   appearances: PlayerProfileAppearanceOption[];
   strategies: PlayerProfileOption[];
@@ -197,6 +204,7 @@ export type PlayerTtsSpeakerOptions = {
 
 export const DEFAULT_PLAYER_PROFILE_INPUT: PlayerProfileEditableFields = {
   display_name: "",
+  model_provider: "",
   model: "",
   personality_id: "balanced",
   personality_text: "",

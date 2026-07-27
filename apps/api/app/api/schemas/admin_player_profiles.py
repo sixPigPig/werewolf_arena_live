@@ -77,6 +77,7 @@ class AdminRequestModel(BaseModel):
 
 class AdminPlayerProfileContent(AdminRequestModel):
     display_name: str = Field(min_length=1, max_length=80)
+    model_provider: str = Field(min_length=1, max_length=32)
     model: str = Field(min_length=1, max_length=120)
     personality_id: str = Field(default="balanced", min_length=1, max_length=40)
     personality_text: str = ""
@@ -201,6 +202,7 @@ class AdminPlayerProfileCreate(AdminPlayerProfileContent):
 class AdminPlayerProfileUpdate(AdminRequestModel):
     expected_version: int = Field(ge=1)
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    model_provider: str | None = Field(default=None, min_length=1, max_length=32)
     model: str | None = Field(default=None, min_length=1, max_length=120)
     personality_id: str | None = Field(default=None, min_length=1, max_length=40)
     personality_text: str | None = None
@@ -418,6 +420,7 @@ class AdminPlayerVoicePreviewResponse(BaseModel):
 class AdminPlayerProfileResponse(BaseModel):
     id: str
     display_name: str
+    model_provider: str
     model: str
     personality_id: str
     personality_text: str
@@ -477,6 +480,13 @@ class PlayerProfileOption(BaseModel):
     description: str = ""
 
 
+class PlayerModelOption(BaseModel):
+    provider: str
+    model_id: str
+    label: str
+    description: str = ""
+
+
 class PlayerAppearanceOption(PlayerProfileOption):
     avatar_asset_id: str | None
     avatar_image_url: str = ""
@@ -492,7 +502,7 @@ class PlayerProfileConstraints(BaseModel):
 
 
 class AdminPlayerProfileOptionsResponse(BaseModel):
-    models: list[PlayerProfileOption]
+    models: list[PlayerModelOption]
     personalities: list[PlayerProfileOption]
     appearances: list[PlayerAppearanceOption]
     strategies: list[PlayerProfileOption]

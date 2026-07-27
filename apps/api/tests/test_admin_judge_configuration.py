@@ -48,7 +48,6 @@ def judge_admin_client(
     monkeypatch.setattr(settings, "admin_session_cookie_name", "judge_admin_session")
     monkeypatch.setattr(settings, "admin_session_cookie_secure", False)
     monkeypatch.setattr(settings, "public_session_cookie_secure", False)
-    monkeypatch.setattr(settings, "live_v2_model_id", "judge-model-default")
     monkeypatch.setattr(
         settings,
         "live_v2_tts_judge_speaker",
