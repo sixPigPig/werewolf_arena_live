@@ -33,6 +33,10 @@ from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.core.config import settings
 from app.db.session import get_db
 from app.judge_configuration import build_judge_voice_snapshot, runtime_judge_configuration
+from app.model_catalog.defaults import (
+    max_output_tokens_limit,
+    parameter_values_with_default_max_tokens,
+)
 from app.models.model_configuration import ModelConfigurationRecord
 from app.v2.contracts import (
     AdminV2EventResponse,
@@ -151,8 +155,13 @@ def create_v2_game(
                     ),
                 )
             player_snapshot = item.model_dump(mode="json", exclude_none=True)
-            player_snapshot["model_parameters"] = dict(
-                model_configuration.parameter_values or {}
+            player_snapshot["model_parameters"] = parameter_values_with_default_max_tokens(
+                model_configuration.parameter_values,
+                supports_thinking=model_configuration.supports_thinking,
+                limit=max_output_tokens_limit(
+                    model_configuration.provider,
+                    model_configuration.model_id,
+                ),
             )
             player_snapshot["model_configuration_updated_at"] = (
                 model_configuration.updated_at.isoformat()

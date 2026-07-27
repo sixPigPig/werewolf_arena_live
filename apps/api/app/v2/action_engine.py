@@ -367,6 +367,11 @@ class V2ActionEngine:
                     decision=decision,
                     target=model_target,
                 )
+                configured_max_tokens = model_target.parameters.get("max_tokens")
+                effective_max_tokens = request_payload.get(
+                    "max_output_tokens",
+                    request_payload.get("max_tokens"),
+                )
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_request_started",
@@ -377,6 +382,23 @@ class V2ActionEngine:
                         "model_id": model_target.model_id,
                         "model_provider": model_target.provider,
                         "model_parameters": dict(model_target.parameters),
+                        "configured_max_tokens": (
+                            configured_max_tokens
+                            if isinstance(configured_max_tokens, int)
+                            and not isinstance(configured_max_tokens, bool)
+                            else None
+                        ),
+                        "effective_max_tokens": effective_max_tokens,
+                        "max_tokens_source": (
+                            "model_configuration"
+                            if isinstance(configured_max_tokens, int)
+                            and not isinstance(configured_max_tokens, bool)
+                            else "thinking_mode_default"
+                        ),
+                        "thinking": model_target.parameters.get(
+                            "thinking",
+                            "default",
+                        ),
                         "judge_configuration_version": None,
                         "actor_kind": spec.actor_kind,
                         "actor_id": spec.actor_id,

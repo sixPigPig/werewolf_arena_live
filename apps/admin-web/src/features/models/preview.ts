@@ -58,7 +58,7 @@ function previewModel(
       reasoning_effort: null,
       temperature: null,
       top_p: null,
-      max_tokens: null,
+      max_tokens: 2048,
       frequency_penalty: null,
       presence_penalty: null,
     },

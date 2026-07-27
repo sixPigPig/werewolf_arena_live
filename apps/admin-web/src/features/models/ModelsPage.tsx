@@ -260,7 +260,12 @@ function ModelConfigurationForm({
   onSubmit: (input: ModelConfigurationInput) => void;
   pending: boolean;
 }) {
+  const DEFAULT_THINKING_MAX_TOKENS = 2048;
+  const DEFAULT_NON_THINKING_MAX_TOKENS = 512;
   const [thinking, setThinking] = useState<ThinkingMode>(model.parameters.thinking);
+  const [maxTokens, setMaxTokens] = useState<number | null>(
+    model.parameters.max_tokens,
+  );
   const [reasoningEffort, setReasoningEffort] = useState(
     model.parameters.thinking === "disabled"
       ? ""
@@ -276,6 +281,14 @@ function ModelConfigurationForm({
 
   function handleThinkingChange(nextThinking: ThinkingMode) {
     setThinking(nextThinking);
+    setMaxTokens(
+      Math.min(
+        model.supports_thinking && nextThinking !== "disabled"
+          ? DEFAULT_THINKING_MAX_TOKENS
+          : DEFAULT_NON_THINKING_MAX_TOKENS,
+        model.max_output_tokens_limit,
+      ),
+    );
     setValidationError(null);
     if (nextThinking === "disabled") setReasoningEffort("");
   }
@@ -284,6 +297,10 @@ function ModelConfigurationForm({
     event.preventDefault();
     if (thinking === "disabled" && reasoningEffort) {
       setValidationError("关闭 Thinking 时不能同时设置 Reasoning effort。");
+      return;
+    }
+    if (maxTokens === null) {
+      setValidationError("最大输出 tokens 不能为空。");
       return;
     }
     setValidationError(null);
@@ -296,7 +313,7 @@ function ModelConfigurationForm({
         reasoning_effort: reasoningEffort || null,
         temperature: samplingDisabled ? null : optionalNumber(form, "temperature"),
         top_p: samplingDisabled ? null : optionalNumber(form, "top_p"),
-        max_tokens: optionalNumber(form, "max_tokens"),
+        max_tokens: maxTokens,
         frequency_penalty: samplingDisabled ? null : optionalNumber(form, "frequency_penalty"),
         presence_penalty: samplingDisabled ? null : optionalNumber(form, "presence_penalty"),
       },
@@ -354,13 +371,15 @@ function ModelConfigurationForm({
             />
           </ModelParameterField>
           <NumberField
-            defaultValue={model.parameters.max_tokens}
-            description={`限制模型单次响应最多生成的 token 数。当前模型上限为 ${model.max_output_tokens_limit.toLocaleString()}；实际值还会受游戏运行预算限制。`}
+            description={`限制模型单次响应最多生成的 token 数。当前模型上限为 ${model.max_output_tokens_limit.toLocaleString()}；该值会直接用于实际模型请求。切换 Thinking 时会自动恢复对应默认值。`}
             label="最大输出 tokens"
             max={model.max_output_tokens_limit}
             min={1}
             name="max_tokens"
+            onChange={setMaxTokens}
+            required
             step={1}
+            value={maxTokens}
           />
           <NumberField
             defaultValue={model.parameters.temperature}
@@ -426,15 +445,30 @@ function ModelConfigurationForm({
   );
 }
 
-function NumberField({ defaultValue, description, disabled, label, max, min, name, step }: {
-  defaultValue: number | null;
+function NumberField({
+  defaultValue,
+  description,
+  disabled,
+  label,
+  max,
+  min,
+  name,
+  onChange,
+  required,
+  step,
+  value,
+}: {
+  defaultValue?: number | null;
   description: string;
   disabled?: boolean;
   label: string;
   max: number;
   min: number;
   name: string;
+  onChange?: (value: number | null) => void;
+  required?: boolean;
   step: number;
+  value?: number | null;
 }) {
   return (
     <ModelParameterField description={description} label={label}>
@@ -445,8 +479,15 @@ function NumberField({ defaultValue, description, disabled, label, max, min, nam
         max={max}
         min={min}
         name={name}
-        placeholder="默认"
+        onChange={(nextValue) => {
+          if (onChange) {
+            onChange(typeof nextValue === "number" ? nextValue : null);
+          }
+        }}
+        placeholder={required ? undefined : "默认"}
+        required={required}
         step={step}
+        value={value}
       />
     </ModelParameterField>
   );

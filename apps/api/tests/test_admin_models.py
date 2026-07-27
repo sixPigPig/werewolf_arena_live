@@ -325,7 +325,11 @@ def test_deepseek_rejects_sampling_parameters_while_thinking_is_enabled(
         headers={"X-CSRF-Token": csrf_token},
         json={
             "enabled": True,
-            "parameters": {"thinking": "enabled", "temperature": 0.4},
+            "parameters": {
+                "thinking": "enabled",
+                "temperature": 0.4,
+                "max_tokens": 2048,
+            },
         },
     )
     assert response.status_code == 422
@@ -351,6 +355,7 @@ def test_model_configuration_save_rejects_reasoning_effort_when_thinking_is_disa
             "parameters": {
                 "thinking": "disabled",
                 "reasoning_effort": "medium",
+                "max_tokens": 512,
             },
         },
     )
@@ -379,7 +384,45 @@ def test_disabling_a_model_used_by_active_profiles_is_rejected(model_admin_clien
     response = client.patch(
         "/api/v1/admin/models/agent_plan/agent-fast",
         headers={"X-CSRF-Token": csrf_token},
-        json={"enabled": False, "parameters": {"thinking": "default"}},
+        json={
+            "enabled": False,
+            "parameters": {"thinking": "default", "max_tokens": 2048},
+        },
     )
     assert response.status_code == 409
     assert response.json()["code"] == "admin_model_configuration_conflict"
+
+
+def test_model_configuration_requires_max_tokens(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/deepseek/deepseek-v4-flash",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {"thinking": "enabled"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_request_invalid"
+
+
+def test_catalog_backfills_thinking_mode_default_max_tokens(
+    model_admin_client,
+) -> None:
+    client, _ = model_admin_client
+    _login(client)
+
+    response = client.get("/api/v1/admin/models")
+
+    assert response.status_code == 200
+    parameters = {
+        (item["provider"], item["model_id"]): item["parameters"]
+        for item in response.json()["models"]
+    }
+    assert parameters[("agent_plan", "agent-fast")]["max_tokens"] == 512
+    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 2048

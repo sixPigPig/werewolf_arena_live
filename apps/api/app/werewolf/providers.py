@@ -239,7 +239,12 @@ class OpenAICompatibleProvider:
             payload["response_format"] = self.config.response_format
         configured_max_tokens = parameters.get("max_tokens")
         budget_max_tokens = call_options.max_output_tokens if call_options is not None else None
-        max_tokens = _minimum_optional_int(configured_max_tokens, budget_max_tokens)
+        max_tokens = (
+            configured_max_tokens
+            if isinstance(configured_max_tokens, int)
+            and not isinstance(configured_max_tokens, bool)
+            else budget_max_tokens
+        )
         if max_tokens is not None:
             if (
                 self.config.env_prefix == "ARK_AGENT_PLAN"
@@ -721,11 +726,6 @@ def _catalog_provider_name(config: OpenAICompatibleProviderConfig) -> str:
         "DEEPSEEK": "deepseek",
         "DASHSCOPE": "qwen",
     }.get(config.env_prefix, config.env_prefix.lower())
-
-
-def _minimum_optional_int(*values: Any) -> int | None:
-    integers = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
-    return min(integers) if integers else None
 
 
 def _has_api_key(config: OpenAICompatibleProviderConfig) -> bool:

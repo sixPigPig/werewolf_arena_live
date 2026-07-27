@@ -109,7 +109,10 @@ describe("model management flow", () => {
       expect(JSON.parse(String(patch?.[1]?.body))).toMatchObject({
         enabled: true,
         is_default: false,
-        parameters: { thinking: "default" },
+        parameters: {
+          thinking: "default",
+          max_tokens: 2048,
+        },
       });
     });
   });
@@ -153,12 +156,21 @@ describe("model management flow", () => {
 
     const thinking = within(model!).getByLabelText("Thinking");
     const reasoningEffort = within(model!).getByLabelText("Reasoning effort");
+    const maxTokens = within(model!).getByLabelText("最大输出 tokens");
     expect(thinking).not.toBeDisabled();
     expect(reasoningEffort).not.toBeDisabled();
     await selectAntdOption(user, reasoningEffort, "medium");
+    await user.clear(maxTokens);
+    await user.type(maxTokens, "1000");
+    expect(maxTokens).toHaveValue("1000");
     await selectAntdOption(user, thinking, "关闭");
 
     expect(reasoningEffort).toBeDisabled();
+    expect(maxTokens).toHaveValue("512");
+    await selectAntdOption(user, thinking, "开启");
+    expect(maxTokens).toHaveValue("2048");
+    await selectAntdOption(user, thinking, "关闭");
+    expect(maxTokens).toHaveValue("512");
     expectAntdSelectLabel(reasoningEffort, "跟随提供方默认");
     expect(within(model!).getByText(/关闭 Thinking 时 Reasoning effort 不可用/)).toBeInTheDocument();
 
@@ -173,6 +185,7 @@ describe("model management flow", () => {
         parameters: {
           thinking: "disabled",
           reasoning_effort: null,
+          max_tokens: 512,
         },
       });
     });

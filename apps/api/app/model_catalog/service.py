@@ -12,6 +12,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.model_catalog.defaults import (
+    max_output_tokens_limit,
+    parameter_values_with_default_max_tokens,
+)
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.werewolf.providers import (
@@ -28,8 +32,6 @@ ThinkingMode = Literal["default", "enabled", "disabled"]
 ARK_DOCS_URL = "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01"
 DEEPSEEK_MODELS_URL = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
 DEEPSEEK_THINKING_URL = "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode"
-GLM_5_2_MAX_OUTPUT_TOKENS = 131_072
-DEFAULT_MAX_OUTPUT_TOKENS = 384_000
 
 
 class ModelCatalogUnavailable(RuntimeError):
@@ -336,16 +338,17 @@ def validate_parameter_values(
     _copy_optional_number(values, normalized, "frequency_penalty", minimum=-2, maximum=2)
     _copy_optional_number(values, normalized, "presence_penalty", minimum=-2, maximum=2)
     max_tokens = values.get("max_tokens")
-    if max_tokens is not None:
-        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
-            raise ValueError("max_tokens must be an integer")
-        max_output_tokens_limit = _max_output_tokens_limit(provider, model_id)
-        if not 1 <= max_tokens <= max_output_tokens_limit:
-            raise ValueError(
-                "max_tokens must be between 1 and "
-                f"{max_output_tokens_limit}"
-            )
-        normalized["max_tokens"] = max_tokens
+    if max_tokens is None:
+        raise ValueError("max_tokens is required")
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+        raise ValueError("max_tokens must be an integer")
+    max_output_tokens_limit = _max_output_tokens_limit(provider, model_id)
+    if not 1 <= max_tokens <= max_output_tokens_limit:
+        raise ValueError(
+            "max_tokens must be between 1 and "
+            f"{max_output_tokens_limit}"
+        )
+    normalized["max_tokens"] = max_tokens
     sampling_parameters = {
         "temperature",
         "top_p",
@@ -381,6 +384,11 @@ def bootstrap_environment_catalog(db: Session) -> None:
                 model_id,
             )
             if record is None:
+                parameter_values = parameter_values_with_default_max_tokens(
+                    {"thinking": "default"},
+                    supports_thinking=bootstrap_supports_thinking,
+                    limit=_max_output_tokens_limit(provider_name, model_id),
+                )
                 record = ModelConfigurationRecord(
                     provider=provider_name,
                     model_id=model_id,
@@ -391,7 +399,7 @@ def bootstrap_environment_catalog(db: Session) -> None:
                     enabled=True,
                     is_default=not has_default and model_id == default_model,
                     supports_thinking=bootstrap_supports_thinking,
-                    parameter_values={"thinking": "default"},
+                    parameter_values=parameter_values,
                     source_details={"bootstrap": "environment"},
                     last_synced_at=None,
                     created_at=now,
@@ -402,6 +410,11 @@ def bootstrap_environment_catalog(db: Session) -> None:
                     has_default = 1
             elif (record.source_details or {}).get("bootstrap") == "environment":
                 record.supports_thinking = bootstrap_supports_thinking
+                record.parameter_values = parameter_values_with_default_max_tokens(
+                    record.parameter_values,
+                    supports_thinking=bootstrap_supports_thinking,
+                    limit=_max_output_tokens_limit(provider_name, model_id),
+                )
                 record.updated_at = now
 
 
@@ -421,12 +434,17 @@ def _sync_discovered_models(
         discovered_ids.add(model.model_id)
         record = db.get(ModelConfigurationRecord, (provider, model.model_id))
         if record is None:
+            parameter_values = parameter_values_with_default_max_tokens(
+                {"thinking": "default"},
+                supports_thinking=model.supports_thinking,
+                limit=_max_output_tokens_limit(provider, model.model_id),
+            )
             record = ModelConfigurationRecord(
                 provider=provider,
                 model_id=model.model_id,
                 enabled=model.model_id in configured_ids,
                 is_default=False,
-                parameter_values={"thinking": "default"},
+                parameter_values=parameter_values,
                 created_at=now,
             )
             db.add(record)
@@ -435,6 +453,11 @@ def _sync_discovered_models(
         record.description = model.description
         record.available = True
         record.supports_thinking = model.supports_thinking
+        record.parameter_values = parameter_values_with_default_max_tokens(
+            record.parameter_values,
+            supports_thinking=model.supports_thinking,
+            limit=_max_output_tokens_limit(provider, model.model_id),
+        )
         record.source_details = model.source_details
         record.last_synced_at = now
         record.updated_at = now
@@ -484,7 +507,14 @@ def _snapshot_from_database(
                 (record.provider, record.model_id),
                 0,
             ),
-            parameters=dict(record.parameter_values or {"thinking": "default"}),
+            parameters=parameter_values_with_default_max_tokens(
+                record.parameter_values,
+                supports_thinking=record.supports_thinking,
+                limit=_max_output_tokens_limit(
+                    record.provider,  # type: ignore[arg-type]
+                    record.model_id,
+                ),
+            ),
             reasoning_effort_options=_reasoning_effort_options(
                 record.provider,  # type: ignore[arg-type]
                 record.supports_thinking,
@@ -594,9 +624,7 @@ def _max_output_tokens_limit(
     provider: ModelProviderName,
     model_id: str,
 ) -> int:
-    if provider == "agent_plan" and model_id.lower().startswith("glm-5-2-"):
-        return GLM_5_2_MAX_OUTPUT_TOKENS
-    return DEFAULT_MAX_OUTPUT_TOKENS
+    return max_output_tokens_limit(provider, model_id)
 
 
 def _copy_optional_number(

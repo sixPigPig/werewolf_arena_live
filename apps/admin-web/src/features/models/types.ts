@@ -6,7 +6,7 @@ export type ModelParameters = {
   reasoning_effort: string | null;
   temperature: number | null;
   top_p: number | null;
-  max_tokens: number | null;
+  max_tokens: number;
   frequency_penalty: number | null;
   presence_penalty: number | null;
 };

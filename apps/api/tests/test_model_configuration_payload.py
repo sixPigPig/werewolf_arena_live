@@ -55,7 +55,7 @@ def test_agent_plan_runtime_configuration_is_applied_to_chat_payload(monkeypatch
     assert requests[0]["thinking"] == {"type": "enabled"}
     assert requests[0]["reasoning_effort"] == "high"
     assert requests[0]["top_p"] == 0.9
-    assert requests[0]["max_completion_tokens"] == 512
+    assert requests[0]["max_completion_tokens"] == 4096
     assert "max_tokens" not in requests[0]
     assert requests[0]["frequency_penalty"] == 0.1
     assert requests[0]["presence_penalty"] == 0.2

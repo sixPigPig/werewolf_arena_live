@@ -11,7 +11,7 @@ class AdminModelParameters(BaseModel):
     reasoning_effort: str | None = None
     temperature: float | None = None
     top_p: float | None = None
-    max_tokens: int | None = None
+    max_tokens: int = Field(ge=1)
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
 
@@ -55,4 +55,4 @@ class AdminModelCatalogResponse(BaseModel):
 class AdminModelConfigurationRequest(BaseModel):
     enabled: bool
     is_default: bool = False
-    parameters: AdminModelParameters = Field(default_factory=AdminModelParameters)
+    parameters: AdminModelParameters

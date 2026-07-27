@@ -7,6 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import SessionLocal
+from app.model_catalog.defaults import (
+    max_output_tokens_limit,
+    parameter_values_with_default_max_tokens,
+)
 from app.models.model_configuration import ModelConfigurationRecord
 
 
@@ -85,5 +89,9 @@ def runtime_configuration_for_model(
         provider=record.provider,
         model_id=record.model_id,
         supports_thinking=record.supports_thinking,
-        parameters=dict(record.parameter_values or {}),
+        parameters=parameter_values_with_default_max_tokens(
+            record.parameter_values,
+            supports_thinking=record.supports_thinking,
+            limit=max_output_tokens_limit(record.provider, record.model_id),
+        ),
     )

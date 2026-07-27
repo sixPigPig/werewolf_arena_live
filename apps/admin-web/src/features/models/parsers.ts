@@ -65,7 +65,7 @@ function parseParameters(value: unknown): ModelParameters {
     reasoning_effort: nullableString(record.reasoning_effort),
     temperature: nullableNumber(record.temperature),
     top_p: nullableNumber(record.top_p),
-    max_tokens: nullableNumber(record.max_tokens),
+    max_tokens: requiredNumber(record.max_tokens, "max_tokens"),
     frequency_penalty: nullableNumber(record.frequency_penalty),
     presence_penalty: nullableNumber(record.presence_penalty),
   };

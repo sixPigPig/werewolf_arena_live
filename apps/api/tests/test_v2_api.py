@@ -270,7 +270,10 @@ def v2_context(
                     enabled=True,
                     is_default=model_id == "test-model",
                     supports_thinking=True,
-                    parameter_values={"thinking": "disabled"},
+                    parameter_values={
+                        "thinking": "disabled",
+                        "max_tokens": 512,
+                    },
                     source_details={"source": "test"},
                 )
             )
@@ -397,7 +400,10 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "name": "阿青",
                 "model_provider": "agent_plan",
                 "model": "private-model-id",
-                "model_parameters": {"thinking": "disabled"},
+                "model_parameters": {
+                    "thinking": "disabled",
+                    "max_tokens": 512,
+                },
                 "personality": "private personality prompt",
                 "avatar_image_url": "/api/v1/public/player-profiles/profile-1/avatar",
                 "strategy_profile": "private-strategy",
@@ -409,7 +415,10 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "name": "白石",
                 "model_provider": "agent_plan",
                 "model": "test-model",
-                "model_parameters": {"thinking": "disabled"},
+                "model_parameters": {
+                    "thinking": "disabled",
+                    "max_tokens": 512,
+                },
             },
         ]
         assert all(

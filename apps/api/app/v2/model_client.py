@@ -10,6 +10,11 @@ from typing import Any
 
 import httpx
 
+from app.model_catalog.defaults import (
+    DEFAULT_NON_THINKING_MAX_TOKENS,
+    DEFAULT_THINKING_MAX_TOKENS,
+)
+
 
 class V2ModelError(RuntimeError):
     def __init__(self, code: str) -> None:
@@ -45,6 +50,15 @@ class _ProviderRoute:
     api_key: str
     url: str
     protocol: str
+
+
+@dataclass(frozen=True)
+class _ProviderEvent:
+    candidate_id: str | None = None
+    text_delta: str | None = None
+    reasoning_delta: str | None = None
+    failed: bool = False
+    finish_reason: str | None = None
 
 
 class V2ModelClient:
@@ -130,7 +144,7 @@ class V2ModelClient:
         raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
             action_context=action_context,
             attempt_id=attempt_id,
-            max_output_tokens=256,
+            max_output_tokens=None,
             decision=True,
             target=target,
             check_cancellation=check_cancellation,
@@ -150,7 +164,7 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        max_output_tokens: int,
+        max_output_tokens: int | None,
         decision: bool,
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None,
@@ -161,6 +175,8 @@ class V2ModelClient:
         first_token_at: float | None = None
         provider_request_id = attempt_id
         text = ""
+        reasoning_seen = False
+        finish_reason: str | None = None
         payload = (
             build_model_request_payload(
                 action_context,
@@ -237,22 +253,35 @@ class V2ModelClient:
                         event = _sse_data(line)
                         if event is None:
                             continue
-                        candidate_id, delta, failed = _provider_event(
+                        provider_event = _provider_event(
                             event,
                             protocol=route.protocol,
                         )
-                        if candidate_id:
-                            provider_request_id = candidate_id
-                        if failed:
+                        if provider_event.candidate_id:
+                            provider_request_id = provider_event.candidate_id
+                        if provider_event.failed:
                             raise V2ModelError("model_provider_failed")
-                        if delta:
+                        if provider_event.finish_reason:
+                            finish_reason = provider_event.finish_reason
+                        if provider_event.reasoning_delta:
+                            reasoning_seen = True
                             if first_token_at is None:
                                 first_token_at = time.monotonic()
-                            text += delta
+                        if provider_event.text_delta:
+                            if first_token_at is None:
+                                first_token_at = time.monotonic()
+                            text += provider_event.text_delta
         except V2ModelError:
             raise
         except (httpx.HTTPError, OSError) as exc:
             raise V2ModelError("model_transport_failed") from exc
+        if not text.strip():
+            if finish_reason in {"length", "max_output_tokens"}:
+                raise V2ModelError("model_output_budget_exhausted")
+            if first_token_at is None:
+                raise V2ModelError("model_empty_stream")
+            if reasoning_seen:
+                raise V2ModelError("model_empty_stream")
         if first_token_at is None:
             raise V2ModelError("model_empty_stream")
         completed = time.monotonic()
@@ -268,7 +297,7 @@ def _provider_event(
     event: dict[str, Any],
     *,
     protocol: str,
-) -> tuple[str | None, str | None, bool]:
+) -> _ProviderEvent:
     if protocol == "responses":
         response_object = event.get("response")
         candidate_id = (
@@ -277,22 +306,74 @@ def _provider_event(
             and isinstance(response_object.get("id"), str)
             else None
         )
-        delta = (
+        text_delta = (
             event.get("delta")
             if event.get("type") == "response.output_text.delta"
             and isinstance(event.get("delta"), str)
             else None
         )
-        return candidate_id, delta, event.get("type") in {"response.failed", "error"}
+        reasoning_delta = (
+            event.get("delta")
+            if event.get("type")
+            in {
+                "response.reasoning_summary_text.delta",
+                "response.reasoning_text.delta",
+            }
+            and isinstance(event.get("delta"), str)
+            else None
+        )
+        response_status = (
+            response_object.get("status")
+            if isinstance(response_object, dict)
+            else None
+        )
+        incomplete_details = (
+            response_object.get("incomplete_details")
+            if isinstance(response_object, dict)
+            else None
+        )
+        incomplete_reason = (
+            incomplete_details.get("reason")
+            if isinstance(incomplete_details, dict)
+            and isinstance(incomplete_details.get("reason"), str)
+            else None
+        )
+        return _ProviderEvent(
+            candidate_id=candidate_id,
+            text_delta=text_delta,
+            reasoning_delta=reasoning_delta,
+            failed=event.get("type") in {"response.failed", "error"},
+            finish_reason=(
+                incomplete_reason
+                if response_status == "incomplete"
+                or event.get("type") == "response.incomplete"
+                else None
+            ),
+        )
 
     candidate_id = event.get("id") if isinstance(event.get("id"), str) else None
     choices = event.get("choices")
-    delta: str | None = None
+    text_delta: str | None = None
+    reasoning_delta: str | None = None
+    finish_reason: str | None = None
     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
         delta_object = choices[0].get("delta")
         if isinstance(delta_object, dict) and isinstance(delta_object.get("content"), str):
-            delta = delta_object["content"]
-    return candidate_id, delta, "error" in event
+            text_delta = delta_object["content"]
+        if (
+            isinstance(delta_object, dict)
+            and isinstance(delta_object.get("reasoning_content"), str)
+        ):
+            reasoning_delta = delta_object["reasoning_content"]
+        if isinstance(choices[0].get("finish_reason"), str):
+            finish_reason = choices[0]["finish_reason"]
+    return _ProviderEvent(
+        candidate_id=candidate_id,
+        text_delta=text_delta,
+        reasoning_delta=reasoning_delta,
+        failed="error" in event,
+        finish_reason=finish_reason,
+    )
 
 
 async def _next_with_cancellation(
@@ -331,7 +412,7 @@ def build_model_request_payload(
     *,
     decision: bool,
     model_id: str,
-    max_output_tokens: int = 256,
+    max_output_tokens: int | None = None,
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     configured = dict(parameters or {})
@@ -356,7 +437,7 @@ def build_chat_completions_request_payload(
     *,
     decision: bool,
     model_id: str,
-    max_output_tokens: int = 256,
+    max_output_tokens: int | None = None,
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     configured = dict(parameters or {})
@@ -393,11 +474,18 @@ def build_chat_completions_request_payload(
     return payload
 
 
-def _effective_max_tokens(parameters: dict[str, Any], requested: int) -> int:
+def _effective_max_tokens(
+    parameters: dict[str, Any],
+    requested: int | None,
+) -> int:
     configured = parameters.get("max_tokens")
     if isinstance(configured, int) and not isinstance(configured, bool):
-        return min(configured, requested)
-    return requested
+        return configured
+    if isinstance(requested, int) and not isinstance(requested, bool):
+        return requested
+    if parameters.get("thinking", "default") == "disabled":
+        return DEFAULT_NON_THINKING_MAX_TOKENS
+    return DEFAULT_THINKING_MAX_TOKENS
 
 
 def _apply_common_parameters(

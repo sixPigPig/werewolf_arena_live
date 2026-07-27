@@ -60,6 +60,7 @@ def test_agent_plan_target_uses_ark_responses_endpoint_and_credentials() -> None
         model_id="deepseek-v4-flash",
         model_parameters={
             "thinking": "disabled",
+            "max_tokens": 512,
             "temperature": 0.2,
             "frequency_penalty": 0.4,
             "presence_penalty": 0.5,
@@ -84,6 +85,7 @@ def test_agent_plan_target_uses_ark_responses_endpoint_and_credentials() -> None
     assert "input" in payload
     assert "messages" not in payload
     assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_output_tokens"] == 512
     assert payload["temperature"] == 0.2
     assert "frequency_penalty" not in payload
     assert "presence_penalty" not in payload
@@ -109,7 +111,11 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     target = client.resolve_model_target(
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "temperature": 0.9},
+        model_parameters={
+            "thinking": "enabled",
+            "max_tokens": 2048,
+            "temperature": 0.9,
+        },
     )
     decision = asyncio.run(
         client.generate_action_decision(
@@ -130,6 +136,7 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     assert "messages" in payload
     assert "input" not in payload
     assert payload["thinking"] == {"type": "enabled"}
+    assert payload["max_tokens"] == 2048
     assert "temperature" not in payload
 
 
@@ -151,4 +158,34 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
             model_provider="unknown",
             model_id="deepseek-v4-flash",
             model_parameters={},
+        )
+
+
+def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"id":"chatcmpl-budget","choices":[{"delta":'
+                '{"reasoning_content":"先分析场上发言。"},"finish_reason":null}]}\n\n'
+                'data: {"id":"chatcmpl-budget","choices":[{"delta":{},'
+                '"finish_reason":"length"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_output_budget_exhausted"):
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_budget",
+                target=target,
+            )
         )
