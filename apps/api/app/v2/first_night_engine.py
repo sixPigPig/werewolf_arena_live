@@ -10,7 +10,12 @@ from app.v2.action_engine import (
     V2SpeechSpec,
 )
 from app.v2.model_client import V2ModelDecision
-from app.v2.model_context import V2ModelPlayerReference
+from app.v2.model_context import (
+    V2ModelPlayerReference,
+    build_public_match_state,
+    build_public_rule_contract,
+    private_authoritative_facts,
+)
 from app.v2.night_repository import (
     V2ActivationRef,
     V2NightPlayer,
@@ -311,7 +316,12 @@ class V2NightEngine:
                         "werewolf_teammates": [item.player_id for item in wolves],
                         "prior_team_proposals": prior_proposals,
                         "round_no": round_no,
-                        "consensus_rule": "全员同一目标才生效；最多两轮；第二轮仍不一致则空刀",
+                        "consensus_rule": (
+                            "本局只有1名狼人，你的选择自动成为团队一致目标，"
+                            "必须袭击一名存活的非狼人玩家"
+                            if len(wolves) == 1
+                            else "全员同一目标才生效；最多两轮；第二轮仍不一致则空刀"
+                        ),
                     },
                     optional=False,
                 )
@@ -905,7 +915,13 @@ class V2NightEngine:
                     "ability_instance_id": activation.ability_instance_id,
                     "activation_id": activation.activation_id,
                     "actor_profile": player.persona,
-                    "allowed_knowledge": knowledge,
+                    "private_authoritative_facts": private_authoritative_facts(
+                        knowledge
+                    ),
+                    "public_match_state": build_public_match_state(
+                        round_no=state.round_no,
+                        players=state.players,
+                    ),
                     "knowledge_fact_ids": list(knowledge_fact_ids),
                     "knowledge_projection_hash": knowledge_hash,
                     "candidates": [
@@ -921,6 +937,10 @@ class V2NightEngine:
                         "must_choose_exact_candidate_id": True,
                     },
                     "night_no": state.round_no,
+                    "public_rule_contract": build_public_rule_contract(
+                        rule=state.rule,
+                        max_rounds=state.max_rounds,
+                    ),
                     "public_history": self._repository.public_history(state.game_id),
                 },
             ),

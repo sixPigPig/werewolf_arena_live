@@ -78,6 +78,9 @@ class V2MatchRepository:
                 raise V2RepositoryError("V2 match has no frozen rule")
             compiled_rule = dict(rule)
             compiled_rule["day_actions"] = list(game.ability_snapshot.get("day_actions") or [])
+            compiled_rule["ability_policies"] = dict(
+                game.ability_snapshot.get("policies") or {}
+            )
             for key, value in dict(game.ability_snapshot.get("day_policies") or {}).items():
                 compiled_rule.setdefault(key, value)
             return V2MatchSnapshot(

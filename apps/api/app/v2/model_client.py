@@ -293,6 +293,13 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                         "允许放弃时可为 null。严格遵守 output_contract.target_policy；"
                         "speech 是准备直接播报的自然中文，可以包含多句话。"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
+                        "上下文中的 public_rule_contract 是本局冻结的公开规则；"
+                        "public_match_state 是法官确认的当前公开存活状态；"
+                        "private_authoritative_facts 是当前玩家被法官确认知晓的私有事实；"
+                        "authoritative_public_facts 是法官公开确认的事实；"
+                        "public_statements 只是玩家说法，可能真实、撒谎或判断错误。"
+                        "这些信息只界定当前玩家知道什么，如何判断、是否公开私有事实以及"
+                        "采用何种策略均由你自主决定。"
                     ),
                 }
             ],

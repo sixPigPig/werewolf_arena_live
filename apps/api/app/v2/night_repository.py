@@ -49,6 +49,8 @@ class V2NightRuntimeState:
     phase_id: str
     round_no: int
     snapshot: dict[str, Any]
+    rule: dict[str, Any]
+    max_rounds: int
     players: tuple[V2NightPlayer, ...]
 
     def player(self, player_id: str) -> V2NightPlayer:
@@ -170,6 +172,7 @@ class V2NightRepository:
                 payload={"window_id": window.window_id, "plan": plan},
             )
             players = _players(db, game)
+            rule = _compiled_rule(game, snapshot)
             return V2NightRuntimeState(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
@@ -178,6 +181,8 @@ class V2NightRepository:
                 phase_id=game.phase_id,
                 round_no=round_no,
                 snapshot=snapshot,
+                rule=rule,
+                max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
                 players=players,
             )
 
@@ -583,6 +588,8 @@ class V2NightRepository:
             phase_id=f"day_{state.round_no}",
             round_no=state.round_no,
             snapshot=state.snapshot,
+            rule=state.rule,
+            max_rounds=state.max_rounds,
             players=self.current_players(state.game_id),
         )
 
@@ -927,6 +934,21 @@ def _effect_outcome(
     if effect_type == "poison":
         return "killed" if target_player_id in death_by_player else "unused"
     return "resolved"
+
+
+def _compiled_rule(
+    game: V2GameRecord,
+    ability_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    rule = game.rule_snapshot.get("rule_set")
+    if not isinstance(rule, dict):
+        raise V2RepositoryError("V2 night runtime has no frozen rule")
+    compiled = dict(rule)
+    compiled["day_actions"] = list(ability_snapshot.get("day_actions") or [])
+    compiled["ability_policies"] = dict(ability_snapshot.get("policies") or {})
+    for key, value in dict(ability_snapshot.get("day_policies") or {}).items():
+        compiled.setdefault(key, value)
+    return compiled
 
 
 def _locked_game(db: Session, game_id: str) -> V2GameRecord:

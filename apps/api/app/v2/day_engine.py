@@ -11,7 +11,12 @@ from app.v2.match_repository import (
     V2MatchRepository,
     V2MatchSnapshot,
 )
-from app.v2.model_context import V2ModelPlayerReference
+from app.v2.model_context import (
+    V2ModelPlayerReference,
+    build_public_match_state,
+    build_public_rule_contract,
+    private_authoritative_facts,
+)
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -1070,6 +1075,10 @@ class V2DayEngine:
     ) -> V2ModelDecision:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
+        private_facts = self._repository.private_knowledge(
+            game_id=game_id,
+            player_id=player.player_id,
+        )
         decision = await self._actions.run_player_decision(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1108,11 +1117,14 @@ class V2DayEngine:
                         "role_key": player.role_key,
                         "team": player.team,
                         "persona": player.persona,
-                        "knowledge": self._repository.private_knowledge(
-                            game_id=game_id,
-                            player_id=player.player_id,
-                        ),
                     },
+                    "private_authoritative_facts": private_authoritative_facts(
+                        private_facts
+                    ),
+                    "public_match_state": build_public_match_state(
+                        round_no=state.round_no,
+                        players=state.players,
+                    ),
                     "candidates": [
                         {
                             "player_id": item.player_id,
@@ -1123,16 +1135,10 @@ class V2DayEngine:
                     ],
                     "public_history": list(state.public_history[-60:]),
                     "sheriff_player_id": state.sheriff_player_id,
-                    "public_rules": {
-                        key: state.rule.get(key)
-                        for key in (
-                            "win_condition",
-                            "sheriff_vote_weight",
-                            "speech_policy",
-                            "werewolf_self_explosion_enabled",
-                            "exile_last_words_enabled",
-                        )
-                    },
+                    "public_rule_contract": build_public_rule_contract(
+                        rule=state.rule,
+                        max_rounds=state.max_rounds,
+                    ),
                     **(extra_context or {}),
                 },
             ),

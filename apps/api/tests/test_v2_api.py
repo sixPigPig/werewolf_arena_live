@@ -1413,6 +1413,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
     created = client.post("/api/v2/games", json=_six_player_create_request())
     assert created.status_code == 201, created.text
     identifiers = created.json()
@@ -1459,6 +1460,45 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     assert "night.progress_changed" not in god_types
     assert "狼人请睁眼，请依次商议今晚的袭击目标。" in god_texts
     assert "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。" in god_texts
+    player_contexts = model_client.decision_contexts
+    assert player_contexts
+    assert any(
+        context["action_type"].startswith("ability_") for context in player_contexts
+    )
+    assert any(
+        context["action_type"] == "day_debate_speech" for context in player_contexts
+    )
+    assert all(
+        context["public_rule_contract"]["player_count"] == 6
+        and context["public_rule_contract"]["werewolf_count"] == 2
+        and context["public_rule_contract"]["sheriff_enabled"] is False
+        and context["public_rule_contract"]["sheriff_vote_weight"] is None
+        for context in player_contexts
+    )
+    assert all(
+        "private_authoritative_facts" in context
+        and "public_match_state" in context
+        and "information_semantics" in context
+        and "public_rules" not in context
+        and "allowed_knowledge" not in context
+        for context in player_contexts
+    )
+    assert all(
+        "knowledge" not in context["actor_private"]
+        for context in player_contexts
+        if "actor_private" in context
+    )
+    seer_day_contexts = [
+        context
+        for context in player_contexts
+        if context.get("actor_private", {}).get("role_key") == "seer"
+    ]
+    assert seer_day_contexts
+    assert any(
+        fact.get("fact_type") == "investigation_alignment"
+        for context in seer_day_contexts
+        for fact in context["private_authoritative_facts"]
+    )
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
@@ -1530,6 +1570,99 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
             if item.actor_kind == "player"
             and (item.phase_id == "first_night" or item.phase_id.startswith("night_"))
         )
+
+
+def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
+    v2_context,
+) -> None:
+    client, _session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    request = _six_player_create_request()
+    request["lobby_snapshot"]["rule_set"]["roles"] = [
+        {"role": "werewolf", "count": 1, "team": "werewolves"},
+        {"role": "seer", "count": 1, "team": "villagers"},
+        {"role": "guard", "count": 1, "team": "villagers"},
+        {"role": "villager", "count": 3, "team": "villagers"},
+    ]
+    created = client.post("/api/v2/games", json=request)
+    assert created.status_code == 201, created.text
+    identifiers = created.json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        _collect_until_observation(
+            websocket,
+            message_types=[],
+            committed_texts=[],
+        )
+
+    contexts = model_client.decision_contexts
+    night_contexts = [
+        context
+        for context in contexts
+        if context["action_type"].startswith("ability_")
+    ]
+    day_contexts = [
+        context for context in contexts if context["action_type"] == "day_debate_speech"
+    ]
+    assert night_contexts
+    assert day_contexts
+    assert all(
+        context["public_rule_contract"]["werewolf_count"] == 1
+        and context["public_rule_contract"]["reveal_policy"] == "hidden"
+        and "不会公开其身份或阵营"
+        in context["public_rule_contract"]["role_reveal_rule"]
+        and context["public_rule_contract"]["sheriff_enabled"] is False
+        and context["public_rule_contract"]["sheriff_rule"]
+        == "本局不启用警长系统，不存在上警、警徽或警徽流机制。"
+        and context["public_rule_contract"]["night_action_rules"][
+            "werewolf_attack"
+        ]["can_target_self"]
+        is False
+        and context["public_rule_contract"]["night_action_rules"][
+            "werewolf_attack"
+        ]["single_werewolf_resolution"]
+        == (
+            "本局只有1名狼人时，该狼人每夜必须选择一名存活的非狼人玩家，"
+            "不会因团队意见不一致而空刀。"
+        )
+        for context in contexts
+    )
+    assert all(
+        context["public_match_state"]["alive_player_count"]
+        == len(context["public_match_state"]["alive_player_ids"])
+        and context["public_match_state"]["eliminated_player_count"]
+        == len(context["public_match_state"]["eliminated_player_ids"])
+        and context["public_match_state"]["identity_information_included"] is False
+        for context in contexts
+    )
+    wolf_night_contexts = [
+        context
+        for context in night_contexts
+        if context.get("ability_id") == "werewolf.attack"
+    ]
+    assert wolf_night_contexts
+    assert all(
+        any(
+            fact.get("fact_type") == "consensus_rule"
+            and "你的选择自动成为团队一致目标" in str(fact.get("payload"))
+            for fact in context["private_authoritative_facts"]
+        )
+        for context in wolf_night_contexts
+    )
+    seer_day_contexts = [
+        context
+        for context in day_contexts
+        if context["actor_private"]["role_key"] == "seer"
+    ]
+    assert seer_day_contexts
+    assert any(
+        fact.get("fact_type") == "investigation_alignment"
+        for context in seer_day_contexts
+        for fact in context["private_authoritative_facts"]
+    )
 
 
 def test_advanced_rule_opens_sheriff_election_after_first_night(
