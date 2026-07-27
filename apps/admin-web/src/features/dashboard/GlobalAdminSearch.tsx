@@ -20,12 +20,12 @@ export function GlobalAdminSearch({ runtimeMode }: { runtimeMode: AdminRuntimeMo
     return () => window.clearTimeout(timeout);
   }, [input]);
   const results = useQuery({
-    enabled: runtimeMode === "authenticated" && query.length >= 2,
+    enabled: runtimeMode === "authenticated" && query.length >= 1,
     queryKey: ["admin", "dashboard", "search", query],
     queryFn: ({ signal }) => searchAdminResources(query, signal),
     staleTime: 10_000,
   });
-  const open = input.trim().length >= 2;
+  const open = input.trim().length >= 1;
   return (
     <div className="global-admin-search">
       <Input

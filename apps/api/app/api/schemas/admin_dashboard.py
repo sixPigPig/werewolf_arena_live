@@ -162,5 +162,5 @@ class AdminSearchResult(BaseModel):
 
 
 class AdminSearchResponse(BaseModel):
-    query: str = Field(min_length=2, max_length=80)
+    query: str = Field(min_length=1, max_length=80)
     items: list[AdminSearchResult]

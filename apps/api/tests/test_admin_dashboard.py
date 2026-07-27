@@ -365,7 +365,7 @@ def test_global_search_respects_safe_resource_projections(dashboard_client) -> N
     _login(client)
 
     run_response = client.get("/api/v1/admin/search", params={"q": "run-"})
-    player_response = client.get("/api/v1/admin/search", params={"q": "夜枭"})
+    player_response = client.get("/api/v1/admin/search", params={"q": "夜"})
     job_response = client.get(
         "/api/v1/admin/search",
         params={"q": seeded["job_id"][:8]},
@@ -373,6 +373,7 @@ def test_global_search_respects_safe_resource_projections(dashboard_client) -> N
 
     assert run_response.status_code == 200
     assert {item["type"] for item in run_response.json()["items"]} == {"run"}
+    assert player_response.status_code == 200
     assert player_response.json()["items"][0]["href"] == (
         "/content/players/profile-night-owl"
     )

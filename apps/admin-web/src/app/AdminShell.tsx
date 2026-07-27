@@ -240,7 +240,6 @@ export function AdminShell() {
                 aria-label="退出"
                 loading={pendingAction === "logout"}
                 onClick={() => void handleLogout()}
-                size="small"
               >
                 退出
               </Button>

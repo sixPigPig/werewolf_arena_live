@@ -212,7 +212,15 @@ describe("admin dashboard flow", () => {
     const user = userEvent.setup();
     const router = renderRoute("/overview");
     const search = await screen.findByLabelText("全局 ID 搜索");
-    await user.type(search, "job-voice");
+    const searchControl = search.closest(".ant-input-affix-wrapper");
+    const logoutButton = screen.getByRole("button", { name: "退出" });
+
+    expect(searchControl).not.toHaveClass("ant-input-affix-wrapper-sm");
+    expect(searchControl).not.toHaveClass("ant-input-affix-wrapper-lg");
+    expect(logoutButton).not.toHaveClass("ant-btn-sm");
+    expect(logoutButton).not.toHaveClass("ant-btn-lg");
+
+    await user.type(search, "j");
 
     const result = await screen.findByRole("link", {
       name: /语音生成任务 job-voice-01/,

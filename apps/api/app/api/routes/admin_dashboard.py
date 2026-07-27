@@ -254,15 +254,15 @@ def search_admin_resources(
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.OVERVIEW_READ)),
     ],
-    q: Annotated[str, Query(min_length=2, max_length=80)],
+    q: Annotated[str, Query(min_length=1, max_length=80)],
 ) -> AdminSearchResponse:
     query = q.strip()
-    if len(query) < 2:
+    if len(query) < 1:
         raise AdminAPIProblem(
             status_code=422,
             code="admin_search_query_too_short",
             title="Search query too short",
-            detail="Search queries must contain at least two non-space characters.",
+            detail="Search queries must contain at least one non-space character.",
         )
     starts_with = f"{_escape_like(query)}%"
     contains = f"%{_escape_like(query)}%"

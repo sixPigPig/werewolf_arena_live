@@ -289,17 +289,6 @@ a {
   margin-left: auto;
 }
 
-.global-admin-search input {
-  width: 100%;
-  min-height: 38px;
-  padding: 8px 13px;
-  border: 1px solid #d0d5dd;
-  border-radius: 9px;
-  color: #101828;
-  background: #fff;
-  font-size: 11px;
-}
-
 .global-admin-search-results {
   position: absolute;
   z-index: 50;
@@ -411,28 +400,6 @@ a {
 .preview-principal strong {
   color: #344054;
   font-size: 11px;
-}
-
-.admin-logout-button {
-  min-height: 34px;
-  padding: 7px 11px;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  color: #344054;
-  background: #ffffff;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.admin-logout-button:hover:not(:disabled) {
-  border-color: #98a2b3;
-  background: #f9fafb;
-}
-
-.admin-logout-button:disabled {
-  color: #98a2b3;
-  cursor: wait;
 }
 
 .topbar-error {
