@@ -168,7 +168,9 @@ export function ReadableModelInput({
             key: "tokens",
             label: "最大输出",
             children: String(
-              request.request_payload.max_output_tokens ?? "—",
+              request.request_payload.max_output_tokens ??
+                request.request_payload.max_tokens ??
+                "—",
             ),
           },
         ]}
@@ -559,18 +561,32 @@ function OutputSummary({
 function requestMessages(
   requestPayload: Record<string, unknown>,
 ): RequestMessage[] {
-  if (!Array.isArray(requestPayload.input)) return [];
-  return requestPayload.input.flatMap((item) => {
+  const input = Array.isArray(requestPayload.input)
+    ? requestPayload.input
+    : [];
+  const messages = Array.isArray(requestPayload.messages)
+    ? requestPayload.messages
+    : [];
+  const items = input.length ? input : messages;
+  return items.flatMap((item) => {
     if (!isRecord(item)) return [];
     const role =
       typeof item.role === "string" && item.role ? item.role : "message";
-    const content = Array.isArray(item.content) ? item.content : [];
-    const text = content
-      .map((part) =>
-        isRecord(part) && typeof part.text === "string" ? part.text : "",
-      )
-      .filter(Boolean)
-      .join("\n");
+    const text =
+      typeof item.content === "string"
+        ? item.content
+        : Array.isArray(item.content)
+          ? item.content
+              .map((part) =>
+                typeof part === "string"
+                  ? part
+                  : isRecord(part) && typeof part.text === "string"
+                    ? part.text
+                    : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : "";
     return text ? [{ role, text }] : [];
   });
 }

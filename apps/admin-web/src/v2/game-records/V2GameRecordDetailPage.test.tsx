@@ -248,6 +248,52 @@ const detail = {
   knowledge_facts: [],
 };
 
+const deepSeekDetail = {
+  ...detail,
+  title: "DeepSeek 输入兼容验收",
+  model_requests: [
+    {
+      ...detail.model_requests[0],
+      model_id: "deepseek-v4-flash",
+      model_provider: "deepseek",
+      request_payload: {
+        model: "deepseek-v4-flash",
+        stream: true,
+        max_tokens: 16384,
+        messages: [
+          {
+            role: "system",
+            content: "你正在扮演一名狼人杀玩家，只能根据已提供的信息行动。",
+          },
+          {
+            role: "user",
+            content: `请完成这个实时动作：${JSON.stringify({
+              schema_version: 1,
+              action_id: actionId,
+              action_type: "ability_werewolf_attack_decision",
+              game_id: gameId,
+              run_id: runId,
+              phase_id: "first_night",
+              actor: { kind: "player", id: "seat_3" },
+              objective: "选择本轮狼人团队建议袭击的一名非狼人存活玩家",
+              output_contract: {
+                kind: "decision_and_speech",
+                language: "zh-CN",
+                target_policy: {
+                  mode: "required",
+                  allowed_target_ids: ["seat_1", "seat_2", "seat_4"],
+                },
+              },
+            })}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+        thinking: { type: "enabled" },
+      },
+    },
+  ],
+};
+
 const templateActionId = "v2_action_dawn";
 const templateDetail = {
   ...detail,
@@ -424,6 +470,52 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("renders Chat Completions messages as readable model input", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
+          return new Response(JSON.stringify(deepSeekDetail), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "DeepSeek 输入兼容验收" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    expect(within(inputPanel).getByText("deepseek-v4-flash")).toBeVisible();
+    expect(within(inputPanel).getByText("16384")).toBeVisible();
+    expect(
+      within(inputPanel).getByText(
+        "你正在扮演一名狼人杀玩家，只能根据已提供的信息行动。",
+      ),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getByText(
+        "选择本轮狼人团队建议袭击的一名非狼人存活玩家",
+      ),
+    ).toBeVisible();
+    expect(within(inputPanel).getByText("可选目标")).toBeVisible();
+    expect(within(inputPanel).getByText("seat_4")).toBeVisible();
+    expect(within(inputPanel).queryByText("请求参数")).not.toBeInTheDocument();
+    expect(
+      within(inputPanel).queryByText(/"schema_version"/),
+    ).not.toBeInTheDocument();
   });
 
   it("shows deterministic template variables, final text and frozen speaker", async () => {
