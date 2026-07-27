@@ -13,10 +13,16 @@ from uuid import uuid4
 
 from app.judge_configuration import RuntimeJudgeConfiguration
 from app.v2.director_projection import project_director_scene
+from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
+from app.v2.model_context import (
+    V2ModelPlayerReference,
+    project_model_action_context,
+    resolve_model_target,
+    sanitize_model_speech,
+)
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
-    V2ModelSpeech,
     V2QualityError,
 )
 from app.v2.protocol import (
@@ -52,15 +58,6 @@ class V2ModelPort(Protocol):
         decision: bool,
         model_id: str | None = None,
     ) -> dict[str, Any]: ...
-
-    async def generate_judge_sentence(
-        self,
-        *,
-        action_context: dict[str, Any],
-        attempt_id: str,
-        model_id: str | None = None,
-        check_cancellation: Callable[[], None] | None = None,
-    ) -> V2ModelSpeech: ...
 
     async def generate_action_decision(
         self,
@@ -129,6 +126,7 @@ class V2SpeechSpec:
     context: dict[str, Any] | None = None
     allowed_target_ids: tuple[str, ...] | None = None
     target_optional: bool = False
+    model_players: tuple[V2ModelPlayerReference, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,7 +143,7 @@ class V2ActionEngine:
         tts_client: V2TtsPort,
         voice_root: Path,
         sample_rate: int,
-        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration],
+        judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
     ) -> None:
         self._repository = repository
         self._model_client = model_client
@@ -263,8 +261,8 @@ class V2ActionEngine:
         action_id = f"v2_action_{uuid4().hex[:16]}"
         judge_configuration = None
         if spec.actor_kind == "judge":
-            judge_configuration = self._judge_configuration_provider()
-            model_id = judge_configuration.model_id
+            judge_configuration = self._judge_configuration_provider(game_id)
+            model_id = None
             speaker = judge_configuration.tts_speaker
         else:
             model_id = spec.model_id
@@ -272,11 +270,12 @@ class V2ActionEngine:
         context = _action_context(game_id=game_id, action_id=action_id, spec=spec)
         if judge_configuration is not None:
             context["judge_configuration"] = {
-                "model_provider": judge_configuration.model_provider,
-                "model_id": judge_configuration.model_id,
+                "voice_mode": judge_configuration.voice_mode,
                 "tts_speaker": judge_configuration.tts_speaker,
+                "random_tts_speakers": list(judge_configuration.random_tts_speakers),
                 "version": judge_configuration.version,
             }
+            context["speech_source"] = "template"
         claim = self._repository.claim_action(
             game_id=game_id,
             action_id=action_id,
@@ -318,44 +317,79 @@ class V2ActionEngine:
                 ),
                 audience=spec.audience,
             )
-            model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
-            selected_model_id = self._model_client.resolve_model_id(model_id)
-            request_payload = self._model_client.build_request_payload(
-                action_context=context,
-                decision=decision,
-                model_id=model_id,
-            )
-            self._repository.append_event(
-                game_id=claim.game_id,
-                event_type="model_request_started",
-                payload={
-                    "action_id": claim.action_id,
-                    "attempt_id": model_attempt_id,
-                    "request_kind": "decision" if decision else "speech",
-                    "model_id": selected_model_id,
-                    "model_provider": (
-                        judge_configuration.model_provider
-                        if judge_configuration is not None
-                        else None
-                    ),
-                    "judge_configuration_version": (
-                        judge_configuration.version if judge_configuration is not None else None
-                    ),
-                    "actor_kind": spec.actor_kind,
-                    "actor_id": spec.actor_id,
-                    "audience": spec.audience,
-                    "request_payload": request_payload,
-                },
-            )
             model_decision: V2ModelDecision | None = None
-            if decision:
+            if judge_configuration is not None:
+                rendered = render_judge_speech(
+                    action_type=spec.action_type,
+                    context=context,
+                )
+                speech_text = rendered.text
+                sentence_ms = 0
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="judge_speech_rendered",
+                    payload={
+                        "action_id": claim.action_id,
+                        "template_id": rendered.template_id,
+                        "template_version": rendered.template_version,
+                        "variables": rendered.variables,
+                        "text": rendered.text,
+                        "voice_mode": judge_configuration.voice_mode,
+                        "tts_speaker": judge_configuration.tts_speaker,
+                        "judge_configuration_version": judge_configuration.version,
+                    },
+                )
+            else:
+                model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
+                selected_model_id = self._model_client.resolve_model_id(model_id)
+                model_context = project_model_action_context(
+                    context,
+                    players=spec.model_players,
+                )
+                request_payload = self._model_client.build_request_payload(
+                    action_context=model_context,
+                    decision=decision,
+                    model_id=model_id,
+                )
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="model_request_started",
+                    payload={
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "request_kind": "decision" if decision else "speech",
+                        "model_id": selected_model_id,
+                        "model_provider": None,
+                        "judge_configuration_version": None,
+                        "actor_kind": spec.actor_kind,
+                        "actor_id": spec.actor_id,
+                        "audience": spec.audience,
+                        "request_payload": request_payload,
+                    },
+                )
                 model_decision = await self._model_client.generate_action_decision(
-                    action_context=context,
+                    action_context=model_context,
                     attempt_id=model_attempt_id,
                     model_id=model_id,
                     check_cancellation=check_cancellation,
                 )
                 original_target = model_decision.target_player_id
+                resolved_target = (
+                    resolve_model_target(
+                        original_target,
+                        players=spec.model_players,
+                    )
+                    if spec.model_players
+                    else original_target
+                )
+                model_decision = replace(
+                    model_decision,
+                    target_player_id=resolved_target,
+                    speech=sanitize_model_speech(
+                        model_decision.speech,
+                        players=spec.model_players,
+                    ),
+                )
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_first_token_received",
@@ -385,7 +419,10 @@ class V2ActionEngine:
                             )
                         ),
                         "parsed_output": {
-                            "target_player_id": original_target,
+                            "target_player_ref": (
+                                original_target if spec.model_players else None
+                            ),
+                            "target_player_id": resolved_target,
                             "speech": model_decision.speech,
                         },
                         "first_token_ms": model_decision.first_token_ms,
@@ -393,12 +430,22 @@ class V2ActionEngine:
                     },
                 )
                 model_request_completed = True
-                normalized_target = original_target
+                normalized_target = resolved_target
                 normalization_reason: str | None = None
                 if spec.allowed_target_ids is None:
-                    if normalized_target is not None:
+                    if original_target is not None:
                         normalized_target = None
                         normalization_reason = "targetless_action"
+                elif original_target is not None and resolved_target is None:
+                    normalized_target = (
+                        None
+                        if spec.target_optional
+                        else _fallback_target(
+                            action_id=claim.action_id,
+                            allowed_target_ids=spec.allowed_target_ids,
+                        )
+                    )
+                    normalization_reason = "target_not_allowed"
                 elif normalized_target is None:
                     if not spec.target_optional:
                         normalized_target = _fallback_target(
@@ -426,48 +473,16 @@ class V2ActionEngine:
                         event_type="model_decision_target_normalized",
                         payload={
                             "action_id": claim.action_id,
-                            "original_target_player_id": original_target,
+                            "original_target_player_ref": (
+                                original_target if spec.model_players else None
+                            ),
+                            "original_target_player_id": resolved_target,
                             "normalized_target_player_id": normalized_target,
                             "reason": normalization_reason,
                         },
                     )
                 speech_text = model_decision.speech
                 sentence_ms = model_decision.completed_ms
-            else:
-                speech = await self._model_client.generate_judge_sentence(
-                    action_context=context,
-                    attempt_id=model_attempt_id,
-                    model_id=model_id,
-                    check_cancellation=check_cancellation,
-                )
-                self._repository.append_event(
-                    game_id=claim.game_id,
-                    event_type="model_first_token_received",
-                    payload={
-                        "action_id": claim.action_id,
-                        "attempt_id": model_attempt_id,
-                        "provider_request_id": speech.provider_request_id,
-                        "first_token_ms": speech.first_token_ms,
-                    },
-                )
-                self._repository.append_event(
-                    game_id=claim.game_id,
-                    event_type="model_response_received",
-                    payload={
-                        "action_id": claim.action_id,
-                        "attempt_id": model_attempt_id,
-                        "provider_request_id": speech.provider_request_id,
-                        "raw_response": (
-                            speech.raw_response if speech.raw_response is not None else speech.text
-                        ),
-                        "parsed_output": {"speech": speech.text},
-                        "first_token_ms": speech.first_token_ms,
-                        "completed_ms": speech.sentence_ms,
-                    },
-                )
-                model_request_completed = True
-                speech_text = speech.text
-                sentence_ms = speech.sentence_ms
             check_cancellation()
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
@@ -695,7 +710,7 @@ _OPENING_SPEECH = V2SpeechSpec(
     action_type="judge_opening_speech",
     phase_id="opening",
     required_phase_state="opening_ready",
-    objective="生成本场直播的法官开场播报",
+    objective="播报本场直播的固定法官开场词",
     success_live_state="ready",
     success_phase_state="opening_speech_closed",
 )
@@ -704,7 +719,7 @@ _NIGHTFALL_ANNOUNCEMENT = V2SpeechSpec(
     action_type="judge_nightfall_announcement",
     phase_id="first_night",
     required_phase_state="nightfall_ready",
-    objective="生成宣布本局进入首夜并提醒所有玩家闭眼的法官播报",
+    objective="播报本局进入首夜并提醒所有玩家闭眼",
     success_live_state="awaiting_observation",
     success_phase_state="nightfall_announced",
 )
@@ -755,6 +770,8 @@ def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> 
 
 
 def _failure(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, V2JudgeTemplateError):
+        return "quality", "judge_template_invalid"
     if isinstance(exc, V2QualityError):
         return "quality", exc.code
     if isinstance(exc, V2ModelError):

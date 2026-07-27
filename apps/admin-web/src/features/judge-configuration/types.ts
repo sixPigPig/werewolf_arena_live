@@ -1,10 +1,4 @@
-export type JudgeModelProvider = "agent_plan";
-
-export type JudgeModelOption = {
-  provider: JudgeModelProvider;
-  model_id: string;
-  label: string;
-};
+export type JudgeVoiceMode = "fixed" | "random";
 
 export type JudgeSpeakerOption = {
   voice_type: string;
@@ -12,21 +6,20 @@ export type JudgeSpeakerOption = {
 };
 
 export type AdminJudgeConfiguration = {
-  model_provider: JudgeModelProvider;
-  model_id: string;
+  voice_mode: JudgeVoiceMode;
   tts_speaker: string;
+  random_tts_speakers: string[];
   version: number;
   source: "database" | "environment";
   updated_at: string | null;
-  models: JudgeModelOption[];
   speakers: JudgeSpeakerOption[];
   speaker_catalog_available: boolean;
   tts_resource_id: string;
 };
 
 export type UpdateJudgeConfigurationRequest = {
-  model_provider: JudgeModelProvider;
-  model_id: string;
-  tts_speaker: string;
+  voice_mode: JudgeVoiceMode;
+  tts_speaker: string | null;
+  random_tts_speakers: string[];
   expected_version: number;
 };

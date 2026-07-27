@@ -608,8 +608,14 @@ class V2NightRepository:
             _append_event(
                 db,
                 game=game,
-                event_type="death_response_resolved",
-                payload={"effect_type": "shoot", "target_player_id": target_player_id},
+                event_type="hunter_response_resolved",
+                payload={
+                    "round_no": state.round_no,
+                    "period": "dawn",
+                    "effect_type": "shoot",
+                    "hunter_player_id": hunter_player_id,
+                    "target_player_id": target_player_id,
+                },
             )
 
     def mark_hunter_response_resolved(
@@ -627,8 +633,10 @@ class V2NightRepository:
             _append_event(
                 db,
                 game=game,
-                event_type="death_response_resolved",
+                event_type="hunter_response_resolved",
                 payload={
+                    "round_no": state.round_no,
+                    "period": "dawn",
                     "effect_type": "shoot_skipped",
                     "hunter_player_id": hunter_player_id,
                 },

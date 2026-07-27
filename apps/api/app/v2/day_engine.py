@@ -11,6 +11,7 @@ from app.v2.match_repository import (
     V2MatchRepository,
     V2MatchSnapshot,
 )
+from app.v2.model_context import V2ModelPlayerReference
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -560,9 +561,9 @@ class V2DayEngine:
         target = state.player(leaders[0])
         result = self._repository.resolve_exile(game_id=game_id, player_id=target.player_id)
         objective = (
-            f"宣布{target.display_name}被投票放逐后翻开白痴身份并免于出局"
+            f"宣布{target.seat}号被投票放逐后翻开白痴身份并免于出局"
             if result.outcome == "idiot_revealed"
-            else f"宣布{target.display_name}被投票放逐出局，不公开其身份"
+            else f"宣布{target.seat}号被投票放逐出局，不公开其身份"
         )
         current = self._repository.snapshot(game_id)
         if not await self._judge(
@@ -571,7 +572,11 @@ class V2DayEngine:
             action_type="judge_exile_result",
             objective=objective,
             success_phase_state=current.phase_state,
-            context={"player_id": target.player_id, "outcome": result.outcome},
+            context={
+                "player_id": target.player_id,
+                "player_seat": target.seat,
+                "outcome": result.outcome,
+            },
         ):
             raise V2DayRuntimeError("judge_exile_result_failed")
         if result.outcome == "eliminated":
@@ -657,9 +662,12 @@ class V2DayEngine:
                     state=current,
                     broadcaster=broadcaster,
                     action_type="judge_hunter_shot_announcement",
-                    objective=f"宣布猎人开枪带走了{target.display_name}，不公开其他身份",
+                    objective=f"宣布猎人开枪带走了{target.seat}号，不公开其他身份",
                     success_phase_state=current.phase_state,
-                    context={"target_player_id": target.player_id},
+                    context={
+                        "target_player_id": target.player_id,
+                        "target_player_seat": target.seat,
+                    },
                 ):
                     raise V2DayRuntimeError("hunter_announcement_failed")
                 await self._broadcast_death(
@@ -703,7 +711,7 @@ class V2DayEngine:
         objective = (
             "宣布警长撕毁警徽，本局不再有警长"
             if target_id is None
-            else f"宣布警徽移交给{current.player(target_id).display_name}"
+            else f"宣布警徽移交给{current.player(target_id).seat}号"
         )
         if not await self._judge(
             state=current,
@@ -711,7 +719,13 @@ class V2DayEngine:
             action_type="judge_sheriff_badge_result",
             objective=objective,
             success_phase_state=current.phase_state,
-            context={"from_player_id": sheriff_id, "to_player_id": target_id},
+            context={
+                "from_player_id": sheriff_id,
+                "to_player_id": target_id,
+                "target_player_seat": (
+                    current.player(target_id).seat if target_id is not None else None
+                ),
+            },
         ):
             raise V2DayRuntimeError("sheriff_badge_announcement_failed")
         await self._broadcast_match_state(current, broadcaster)
@@ -874,9 +888,14 @@ class V2DayEngine:
             state=current,
             broadcaster=broadcaster,
             action_type="judge_werewolf_self_explosion",
-            objective=f"公开宣布{player.display_name}发动狼人自爆并立即出局，当天剩余流程中止",
+            objective=f"公开宣布{player.seat}号发动狼人自爆并立即出局，当天剩余流程中止",
             success_phase_state=current.phase_state,
-            context={"player_id": player.player_id, "stage": stage, "outcome": outcome},
+            context={
+                "player_id": player.player_id,
+                "player_seat": player.seat,
+                "stage": stage,
+                "outcome": outcome,
+            },
         ):
             raise V2DayRuntimeError("self_explosion_announcement_failed")
         await self._broadcast_death(
@@ -903,9 +922,13 @@ class V2DayEngine:
             state=state,
             broadcaster=broadcaster,
             action_type="judge_sheriff_elected",
-            objective=f"宣布{player.display_name}当选警长并获得警徽",
+            objective=f"宣布{player.seat}号当选警长并获得警徽",
             success_phase_state=state.phase_state,
-            context={"player_id": player.player_id, "reason": reason},
+            context={
+                "player_id": player.player_id,
+                "player_seat": player.seat,
+                "reason": reason,
+            },
         ):
             raise V2DayRuntimeError("sheriff_elected_announcement_failed")
         await self._broadcast_match_state(state, broadcaster)
@@ -977,9 +1000,9 @@ class V2DayEngine:
                 state=state,
                 broadcaster=broadcaster,
                 action_type="judge_day_summary",
-                objective=f"简洁总结第{state.round_no}天公开结果并宣布即将入夜，不添加未公开信息",
+                objective=f"播报第{state.round_no}天流程结束并即将入夜",
                 success_phase_state=state.phase_state,
-                context={"public_history": list(state.public_history[-20:])},
+                context={},
             ):
                 raise V2DayRuntimeError("day_summary_failed")
         self._actions.check_cancellation(game_id)
@@ -1069,6 +1092,14 @@ class V2DayEngine:
                     else tuple(item.player_id for item in candidates)
                 ),
                 target_optional=optional,
+                model_players=tuple(
+                    V2ModelPlayerReference(
+                        player_id=item.player_id,
+                        seat=item.seat,
+                        display_name=item.display_name,
+                    )
+                    for item in state.players
+                ),
                 context={
                     "round_no": state.round_no,
                     "actor_private": {

@@ -214,6 +214,7 @@ class V2MatchRepository:
                 game=game,
                 event_type="werewolf_self_exploded",
                 payload={
+                    "round_no": match.round_no,
                     "player_id": player_id,
                     "stage": "pre_sheriff_election",
                     "count": match.pre_sheriff_explosion_count,
@@ -226,18 +227,25 @@ class V2MatchRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            match = _match(db, game)
             _kill(db, game=game, player_id=player_id, cause="werewolf_self_explosion")
             _append_event(
                 db,
                 game=game,
                 event_type="werewolf_self_exploded",
-                payload={"player_id": player_id, "stage": stage, "outcome": "day_ended"},
+                payload={
+                    "round_no": match.round_no,
+                    "player_id": player_id,
+                    "stage": stage,
+                    "outcome": "day_ended",
+                },
             )
 
     def resolve_exile(self, *, game_id: str, player_id: str) -> V2ExileResult:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            match = _match(db, game)
             assignment = db.scalar(
                 select(V2RoleAssignment).where(
                     V2RoleAssignment.game_id == game_id,
@@ -257,7 +265,11 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="idiot_revealed",
-                    payload={"player_id": player_id, "survived": True},
+                    payload={
+                        "round_no": match.round_no,
+                        "player_id": player_id,
+                        "survived": True,
+                    },
                 )
             else:
                 _kill(db, game=game, player_id=player_id, cause="exile")
@@ -266,7 +278,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="player_exiled",
-                    payload={"player_id": player_id},
+                    payload={"round_no": match.round_no, "player_id": player_id},
                 )
             return V2ExileResult(
                 player_id=player_id,
@@ -284,6 +296,7 @@ class V2MatchRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            match = _match(db, game)
             hunter = db.get(V2PlayerState, (game_id, hunter_id))
             if hunter is None or hunter.alive or hunter.death_cause == "witch_poison":
                 raise V2RepositoryError("hunter response is not eligible")
@@ -299,6 +312,8 @@ class V2MatchRepository:
                 game=game,
                 event_type="hunter_response_resolved",
                 payload={
+                    "round_no": match.round_no,
+                    "period": "day",
                     "hunter_player_id": hunter_id,
                     "target_player_id": target_player_id,
                 },

@@ -60,6 +60,7 @@ def create_waiting_game(
     title: str,
     rule_snapshot: dict[str, Any] | None = None,
     players_snapshot: list[dict[str, Any]] | None = None,
+    judge_voice_snapshot: dict[str, Any] | None = None,
 ) -> tuple[V2GameRecord, V2GameRun, str]:
     game_id = f"v2_game_{uuid4().hex[:16]}"
     run_id = f"v2_run_{uuid4().hex[:16]}"
@@ -97,6 +98,7 @@ def create_waiting_game(
         phase_state="opening_ready",
         rule_snapshot=rule_snapshot or {},
         players_snapshot=players_snapshot or [],
+        judge_voice_snapshot=judge_voice_snapshot or {},
         ability_snapshot=ability_snapshot,
         ability_snapshot_hash=(ability_snapshot or {}).get("snapshot_hash"),
     )
@@ -122,6 +124,7 @@ def create_waiting_game(
             ),
             "rule_set_id": (rule_snapshot or {}).get("rule_set", {}).get("id"),
             "player_count": len(players_snapshot or []),
+            "judge_voice": judge_voice_snapshot or {},
         },
     )
     db.add(game)

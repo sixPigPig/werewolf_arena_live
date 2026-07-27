@@ -34,7 +34,7 @@ describe("admin judge configuration flow", () => {
     vi.unstubAllGlobals();
   });
 
-  it("edits only model and speaker with Ant Design controls", async () => {
+  it("switches from fixed voice to a per-game random pool", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/api/v1/admin/me")) {
@@ -55,6 +55,10 @@ describe("admin judge configuration flow", () => {
         return jsonResponse({
           ...previewJudgeConfiguration,
           ...body,
+          tts_speaker:
+            body.voice_mode === "random"
+              ? body.random_tts_speakers[0]
+              : body.tts_speaker,
           version: 2,
         });
       }
@@ -71,10 +75,24 @@ describe("admin judge configuration flow", () => {
       await screen.findByRole("heading", { name: "法官配置" }),
     ).toBeInTheDocument();
     expect(screen.getAllByRole("combobox")).toHaveLength(2);
+    expect(screen.queryByLabelText("模型")).toBeNull();
     expect(screen.queryByLabelText(/人设|策略|性格|背景故事/)).toBeNull();
 
-    await selectAntdOption(user, screen.getByLabelText("模型"), "GLM 5.2");
-    await selectAntdOption(user, screen.getByLabelText("音色"), "阳光青年 2.0");
+    await selectAntdOption(
+      user,
+      screen.getByLabelText("音色模式"),
+      "每局随机音色",
+    );
+    await selectAntdOption(
+      user,
+      screen.getByLabelText("随机音色池"),
+      "Vivi 2.0",
+    );
+    await selectAntdOption(
+      user,
+      screen.getByLabelText("随机音色池"),
+      "阳光青年 2.0",
+    );
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 
     await screen.findByText("法官配置已保存");
@@ -86,9 +104,12 @@ describe("admin judge configuration flow", () => {
     expect(patch).toBeDefined();
     await waitFor(() =>
       expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
-        model_provider: "agent_plan",
-        model_id: "glm-5-2-260617",
-        tts_speaker: "zh_male_yangguangqingnian_uranus_bigtts",
+        voice_mode: "random",
+        tts_speaker: null,
+        random_tts_speakers: [
+          "zh_female_vv_uranus_bigtts",
+          "zh_male_yangguangqingnian_uranus_bigtts",
+        ],
         expected_version: 1,
       }),
     );

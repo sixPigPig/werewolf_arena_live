@@ -40,6 +40,13 @@ const detail = {
   updated_at: "2026-07-23T08:00:03Z",
   rule_snapshot: { player_count: 9 },
   players_snapshot: [],
+  judge_voice_snapshot: {
+    schema_version: 1,
+    voice_mode: "fixed",
+    selected_tts_speaker: "judge-speaker",
+    random_tts_speakers: [],
+    configuration_version: 1,
+  },
   ability_snapshot: { compiler_version: 1 },
   match_state: { day_number: 0, alive_player_ids: [] },
   player_identities: [
@@ -241,6 +248,48 @@ const detail = {
   knowledge_facts: [],
 };
 
+const templateActionId = "v2_action_dawn";
+const templateDetail = {
+  ...detail,
+  title: "确定性模板验收",
+  last_record_seq: 4,
+  phase_id: "day_1",
+  phase_state: "dawn_announced",
+  events: [
+    event(1, "game_created", {}),
+    event(2, "action_opened", {
+      action_id: templateActionId,
+      context: {
+        phase_id: "day_1",
+        action_type: "judge_dawn_announcement",
+        objective: "播报天亮结果",
+        actor: { kind: "judge", id: "judge" },
+        speech_source: "template",
+      },
+    }),
+    event(3, "judge_speech_rendered", {
+      action_id: templateActionId,
+      template_id: "judge_dawn_announcement",
+      template_version: 1,
+      variables: { public_deaths: ["白石"] },
+      text: "天亮了，昨夜出局的玩家是：白石。",
+      voice_mode: "fixed",
+      tts_speaker: "judge-speaker",
+      judge_configuration_version: 1,
+    }),
+    event(4, "action_succeeded", { action_id: templateActionId }),
+  ],
+  model_requests: [],
+  presentations: [
+    {
+      ...detail.presentations[0],
+      action_id: templateActionId,
+      phase_id: "day_1",
+      subtitle_text: "天亮了，昨夜出局的玩家是：白石。",
+    },
+  ],
+};
+
 function event(
   recordSeq: number,
   eventType: string,
@@ -375,6 +424,49 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("shows deterministic template variables, final text and frozen speaker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
+          return new Response(JSON.stringify(templateDetail), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "确定性模板验收" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("judge-speaker")).not.toHaveLength(0);
+    expect(screen.getByText("系统模板")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 天亮播报" }),
+    );
+    expect(await screen.findByText("系统确定性模板")).toBeVisible();
+    expect(
+      screen.queryByRole("tab", { name: "模型输入" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "模板详情" }));
+    const panel = screen.getByRole("tabpanel", { name: "模板详情" });
+    expect(
+      within(panel).getByText("judge_dawn_announcement"),
+    ).toBeVisible();
+    expect(within(panel).getByText("judge-speaker")).toBeVisible();
+    expect(
+      within(panel).getByText("天亮了，昨夜出局的玩家是：白石。"),
+    ).toBeVisible();
+    expect(within(panel).getByText(/public_deaths/)).toBeVisible();
   });
 
   it("refreshes active games every two seconds and stops polling terminal games", () => {

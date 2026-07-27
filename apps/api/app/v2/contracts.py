@@ -517,6 +517,7 @@ class AdminV2ModelRequestResponse(BaseModel):
 class AdminV2GameDetailResponse(AdminV2GameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
+    judge_voice_snapshot: dict[str, Any]
     ability_snapshot: dict[str, Any]
     match_state: dict[str, Any] | None
     player_identities: list[V2GodViewPlayerIdentityResponse]

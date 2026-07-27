@@ -98,7 +98,7 @@ export const adminNavigation: AdminNavSection[] = [
       {
         id: "judge-configuration",
         label: "法官配置",
-        description: "模型与播报音色",
+        description: "固定或每局随机音色",
         href: "/content/judge",
         marker: "判",
         permission: "settings.read",

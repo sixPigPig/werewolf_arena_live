@@ -135,6 +135,20 @@ def test_decision_fields_accept_multi_sentence_text_and_extra_fields() -> None:
     )
 
 
+def test_decision_fields_repairs_structural_smart_quote_from_real_response() -> None:
+    raw = """```json
+{
+  "target_player_id": "system-player-03",
+  "speech": "3号周野，你先把自己的逻辑补齐。你到底想带什么节奏？”
+}
+```"""
+
+    assert _decision_fields(raw) == (
+        "system-player-03",
+        "3号周野，你先把自己的逻辑补齐。你到底想带什么节奏？",
+    )
+
+
 def test_decision_fields_keep_only_fundamental_failures() -> None:
     assert _decision_fields("我先保留意见，再听后面的发言。") == (
         None,

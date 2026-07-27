@@ -10,6 +10,7 @@ from app.v2.action_engine import (
     V2SpeechSpec,
 )
 from app.v2.model_client import V2ModelDecision
+from app.v2.model_context import V2ModelPlayerReference
 from app.v2.night_repository import (
     V2ActivationRef,
     V2NightPlayer,
@@ -134,8 +135,8 @@ class V2NightEngine:
                 audience="public",
             )
             await broadcaster.broadcast_json(game_phase_changed(resolution.transition))
-            death_names = [
-                state.player(item["player_id"]).display_name for item in resolution.deaths
+            death_seats = [
+                state.player(item["player_id"]).seat for item in resolution.deaths
             ]
             dawn_ok = await self._actions.run_judge_speech(
                 game_id=game_id,
@@ -145,14 +146,14 @@ class V2NightEngine:
                     phase_id=f"day_{state.round_no}",
                     required_phase_state="dawn_announcement_ready",
                     objective=(
-                        "生成天亮播报：昨夜平安夜，不得提及任何私密原因"
-                        if not death_names
-                        else "生成天亮播报，只公布昨夜死亡玩家姓名，不得说明死亡原因："
-                        + "、".join(death_names)
+                        "播报天亮结果：昨夜平安夜，不得提及任何私密原因"
+                        if not death_seats
+                        else "播报天亮结果，只公布昨夜死亡玩家座位号，不得说明死亡原因："
+                        + "、".join(f"{seat}号" for seat in death_seats)
                     ),
                     success_live_state="ready",
                     success_phase_state="dawn_announced",
-                    context={"public_deaths": death_names},
+                    context={"public_death_seats": death_seats},
                 ),
             )
             if not dawn_ok:
@@ -524,12 +525,13 @@ class V2NightEngine:
             broadcaster=broadcaster,
             action_type="seer_investigate_result",
             objective=(
-                f"只向预言家确认{target.display_name}的查验阵营是"
+                f"只向预言家确认{target.seat}号的查验阵营是"
                 f"{'狼人阵营' if alignment == 'werewolves' else '好人阵营'}"
             ),
             context={
                 "ability_id": ability_id,
                 "target_player_id": target.player_id,
+                "target_player_seat": target.seat,
                 "alignment": alignment,
             },
         )
@@ -577,9 +579,12 @@ class V2NightEngine:
             objective=(
                 "只向女巫说明今晚目前没有狼人袭击目标"
                 if attacked is None
-                else f"只向女巫说明今晚被狼人袭击的是{attacked.display_name}"
+                else f"只向女巫说明今晚被狼人袭击的是{attacked.seat}号"
             ),
-            context={"attacked_player_id": working.attack_target},
+            context={
+                "attacked_player_id": working.attack_target,
+                "attacked_player_seat": attacked.seat if attacked is not None else None,
+            },
         )
         heal_used = False
         heal_state = self._repository.ability_state(
@@ -793,10 +798,13 @@ class V2NightEngine:
                     action_type="judge_hunter_shot_announcement",
                     phase_id=f"day_{state.round_no}",
                     required_phase_state="dawn_reactions_ready",
-                    objective=f"生成公开法官播报，宣布猎人带走了{target.display_name}",
+                    objective=f"公开播报猎人带走了{target.seat}号",
                     success_live_state="ready",
                     success_phase_state="dawn_reactions_ready",
-                    context={"target_player_id": target.player_id},
+                    context={
+                        "target_player_id": target.player_id,
+                        "target_player_seat": target.seat,
+                    },
                 ),
             )
             if not ok:
@@ -884,6 +892,14 @@ class V2NightEngine:
                 output_kind="decision_and_speech",
                 allowed_target_ids=tuple(item.player_id for item in candidates),
                 target_optional=optional,
+                model_players=tuple(
+                    V2ModelPlayerReference(
+                        player_id=item.player_id,
+                        seat=item.seat,
+                        display_name=item.display_name,
+                    )
+                    for item in state.players
+                ),
                 context={
                     "ability_id": activation.ability_id,
                     "ability_instance_id": activation.ability_instance_id,

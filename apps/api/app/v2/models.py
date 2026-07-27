@@ -46,6 +46,11 @@ class V2GameRecord(Base):
         nullable=False,
         default=list,
     )
+    judge_voice_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
     ability_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     ability_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

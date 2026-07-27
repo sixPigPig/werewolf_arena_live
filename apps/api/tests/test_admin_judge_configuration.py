@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
-from app.model_catalog.service import ModelConfigurationConflict, update_model_configuration
+from app.model_catalog.service import update_model_configuration
 from app.models.admin import AuditEvent
 from app.models.model_configuration import ModelConfigurationRecord
 from app.werewolf.tts_speaker_catalog import TtsSpeakerOption
@@ -100,7 +100,7 @@ def test_judge_configuration_requires_admin_session(judge_admin_client) -> None:
     assert client.get("/api/v1/admin/judge-configuration").status_code == 401
 
 
-def test_judge_configuration_reads_defaults_and_persists_two_fields(
+def test_judge_configuration_reads_defaults_and_persists_fixed_voice(
     judge_admin_client,
 ) -> None:
     client, session_factory = judge_admin_client
@@ -109,24 +109,12 @@ def test_judge_configuration_reads_defaults_and_persists_two_fields(
     initial = client.get("/api/v1/admin/judge-configuration")
     assert initial.status_code == 200, initial.text
     assert initial.json() == {
-        "model_provider": "agent_plan",
-        "model_id": "judge-model-default",
+        "voice_mode": "fixed",
         "tts_speaker": "zh_female_vv_uranus_bigtts",
+        "random_tts_speakers": [],
         "version": 0,
         "source": "environment",
         "updated_at": None,
-        "models": [
-            {
-                "provider": "agent_plan",
-                "model_id": "judge-model-default",
-                "label": "当前模型 · judge-model-default",
-            },
-            {
-                "provider": "agent_plan",
-                "model_id": "judge-model-pro",
-                "label": "Judge Model Pro",
-            },
-        ],
         "speakers": [
             {
                 "voice_type": "zh_female_vv_uranus_bigtts",
@@ -145,14 +133,14 @@ def test_judge_configuration_reads_defaults_and_persists_two_fields(
         "/api/v1/admin/judge-configuration",
         headers={"X-CSRF-Token": csrf_token},
         json={
-            "model_provider": "agent_plan",
-            "model_id": "judge-model-pro",
+            "voice_mode": "fixed",
             "tts_speaker": "zh_male_yangguangqingnian_uranus_bigtts",
+            "random_tts_speakers": [],
             "expected_version": 0,
         },
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["model_id"] == "judge-model-pro"
+    assert saved.json()["voice_mode"] == "fixed"
     assert saved.json()["tts_speaker"] == "zh_male_yangguangqingnian_uranus_bigtts"
     assert saved.json()["version"] == 1
     assert saved.json()["source"] == "database"
@@ -162,47 +150,49 @@ def test_judge_configuration_reads_defaults_and_persists_two_fields(
             select(AuditEvent).where(AuditEvent.action == "admin.judge_configuration.update")
         )
         assert audit is not None
-        assert audit.after["model_id"] == "judge-model-pro"
-        with pytest.raises(ModelConfigurationConflict, match="judge configuration"):
-            update_model_configuration(
-                db,
-                provider="agent_plan",
-                model_id="judge-model-pro",
-                enabled=False,
-                is_default=False,
-                parameters={},
-            )
+        assert audit.after["voice_mode"] == "fixed"
+        update_model_configuration(
+            db,
+            provider="agent_plan",
+            model_id="judge-model-pro",
+            enabled=False,
+            is_default=False,
+            parameters={},
+        )
 
 
-def test_judge_configuration_rejects_stale_and_disabled_model(
+def test_judge_configuration_persists_random_pool_and_rejects_stale_update(
     judge_admin_client,
 ) -> None:
     client, session_factory = judge_admin_client
     csrf_token = _login(client)
-    with session_factory() as db:
-        model = db.get(ModelConfigurationRecord, ("agent_plan", "judge-model-pro"))
-        assert model is not None
-        model.enabled = False
-        db.commit()
-
-    unavailable = client.patch(
+    saved = client.patch(
         "/api/v1/admin/judge-configuration",
         headers={"X-CSRF-Token": csrf_token},
         json={
-            "model_id": "judge-model-pro",
-            "tts_speaker": "zh_female_vv_uranus_bigtts",
+            "voice_mode": "random",
+            "tts_speaker": None,
+            "random_tts_speakers": [
+                "zh_female_vv_uranus_bigtts",
+                "zh_male_yangguangqingnian_uranus_bigtts",
+            ],
             "expected_version": 0,
         },
     )
-    assert unavailable.status_code == 422
-    assert unavailable.json()["code"] == "admin_judge_model_unavailable"
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["voice_mode"] == "random"
+    assert saved.json()["random_tts_speakers"] == [
+        "zh_female_vv_uranus_bigtts",
+        "zh_male_yangguangqingnian_uranus_bigtts",
+    ]
 
     stale = client.patch(
         "/api/v1/admin/judge-configuration",
         headers={"X-CSRF-Token": csrf_token},
         json={
-            "model_id": "judge-model-default",
+            "voice_mode": "fixed",
             "tts_speaker": "zh_female_vv_uranus_bigtts",
+            "random_tts_speakers": [],
             "expected_version": 9,
         },
     )

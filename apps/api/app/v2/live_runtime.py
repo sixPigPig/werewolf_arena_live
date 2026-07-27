@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, settings
 from app.db.session import SessionLocal
-from app.judge_configuration import RuntimeJudgeConfiguration, runtime_judge_configuration
+from app.judge_configuration import (
+    RuntimeJudgeConfiguration,
+    build_judge_voice_snapshot,
+    configuration_from_voice_snapshot,
+    runtime_judge_configuration,
+)
 from app.v2.action_engine import V2ActionEngine, V2ModelPort, V2TtsPort
 from app.v2.contracts import (
     V2ActorResponse,
@@ -32,6 +37,7 @@ from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
 from app.v2.night_repository import V2NightRepository
 from app.v2.match_repository import V2MatchRepository
+from app.v2.models import V2GameRecord
 from app.v2.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
@@ -235,7 +241,7 @@ class V2LiveRuntime:
         tts_client: V2TtsPort,
         voice_root: Path,
         sample_rate: int,
-        judge_configuration_provider: Callable[[], RuntimeJudgeConfiguration],
+        judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
     ) -> None:
         self._session_factory = session_factory
         self._repository = V2ActionRepository(session_factory)
@@ -439,24 +445,39 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
         ),
         voice_root=Path(config.live_v2_voice_storage_dir),
         sample_rate=config.live_v2_tts_sample_rate,
-        judge_configuration_provider=lambda: _runtime_judge_configuration(config),
+        judge_configuration_provider=lambda game_id: _runtime_judge_configuration(
+            config,
+            game_id,
+        ),
     )
 
 
-def _runtime_judge_configuration(config: Settings) -> RuntimeJudgeConfiguration:
+def _runtime_judge_configuration(
+    config: Settings,
+    game_id: str,
+) -> RuntimeJudgeConfiguration:
     try:
-        with SessionLocal() as db:
-            return runtime_judge_configuration(
+        with SessionLocal.begin() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is not None:
+                frozen = configuration_from_voice_snapshot(game.judge_voice_snapshot)
+                if frozen is not None:
+                    return frozen
+            current = runtime_judge_configuration(
                 db,
-                default_model_id=config.live_v2_model_id,
                 default_tts_speaker=config.live_v2_tts_judge_speaker,
             )
+            if game is None:
+                return current
+            snapshot = build_judge_voice_snapshot(current)
+            game.judge_voice_snapshot = snapshot
+            return configuration_from_voice_snapshot(snapshot) or current
     except Exception:
         logger.warning("Falling back to environment judge configuration", exc_info=True)
         return RuntimeJudgeConfiguration(
-            model_provider="agent_plan",
-            model_id=config.live_v2_model_id,
+            voice_mode="fixed",
             tts_speaker=config.live_v2_tts_judge_speaker,
+            random_tts_speakers=(),
             version=0,
         )
 

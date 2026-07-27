@@ -134,6 +134,7 @@ export type V2PlayerIdentity = {
 export type V2GameRecordDetail = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
+  judge_voice_snapshot: Record<string, unknown>;
   ability_snapshot: Record<string, unknown>;
   match_state: Record<string, unknown> | null;
   player_identities: V2PlayerIdentity[];

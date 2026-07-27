@@ -41,6 +41,13 @@ describe("V2 game record parsers", () => {
       ...item,
       rule_snapshot: {},
       players_snapshot: [],
+      judge_voice_snapshot: {
+        schema_version: 1,
+        voice_mode: "fixed",
+        selected_tts_speaker: "judge-speaker",
+        random_tts_speakers: [],
+        configuration_version: 1,
+      },
       ability_snapshot: {},
       match_state: null,
       player_identities: [
@@ -220,6 +227,7 @@ describe("V2 game record parsers", () => {
       status: "waiting_to_start",
       rule_snapshot: {},
       players_snapshot: [],
+      judge_voice_snapshot: {},
       ability_snapshot: {},
       match_state: null,
       player_identities: [],

@@ -10,16 +10,16 @@ describe("admin judge configuration contract", () => {
     vi.unstubAllGlobals();
   });
 
-  it("strictly parses the two-field configuration and options", () => {
+  it("strictly parses the voice-only configuration and options", () => {
     expect(parseAdminJudgeConfiguration(previewJudgeConfiguration)).toEqual(
       previewJudgeConfiguration,
     );
     expect(() =>
       parseAdminJudgeConfiguration({
         ...previewJudgeConfiguration,
-        model_provider: "deepseek",
+        voice_mode: "per_sentence",
       }),
-    ).toThrow(/模型来源/);
+    ).toThrow(/音色模式/);
   });
 
   it("uses the bounded GET and PATCH endpoints", async () => {
@@ -34,9 +34,12 @@ describe("admin judge configuration contract", () => {
     await getAdminJudgeConfiguration();
     await updateAdminJudgeConfiguration(
       {
-        model_provider: "agent_plan",
-        model_id: "glm-5-2-260617",
-        tts_speaker: "zh_female_vv_uranus_bigtts",
+        voice_mode: "random",
+        tts_speaker: null,
+        random_tts_speakers: [
+          "zh_female_vv_uranus_bigtts",
+          "zh_male_yangguangqingnian_uranus_bigtts",
+        ],
         expected_version: 1,
       },
       "csrf-judge",
@@ -52,9 +55,12 @@ describe("admin judge configuration contract", () => {
       "csrf-judge",
     );
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
-      model_provider: "agent_plan",
-      model_id: "glm-5-2-260617",
-      tts_speaker: "zh_female_vv_uranus_bigtts",
+      voice_mode: "random",
+      tts_speaker: null,
+      random_tts_speakers: [
+        "zh_female_vv_uranus_bigtts",
+        "zh_male_yangguangqingnian_uranus_bigtts",
+      ],
       expected_version: 1,
     });
   });

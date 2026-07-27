@@ -139,6 +139,13 @@ function detail(stopped: boolean) {
     updated_at: now,
     rule_snapshot: {},
     players_snapshot: [],
+    judge_voice_snapshot: {
+      schema_version: 1,
+      voice_mode: "fixed",
+      selected_tts_speaker: "judge-speaker",
+      random_tts_speakers: [],
+      configuration_version: 1,
+    },
     ability_snapshot: {},
     match_state: null,
     player_identities: [],

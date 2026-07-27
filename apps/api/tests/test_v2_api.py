@@ -18,10 +18,11 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.judge_configuration import RuntimeJudgeConfiguration
+from app.judge_configuration import configuration_from_voice_snapshot
 from app.main import create_application
 from app.models.admin import AuditEvent
 from app.models.game_session import GameSessionRecord
+from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.live import LiveRunRecord
 from app.models.user import User
 from app.v2.live_runtime import V2LiveRuntime, _GameChannel
@@ -29,7 +30,6 @@ from app.v2.day_engine import V2DayEngine, _leaders
 from app.v2.match_repository import V2MatchRepository
 from app.v2.model_client import (
     V2ModelDecision,
-    V2ModelSpeech,
     build_model_request_payload,
 )
 from app.v2.models import (
@@ -53,6 +53,17 @@ from app.v2.models import (
 
 
 PCM_CHUNK = b"\x10\x00" * 240
+
+
+def _nested_strings(value: Any) -> Generator[str, None, None]:
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _nested_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _nested_strings(item)
+    elif isinstance(value, str):
+        yield value
 
 
 class FakeV2ModelClient:
@@ -79,67 +90,6 @@ class FakeV2ModelClient:
             action_context,
             decision=decision,
             model_id=self.resolve_model_id(model_id),
-        )
-
-    async def generate_judge_sentence(
-        self,
-        *,
-        action_context: dict[str, Any],
-        attempt_id: str,
-        model_id: str | None = None,
-        check_cancellation: Any = None,
-    ) -> V2ModelSpeech:
-        if check_cancellation is not None:
-            check_cancellation()
-        self.call_count += 1
-        self.contexts.append(action_context)
-        if not self.release.is_set():
-            released = await asyncio.to_thread(self.release.wait, 5)
-            if not released:
-                raise RuntimeError("test model release timed out")
-        if check_cancellation is not None:
-            check_cancellation()
-        assert action_context["influence"] == {
-            "schema_version": 1,
-            "status": "disabled",
-            "captured_at": None,
-            "strength": 0,
-            "signals": [],
-        }
-        assert attempt_id.startswith("v2_model_")
-        assert model_id == "judge-configured-model"
-        assert action_context["judge_configuration"] == {
-            "model_provider": "agent_plan",
-            "model_id": "judge-configured-model",
-            "tts_speaker": "judge-configured-speaker",
-            "version": 1,
-        }
-        text_by_action = {
-            "judge_opening_speech": "欢迎来到这场实时狼人杀对局。",
-            "judge_nightfall_announcement": "夜幕已经降临，请所有玩家闭眼。",
-            "judge_dawn_announcement": "天亮了，请大家确认昨夜的结果。",
-            "judge_public_discussion_opening": "第一天白天讨论现在开始，请存活玩家准备发言。",
-            "judge_sheriff_election_opening": "第一天警长竞选现在开始，请存活玩家准备参选。",
-            "judge_hunter_shot_announcement": "猎人的枪声已经带走一名玩家。",
-            "judge_exile_result": "放逐投票结果已经确定。",
-            "judge_no_exile": "本轮没有玩家被放逐。",
-            "judge_day_summary": "本日公开流程结束，即将进入夜晚。",
-            "judge_game_completed": "本局已经产生获胜阵营。",
-            "judge_sheriff_elected": "警长已经产生。",
-            "judge_sheriff_badge_destroyed": "本局警徽已经流失。",
-            "judge_sheriff_badge_result": "警徽去向已经确定。",
-            "judge_werewolf_self_explosion": "有玩家发动狼人自爆并出局。",
-        }
-        text = text_by_action.get(
-            action_context["action_type"],
-            "这项首夜能力现在开始实时执行。",
-        )
-        return V2ModelSpeech(
-            text=text,
-            provider_request_id="provider-response-test",
-            first_token_ms=12,
-            sentence_ms=34,
-            raw_response=text,
         )
 
     async def generate_action_decision(
@@ -302,18 +252,23 @@ def v2_context(
     application.dependency_overrides[get_db] = override_get_db
     model_client = FakeV2ModelClient()
     tts_client = FakeV2TtsClient()
+    def judge_configuration_provider(game_id: str):
+        with testing_session() as db:
+            game = db.get(V2GameRecord, game_id)
+            assert game is not None
+            configuration = configuration_from_voice_snapshot(
+                game.judge_voice_snapshot
+            )
+            assert configuration is not None
+            return configuration
+
     application.state.v2_live_runtime = V2LiveRuntime(
         session_factory=testing_session,
         model_client=model_client,
         tts_client=tts_client,
         voice_root=voice_root,
         sample_rate=24000,
-        judge_configuration_provider=lambda: RuntimeJudgeConfiguration(
-            model_provider="agent_plan",
-            model_id="judge-configured-model",
-            tts_speaker="judge-configured-speaker",
-            version=1,
-        ),
+        judge_configuration_provider=judge_configuration_provider,
     )
     application.state.v2_test_model_client = model_client
     application.state.v2_test_tts_client = tts_client
@@ -390,6 +345,13 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         assert game.rule_snapshot["rule_set_revision_id"] == "rule_rev_123"
         assert game.rule_snapshot["seed"] == 42
         assert game.rule_snapshot["max_rounds"] == 8
+        assert game.judge_voice_snapshot == {
+            "schema_version": 1,
+            "voice_mode": "fixed",
+            "selected_tts_speaker": "zh_female_vv_uranus_bigtts",
+            "random_tts_speakers": [],
+            "configuration_version": 0,
+        }
         assert game.players_snapshot == [
             {
                 "seat": 1,
@@ -439,6 +401,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "creation_source": "existing_mobile_lobby",
             "rule_set_id": "classic_8",
             "player_count": 2,
+            "judge_voice": game.judge_voice_snapshot,
         }
         assert events[1].payload == {
             "assignment_id": assignment_batch.assignment_id,
@@ -737,36 +700,34 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
             public_socket.send_json(_ready_message("client.ready"))
             public_started = public_socket.receive_json()
             assert public_started["type"] == "live.snapshot"
-            assert public_started["live_state"] == "generating"
+            assert public_started["live_state"] in {"ready", "generating", "broadcasting"}
             model_client.release.set()
 
             public_result = _receive_realtime_action(public_socket)
             god_result = _receive_realtime_action(god_socket)
 
-    assert (
-        public_result
-        == god_result
-        == {
-            "committed_texts": [
-                "欢迎来到这场实时狼人杀对局。",
-                "夜幕已经降临，请所有玩家闭眼。",
-            ],
-            "presentation_seqs": [1, 2],
-            "phase_changes": ["first_night"],
-            "audio_chunks": 4,
-            "awaiting_observation": True,
-        }
-    )
-    assert model_client.call_count == 2
+    expected_texts = [
+        "欢迎来到经典 8 人。本局共2名玩家，对局现在开始。",
+        "首夜开始，请所有玩家闭眼。",
+    ]
+    assert god_result == {
+        "committed_texts": expected_texts,
+        "presentation_seqs": [1, 2],
+        "phase_changes": ["first_night"],
+        "audio_chunks": 4,
+        "awaiting_observation": True,
+    }
+    assert public_result["committed_texts"][-1] == expected_texts[-1]
+    assert public_result["presentation_seqs"][-1] == 2
+    assert public_result["phase_changes"] == ["first_night"]
+    assert public_result["awaiting_observation"] is True
+    assert model_client.call_count == 0
     assert tts_client.call_count == 2
     assert tts_client.speakers == [
-        "judge-configured-speaker",
-        "judge-configured-speaker",
+        "zh_female_vv_uranus_bigtts",
+        "zh_female_vv_uranus_bigtts",
     ]
-    assert [context["action_type"] for context in model_client.contexts] == [
-        "judge_opening_speech",
-        "judge_nightfall_announcement",
-    ]
+    assert model_client.contexts == []
     with session_factory() as db:
         run = db.get(V2GameRun, identifiers["run_id"])
         assert run is not None and run.started_at is not None
@@ -796,6 +757,17 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(v2_contex
                 .where(
                     V2GameRecordEvent.game_id == identifiers["game_id"],
                     V2GameRecordEvent.event_type == "action_opened",
+                )
+            )
+            == 2
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "judge_speech_rendered",
                 )
             )
             == 2
@@ -981,8 +953,8 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         assert started_snapshot["live_state"] == "ready"
         result = _receive_realtime_action(websocket, include_audio_headers=True)
         assert result["committed_texts"] == [
-            "欢迎来到这场实时狼人杀对局。",
-            "夜幕已经降临，请所有玩家闭眼。",
+            "欢迎来到本场实时狼人杀对局。对局现在开始。",
+            "首夜开始，请所有玩家闭眼。",
         ]
         assert result["presentation_seqs"] == [1, 2]
         assert result["phase_changes"] == ["first_night"]
@@ -1046,9 +1018,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
             "game_created",
             "game_started",
             "action_opened",
-            "model_request_started",
-            "model_first_token_received",
-            "model_response_received",
+            "judge_speech_rendered",
             "speech_opened",
             "speech_segment_committed",
             "speech_sealed",
@@ -1063,9 +1033,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
             "action_succeeded",
             "game_phase_changed",
             "action_opened",
-            "model_request_started",
-            "model_first_token_received",
-            "model_response_received",
+            "judge_speech_rendered",
             "speech_opened",
             "speech_segment_committed",
             "speech_sealed",
@@ -1116,20 +1084,21 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert len(body["model_requests"]) == 2
-    for model_request in body["model_requests"]:
-        assert model_request["status"] == "succeeded"
-        assert model_request["model_id"] == "judge-configured-model"
-        assert model_request["model_provider"] == "agent_plan"
-        assert model_request["request_payload"]["model"] == "judge-configured-model"
-        assert model_request["request_payload"]["input"][0]["role"] == "system"
-        assert model_request["raw_response"]
-        assert model_request["parsed_output"]["speech"]
-        assert model_request["input_source"] == "persisted"
-        assert model_request["output_source"] == "persisted"
-        assert model_request["provider_request_id"] == "provider-response-test"
-        assert model_request["first_token_ms"] == 12
-        assert model_request["completed_ms"] == 34
+    assert body["model_requests"] == []
+    template_events = [
+        item for item in body["events"] if item["event_type"] == "judge_speech_rendered"
+    ]
+    assert [item["payload"]["template_id"] for item in template_events] == [
+        "judge_opening_speech",
+        "judge_nightfall_announcement",
+    ]
+    assert all(
+        item["payload"]["tts_speaker"] == "zh_female_vv_uranus_bigtts"
+        for item in template_events
+    )
+    assert body["judge_voice_snapshot"]["selected_tts_speaker"] == (
+        "zh_female_vv_uranus_bigtts"
+    )
     assert len(body["voice_assets"]) == 2
     for voice in body["voice_assets"]:
         assert voice["state"] == "ready"
@@ -1139,6 +1108,59 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
         assert audio.status_code == 200
         assert audio.headers["content-type"] == "audio/wav"
         assert audio.content[:4] == b"RIFF"
+
+
+def test_random_judge_voice_is_frozen_per_game_before_runtime_actions(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    tts_client = client.app.state.v2_test_tts_client
+    configured_pool = ["judge-random-a", "judge-random-b"]
+    with session_factory.begin() as db:
+        db.add(
+            JudgeConfigurationRecord(
+                id="default",
+                voice_mode="random",
+                tts_speaker=configured_pool[0],
+                random_tts_speakers=configured_pool,
+                version=4,
+            )
+        )
+
+    identifiers = client.post(
+        "/api/v2/games",
+        json={"title": "每局随机音色冻结"},
+    ).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None
+        selected = game.judge_voice_snapshot["selected_tts_speaker"]
+        assert selected in configured_pool
+        assert game.judge_voice_snapshot["voice_mode"] == "random"
+        assert game.judge_voice_snapshot["configuration_version"] == 4
+        configured = db.get(JudgeConfigurationRecord, "default")
+        assert configured is not None
+        configured.voice_mode = "fixed"
+        configured.tts_speaker = "judge-changed-after-creation"
+        configured.random_tts_speakers = []
+        configured.version = 5
+
+    _run_opening_to_nightfall(client, identifiers["websocket_url"])
+
+    assert tts_client.speakers == [selected, selected]
+    with session_factory() as db:
+        rendered = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "judge_speech_rendered",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert len(rendered) == 2
+        assert all(item.payload["tts_speaker"] == selected for item in rendered)
 
 
 def test_admin_v2_record_exposes_complete_private_identity_table(v2_context) -> None:
@@ -1338,7 +1360,7 @@ def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_stat
         assert "speech_interrupted" in event_types
         assert "game_canceled" in event_types
         assert "action_failed" not in event_types
-    assert client.app.state.v2_test_model_client.call_count == 1
+    assert client.app.state.v2_test_model_client.call_count == 0
     assert not list(voice_root.rglob("*.tmp"))
 
 
@@ -1422,12 +1444,12 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
             )
 
     assert public_texts[:2] == [
-        "欢迎来到这场实时狼人杀对局。",
-        "夜幕已经降临，请所有玩家闭眼。",
+        "欢迎来到动态首夜 6 人。本局共6名玩家，对局现在开始。",
+        "首夜开始，请所有玩家闭眼。",
     ]
-    assert "天亮了，请大家确认昨夜的结果。" in public_texts
-    assert "第一天白天讨论现在开始，请存活玩家准备发言。" in public_texts
-    assert "第一天白天讨论现在开始，请存活玩家准备发言。" in god_texts
+    assert any(text.startswith("天亮了，昨夜") for text in public_texts)
+    assert "第1天白天讨论现在开始，请存活玩家按照发言顺序依次发言。" in public_texts
+    assert "第1天白天讨论现在开始，请存活玩家按照发言顺序依次发言。" in god_texts
     assert "这项首夜能力现在开始实时执行。" not in public_texts
     assert "night.progress_changed" in public_types
     assert "ability.progress_changed" not in public_types
@@ -1435,26 +1457,29 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     assert "ability.progress_changed" in god_types
     assert "god_view.night_resolved" in god_types
     assert "night.progress_changed" not in god_types
-    assert "这项首夜能力现在开始实时执行。" in god_texts
+    assert "狼人请睁眼，请依次商议今晚的袭击目标。" in god_texts
     assert "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。" in god_texts
-    opening_context = next(
-        context
-        for context in client.app.state.v2_test_model_client.contexts
-        if context["action_type"] == "judge_opening_speech"
-    )
-    assert opening_context["game_setup"] == {
-        "rule_name": "动态首夜 6 人",
-        "player_count": 6,
-        "role_summary": None,
-        "max_rounds": 8,
-    }
-
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
         assert game.status == "awaiting_observation"
         assert game.phase_id.startswith("day_")
         assert game.phase_state == "game_completed"
+        opening_event = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.event_type == "action_opened",
+                V2GameRecordEvent.payload["context"]["action_type"].as_string()
+                == "judge_opening_speech",
+            )
+        )
+        assert opening_event is not None
+        assert opening_event.payload["context"]["game_setup"] == {
+            "rule_name": "动态首夜 6 人",
+            "player_count": 6,
+            "role_summary": None,
+            "max_rounds": 8,
+        }
         windows = list(
             db.scalars(
                 select(V2ActionWindow)
@@ -1541,10 +1566,43 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
         assert game is not None
         assert game.phase_id.startswith("day_")
         assert game.phase_state == "game_completed"
-        assert any(
-            context["action_type"] == "judge_sheriff_election_opening"
-            for context in model_client.contexts
+        assert db.scalar(
+            select(func.count())
+            .select_from(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.event_type == "judge_speech_rendered",
+                V2GameRecordEvent.payload["template_id"].as_string()
+                == "judge_sheriff_election_opening",
+            )
+        ) == 1
+        judge_speeches = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                    V2GameRecordEvent.event_type == "judge_speech_rendered",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
         )
+        dawn = next(
+            item
+            for item in judge_speeches
+            if item.payload["template_id"] == "judge_dawn_announcement"
+        )
+        discussion = next(
+            item
+            for item in judge_speeches
+            if item.payload["template_id"] == "judge_public_discussion_opening"
+        )
+        assert all("进阶玩家" not in item.payload["text"] for item in judge_speeches)
+        assert dawn.record_seq < discussion.record_seq
+        assert dawn.payload["action_id"] != discussion.payload["action_id"]
+        assert "白天讨论现在开始" not in dawn.payload["text"]
+        assert "平安夜" not in discussion.payload["text"]
+        if "出局" in dawn.payload["text"]:
+            assert "平安夜" not in dawn.payload["text"]
         assert any(
             context["action_type"] == "sheriff_run" for context in model_client.decision_contexts
         )
@@ -1598,6 +1656,34 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             for event in normalized_targets
         )
     assert all(context["influence"]["status"] == "disabled" for context in model_client.contexts)
+    serialized_model_contexts = json.dumps(model_client.contexts, ensure_ascii=False)
+    if "进阶玩家" in serialized_model_contexts:
+        pytest.fail("player display name leaked into model context")
+    if "advanced-player-" in serialized_model_contexts:
+        leaked_value = next(
+            value
+            for context in model_client.contexts
+            for value in _nested_strings(context)
+            if "advanced-player-" in value
+        )
+        pytest.fail(f"internal player id leaked into model context: {leaked_value}")
+    assert all(
+        context["actor"]["id"].startswith("seat_")
+        for context in model_client.contexts
+    )
+    assert all(
+        candidate["player_id"].startswith("seat_")
+        and candidate["display_name"] == f"{candidate['seat']}号"
+        for context in model_client.contexts
+        for candidate in context.get("candidates", [])
+    )
+    fact_contexts = [
+        context
+        for context in model_client.contexts
+        if context.get("authoritative_public_facts")
+    ]
+    assert fact_contexts
+    assert all("public_history" not in context for context in fact_contexts)
 
 
 def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> None:

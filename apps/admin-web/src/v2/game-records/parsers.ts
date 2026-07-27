@@ -46,6 +46,7 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     ...parseListItem(record),
     rule_snapshot: object(record.rule_snapshot),
     players_snapshot: array(record.players_snapshot).map(object),
+    judge_voice_snapshot: object(record.judge_voice_snapshot),
     ability_snapshot: object(record.ability_snapshot),
     match_state: record.match_state === null ? null : object(record.match_state),
     player_identities: array(record.player_identities).map(parsePlayerIdentity),

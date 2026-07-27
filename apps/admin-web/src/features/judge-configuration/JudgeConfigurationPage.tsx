@@ -29,11 +29,12 @@ const { Text } = Typography;
 
 type JudgeConfigurationForm = Pick<
   UpdateJudgeConfigurationRequest,
-  "model_id" | "tts_speaker"
+  "voice_mode" | "tts_speaker" | "random_tts_speakers"
 >;
 
 export default function JudgeConfigurationPage() {
   const [form] = Form.useForm<JudgeConfigurationForm>();
+  const voiceMode = Form.useWatch("voice_mode", form) ?? "fixed";
   const queryClient = useQueryClient();
   const { runtimeMode, session } = useAdminSession();
   const canManage = hasAdminPermission(session?.permissions ?? [], "settings.manage");
@@ -57,8 +58,9 @@ export default function JudgeConfigurationPage() {
   useEffect(() => {
     if (!configuration) return;
     form.setFieldsValue({
-      model_id: configuration.model_id,
+      voice_mode: configuration.voice_mode,
       tts_speaker: configuration.tts_speaker,
+      random_tts_speakers: configuration.random_tts_speakers,
     });
   }, [configuration, form]);
 
@@ -80,9 +82,10 @@ export default function JudgeConfigurationPage() {
 
   function save(values: JudgeConfigurationForm) {
     mutation.mutate({
-      model_provider: "agent_plan",
-      model_id: values.model_id,
-      tts_speaker: values.tts_speaker,
+      voice_mode: values.voice_mode,
+      tts_speaker: values.voice_mode === "fixed" ? values.tts_speaker : null,
+      random_tts_speakers:
+        values.voice_mode === "random" ? values.random_tts_speakers : [],
       expected_version: expectedVersion,
     });
   }
@@ -90,7 +93,7 @@ export default function JudgeConfigurationPage() {
   return (
     <AdminPage className="judge-configuration-page">
       <AdminPageHeader
-        description="配置动态法官播报使用的模型与音色，不包含虚拟玩家的人设、策略及表达参数。"
+        description="法官使用确定性模板准确播报引擎事实；这里仅配置整局使用的法官音色。"
         kicker="CONTENT / JUDGE"
         title="法官配置"
       />
@@ -98,7 +101,7 @@ export default function JudgeConfigurationPage() {
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         {configuration.source === "environment" ? (
           <Alert
-            description="首次保存后将写入数据库，并覆盖环境变量中的法官模型与音色默认值。"
+            description="首次保存后将写入数据库，并覆盖环境变量中的法官默认音色。"
             showIcon
             title="当前使用环境默认配置"
             type="info"
@@ -113,7 +116,7 @@ export default function JudgeConfigurationPage() {
           />
         ) : null}
         <Alert
-          description="动态法官播报会读取这里的配置；已经生成的静态法官语音不会自动改写，重新生成时会使用所选音色。"
+          description="固定模式整局使用所选音色；每局随机模式会在创建对局时从音色池选择一次并冻结，继续、重试和回放保持一致。"
           showIcon
           title="生效范围"
           type="info"
@@ -137,39 +140,60 @@ export default function JudgeConfigurationPage() {
             onFinish={save}
             requiredMark={false}
           >
-            <Form.Item
-              label="模型"
-              name="model_id"
-              rules={[{ required: true, message: "请选择法官模型" }]}
-            >
+            <Form.Item label="音色模式" name="voice_mode" rules={[{ required: true }]}>
               <Select
                 disabled={!editable}
-                optionFilterProp="label"
-                options={configuration.models.map((model) => ({
-                  label: `${model.label} · ${model.model_id}`,
-                  value: model.model_id,
-                }))}
-                placeholder="选择法官模型"
-                showSearch
+                options={[
+                  { label: "固定音色", value: "fixed" },
+                  { label: "每局随机音色", value: "random" },
+                ]}
               />
             </Form.Item>
-            <Form.Item
-              extra={`TTS 资源：${configuration.tts_resource_id}`}
-              label="音色"
-              name="tts_speaker"
-              rules={[{ required: true, message: "请选择法官音色" }]}
-            >
-              <Select
-                disabled={!editable || !configuration.speaker_catalog_available}
-                optionFilterProp="label"
-                options={configuration.speakers.map((speaker) => ({
-                  label: `${speaker.name} · ${speaker.voice_type}`,
-                  value: speaker.voice_type,
-                }))}
-                placeholder="选择法官音色"
-                showSearch
-              />
-            </Form.Item>
+            {voiceMode === "fixed" ? (
+              <Form.Item
+                extra={`TTS 资源：${configuration.tts_resource_id}`}
+                label="固定音色"
+                name="tts_speaker"
+                rules={[{ required: true, message: "请选择法官音色" }]}
+              >
+                <Select
+                  disabled={!editable || !configuration.speaker_catalog_available}
+                  optionFilterProp="label"
+                  options={configuration.speakers.map((speaker) => ({
+                    label: `${speaker.name} · ${speaker.voice_type}`,
+                    value: speaker.voice_type,
+                  }))}
+                  placeholder="选择法官音色"
+                  showSearch
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item
+                extra="开局时从音色池随机选择一次；至少选择两个音色。"
+                label="随机音色池"
+                name="random_tts_speakers"
+                rules={[
+                  { required: true, message: "请选择随机音色池" },
+                  {
+                    min: 2,
+                    type: "array",
+                    message: "随机音色池至少需要两个音色",
+                  },
+                ]}
+              >
+                <Select
+                  disabled={!editable || !configuration.speaker_catalog_available}
+                  mode="multiple"
+                  optionFilterProp="label"
+                  options={configuration.speakers.map((speaker) => ({
+                    label: `${speaker.name} · ${speaker.voice_type}`,
+                    value: speaker.voice_type,
+                  }))}
+                  placeholder="选择至少两个法官音色"
+                  showSearch
+                />
+              </Form.Item>
+            )}
             <Space align="center" wrap>
               <Button
                 disabled={!editable}

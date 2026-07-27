@@ -11,7 +11,6 @@ from typing import Any, cast
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import settings
 from app.judge_configuration import runtime_judge_configuration
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
 from app.models.live import (
@@ -196,7 +195,6 @@ class VoiceMaterializer:
             if speaker_kind == "judge":
                 judge_speaker = runtime_judge_configuration(
                     db,
-                    default_model_id=settings.live_v2_model_id,
                     default_tts_speaker=self.config.judge_speaker,
                 ).tts_speaker
             utterance = event_to_voice_materialization(

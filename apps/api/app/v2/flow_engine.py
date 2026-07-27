@@ -74,7 +74,7 @@ class V2LiveFlowEngine:
                 action_type="judge_opening_speech",
                 phase_id="opening",
                 required_phase_state="opening_ready",
-                objective="生成本场直播的法官开场播报",
+                objective="播报本场直播的固定法官开场词",
                 success_live_state="ready",
                 success_phase_state="opening_speech_closed",
                 context={"game_setup": opening_setup} if opening_setup is not None else None,
@@ -167,9 +167,9 @@ class V2LiveFlowEngine:
                 phase_id=phase_id,
                 required_phase_state="nightfall_ready",
                 objective=(
-                    "生成宣布本局进入首夜并提醒所有玩家闭眼的法官播报"
+                    "播报本局进入首夜并提醒所有玩家闭眼"
                     if round_no == 1
-                    else f"生成宣布本局进入第{round_no}夜并提醒存活玩家闭眼的法官播报"
+                    else f"播报本局进入第{round_no}夜并提醒存活玩家闭眼"
                 ),
                 success_live_state="awaiting_observation" if terminal else "ready",
                 success_phase_state="nightfall_announced",

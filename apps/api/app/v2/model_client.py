@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import re
 import time
 from typing import Any
 
@@ -20,15 +21,6 @@ class V2QualityError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
-
-
-@dataclass(frozen=True)
-class V2ModelSpeech:
-    text: str
-    provider_request_id: str
-    first_token_ms: int
-    sentence_ms: int
-    raw_response: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,30 +63,6 @@ class V2ModelClient:
             action_context,
             decision=decision,
             model_id=self.resolve_model_id(model_id),
-        )
-
-    async def generate_judge_sentence(
-        self,
-        *,
-        action_context: dict[str, Any],
-        attempt_id: str,
-        model_id: str | None = None,
-        check_cancellation: Callable[[], None] | None = None,
-    ) -> V2ModelSpeech:
-        raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
-            action_context=action_context,
-            attempt_id=attempt_id,
-            max_output_tokens=256,
-            input_builder=_model_input,
-            model_id=model_id,
-            check_cancellation=check_cancellation,
-        )
-        return V2ModelSpeech(
-            text=_required_speech(raw, error_code="model_empty_speech"),
-            provider_request_id=provider_request_id,
-            first_token_ms=first_token_ms,
-            sentence_ms=completed_ms,
-            raw_response=raw,
         )
 
     async def generate_action_decision(
@@ -321,9 +289,10 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                         "你正在扮演一名狼人杀玩家。只根据给出的实时动作上下文做决定，"
                         "不得使用未提供的私密信息。输出一个 JSON 对象，其中包含"
                         "target_player_id 和 speech 两个字段。需要选择目标时，"
-                        "target_player_id 必须是候选列表中的 player_id；无需选择目标或"
+                        "target_player_id 必须是候选列表中的 seat_N 引用；无需选择目标或"
                         "允许放弃时可为 null。严格遵守 output_contract.target_policy；"
                         "speech 是准备直接播报的自然中文，可以包含多句话。"
+                        "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
                     ),
                 }
             ],
@@ -362,14 +331,25 @@ def _decision_object(raw: str) -> dict[str, Any]:
     if 0 <= start < end:
         candidates.append(raw[start : end + 1])
     for candidate in candidates:
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-        raise V2QualityError("model_decision_invalid_shape")
+        repaired = _repair_structural_smart_quotes(candidate)
+        for serialized in dict.fromkeys((candidate, repaired)):
+            try:
+                value = json.loads(serialized)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+            raise V2QualityError("model_decision_invalid_shape")
     raise V2QualityError("model_decision_invalid_json")
+
+
+def _repair_structural_smart_quotes(value: str) -> str:
+    repaired = re.sub(
+        r'("(?:target_player_id|speech)"\s*:\s*)“',
+        r'\1"',
+        value,
+    )
+    return re.sub(r"”(?=\s*[,}])", '"', repaired)
 
 
 def _decision_fields(raw: str) -> tuple[str | None, str]:

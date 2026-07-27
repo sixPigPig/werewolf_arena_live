@@ -32,6 +32,7 @@ from app.api.admin.dependencies import (
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.core.config import settings
 from app.db.session import get_db
+from app.judge_configuration import build_judge_voice_snapshot, runtime_judge_configuration
 from app.v2.contracts import (
     AdminV2EventResponse,
     AdminV2GameDetailResponse,
@@ -138,6 +139,12 @@ def create_v2_game(
         title=body.title,
         rule_snapshot=rule_snapshot,
         players_snapshot=players_snapshot,
+        judge_voice_snapshot=build_judge_voice_snapshot(
+            runtime_judge_configuration(
+                db,
+                default_tts_speaker=settings.live_v2_tts_judge_speaker,
+            )
+        ),
     )
     return V2GameCreateResponse(
         game_id=game.game_id,
@@ -463,6 +470,7 @@ def read_admin_v2_game(
         **_admin_game_item(game).model_dump(),
         rule_snapshot=game.rule_snapshot,
         players_snapshot=game.players_snapshot,
+        judge_voice_snapshot=game.judge_voice_snapshot,
         ability_snapshot=game.ability_snapshot,
         player_identities=player_identities,
         match_state=(

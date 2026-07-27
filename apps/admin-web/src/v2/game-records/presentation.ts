@@ -25,6 +25,7 @@ export type V2TimelineItem = {
   firstRecordSeq: number;
   lastRecordSeq: number;
   modelRequest: V2ModelRequest | null;
+  templateRender: V2GameRecordEvent | null;
   presentation: V2GamePresentation | null;
   voiceAsset: V2VoiceAsset | null;
   events: V2GameRecordEvent[];
@@ -40,6 +41,7 @@ export type V2PhaseGroup = {
 };
 
 const lifecycleEventTypes = new Set([
+  "judge_speech_rendered",
   "model_request_started",
   "model_first_token_received",
   "model_response_received",
@@ -160,6 +162,9 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     const actor = objectValue(context.actor);
     const actionEvents = eventsByAction.get(actionId) ?? [event];
     const request = requestsByAction.get(actionId) ?? null;
+    const templateRender =
+      actionEvents.find((item) => item.event_type === "judge_speech_rendered") ??
+      null;
     const presentation = presentationsByAction.get(actionId) ?? null;
     const voiceAsset = voicesByAction.get(actionId) ?? null;
     const failed = actionEvents.find((item) => item.event_type === "action_failed");
@@ -194,6 +199,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
       lastRecordSeq:
         actionEvents[actionEvents.length - 1]?.record_seq ?? event.record_seq,
       modelRequest: request,
+      templateRender,
       presentation,
       voiceAsset,
       events: actionEvents,
@@ -235,6 +241,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
       firstRecordSeq: event.record_seq,
       lastRecordSeq: event.record_seq,
       modelRequest: null,
+      templateRender: null,
       presentation: null,
       voiceAsset: null,
       events: [event],

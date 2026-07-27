@@ -179,7 +179,6 @@ def _fail(job: JudgeVoiceGenerationJob, code: str) -> None:
 def _judge_config(db: Session) -> VolcengineTtsConfig:
     judge = runtime_judge_configuration(
         db,
-        default_model_id=settings.live_v2_model_id,
         default_tts_speaker=settings.ark_tts_judge_speaker,
     )
     return VolcengineTtsConfig(

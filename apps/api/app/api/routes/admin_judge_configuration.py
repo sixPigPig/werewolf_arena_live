@@ -4,7 +4,6 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -15,14 +14,12 @@ from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_judge_configuration import (
     AdminJudgeConfigurationRequest,
     AdminJudgeConfigurationResponse,
-    AdminJudgeModelOption,
     AdminJudgeSpeakerOption,
 )
 from app.core.config import settings
 from app.db.session import get_db
 from app.judge_configuration import JUDGE_CONFIGURATION_ID, runtime_judge_configuration
 from app.models.judge_configuration import JudgeConfigurationRecord
-from app.models.model_configuration import ModelConfigurationRecord
 from app.werewolf.tts_speaker_catalog import (
     TtsSpeakerCatalogUnavailable,
     VolcengineTtsSpeakerCatalog,
@@ -83,11 +80,9 @@ def update_admin_judge_configuration(
     try:
         current = runtime_judge_configuration(
             db,
-            default_model_id=settings.live_v2_model_id,
             default_tts_speaker=settings.live_v2_tts_judge_speaker,
         )
         existing = db.get(JudgeConfigurationRecord, JUDGE_CONFIGURATION_ID)
-        _validate_model(db, payload=payload, current_model_id=current.model_id)
     except SQLAlchemyError as exc:
         raise _configuration_unavailable() from exc
     if payload.expected_version != current.version:
@@ -97,32 +92,50 @@ def update_admin_judge_configuration(
             title="Judge configuration conflict",
             detail="法官配置已被其他管理员更新，请刷新后重试。",
         )
-    _validate_speaker(
+    requested_speakers = (
+        [payload.tts_speaker]
+        if payload.voice_mode == "fixed" and payload.tts_speaker is not None
+        else payload.random_tts_speakers
+    )
+    _validate_speakers(
         catalog,
-        requested=payload.tts_speaker,
-        current=current.tts_speaker,
+        requested=requested_speakers,
+        current={
+            current.tts_speaker,
+            *current.random_tts_speakers,
+        },
     )
     before = _audit_value(current)
+    stored_speaker = (
+        payload.tts_speaker
+        if payload.voice_mode == "fixed"
+        else payload.random_tts_speakers[0]
+    )
+    assert stored_speaker is not None
     try:
         if existing is None:
             existing = JudgeConfigurationRecord(
                 id=JUDGE_CONFIGURATION_ID,
-                model_provider=payload.model_provider,
-                model_id=payload.model_id,
-                tts_speaker=payload.tts_speaker,
+                voice_mode=payload.voice_mode,
+                tts_speaker=stored_speaker,
+                random_tts_speakers=(
+                    payload.random_tts_speakers if payload.voice_mode == "random" else []
+                ),
                 version=1,
             )
             db.add(existing)
         else:
-            existing.model_provider = payload.model_provider
-            existing.model_id = payload.model_id
-            existing.tts_speaker = payload.tts_speaker
+            existing.voice_mode = payload.voice_mode
+            existing.tts_speaker = stored_speaker
+            existing.random_tts_speakers = (
+                payload.random_tts_speakers if payload.voice_mode == "random" else []
+            )
             existing.version += 1
         db.flush()
         after = {
-            "model_provider": existing.model_provider,
-            "model_id": existing.model_id,
+            "voice_mode": existing.voice_mode,
             "tts_speaker": existing.tts_speaker,
+            "random_tts_speakers": existing.random_tts_speakers,
             "version": existing.version,
         }
         record_audit_event(
@@ -153,38 +166,9 @@ def _configuration_response(
 ) -> AdminJudgeConfigurationResponse:
     current = runtime_judge_configuration(
         db,
-        default_model_id=settings.live_v2_model_id,
         default_tts_speaker=settings.live_v2_tts_judge_speaker,
     )
     record = db.get(JudgeConfigurationRecord, JUDGE_CONFIGURATION_ID)
-    model_rows = list(
-        db.scalars(
-            select(ModelConfigurationRecord)
-            .where(
-                ModelConfigurationRecord.provider == "agent_plan",
-                ModelConfigurationRecord.available.is_(True),
-                ModelConfigurationRecord.enabled.is_(True),
-            )
-            .order_by(ModelConfigurationRecord.display_name, ModelConfigurationRecord.model_id)
-        )
-    )
-    models = [
-        AdminJudgeModelOption(
-            provider="agent_plan",
-            model_id=item.model_id,
-            label=item.display_name or item.model_id,
-        )
-        for item in model_rows
-    ]
-    if current.model_id not in {item.model_id for item in models}:
-        models.insert(
-            0,
-            AdminJudgeModelOption(
-                provider="agent_plan",
-                model_id=current.model_id,
-                label=f"当前模型 · {current.model_id}",
-            ),
-        )
     speaker_catalog_available = True
     try:
         speaker_rows = catalog.list_supported(resource_id=settings.ark_tts_resource_id)
@@ -195,52 +179,35 @@ def _configuration_response(
     except TtsSpeakerCatalogUnavailable:
         speaker_catalog_available = False
         speakers = []
-    if current.tts_speaker not in {item.voice_type for item in speakers}:
-        speakers.insert(
-            0,
-            AdminJudgeSpeakerOption(
-                voice_type=current.tts_speaker,
-                name="当前音色",
-            ),
-        )
+    known_speakers = {item.voice_type for item in speakers}
+    for speaker in (current.tts_speaker, *current.random_tts_speakers):
+        if speaker not in known_speakers:
+            speakers.insert(
+                0,
+                AdminJudgeSpeakerOption(
+                    voice_type=speaker,
+                    name="当前音色",
+                ),
+            )
+            known_speakers.add(speaker)
     return AdminJudgeConfigurationResponse(
-        model_provider="agent_plan",
-        model_id=current.model_id,
+        voice_mode=current.voice_mode,
         tts_speaker=current.tts_speaker,
+        random_tts_speakers=list(current.random_tts_speakers),
         version=current.version,
         source="database" if record is not None else "environment",
         updated_at=record.updated_at if record is not None else None,
-        models=models,
         speakers=speakers,
         speaker_catalog_available=speaker_catalog_available,
         tts_resource_id=settings.ark_tts_resource_id,
     )
 
 
-def _validate_model(
-    db: Session,
-    *,
-    payload: AdminJudgeConfigurationRequest,
-    current_model_id: str,
-) -> None:
-    record = db.get(ModelConfigurationRecord, (payload.model_provider, payload.model_id))
-    if record is not None and record.available and record.enabled:
-        return
-    if payload.model_id == current_model_id:
-        return
-    raise AdminAPIProblem(
-        status_code=422,
-        code="admin_judge_model_unavailable",
-        title="Judge model unavailable",
-        detail="请选择模型管理中已启用且可用的 Agent Plan 模型。",
-    )
-
-
-def _validate_speaker(
+def _validate_speakers(
     catalog: VolcengineTtsSpeakerCatalog,
     *,
-    requested: str,
-    current: str,
+    requested: list[str],
+    current: set[str],
 ) -> None:
     try:
         supported = {
@@ -248,7 +215,7 @@ def _validate_speaker(
             for item in catalog.list_supported(resource_id=settings.ark_tts_resource_id)
         }
     except TtsSpeakerCatalogUnavailable as exc:
-        if requested == current:
+        if set(requested) <= current:
             return
         raise AdminAPIProblem(
             status_code=503,
@@ -256,7 +223,7 @@ def _validate_speaker(
             title="Judge speakers unavailable",
             detail="音色目录暂时不可用，当前只能保留原音色。",
         ) from exc
-    if requested not in supported:
+    if any(speaker not in supported for speaker in requested):
         raise AdminAPIProblem(
             status_code=422,
             code="admin_judge_speaker_invalid",
@@ -267,9 +234,9 @@ def _validate_speaker(
 
 def _audit_value(value) -> dict[str, object]:
     return {
-        "model_provider": value.model_provider,
-        "model_id": value.model_id,
+        "voice_mode": value.voice_mode,
         "tts_speaker": value.tts_speaker,
+        "random_tts_speakers": list(value.random_tts_speakers),
         "version": value.version,
     }
 

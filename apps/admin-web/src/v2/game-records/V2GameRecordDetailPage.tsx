@@ -53,11 +53,12 @@ import {
   ReadableRawEvents,
 } from "@/v2/game-records/request-presentation";
 import type {
+  V2GameRecordEvent,
   V2GameRecordDetail,
   V2PlayerIdentity,
 } from "@/v2/game-records/types";
 
-type CategoryFilter = "all" | "model" | "milestone";
+type CategoryFilter = "all" | "model" | "template" | "milestone";
 type StatusFilter = "all" | "running" | "succeeded" | "failed";
 const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
 
@@ -173,6 +174,7 @@ function V2GameRecordWorkspace({
       }
       if (statusFilter !== "all" && item.status !== statusFilter) return false;
       if (categoryFilter === "model" && !item.modelRequest) return false;
+      if (categoryFilter === "template" && !item.templateRender) return false;
       if (categoryFilter === "milestone" && item.kind !== "milestone") {
         return false;
       }
@@ -256,6 +258,12 @@ function V2GameRecordWorkspace({
               game.phase_id
             }
           />
+          <SummaryMetric
+            label="法官音色"
+            value={
+              recordText(game.judge_voice_snapshot.selected_tts_speaker) ?? "—"
+            }
+          />
         </section>
         <Space>
           {canStop ? (
@@ -319,6 +327,7 @@ function V2GameRecordWorkspace({
           options={[
             { label: "全部类别", value: "all" },
             { label: "模型调用", value: "model" },
+            { label: "系统模板", value: "template" },
             { label: "流程里程碑", value: "milestone" },
           ]}
           value={categoryFilter}
@@ -795,7 +804,7 @@ function ActionTimeline({
         <span>动作</span>
         <span>受众</span>
         <span>结果</span>
-        <span>模型</span>
+        <span>内容来源</span>
         <span>耗时</span>
       </div>
       {phases.length ? (
@@ -824,7 +833,11 @@ function ActionTimeline({
                       <StatusIcon status={item.status} />
                       {statusLabel(item.status)}
                     </span>
-                    <span>{item.modelRequest?.model_id ?? "—"}</span>
+                    <span>
+                      {item.templateRender
+                        ? "系统模板"
+                        : item.modelRequest?.model_id ?? "—"}
+                    </span>
                     <span>{formatDuration(item.durationMs)}</span>
                   </button>
                   {item.id === selectedId ? (
@@ -863,6 +876,14 @@ function LifecycleStrip({ item }: { item: V2TimelineItem }) {
       at: item.startedAt,
       detail: `事实 #${item.firstRecordSeq}`,
     },
+    item.templateRender
+      ? {
+          label: "系统模板",
+          at: item.templateRender.created_at,
+          detail:
+            recordText(item.templateRender.payload.template_id) ?? "已渲染",
+        }
+      : null,
     requestStarted
       ? {
           label: "模型请求",
@@ -947,20 +968,30 @@ function RequestDetailsDrawer({
                 key: "overview",
                 label: "概览",
               },
-              {
-                children: (
-                  <ReadableModelInput request={item.modelRequest} />
-                ),
-                key: "input",
-                label: "模型输入",
-              },
-              {
-                children: (
-                  <ReadableModelOutput request={item.modelRequest} />
-                ),
-                key: "output",
-                label: "模型输出",
-              },
+              ...(item.templateRender
+                ? [
+                    {
+                      children: <ReadableTemplateRender event={item.templateRender} />,
+                      key: "template",
+                      label: "模板详情",
+                    },
+                  ]
+                : [
+                    {
+                      children: (
+                        <ReadableModelInput request={item.modelRequest} />
+                      ),
+                      key: "input",
+                      label: "模型输入",
+                    },
+                    {
+                      children: (
+                        <ReadableModelOutput request={item.modelRequest} />
+                      ),
+                      key: "output",
+                      label: "模型输出",
+                    },
+                  ]),
               {
                 children: <ReadableRawEvents events={item.events} />,
                 key: "events",
@@ -977,16 +1008,42 @@ function RequestDetailsDrawer({
 
 function InspectorOverview({ item }: { item: V2TimelineItem }) {
   const request = item.modelRequest;
+  const template = item.templateRender?.payload;
   return (
     <div className="v2-inspector-panel">
       <Descriptions
         column={2}
         items={[
+          {
+            key: "source",
+            label: "内容来源",
+            children: item.templateRender
+              ? "系统确定性模板"
+              : request?.actor_kind === "judge"
+                ? "法官模型（历史记录）"
+                : request
+                  ? "玩家模型"
+                  : "无内容生成",
+          },
           { key: "model", label: "模型", children: request?.model_id ?? "—" },
           {
             key: "provider",
             label: "提供商",
             children: request?.model_provider ?? "—",
+          },
+          {
+            key: "template",
+            label: "模板",
+            children: item.templateRender
+              ? `${recordText(template?.template_id) ?? "—"} · v${
+                  recordNumber(template?.template_version) ?? "—"
+                }`
+              : "—",
+          },
+          {
+            key: "speaker",
+            label: "实际音色",
+            children: recordText(template?.tts_speaker) ?? "—",
           },
           {
             key: "status",
@@ -1079,6 +1136,51 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
   );
 }
 
+function ReadableTemplateRender({ event }: { event: V2GameRecordEvent }) {
+  const payload = event.payload;
+  return (
+    <div className="v2-inspector-panel">
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "template",
+            label: "模板 ID",
+            children: recordText(payload.template_id) ?? "—",
+          },
+          {
+            key: "version",
+            label: "模板版本",
+            children: recordNumber(payload.template_version) ?? "—",
+          },
+          {
+            key: "mode",
+            label: "音色模式",
+            children:
+              recordText(payload.voice_mode) === "random" ? "每局随机" : "固定音色",
+          },
+          {
+            key: "speaker",
+            label: "实际音色",
+            children: recordText(payload.tts_speaker) ?? "—",
+          },
+        ]}
+        size="small"
+      />
+      <section>
+        <Typography.Text strong>模板变量</Typography.Text>
+        <pre>{prettyJson(payload.variables ?? {})}</pre>
+      </section>
+      <section>
+        <Typography.Text strong>最终播报文本</Typography.Text>
+        <Typography.Paragraph className="v2-result-copy">
+          {recordText(payload.text) ?? "—"}
+        </Typography.Paragraph>
+      </section>
+    </div>
+  );
+}
+
 function RawDataDrawer({
   game,
   open,
@@ -1143,6 +1245,10 @@ function RawDataDrawer({
                 <RecordSection
                   label="规则快照"
                   records={[game.rule_snapshot]}
+                />
+                <RecordSection
+                  label="法官音色快照"
+                  records={[game.judge_voice_snapshot]}
                 />
                 <RecordSection
                   label="玩家快照"
