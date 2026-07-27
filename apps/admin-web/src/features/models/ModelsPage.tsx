@@ -260,7 +260,7 @@ function ModelConfigurationForm({
   onSubmit: (input: ModelConfigurationInput) => void;
   pending: boolean;
 }) {
-  const DEFAULT_THINKING_MAX_TOKENS = 2048;
+  const DEFAULT_THINKING_MAX_TOKENS = 16_384;
   const DEFAULT_NON_THINKING_MAX_TOKENS = 512;
   const [thinking, setThinking] = useState<ThinkingMode>(model.parameters.thinking);
   const [maxTokens, setMaxTokens] = useState<number | null>(

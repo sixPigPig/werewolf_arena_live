@@ -196,6 +196,8 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
         and item["model_id"] == "glm-5-2-260617"
     )
     assert bootstrapped_glm["supports_thinking"] is True
+    assert bootstrapped_glm["parameters"]["thinking"] == "enabled"
+    assert bootstrapped_glm["parameters"]["max_tokens"] == 16_384
     assert bootstrapped_glm["reasoning_effort_options"] == [
         "minimal",
         "low",
@@ -225,9 +227,10 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     assert next(item for item in agent_models if item["model_id"] == "agent-fast")[
         "enabled"
     ]
-    assert not next(item for item in agent_models if item["model_id"] == "agent-pro")[
-        "enabled"
-    ]
+    agent_pro = next(item for item in agent_models if item["model_id"] == "agent-pro")
+    assert not agent_pro["enabled"]
+    assert agent_pro["parameters"]["thinking"] == "enabled"
+    assert agent_pro["parameters"]["max_tokens"] == 16_384
 
 
 def test_glm_5_2_accepts_documented_reasoning_and_output_limit(
@@ -411,7 +414,7 @@ def test_model_configuration_requires_max_tokens(model_admin_client) -> None:
     assert response.json()["code"] == "admin_request_invalid"
 
 
-def test_catalog_backfills_thinking_mode_default_max_tokens(
+def test_catalog_uses_explicit_thinking_defaults(
     model_admin_client,
 ) -> None:
     client, _ = model_admin_client
@@ -425,4 +428,5 @@ def test_catalog_backfills_thinking_mode_default_max_tokens(
         for item in response.json()["models"]
     }
     assert parameters[("agent_plan", "agent-fast")]["max_tokens"] == 512
-    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 2048
+    assert parameters[("deepseek", "deepseek-v4-flash")]["thinking"] == "enabled"
+    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 16_384

@@ -54,11 +54,11 @@ function previewModel(
     supports_thinking: true,
     assigned_profile_count: enabled ? 3 : 0,
     parameters: {
-      thinking: "default" as const,
+      thinking: "enabled" as const,
       reasoning_effort: null,
       temperature: null,
       top_p: null,
-      max_tokens: 2048,
+      max_tokens: 16_384,
       frequency_penalty: null,
       presence_penalty: null,
     },

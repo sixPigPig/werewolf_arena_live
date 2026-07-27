@@ -110,8 +110,8 @@ describe("model management flow", () => {
         enabled: true,
         is_default: false,
         parameters: {
-          thinking: "default",
-          max_tokens: 2048,
+          thinking: "enabled",
+          max_tokens: 16_384,
         },
       });
     });
@@ -168,7 +168,7 @@ describe("model management flow", () => {
     expect(reasoningEffort).toBeDisabled();
     expect(maxTokens).toHaveValue("512");
     await selectAntdOption(user, thinking, "开启");
-    expect(maxTokens).toHaveValue("2048");
+    expect(maxTokens).toHaveValue("16384");
     await selectAntdOption(user, thinking, "关闭");
     expect(maxTokens).toHaveValue("512");
     expectAntdSelectLabel(reasoningEffort, "跟随提供方默认");

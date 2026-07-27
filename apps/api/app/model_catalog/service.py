@@ -385,7 +385,11 @@ def bootstrap_environment_catalog(db: Session) -> None:
             )
             if record is None:
                 parameter_values = parameter_values_with_default_max_tokens(
-                    {"thinking": "default"},
+                    {
+                        "thinking": (
+                            "enabled" if bootstrap_supports_thinking else "default"
+                        )
+                    },
                     supports_thinking=bootstrap_supports_thinking,
                     limit=_max_output_tokens_limit(provider_name, model_id),
                 )
@@ -435,7 +439,7 @@ def _sync_discovered_models(
         record = db.get(ModelConfigurationRecord, (provider, model.model_id))
         if record is None:
             parameter_values = parameter_values_with_default_max_tokens(
-                {"thinking": "default"},
+                {"thinking": "enabled" if model.supports_thinking else "default"},
                 supports_thinking=model.supports_thinking,
                 limit=_max_output_tokens_limit(provider, model.model_id),
             )
