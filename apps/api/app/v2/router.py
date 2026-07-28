@@ -929,11 +929,26 @@ def _admin_model_requests(
                     if isinstance(payload.get("judge_configuration_version"), int)
                     else None
                 ),
+                prompt_schema_version=(
+                    payload.get("prompt_schema_version")
+                    if isinstance(payload.get("prompt_schema_version"), int)
+                    else None
+                ),
+                prompt_projection=(
+                    payload.get("prompt_projection")
+                    if isinstance(payload.get("prompt_projection"), dict)
+                    else None
+                ),
                 status=status,
                 request_payload=request_payload,
                 input_source=input_source,
                 raw_response=raw_response,
                 parsed_output=parsed_output,
+                passive_observations=(
+                    response_payload.get("passive_observations")
+                    if isinstance(response_payload.get("passive_observations"), list)
+                    else []
+                ),
                 output_source=output_source,
                 provider_request_id=(
                     provider_request_id if isinstance(provider_request_id, str) else None

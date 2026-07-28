@@ -78,10 +78,17 @@ const fieldLabels: Record<string, string> = {
   payload: "事件内容",
   player_count: "玩家数",
   player_id: "玩家 ID",
+  prompt_projection: "提示词投影摘要",
+  prompt_schema_version: "提示词结构版本",
   personality: "性格与策略",
   prior_team_proposals: "此前提议",
   projection_policy_id: "信息投影规则",
+  public_state: "公开事实",
   public_history: "公开历史",
+  hard_rules: "硬规则",
+  history: "公开发言历史",
+  recent_statements: "近期原始发言",
+  older_claims: "更早的观点摘录",
   role_summary: "身份配置",
   round_no: "轮次",
   rule_name: "规则",
@@ -94,6 +101,7 @@ const fieldLabels: Record<string, string> = {
   stage: "阶段",
   status: "状态",
   strategy_profile: "策略类型",
+  self: "玩家自身与私有事实",
   strength: "影响强度",
   target_optional: "目标可为空",
   target_player_id: "目标玩家",
@@ -136,6 +144,10 @@ export function ReadableModelInput({
     return <Empty description="这一步没有模型输入" />;
   }
   const messages = requestMessages(request.request_payload);
+  const serializedCharCount = numericField(
+    request.prompt_projection,
+    "serialized_char_count",
+  );
   return (
     <div className="v2-inspector-panel">
       {request.input_source === "reconstructed" ? (
@@ -172,6 +184,22 @@ export function ReadableModelInput({
                 request.request_payload.max_tokens ??
                 "—",
             ),
+          },
+          {
+            key: "prompt-schema",
+            label: "提示词结构",
+            children:
+              request.prompt_schema_version === null
+                ? "—"
+                : `V${request.prompt_schema_version}`,
+          },
+          {
+            key: "prompt-size",
+            label: "投影字符数",
+            children:
+              serializedCharCount === null
+                ? "—"
+                : serializedCharCount.toLocaleString("zh-CN"),
           },
         ]}
         size="small"
@@ -218,6 +246,28 @@ export function ReadableModelOutput({
           type="warning"
         />
       ) : null}
+      {request.passive_observations.length ? (
+        <>
+          <Alert
+            description="以下信号只记录模型是否违背已给规则，用于评估真实推理表现；不会触发重试、改写、拦截或替换。"
+            showIcon
+            title={`旁路观察（未影响对局，${request.passive_observations.length} 项）`}
+            type="warning"
+          />
+          <Collapse
+            items={[
+              {
+                children: (
+                  <pre>{prettyJson(request.passive_observations)}</pre>
+                ),
+                key: "passive-observations",
+                label: "查看旁路观察详情",
+              },
+            ]}
+            size="small"
+          />
+        </>
+      ) : null}
       <OutputSummary label="程序采用结果" value={adoptedValue} />
       {request.raw_response ? (
         <Collapse
@@ -242,6 +292,16 @@ export function ReadableModelOutput({
       ) : null}
     </div>
   );
+}
+
+function numericField(
+  value: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const candidate = value?.[key];
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate
+    : null;
 }
 
 export function ReadableRawEvents({

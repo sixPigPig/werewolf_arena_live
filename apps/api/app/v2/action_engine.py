@@ -16,6 +16,7 @@ from app.v2.director_projection import project_director_scene
 from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
 from app.v2.model_context import (
     V2ModelPlayerReference,
+    model_prompt_metadata,
     project_model_action_context,
     resolve_model_target,
     sanitize_model_speech,
@@ -26,6 +27,7 @@ from app.v2.model_client import (
     V2ModelTarget,
     V2QualityError,
 )
+from app.v2.model_observation import observe_model_speech
 from app.v2.protocol import (
     V2LiveProtocolError,
     audio_frame,
@@ -380,6 +382,7 @@ class V2ActionEngine:
                     context,
                     players=spec.model_players,
                 )
+                prompt_projection = model_prompt_metadata(model_context)
                 request_payload = self._model_client.build_request_payload(
                     action_context=model_context,
                     decision=decision,
@@ -422,6 +425,10 @@ class V2ActionEngine:
                         "actor_kind": spec.actor_kind,
                         "actor_id": spec.actor_id,
                         "audience": spec.audience,
+                        "prompt_schema_version": model_context.get(
+                            "prompt_schema_version"
+                        ),
+                        "prompt_projection": prompt_projection,
                         "request_payload": request_payload,
                     },
                 )
@@ -450,6 +457,14 @@ class V2ActionEngine:
                         )
                         if model_decision.speech is not None
                         else None
+                    ),
+                )
+                passive_observations = observe_model_speech(
+                    model_decision.speech,
+                    hard_rules=(
+                        model_context.get("hard_rules")
+                        if isinstance(model_context.get("hard_rules"), dict)
+                        else {}
                     ),
                 )
                 self._repository.append_event(
@@ -497,6 +512,7 @@ class V2ActionEngine:
                             )
                         ),
                         "parsed_output": parsed_output,
+                        "passive_observations": passive_observations,
                         "repair_kind": model_decision.repair_kind,
                         "first_token_ms": model_decision.first_token_ms,
                         "completed_ms": model_decision.completed_ms,

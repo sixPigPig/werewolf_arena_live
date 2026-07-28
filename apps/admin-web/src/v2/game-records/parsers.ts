@@ -186,6 +186,15 @@ function parseModelRequest(value: unknown): V2ModelRequest {
       record.judge_configuration_version,
       0,
     ),
+    prompt_schema_version:
+      record.prompt_schema_version === undefined
+        ? null
+        : nullableInteger(record.prompt_schema_version, 0),
+    prompt_projection:
+      record.prompt_projection === undefined ||
+      record.prompt_projection === null
+        ? null
+        : object(record.prompt_projection),
     status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
     request_payload:
       record.request_payload === null ? null : object(record.request_payload),
@@ -196,6 +205,10 @@ function parseModelRequest(value: unknown): V2ModelRequest {
     raw_response: nullableText(record.raw_response),
     parsed_output:
       record.parsed_output === null ? null : object(record.parsed_output),
+    passive_observations:
+      record.passive_observations === undefined
+        ? []
+        : array(record.passive_observations).map(object),
     output_source: oneOf(
       record.output_source,
       ["persisted", "legacy_inferred", "unavailable"] as const,

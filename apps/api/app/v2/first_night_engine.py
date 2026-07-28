@@ -287,7 +287,11 @@ class V2NightEngine:
             state=state,
             broadcaster=broadcaster,
             action_type="werewolf_attack_wake",
-            objective="唤醒狼人团队并请他们依次实时商议袭击目标",
+            objective=(
+                "唤醒本局唯一狼人并请其选择袭击目标"
+                if len(wolves) == 1
+                else "唤醒狼人团队并请他们依次实时商议袭击目标"
+            ),
             context={"ability_id": ability_id},
         )
         prior_proposals: list[dict[str, Any]] = []
@@ -312,19 +316,34 @@ class V2NightEngine:
                     player=wolf,
                     candidates=candidates,
                     objective=(
-                        "选择本轮狼人团队建议袭击的一名非狼人存活玩家；你可以参考本轮此前狼人的建议"
+                        "独自选择一名非狼人存活玩家作为本轮袭击目标"
+                        if len(wolves) == 1
+                        else (
+                            "选择本轮狼人团队建议袭击的一名非狼人存活玩家；"
+                            "你可以参考本轮此前狼人的建议"
+                        )
                     ),
-                    knowledge={
-                        "werewolf_teammates": [item.player_id for item in wolves],
-                        "prior_team_proposals": prior_proposals,
-                        "round_no": round_no,
-                        "consensus_rule": (
-                            "本局只有1名狼人，你的选择自动成为团队一致目标，"
-                            "必须袭击一名存活的非狼人玩家"
-                            if len(wolves) == 1
-                            else "全员同一目标才生效；最多两轮；第二轮仍不一致则空刀"
-                        ),
-                    },
+                    knowledge=(
+                        {
+                            "living_werewolf_teammates": [],
+                            "coordination": "solo",
+                            "round_no": round_no,
+                        }
+                        if len(wolves) == 1
+                        else {
+                            "werewolf_teammates": [
+                                item.player_id
+                                for item in wolves
+                                if item.player_id != wolf.player_id
+                            ],
+                            "prior_team_proposals": prior_proposals,
+                            "round_no": round_no,
+                            "consensus_rule": (
+                                "全员同一目标才生效；最多两轮；"
+                                "第二轮仍不一致则空刀"
+                            ),
+                        }
+                    ),
                     optional=False,
                 )
                 round_items.append((activation, decision))

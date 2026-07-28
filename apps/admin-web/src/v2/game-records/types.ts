@@ -105,11 +105,14 @@ export type V2ModelRequest = {
   model_id: string | null;
   model_provider: string | null;
   judge_configuration_version: number | null;
+  prompt_schema_version: number | null;
+  prompt_projection: Record<string, unknown> | null;
   status: "running" | "succeeded" | "failed";
   request_payload: Record<string, unknown> | null;
   input_source: "persisted" | "reconstructed" | "unavailable";
   raw_response: string | null;
   parsed_output: Record<string, unknown> | null;
+  passive_observations: Array<Record<string, unknown>>;
   output_source: "persisted" | "legacy_inferred" | "unavailable";
   provider_request_id: string | null;
   first_token_ms: number | null;

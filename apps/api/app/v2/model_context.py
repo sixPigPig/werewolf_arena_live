@@ -9,81 +9,15 @@ from typing import Any
 from app.v2.ability_runtime import normalize_role_key, normalize_team_key
 
 
-MODEL_INFORMATION_SEMANTICS = {
-    "self_identity": (
-        "法官私下确认给当前行动玩家的真实身份与阵营；它不等于玩家对外公开的身份声明。"
-    ),
-    "role_capabilities": (
-        "由当前玩家真实角色产生的能力；警长身份不会新增、替换或删除这些角色能力。"
-    ),
-    "ability_runtime_state": (
-        "当前玩家真实角色能力的运行状态；owned 表示永久拥有，remaining_uses、"
-        "resource_status 和 can_execute_now 表示资源是否已消耗以及本次动作窗口能否执行。"
-    ),
-    "current_action_effect": (
-        "法官根据冻结规则和当前阶段给出的本次动作确定性效果；speech 本身不会改变游戏状态。"
-    ),
-    "public_office_capabilities": (
-        "由当前公开职位产生的附加职权；只描述警长投票、发言顺序和警徽处置等职位权力，"
-        "不会赋予验人、用药、守护或开枪等神职能力。"
-    ),
-    "current_state_restrictions": (
-        "当前存活、投票资格和警徽状态等限制；实际执行仍以本次动作的候选人与输出契约为准。"
-    ),
-    "public_rule_contract": (
-        "本局冻结的公开规则；enabled=false 表示对应机制在本局不存在。"
-    ),
-    "public_match_state": (
-        "当前法官确认的公开存活状态；只包含座位与是否仍在场，不包含任何身份或阵营信息。"
-    ),
-    "private_judge_facts": (
-        "法官只向当前行动玩家确认的真实私有事实；是否公开以及如何使用由玩家自主决定。"
-    ),
-    "public_judge_facts": "法官已经向全体玩家确认的公开事实。",
-    "public_role_confirmations": (
-        "法官通过公开规则动作明确确认的身份；只有这里列出的座位才属于公开坐实身份。"
-    ),
-    "role_information_boundaries": (
-        "本局公开规则规定的角色信息可见边界；只描述某角色通常会或不会收到哪类法官私有信息，"
-        "不暴露本局其他玩家的实际私有动作。"
-    ),
-    "canonical_public_timeline": (
-        "按 source_event_id 去重后的公开法官事件时间线；同一 source_event_id "
-        "在其他字段再次出现仍是同一事件，统计时只能计算一次。"
-    ),
-    "public_event_counters": (
-        "从 canonical_public_timeline 和公开身份确认确定性计算的公开事件计数与座位集合。"
-    ),
-    "vote_snapshots": (
-        "法官记录的公开票型快照，包含投票资格、候选范围、实际票重、总票数和领先者；"
-        "票型本身不公开任何玩家身份。"
-    ),
-    "public_statements": (
-        "玩家的公开说法，可能包含欺骗、误判或遗漏，不会改变冻结规则或法官事实。"
-    ),
-    "player_claims": (
-        "从玩家原话逐字提取的身份、验人、站边、投票或行动说法；"
-        "confirmation_status=unverified 表示未经法官确认，不能当作事实。"
-    ),
-    "public_statement_ledger": (
-        "较早玩家发言中逐字提取的持久说法片段；每条都带 source_event_id，"
-        "仍然只是玩家说法，不是法官确认的事实。"
-    ),
-    "history_coverage": (
-        "历史投影的覆盖审计；mode=compacted 表示当前轮和相关原文完整保留，"
-        "其余历史发言由带来源的说法账本覆盖；mode=full 表示本次回退为完整发言历史。"
-    ),
-    "peaceful_night": (
-        "night_result.outcome=peaceful 只表示该夜无人出局，不表示当前玩家没有其他私有信息。"
-    ),
-    "decision_freedom": (
-        "这些字段只描述当前玩家可知的信息；如何判断、是否公开私有事实以及采用何种策略"
-        "均由玩家自主决定。"
-    ),
-    "current_information_summary": (
-        "置于上下文末尾的确定性信息边界摘要，只重申本次输入已有事实，不评价或修复玩家推理。"
-    ),
-}
+MODEL_PROMPT_SCHEMA_VERSION = 2
+_RECENT_STATEMENT_LIMIT = 3
+_RECENT_STATEMENT_CHAR_BUDGET = 5_000
+_PUBLIC_JUDGE_FACT_LIMIT = 20
+_OLDER_CLAIM_LIMIT = 18
+_OLDER_CLAIM_CHAR_BUDGET = 5_000
+_CLAIMS_PER_STATEMENT_LIMIT = 4
+_CLAIM_CHAR_LIMIT = 180
+_PERSONA_TEXT_LIMIT = 600
 
 
 @dataclass(frozen=True)
@@ -108,71 +42,300 @@ def project_model_action_context(
 ) -> dict[str, Any]:
     if not players:
         return dict(context)
-    projected = _project_value(context, players=players)
-    private_facts = projected.pop("private_authoritative_facts", None)
-    if private_facts is not None:
-        projected["private_judge_facts"] = private_facts
+    source = _project_value(context, players=players)
+    private_facts = source.pop("private_authoritative_facts", None)
+    private_facts = private_facts if isinstance(private_facts, list) else []
     public_history = context.get("public_history")
     if isinstance(public_history, list) or isinstance(public_history, tuple):
-        facts, statements, role_confirmations, vote_snapshots, canonical_timeline = (
-            _project_public_history(public_history, players=players)
+        facts, statements, role_confirmations, vote_snapshots = _project_public_history(
+            public_history,
+            players=players,
         )
-        projected.pop("public_history", None)
-        projected["public_judge_facts"] = facts
-        projected["public_role_confirmations"] = role_confirmations
-        projected["canonical_public_timeline"] = canonical_timeline
-        projected["public_event_counters"] = _public_event_counters(
-            canonical_timeline=canonical_timeline,
-            role_confirmations=role_confirmations,
-        )
-        projected["vote_snapshots"] = vote_snapshots
-        projected["player_claims"] = _player_claims(statements)
-        compacted_statements, statement_ledger, coverage = _compact_public_statements(
-            statements,
-            context=projected,
-        )
-        projected["public_statements"] = compacted_statements
-        projected["public_statement_ledger"] = statement_ledger
-        projected["history_coverage"] = {
-            **coverage,
-            "source_event_count": len(public_history),
-            "authoritative_fact_count": len(facts),
-            "role_confirmation_count": len(role_confirmations),
-            "vote_snapshot_count": len(vote_snapshots),
-            "canonical_public_event_count": len(canonical_timeline),
-        }
     else:
-        projected.setdefault("public_judge_facts", [])
-        projected.setdefault("public_role_confirmations", [])
-        projected.setdefault("canonical_public_timeline", [])
-        projected.setdefault(
-            "public_event_counters",
-            _public_event_counters(
-                canonical_timeline=[],
-                role_confirmations=[],
-            ),
-        )
-        projected.setdefault("vote_snapshots", [])
-        projected.setdefault("public_statements", [])
-        projected.setdefault("player_claims", [])
-        projected.setdefault("public_statement_ledger", [])
-    projected.setdefault(
-        "current_action_effect",
-        _default_current_action_effect(projected),
-    )
-    projected.setdefault(
-        "role_information_boundaries",
-        _role_information_boundaries_from_context(projected),
-    )
-    projected["information_semantics"] = dict(MODEL_INFORMATION_SEMANTICS)
-    projected["player_reference_rule"] = {
-        "reference_format": "seat_N",
-        "spoken_format": "N号",
-        "names_available": False,
-        "instruction": "只使用座位号称呼玩家，不得猜测或生成玩家姓名。",
+        facts = []
+        statements = []
+        role_confirmations = []
+        vote_snapshots = []
+
+    recent_statements, older_claims = _compact_public_statements(statements)
+    hard_rules = _model_hard_rules(source.get("public_rule_contract"))
+    return {
+        "prompt_schema_version": MODEL_PROMPT_SCHEMA_VERSION,
+        "task": _model_task(source),
+        "hard_rules": hard_rules,
+        "self": _model_self(
+            source,
+            private_facts=private_facts,
+            hard_rules=hard_rules,
+        ),
+        "public_state": _model_public_state(
+            source,
+            facts=facts,
+            role_confirmations=role_confirmations,
+            vote_snapshots=vote_snapshots,
+        ),
+        "history": {
+            "recent_statements": recent_statements,
+            "older_claims": older_claims,
+        },
+        "persona": _compact_persona(source.get("actor_profile")),
+        "candidates": (
+            source.get("candidates") if isinstance(source.get("candidates"), list) else []
+        ),
+        "output_contract": (
+            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
+        ),
+        "player_reference_rule": {
+            "reference_format": "seat_N",
+            "spoken_format": "N号",
+            "names_available": False,
+        },
     }
-    projected["current_information_summary"] = _current_information_summary(projected)
-    return projected
+
+
+def model_prompt_metadata(context: dict[str, Any]) -> dict[str, Any]:
+    history = context.get("history")
+    history = history if isinstance(history, dict) else {}
+    recent = history.get("recent_statements")
+    older = history.get("older_claims")
+    return {
+        "prompt_schema_version": context.get("prompt_schema_version"),
+        "serialized_char_count": len(
+            json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        ),
+        "recent_statement_count": len(recent) if isinstance(recent, list) else 0,
+        "older_claim_count": len(older) if isinstance(older, list) else 0,
+    }
+
+
+def _model_task(source: dict[str, Any]) -> dict[str, Any]:
+    task: dict[str, Any] = {
+        "action_type": source.get("action_type"),
+        "objective": source.get("objective"),
+        "phase_id": source.get("phase_id"),
+        "round_no": source.get("round_no"),
+    }
+    for field in (
+        "night_no",
+        "speech_round",
+        "speech_order",
+        "vote_round",
+        "pk_candidate_ids",
+        "original_candidate_ids",
+        "original_off_sheriff_voter_ids",
+        "public_stage",
+        "ability_id",
+        "decision_rules",
+    ):
+        if field in source:
+            task[field] = source[field]
+    current_action_effect = source.get("current_action_effect")
+    if not isinstance(current_action_effect, dict):
+        current_action_effect = _default_current_action_effect(source)
+    task["mechanical_effect"] = _without_explanations(current_action_effect)
+    return {key: value for key, value in task.items() if value is not None}
+
+
+def _model_hard_rules(value: Any) -> dict[str, Any]:
+    contract = value if isinstance(value, dict) else {}
+    roles = contract.get("roles")
+    roles = roles if isinstance(roles, list) else []
+    configured_werewolf_count = contract.get("werewolf_count")
+    if isinstance(configured_werewolf_count, int) and not isinstance(
+        configured_werewolf_count,
+        bool,
+    ):
+        werewolf_count: int | None = configured_werewolf_count
+    elif roles:
+        werewolf_count = sum(
+            int(item.get("count") or 0)
+            for item in roles
+            if isinstance(item, dict) and item.get("role_key") == "werewolf"
+        )
+    else:
+        werewolf_count = None
+    night_rules = contract.get("night_action_rules")
+    night_rules = night_rules if isinstance(night_rules, dict) else {}
+    ability_rules: dict[str, Any] = {}
+    for ability_id, raw_rule in night_rules.items():
+        if not isinstance(ability_id, str) or not isinstance(raw_rule, dict):
+            continue
+        rule = _without_explanations(raw_rule)
+        if ability_id == "werewolf_attack":
+            rule.pop("actor_scope", None)
+            rule.pop("single_werewolf_resolution", None)
+            if werewolf_count == 1:
+                rule["coordination"] = "solo"
+                rule.pop("team_resolution", None)
+                rule.pop("can_target_werewolf_teammates", None)
+            elif isinstance(werewolf_count, int) and werewolf_count > 1:
+                rule["coordination"] = "team"
+        ability_rules[ability_id] = rule
+    result = {
+        "rule_id": contract.get("rule_id"),
+        "rule_version": contract.get("rule_version"),
+        "player_count": contract.get("player_count"),
+        "roles": [
+            {
+                key: item.get(key)
+                for key in ("role_key", "role_label", "count", "team")
+                if item.get(key) is not None
+            }
+            for item in roles
+            if isinstance(item, dict)
+        ],
+        "werewolf_count": werewolf_count,
+        "max_rounds": contract.get("max_rounds"),
+        "win_condition": contract.get("win_condition"),
+        "reveal_policy": contract.get("reveal_policy"),
+        "role_reveal_rule": contract.get("role_reveal_rule"),
+        "sheriff": {
+            "enabled": bool(contract.get("sheriff_enabled")),
+            "vote_weight": contract.get("sheriff_vote_weight"),
+        },
+        "speech": {
+            "policy": contract.get("speech_policy"),
+            "rounds": contract.get("speech_rounds"),
+            "exile_last_words_enabled": bool(contract.get("exile_last_words_enabled")),
+        },
+        "werewolf_self_explosion_enabled": bool(contract.get("werewolf_self_explosion_enabled")),
+        "ability_rules": ability_rules,
+    }
+    return {key: item for key, item in result.items() if item is not None}
+
+
+def _model_self(
+    source: dict[str, Any],
+    *,
+    private_facts: list[Any],
+    hard_rules: dict[str, Any],
+) -> dict[str, Any]:
+    identity = source.get("self_identity")
+    identity = identity if isinstance(identity, dict) else {}
+    role_key = identity.get("role_key")
+    self_ref = identity.get("player_id")
+    visible_private_facts = (
+        [
+            fact
+            for fact in private_facts
+            if not isinstance(fact, dict)
+            or fact.get("fact_type")
+            not in {"werewolf_teammates", "living_werewolf_teammates"}
+        ]
+        if role_key == "werewolf"
+        else private_facts
+    )
+    result: dict[str, Any] = {
+        "identity": {
+            key: identity.get(key)
+            for key in ("player_id", "seat", "role_key", "team")
+            if identity.get(key) is not None
+        },
+        "private_judge_facts": visible_private_facts,
+        "role_capabilities": _without_explanations(source.get("role_capabilities")),
+        "ability_runtime_state": _without_explanations(source.get("ability_runtime_state")),
+        "public_office_capabilities": _without_explanations(
+            source.get("public_office_capabilities")
+        ),
+        "state_restrictions": _without_explanations(source.get("current_state_restrictions")),
+    }
+    if role_key == "werewolf":
+        living_teammates = _living_werewolf_teammates(
+            private_facts,
+            self_ref=self_ref if isinstance(self_ref, str) else None,
+            werewolf_count=hard_rules.get("werewolf_count"),
+        )
+        result["werewolf_coordination"] = (
+            {"mode": "solo"}
+            if hard_rules.get("werewolf_count") == 1
+            else {
+                "mode": "team",
+                "living_teammate_refs": living_teammates or [],
+            }
+        )
+    return result
+
+
+def _living_werewolf_teammates(
+    private_facts: list[Any],
+    *,
+    self_ref: str | None,
+    werewolf_count: Any,
+) -> list[str] | None:
+    if werewolf_count == 1:
+        return []
+    for fact in reversed(private_facts):
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("fact_type") not in {
+            "werewolf_teammates",
+            "living_werewolf_teammates",
+        }:
+            continue
+        payload = fact.get("payload")
+        if not isinstance(payload, list):
+            continue
+        return [item for item in payload if isinstance(item, str) and item != self_ref]
+    return None
+
+
+def _model_public_state(
+    source: dict[str, Any],
+    *,
+    facts: list[dict[str, Any]],
+    role_confirmations: list[dict[str, Any]],
+    vote_snapshots: list[dict[str, Any]],
+) -> dict[str, Any]:
+    public_match_state = source.get("public_match_state")
+    public_match_state = dict(public_match_state) if isinstance(public_match_state, dict) else {}
+    sheriff_player_id = source.get("sheriff_player_id")
+    if sheriff_player_id is not None:
+        public_match_state["sheriff_player_id"] = sheriff_player_id
+    office = source.get("public_office_capabilities")
+    if isinstance(office, dict):
+        badge_state = office.get("sheriff_badge_state")
+        if badge_state is not None:
+            public_match_state["sheriff_badge_state"] = badge_state
+    if facts:
+        public_match_state["judge_facts"] = facts[-_PUBLIC_JUDGE_FACT_LIMIT:]
+    if role_confirmations:
+        public_match_state["role_confirmations"] = role_confirmations
+    if vote_snapshots:
+        public_match_state["latest_vote_snapshot"] = vote_snapshots[-1]
+    return public_match_state
+
+
+def _compact_persona(value: Any) -> dict[str, Any]:
+    profile = value if isinstance(value, dict) else {}
+    personality = profile.get("personality")
+    if isinstance(personality, str) and len(personality) > _PERSONA_TEXT_LIMIT:
+        personality = personality[:_PERSONA_TEXT_LIMIT].rstrip() + "…"
+    catchphrases = profile.get("catchphrases")
+    return {
+        key: item
+        for key, item in {
+            "personality": personality,
+            "strategy_profile": profile.get("strategy_profile"),
+            "catchphrases": (catchphrases[:3] if isinstance(catchphrases, list) else None),
+            "delivery_mood": profile.get("base_delivery_mood"),
+            "delivery_intensity": profile.get("base_delivery_intensity"),
+            "delivery_pace": profile.get("base_delivery_pace"),
+            "delivery_instruction": profile.get("base_delivery_instruction"),
+        }.items()
+        if item not in (None, [], "")
+    }
+
+
+def _without_explanations(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_explanations(item)
+            for key, item in value.items()
+            if key not in {"source", "instruction"}
+        }
+    if isinstance(value, list):
+        return [_without_explanations(item) for item in value]
+    return value
 
 
 def sanitize_model_speech(
@@ -195,9 +358,7 @@ def resolve_model_target(
 
 def _default_current_action_effect(context: dict[str, Any]) -> dict[str, Any]:
     output_contract = context.get("output_contract")
-    output_contract = (
-        output_contract if isinstance(output_contract, dict) else {}
-    )
+    output_contract = output_contract if isinstance(output_contract, dict) else {}
     target_policy = output_contract.get("target_policy")
     target_policy = target_policy if isinstance(target_policy, dict) else {}
     return {
@@ -246,13 +407,9 @@ def build_public_rule_contract(
     player_count = rule.get("player_count")
     if not isinstance(player_count, int) or isinstance(player_count, bool):
         player_count = sum(item["count"] for item in roles)
-    werewolf_count = sum(
-        item["count"] for item in roles if item["role_key"] == "werewolf"
-    )
+    werewolf_count = sum(item["count"] for item in roles if item["role_key"] == "werewolf")
     sheriff_enabled = bool(rule.get("sheriff_enabled"))
-    role_composition = "、".join(
-        f"{item['count']}名{item['role_label']}" for item in roles
-    )
+    role_composition = "、".join(f"{item['count']}名{item['role_label']}" for item in roles)
     night_action_rules = _night_action_rules(
         role_keys={item["role_key"] for item in roles},
         werewolf_count=werewolf_count,
@@ -285,9 +442,7 @@ def build_public_rule_contract(
         ),
         "sheriff_enabled": sheriff_enabled,
         "sheriff_vote_weight": (
-            float(rule.get("sheriff_vote_weight") or 1)
-            if sheriff_enabled
-            else None
+            float(rule.get("sheriff_vote_weight") or 1) if sheriff_enabled else None
         ),
         "sheriff_rule": (
             "本局启用警长系统。"
@@ -296,9 +451,7 @@ def build_public_rule_contract(
         ),
         "speech_policy": rule.get("speech_policy") or "sequential",
         "speech_rounds": int(rule.get("speech_rounds") or 1),
-        "werewolf_self_explosion_enabled": bool(
-            rule.get("werewolf_self_explosion_enabled")
-        ),
+        "werewolf_self_explosion_enabled": bool(rule.get("werewolf_self_explosion_enabled")),
         "exile_last_words_enabled": bool(rule.get("exile_last_words_enabled")),
     }
 
@@ -309,9 +462,7 @@ def build_public_match_state(
     players: Iterable[Any],
 ) -> dict[str, Any]:
     player_list = tuple(players)
-    alive_player_ids = [
-        str(player.player_id) for player in player_list if bool(player.alive)
-    ]
+    alive_player_ids = [str(player.player_id) for player in player_list if bool(player.alive)]
     eliminated_player_ids = [
         str(player.player_id) for player in player_list if not bool(player.alive)
     ]
@@ -322,112 +473,6 @@ def build_public_match_state(
         "eliminated_player_count": len(eliminated_player_ids),
         "eliminated_player_ids": eliminated_player_ids,
         "identity_information_included": False,
-    }
-
-
-def _role_information_boundaries_from_context(
-    context: dict[str, Any],
-) -> dict[str, Any]:
-    public_rule_contract = context.get("public_rule_contract")
-    public_rule_contract = (
-        public_rule_contract if isinstance(public_rule_contract, dict) else {}
-    )
-    raw_roles = public_rule_contract.get("roles")
-    raw_roles = raw_roles if isinstance(raw_roles, list) else []
-    role_keys = {
-        item.get("role_key")
-        for item in raw_roles
-        if isinstance(item, dict)
-        and isinstance(item.get("role_key"), str)
-    }
-    boundaries: dict[str, dict[str, Any]] = {
-        "werewolf": {
-            "private_information_received": [
-                "存活狼人队友座位",
-                "当前狼人袭击动作中的队友建议与团队决议",
-                "自己此前已提交的狼人私有动作",
-            ],
-            "private_information_not_received": [
-                "预言家查验结果",
-                "女巫用药决定",
-                "其他神职的夜间选择",
-            ],
-        },
-        "seer": {
-            "private_information_received": [
-                "自己的查验目标",
-                "自己的查验阵营结果",
-                "自己此前已完成的查验历史",
-            ],
-            "private_information_not_received": [
-                "狼人袭击目标",
-                "女巫是否使用解药或毒药",
-                "守卫守护目标",
-                "其他角色的夜间决定",
-            ],
-        },
-        "witch": {
-            "private_information_received": [
-                "规则允许时法官告知的狼人袭击目标",
-                "自己的药物剩余状态",
-                "自己此前已提交的用药历史",
-            ],
-            "private_information_not_received": [
-                "预言家查验目标和结果",
-                "狼人团队的具体投刀过程",
-                "守卫守护目标",
-                "其他角色的夜间决定",
-            ],
-        },
-        "guard": {
-            "private_information_received": [
-                "自己的守护目标与守护历史",
-            ],
-            "private_information_not_received": [
-                "狼人袭击目标",
-                "预言家查验结果",
-                "女巫用药决定",
-            ],
-        },
-        "hunter": {
-            "private_information_received": [
-                "法官告知的当前死亡原因是否允许发动猎枪",
-                "自己的开枪决定",
-            ],
-            "private_information_not_received": [
-                "狼人袭击目标",
-                "预言家查验结果",
-                "女巫用药决定",
-            ],
-        },
-        "idiot": {
-            "private_information_received": [
-                "自己的真实身份与放逐免疫是否已经触发",
-            ],
-            "private_information_not_received": [
-                "其他角色的私有能力动作与结果",
-            ],
-        },
-        "villager": {
-            "private_information_received": [
-                "自己的真实身份",
-            ],
-            "private_information_not_received": [
-                "其他角色的私有能力动作与结果",
-            ],
-        },
-    }
-    return {
-        "source": "frozen_public_rules",
-        "roles": {
-            role_key: boundaries[role_key]
-            for role_key in sorted(role_keys)
-            if role_key in boundaries
-        },
-        "instruction": (
-            "这些是所有玩家都知道的角色信息边界，不表示本局对应角色已经公开，"
-            "也不公开任何玩家本局实际执行的私有动作。"
-        ),
     }
 
 
@@ -500,13 +545,22 @@ def _role_capabilities(
     role_key: str,
     rule: dict[str, Any],
 ) -> dict[str, Any]:
+    werewolf_count = _werewolf_count_from_rule(rule)
     capabilities: dict[str, list[dict[str, Any]]] = {
         "villager": [],
         "werewolf": [
             {
                 "ability_id": "werewolf.attack",
                 "timing": "night",
-                "description": "与存活狼人队友共同选择一名存活的非狼人玩家作为袭击目标。",
+                "description": (
+                    "你是本局唯一狼人，独自选择一名存活的非狼人玩家作为袭击目标。"
+                    if werewolf_count == 1
+                    else (
+                        "与存活狼人队友共同选择一名存活的非狼人玩家作为袭击目标。"
+                        if werewolf_count > 1
+                        else "选择一名存活的非狼人玩家作为袭击目标。"
+                    )
+                ),
             }
         ],
         "seer": [
@@ -571,6 +625,17 @@ def _role_capabilities(
     }
 
 
+def _werewolf_count_from_rule(rule: dict[str, Any]) -> int:
+    roles = rule.get("roles")
+    if not isinstance(roles, list):
+        return 0
+    return sum(
+        int(item.get("count") or 0)
+        for item in roles
+        if isinstance(item, dict) and normalize_role_key(item.get("role")) == "werewolf"
+    )
+
+
 def _ability_runtime_state(
     *,
     abilities: Iterable[dict[str, Any]],
@@ -581,11 +646,7 @@ def _ability_runtime_state(
     current_action_knowledge: dict[str, Any] | None,
 ) -> dict[str, Any]:
     facts = tuple(private_facts or ())
-    knowledge = (
-        current_action_knowledge
-        if isinstance(current_action_knowledge, dict)
-        else {}
-    )
+    knowledge = current_action_knowledge if isinstance(current_action_knowledge, dict) else {}
     current_ability_id = _ability_id_for_action(current_action_type)
     latest_commits: dict[str, dict[str, Any]] = {}
     for fact in facts:
@@ -620,9 +681,7 @@ def _ability_runtime_state(
         if limited is not None:
             remaining_key, result_key = limited
             remaining_uses = 1
-            if ability_id == "idiot.exile_immunity" and bool(
-                player_state.get("idiot_revealed")
-            ):
+            if ability_id == "idiot.exile_immunity" and bool(player_state.get("idiot_revealed")):
                 remaining_uses = 0
             elif (
                 isinstance(last_commit, dict)
@@ -632,22 +691,14 @@ def _ability_runtime_state(
             ):
                 remaining_uses = 0
             explicit_remaining = (
-                knowledge.get(remaining_key)
-                if isinstance(remaining_key, str)
-                else None
+                knowledge.get(remaining_key) if isinstance(remaining_key, str) else None
             )
-            if isinstance(explicit_remaining, int) and not isinstance(
-                explicit_remaining, bool
-            ):
+            if isinstance(explicit_remaining, int) and not isinstance(explicit_remaining, bool):
                 remaining_uses = max(0, explicit_remaining)
             resource_status = "consumed" if remaining_uses == 0 else "available"
 
         in_current_action_window = current_ability_id == ability_id
-        can_execute_now = (
-            alive
-            and in_current_action_window
-            and resource_status != "consumed"
-        )
+        can_execute_now = alive and in_current_action_window and resource_status != "consumed"
         unavailable_now_reason: str | None = None
         if not alive:
             unavailable_now_reason = "actor_not_alive"
@@ -726,9 +777,7 @@ def _public_office_capabilities(
         "is_current_sheriff": is_sheriff,
         "sheriff_badge_state": sheriff_badge_state,
         "abilities": abilities,
-        "instruction": (
-            "警长职权只与职位有关，不会授予验人、用药、守护、开枪或其他角色能力。"
-        ),
+        "instruction": ("警长职权只与职位有关，不会授予验人、用药、守护、开枪或其他角色能力。"),
     }
 
 
@@ -763,12 +812,10 @@ def _night_action_rules(
             "target_scope": "一名存活玩家，可以选择自己",
             "target_required": True,
             "first_night_self_protect": bool(
-                isinstance(guard_policy, dict)
-                and guard_policy.get("first_night_self_protect")
+                isinstance(guard_policy, dict) and guard_policy.get("first_night_self_protect")
             ),
             "can_repeat_previous_night_target": bool(
-                isinstance(guard_policy, dict)
-                and guard_policy.get("consecutive_same_target")
+                isinstance(guard_policy, dict) and guard_policy.get("consecutive_same_target")
             ),
             "successful_protection_effect": (
                 "若守护目标当夜受到狼人攻击，该目标不会因这次攻击出局。"
@@ -829,17 +876,13 @@ def _project_public_history(
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
-    list[dict[str, Any]],
 ]:
     facts: list[dict[str, Any]] = []
     statements: list[dict[str, Any]] = []
     role_confirmations: list[dict[str, Any]] = []
     vote_snapshots: list[dict[str, Any]] = []
-    canonical_timeline: list[dict[str, Any]] = []
-    canonical_source_event_ids: set[str] = set()
     has_presented_player_speech = any(
-        isinstance(item, dict)
-        and item.get("event_type") == "public_player_speech_presented"
+        isinstance(item, dict) and item.get("event_type") == "public_player_speech_presented"
         for item in history
     )
     latest_round = 1
@@ -857,19 +900,6 @@ def _project_public_history(
         if isinstance(round_no, int) and round_no > 0:
             latest_round = round_no
         projected_payload = _project_value(payload, players=players)
-        canonical_event = _canonical_public_event(
-            event_type=event_type,
-            source_event_id=source_event_id,
-            round_no=latest_round,
-            payload=projected_payload,
-        )
-        if (
-            canonical_event is not None
-            and source_event_id not in canonical_source_event_ids
-        ):
-            canonical_timeline.append(canonical_event)
-            canonical_source_event_ids.add(source_event_id)
-
         if event_type == "public_player_speech_presented":
             statements.append(
                 {
@@ -927,20 +957,12 @@ def _project_public_history(
                     "source_event_id": source_event_id,
                     "occurred_in": {"period": "day", "round_no": latest_round},
                     "action_type": projected_payload.get("action_type"),
-                    "eligible_voter_refs": projected_payload.get(
-                        "eligible_voter_ids", []
-                    ),
-                    "ineligible_voter_refs": projected_payload.get(
-                        "ineligible_voter_ids", []
-                    ),
-                    "candidate_refs": projected_payload.get(
-                        "candidate_player_ids", []
-                    ),
+                    "eligible_voter_refs": projected_payload.get("eligible_voter_ids", []),
+                    "ineligible_voter_refs": projected_payload.get("ineligible_voter_ids", []),
+                    "candidate_refs": projected_payload.get("candidate_player_ids", []),
                     "weighted": projected_payload.get("weighted"),
                     "sheriff_ref": projected_payload.get("sheriff_player_id"),
-                    "sheriff_vote_weight": projected_payload.get(
-                        "sheriff_vote_weight"
-                    ),
+                    "sheriff_vote_weight": projected_payload.get("sheriff_vote_weight"),
                     "voter_weights": projected_payload.get("voter_weights", {}),
                     "totals": projected_payload.get("totals", {}),
                     "leader_refs": projected_payload.get("leaders", []),
@@ -1064,171 +1086,7 @@ def _project_public_history(
                 "payload": projected_payload,
             }
         )
-    return (
-        facts,
-        statements,
-        role_confirmations,
-        vote_snapshots,
-        canonical_timeline,
-    )
-
-
-def _canonical_public_event(
-    *,
-    event_type: str,
-    source_event_id: str,
-    round_no: int,
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    if event_type in {
-        "day_speech_committed",
-        "public_player_speech_presented",
-        "day_vote_committed",
-    }:
-        return None
-    event: dict[str, Any] = {
-        "source_event_id": source_event_id,
-        "event_type": event_type,
-        "occurred_in": {
-            "period": (
-                "night" if event_type == "dawn_public_result" else "day"
-            ),
-            "round_no": round_no,
-        },
-    }
-    if event_type == "day_vote_committed":
-        event.update(
-            {
-                "action_type": payload.get("action_type"),
-                "voter_ref": payload.get("voter_player_id"),
-                "target_ref": payload.get("target_player_id"),
-                "weight": payload.get("weight"),
-            }
-        )
-    elif event_type == "day_vote_resolved":
-        event.update(
-            {
-                "action_type": payload.get("action_type"),
-                "totals": payload.get("totals", {}),
-                "leader_refs": payload.get("leaders", []),
-            }
-        )
-    elif event_type == "dawn_public_result":
-        eliminated = payload.get("dead_player_ids")
-        eliminated_refs = eliminated if isinstance(eliminated, list) else []
-        event.update(
-            {
-                "outcome": "deaths" if eliminated_refs else "peaceful",
-                "eliminated_player_refs": eliminated_refs,
-                "identity_reveal": "none",
-            }
-        )
-    elif event_type == "player_exiled":
-        event.update(
-            {
-                "player_ref": payload.get("player_id"),
-                "public_effects": {
-                    "player_eliminated": True,
-                    "role_revealed": False,
-                },
-            }
-        )
-    elif event_type == "werewolf_self_exploded":
-        event.update(
-            {
-                "player_ref": payload.get("player_id"),
-                "stage": payload.get("stage"),
-                "public_effects": {
-                    "player_eliminated": True,
-                    "role_confirmed": "werewolf",
-                    "other_players_affected": False,
-                },
-            }
-        )
-    elif event_type == "idiot_revealed":
-        event.update(
-            {
-                "player_ref": payload.get("player_id"),
-                "public_effects": {
-                    "role_confirmed": "idiot",
-                    "survived": bool(payload.get("survived")),
-                },
-            }
-        )
-    elif event_type == "hunter_response_resolved":
-        event.update(
-            {
-                "hunter_ref": payload.get("hunter_player_id"),
-                "target_ref": payload.get("target_player_id"),
-                "public_effects": {
-                    "hunter_role_confirmed": payload.get("target_player_id")
-                    is not None,
-                    "target_role_revealed": False,
-                },
-            }
-        )
-    elif event_type in {
-        "sheriff_elected",
-        "sheriff_badge_transferred",
-        "sheriff_badge_destroyed",
-    }:
-        event.update(
-            {
-                "player_ref": payload.get("player_id"),
-                "from_player_ref": payload.get("from_player_id"),
-                "reason": payload.get("reason"),
-            }
-        )
-    else:
-        event["public_payload"] = payload
-    return event
-
-
-def _public_event_counters(
-    *,
-    canonical_timeline: Iterable[dict[str, Any]],
-    role_confirmations: Iterable[dict[str, Any]],
-) -> dict[str, Any]:
-    timeline = tuple(
-        item for item in canonical_timeline if isinstance(item, dict)
-    )
-    confirmations = tuple(
-        item for item in role_confirmations if isinstance(item, dict)
-    )
-    self_explosions = [
-        item for item in timeline if item.get("event_type") == "werewolf_self_exploded"
-    ]
-    confirmed_wolves = {
-        str(item["player_ref"]): str(item["source_event_id"])
-        for item in confirmations
-        if item.get("role_key") == "werewolf"
-        and isinstance(item.get("player_ref"), str)
-        and _source_id(item.get("source_event_id")) is not None
-    }
-    return {
-        "counting_rule": (
-            "相同 source_event_id 在不同字段中表示同一事件；统计事件、死亡或人数时只能计算一次。"
-        ),
-        "werewolf_self_explosion_count": len(self_explosions),
-        "werewolf_self_explosion_player_refs": [
-            item["player_ref"]
-            for item in self_explosions
-            if isinstance(item.get("player_ref"), str)
-        ],
-        "werewolf_self_explosion_source_event_ids": [
-            item["source_event_id"]
-            for item in self_explosions
-            if _source_id(item.get("source_event_id")) is not None
-        ],
-        "confirmed_werewolf_elimination_count": len(confirmed_wolves),
-        "confirmed_werewolf_refs": sorted(
-            confirmed_wolves,
-            key=_seat_sort_key,
-        ),
-        "confirmed_werewolf_source_event_ids": list(
-            dict.fromkeys(confirmed_wolves.values())
-        ),
-    }
+    return facts, statements, role_confirmations, vote_snapshots
 
 
 _DURABLE_STATEMENT_TERMS = (
@@ -1272,278 +1130,78 @@ _DURABLE_STATEMENT_TERMS = (
 )
 _STRUCTURED_SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？!?；;])|[，,：:]|\n+")
 _SEAT_REFERENCE = re.compile(r"(?<!\d)(?:seat_)?(2[0-9]|1[0-9]|[1-9])号?")
-_ROLE_CLAIM = re.compile(
-    r"(?:我是|我跳|我拍)(?:真)?(?:预言家|女巫|猎人|白痴|守卫|村民|好人|狼人)"
-)
+_ROLE_CLAIM = re.compile(r"(?:我是|我跳|我拍)(?:真)?(?:预言家|女巫|猎人|白痴|守卫|村民|好人|狼人)")
 
 
 def _compact_public_statements(
     statements: list[dict[str, Any]],
-    *,
-    context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not statements:
-        return [], [], {
-            "schema_version": 1,
-            "mode": "compacted",
-            "statement_count": 0,
-            "exact_statement_count": 0,
-            "ledger_statement_count": 0,
-            "through_source_event_id": None,
-        }
-
-    current_round = _positive_int(context.get("round_no"))
-    if current_round is None:
-        public_match_state = context.get("public_match_state")
-        if isinstance(public_match_state, dict):
-            current_round = _positive_int(public_match_state.get("round_no"))
-    current_round = current_round or 1
-    focal_refs = _focal_player_refs(context)
+        return [], []
 
     exact_ids: set[str] = set()
-    latest_by_speaker: dict[str, str] = {}
-    ledger: list[dict[str, Any]] = []
-    ledger_ids: set[str] = set()
-    coverage_failed = False
+    exact_statements_reversed: list[dict[str, Any]] = []
+    remaining_recent_chars = _RECENT_STATEMENT_CHAR_BUDGET
+    for statement in reversed(statements):
+        source_id = _source_id(statement.get("source_event_id"))
+        speech = statement.get("speech")
+        if source_id is None or not isinstance(speech, str):
+            continue
+        if len(exact_statements_reversed) >= _RECENT_STATEMENT_LIMIT or remaining_recent_chars <= 0:
+            break
+        bounded_speech = speech[:remaining_recent_chars]
+        if not bounded_speech:
+            continue
+        bounded_statement = dict(statement)
+        bounded_statement["speech"] = bounded_speech
+        if len(bounded_speech) < len(speech):
+            bounded_statement["speech_truncated"] = True
+        exact_statements_reversed.append(bounded_statement)
+        exact_ids.add(source_id)
+        remaining_recent_chars -= len(bounded_speech)
 
-    for statement in statements:
+    exact_statements = list(reversed(exact_statements_reversed))
+    older_ledger_reversed: list[dict[str, Any]] = []
+    remaining_claim_chars = _OLDER_CLAIM_CHAR_BUDGET
+    for statement in reversed(statements):
+        if len(older_ledger_reversed) >= _OLDER_CLAIM_LIMIT or remaining_claim_chars <= 0:
+            break
         source_id = _source_id(statement.get("source_event_id"))
         speaker_ref = statement.get("speaker_ref")
         speech = statement.get("speech")
-        occurred_in = statement.get("occurred_in")
-        round_no = (
-            _positive_int(occurred_in.get("round_no"))
-            if isinstance(occurred_in, dict)
-            else None
-        )
-        if source_id is None or not isinstance(speaker_ref, str) or not isinstance(
-            speech, str
+        if (
+            source_id is None
+            or source_id in exact_ids
+            or not isinstance(speaker_ref, str)
+            or not isinstance(speech, str)
         ):
-            coverage_failed = True
             continue
-
-        latest_by_speaker[speaker_ref] = source_id
-        mentioned_refs = _mentioned_player_refs(speech)
-        claims = _durable_statement_clauses(speech)
-        if round_no == current_round:
-            exact_ids.add(source_id)
-        if speaker_ref in focal_refs or focal_refs.intersection(mentioned_refs):
-            exact_ids.add(source_id)
+        claims: list[str] = []
+        for clause in _durable_statement_clauses(speech):
+            if len(claims) >= _CLAIMS_PER_STATEMENT_LIMIT or remaining_claim_chars <= 0:
+                break
+            bounded_claim = clause[: min(_CLAIM_CHAR_LIMIT, remaining_claim_chars)]
+            if bounded_claim:
+                claims.append(bounded_claim)
+                remaining_claim_chars -= len(bounded_claim)
         if not claims:
-            exact_ids.add(source_id)
-        ledger.append(
+            continue
+        older_ledger_reversed.append(
             {
                 "source_event_id": source_id,
-                "occurred_in": occurred_in,
-                "stage": statement.get("stage"),
-                "speaker_ref": speaker_ref,
-                "mentioned_player_refs": sorted(mentioned_refs, key=_seat_sort_key),
-                "exact_claim_fragments": claims,
-            }
-        )
-        ledger_ids.add(source_id)
-
-    exact_ids.update(latest_by_speaker.values())
-    all_ids = {
-        source_id
-        for statement in statements
-        if (source_id := _source_id(statement.get("source_event_id"))) is not None
-    }
-    if coverage_failed or all_ids != ledger_ids:
-        return list(statements), [], _full_history_coverage(
-            statements,
-            reason="statement_coverage_incomplete",
-        )
-
-    exact_statements = [
-        statement
-        for statement in statements
-        if _source_id(statement.get("source_event_id")) in exact_ids
-    ]
-    older_ledger = [
-        item
-        for item in ledger
-        if item["source_event_id"] not in exact_ids
-    ]
-    full_size = len(json.dumps(statements, ensure_ascii=False, separators=(",", ":")))
-    compacted_size = len(
-        json.dumps(
-            {
-                "public_statements": exact_statements,
-                "public_statement_ledger": older_ledger,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    )
-    if compacted_size >= full_size:
-        return list(statements), [], _full_history_coverage(
-            statements,
-            reason="compaction_not_smaller",
-        )
-
-    return exact_statements, older_ledger, {
-        "schema_version": 1,
-        "mode": "compacted",
-        "statement_count": len(statements),
-        "exact_statement_count": len(exact_statements),
-        "ledger_statement_count": len(older_ledger),
-        "through_source_event_id": _source_id(
-            statements[-1].get("source_event_id")
-        ),
-    }
-
-
-def _player_claims(statements: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    claims: list[dict[str, Any]] = []
-    for statement in statements:
-        speech = statement.get("speech")
-        source_event_id = _source_id(statement.get("source_event_id"))
-        speaker_ref = statement.get("speaker_ref")
-        if (
-            not isinstance(speech, str)
-            or source_event_id is None
-            or not isinstance(speaker_ref, str)
-        ):
-            continue
-        fragments = _durable_statement_clauses(speech)
-        if not fragments:
-            continue
-        claims.append(
-            {
-                "source_event_id": source_event_id,
                 "occurred_in": statement.get("occurred_in"),
                 "stage": statement.get("stage"),
                 "speaker_ref": speaker_ref,
-                "exact_claim_fragments": fragments,
+                "mentioned_player_refs": sorted(
+                    _mentioned_player_refs(speech),
+                    key=_seat_sort_key,
+                ),
+                "exact_claim_fragments": claims,
                 "confirmation_status": "unverified",
-                "instruction": "这是玩家说法，不是法官事实。",
             }
         )
-    return claims
-
-
-def _current_information_summary(context: dict[str, Any]) -> dict[str, Any]:
-    identity = context.get("self_identity")
-    identity = identity if isinstance(identity, dict) else {}
-    role_capabilities = context.get("role_capabilities")
-    role_capabilities = (
-        role_capabilities if isinstance(role_capabilities, dict) else {}
-    )
-    ability_runtime_state = context.get("ability_runtime_state")
-    ability_runtime_state = (
-        ability_runtime_state
-        if isinstance(ability_runtime_state, dict)
-        else {}
-    )
-    runtime_abilities = ability_runtime_state.get("abilities")
-    runtime_abilities = (
-        runtime_abilities if isinstance(runtime_abilities, list) else []
-    )
-    office_capabilities = context.get("public_office_capabilities")
-    office_capabilities = (
-        office_capabilities if isinstance(office_capabilities, dict) else {}
-    )
-    confirmations = context.get("public_role_confirmations")
-    confirmations = confirmations if isinstance(confirmations, list) else []
-    claims = context.get("player_claims")
-    claims = claims if isinstance(claims, list) else []
-    vote_snapshots = context.get("vote_snapshots")
-    vote_snapshots = vote_snapshots if isinstance(vote_snapshots, list) else []
-    action_effect = context.get("current_action_effect")
-    action_effect = action_effect if isinstance(action_effect, dict) else {}
-    event_counters = context.get("public_event_counters")
-    event_counters = event_counters if isinstance(event_counters, dict) else {}
-    return {
-        "self_role": identity.get("role_key"),
-        "self_team": identity.get("team"),
-        "is_current_sheriff": bool(office_capabilities.get("is_current_sheriff")),
-        "role_ability_ids": [
-            item.get("ability_id")
-            for item in role_capabilities.get("abilities", [])
-            if isinstance(item, dict) and isinstance(item.get("ability_id"), str)
-        ],
-        "available_role_ability_ids": [
-            item.get("ability_id")
-            for item in runtime_abilities
-            if isinstance(item, dict)
-            and isinstance(item.get("ability_id"), str)
-            and item.get("resource_status") != "consumed"
-        ],
-        "consumed_role_ability_ids": [
-            item.get("ability_id")
-            for item in runtime_abilities
-            if isinstance(item, dict)
-            and isinstance(item.get("ability_id"), str)
-            and item.get("resource_status") == "consumed"
-        ],
-        "current_action_ability_id": ability_runtime_state.get(
-            "current_action_ability_id"
-        ),
-        "current_action_target_mode": action_effect.get("target_mode"),
-        "current_action_affects_other_players": (
-            action_effect.get("if_executed", {}).get("other_players_affected")
-            if isinstance(action_effect.get("if_executed"), dict)
-            else None
-        ),
-        "public_office_authority_ids": [
-            item.get("authority_id")
-            for item in office_capabilities.get("abilities", [])
-            if isinstance(item, dict) and isinstance(item.get("authority_id"), str)
-        ],
-        "publicly_confirmed_roles": confirmations,
-        "confirmed_werewolf_elimination_count": event_counters.get(
-            "confirmed_werewolf_elimination_count", 0
-        ),
-        "confirmed_werewolf_refs": event_counters.get(
-            "confirmed_werewolf_refs", []
-        ),
-        "unverified_player_claim_count": len(claims),
-        "latest_vote_snapshot": vote_snapshots[-1] if vote_snapshots else None,
-        "information_boundary": (
-            "self_identity、private_judge_facts、public_judge_facts、"
-            "canonical_public_timeline、public_event_counters、"
-            "public_role_confirmations 和 vote_snapshots 是法官信息；"
-            "public_statements、player_claims 与 public_statement_ledger 都是玩家说法。"
-            "相同 source_event_id 只计算一次；"
-            "普通死亡或放逐不公开身份；警长职位只增加职位职权，不改变真实角色能力。"
-        ),
-    }
-
-
-def _full_history_coverage(
-    statements: list[dict[str, Any]],
-    *,
-    reason: str,
-) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "mode": "full",
-        "fallback_reason": reason,
-        "statement_count": len(statements),
-        "exact_statement_count": len(statements),
-        "ledger_statement_count": 0,
-        "through_source_event_id": (
-            _source_id(statements[-1].get("source_event_id"))
-            if statements
-            else None
-        ),
-    }
-
-
-def _focal_player_refs(context: dict[str, Any]) -> set[str]:
-    refs: set[str] = set()
-    actor = context.get("actor")
-    if isinstance(actor, dict) and isinstance(actor.get("id"), str):
-        refs.add(actor["id"])
-    candidates = context.get("candidates")
-    if isinstance(candidates, list) and len(candidates) <= 3:
-        for candidate in candidates:
-            if isinstance(candidate, dict) and isinstance(
-                candidate.get("player_id"), str
-            ):
-                refs.add(candidate["player_id"])
-    return refs
+    older_ledger = list(reversed(older_ledger_reversed))
+    return exact_statements, older_ledger
 
 
 def _mentioned_player_refs(speech: str) -> set[str]:
@@ -1557,9 +1215,7 @@ def _durable_statement_clauses(speech: str) -> list[str]:
         if not clause:
             continue
         has_stance = any(term in clause for term in _DURABLE_STATEMENT_TERMS)
-        if (_SEAT_REFERENCE.search(clause) and has_stance) or _ROLE_CLAIM.search(
-            clause
-        ):
+        if (_SEAT_REFERENCE.search(clause) and has_stance) or _ROLE_CLAIM.search(clause):
             clauses.append(clause)
     return clauses
 
@@ -1569,12 +1225,6 @@ def _source_id(value: Any) -> str | None:
         return value
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
-    return None
-
-
-def _positive_int(value: Any) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
     return None
 
 
@@ -1595,11 +1245,9 @@ def _project_value(
 ) -> Any:
     if isinstance(value, dict):
         return {
-            (
-                _project_text(key, players=players)
-                if isinstance(key, str)
-                else key
-            ): _project_value(item, players=players)
+            (_project_text(key, players=players) if isinstance(key, str) else key): _project_value(
+                item, players=players
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):

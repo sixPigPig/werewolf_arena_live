@@ -1152,6 +1152,20 @@ class V2DayEngine:
             game_id=game_id,
             player_id=player.player_id,
         )
+        if player.role_key == "werewolf":
+            private_facts = [
+                *private_facts,
+                {
+                    "fact_type": "living_werewolf_teammates",
+                    "payload": [
+                        item.player_id
+                        for item in state.players
+                        if item.alive
+                        and item.role_key == "werewolf"
+                        and item.player_id != player.player_id
+                    ],
+                },
+            ]
         resolved_contract = decision_contract or (
             V2DecisionContract(kind="speech")
             if output_kind == "public_speech"

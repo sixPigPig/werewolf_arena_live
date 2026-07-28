@@ -97,6 +97,12 @@ describe("V2 game record parsers", () => {
           model_id: "doubao-seed-2-0-lite-260215",
           model_provider: "agent_plan",
           judge_configuration_version: 1,
+          prompt_schema_version: 2,
+          prompt_projection: {
+            serialized_char_count: 3210,
+            recent_statement_count: 3,
+            older_claim_count: 2,
+          },
           status: "succeeded",
           request_payload: {
             model: "doubao-seed-2-0-lite-260215",
@@ -105,6 +111,12 @@ describe("V2 game record parsers", () => {
           input_source: "persisted",
           raw_response: "欢迎来到这场实时狼人杀对局。",
           parsed_output: { speech: "欢迎来到这场实时狼人杀对局。" },
+          passive_observations: [
+            {
+              code: "wolf_cardinality_contradiction",
+              effect: "observed_only",
+            },
+          ],
           output_source: "persisted",
           provider_request_id: "provider-response-test",
           first_token_ms: 12,
@@ -178,6 +190,18 @@ describe("V2 game record parsers", () => {
       input_source: "persisted",
       raw_response: "欢迎来到这场实时狼人杀对局。",
       first_token_ms: 12,
+      prompt_schema_version: 2,
+      prompt_projection: {
+        serialized_char_count: 3210,
+        recent_statement_count: 3,
+        older_claim_count: 2,
+      },
+      passive_observations: [
+        {
+          code: "wolf_cardinality_contradiction",
+          effect: "observed_only",
+        },
+      ],
     });
     expect(result.presentations[0]).toMatchObject({
       presentation_seq: 1,

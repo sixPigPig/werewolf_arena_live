@@ -499,11 +499,14 @@ class AdminV2ModelRequestResponse(BaseModel):
     model_id: str | None
     model_provider: str | None
     judge_configuration_version: int | None
+    prompt_schema_version: int | None
+    prompt_projection: dict[str, Any] | None
     status: Literal["running", "succeeded", "failed"]
     request_payload: dict[str, Any] | None
     input_source: Literal["persisted", "reconstructed", "unavailable"]
     raw_response: str | None
     parsed_output: dict[str, Any] | None
+    passive_observations: list[dict[str, Any]]
     output_source: Literal["persisted", "legacy_inferred", "unavailable"]
     provider_request_id: str | None
     first_token_ms: int | None

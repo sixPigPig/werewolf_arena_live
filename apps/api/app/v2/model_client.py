@@ -604,34 +604,12 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                 {
                     "type": "input_text",
                     "text": (
-                        "你正在扮演一名狼人杀玩家。只根据给出的实时动作上下文做决定，"
-                        "不得使用未提供的私密信息。"
+                        "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
+                        "和 public_state 是权威事实；history 只是玩家公开说法，可能真实、"
+                        "撒谎或判断错误。你可以自主判断、伪装身份和制定策略，但不得使用"
+                        "未提供的私密信息，也不要把玩家说法当成法官确认。"
                         f"{output_instruction}"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
-                        "self_identity 是法官私下确认的当前玩家真实身份；"
-                        "role_capabilities 来自真实角色，public_office_capabilities "
-                        "来自警长等公开职位，两者相加但互不替代，警长职位不会赋予神职能力；"
-                        "ability_runtime_state 描述这些角色能力当前是否已消耗、剩余次数"
-                        "以及本次动作窗口能否执行；current_action_effect 是法官根据冻结"
-                        "规则与当前阶段给出的本次动作机械效果，speech 本身不会产生游戏效果；"
-                        "上下文中的 public_rule_contract 是本局冻结的公开规则；"
-                        "role_information_boundaries 是所有玩家都知道的角色信息可见边界，"
-                        "不代表对应角色已经公开；"
-                        "public_match_state 是法官确认的当前公开存活状态；"
-                        "private_judge_facts 是当前玩家被法官确认知晓的私有事实；"
-                        "public_judge_facts 和 public_role_confirmations 是法官公开确认的事实；"
-                        "canonical_public_timeline 是按 source_event_id 去重后的公开法官事件"
-                        "时间线，public_event_counters 是基于该时间线的确定性计数；"
-                        "同一 source_event_id 在不同字段中出现仍是同一事件，只能计算一次；"
-                        "vote_snapshots 是公开票型但不揭示身份；"
-                        "public_statements 和 player_claims 只是玩家说法，"
-                        "可能真实、撒谎或判断错误。"
-                        "public_statement_ledger 是较早发言中带 source_event_id 的逐字说法"
-                        "片段，同样不是法官事实；history_coverage 描述本次历史投影覆盖范围。"
-                        "普通死亡或放逐不公开身份，只有 public_role_confirmations "
-                        "中的座位属于公开坐实身份。"
-                        "这些信息只界定当前玩家知道什么，如何判断、是否公开私有事实以及"
-                        "采用何种策略均由你自主决定。"
                     ),
                 }
             ],
@@ -977,6 +955,10 @@ def _looks_like_context_echo(value: str) -> bool:
         marker in prefix
         for marker in (
             '"output_contract"',
+            '"hard_rules"',
+            '"public_state"',
+            '"history"',
+            '"self"',
             '"public_rule_contract"',
             '"public_match_state"',
             '"actor_private"',
@@ -1027,6 +1009,10 @@ def _expected_output_fields(output_contract: dict[str, Any]) -> set[str]:
 def _is_context_echo_object(value: dict[str, Any]) -> bool:
     context_fields = {
         "output_contract",
+        "hard_rules",
+        "public_state",
+        "history",
+        "self",
         "public_rule_contract",
         "public_match_state",
         "actor_private",

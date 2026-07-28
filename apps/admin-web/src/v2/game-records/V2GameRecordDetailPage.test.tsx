@@ -125,6 +125,12 @@ const detail = {
       model_id: "doubao-seed-2-0-lite-260215",
       model_provider: "agent_plan",
       judge_configuration_version: 5,
+      prompt_schema_version: 2,
+      prompt_projection: {
+        serialized_char_count: 3210,
+        recent_statement_count: 0,
+        older_claim_count: 0,
+      },
       status: "succeeded",
       request_payload: {
         model: "doubao-seed-2-0-lite-260215",
@@ -177,6 +183,13 @@ const detail = {
       input_source: "persisted",
       raw_response: "夜幕将至，九位玩家请准备。",
       parsed_output: { speech: "夜幕将至，九位玩家请准备。" },
+      passive_observations: [
+        {
+          code: "wolf_cardinality_contradiction",
+          severity: "warning",
+          effect: "observed_only",
+        },
+      ],
       output_source: "persisted",
       provider_request_id: "provider-request-1",
       first_token_ms: 18,
@@ -447,12 +460,20 @@ describe("V2 game record detail workspace", () => {
     expect(within(inputPanel).getByText("对局配置")).toBeVisible();
     expect(within(inputPanel).getByText("九人标准局")).toBeVisible();
     expect(within(inputPanel).getByText("公开发言")).toBeVisible();
+    expect(within(inputPanel).getByText("V2")).toBeVisible();
+    expect(within(inputPanel).getByText("3,210")).toBeVisible();
     expect(
       within(inputPanel).queryByText(/"schema_version"/),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    expect(
+      within(outputPanel).getByText("旁路观察（未影响对局，1 项）"),
+    ).toBeVisible();
+    expect(
+      within(outputPanel).getByText(/不会触发重试、改写、拦截或替换/),
+    ).toBeVisible();
     expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
     expect(
       within(outputPanel).getByText("夜幕将至，九位玩家请准备。"),
