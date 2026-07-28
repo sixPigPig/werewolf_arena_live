@@ -219,10 +219,9 @@ def test_build_tts_session_request_adds_bounded_context_texts() -> None:
         context_texts=["  克制地接话。  ", "", "坚定反问。"],
     )
 
-    assert request["req_params"]["context_texts"] == [
-        "克制地接话。",
-        "坚定反问。",
-    ]
+    assert json.loads(request["req_params"]["additions"]) == {
+        "context_texts": ["克制地接话。"],
+    }
 
 
 def test_build_tts_session_request_omits_empty_context_texts() -> None:
@@ -233,7 +232,43 @@ def test_build_tts_session_request_omits_empty_context_texts() -> None:
         context_texts=["", "   "],
     )
 
-    assert "context_texts" not in request["req_params"]
+    assert "additions" not in request["req_params"]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "explicit_dialect"),
+    [
+        ("sichuan", "sichuan"),
+        ("shaanxi", "shaanxi"),
+        ("northeast", "dongbei"),
+    ],
+)
+def test_build_tts_session_request_uses_documented_explicit_dialect(
+    dialect: str,
+    explicit_dialect: str,
+) -> None:
+    request = build_tts_session_request(
+        speaker="zh_female_vv_uranus_bigtts",
+        audio_format="pcm",
+        sample_rate=24000,
+        context_texts=["使用自然语气。"],
+        dialect=dialect,
+    )
+
+    assert json.loads(request["req_params"]["additions"]) == {
+        "context_texts": ["使用自然语气。"],
+        "explicit_dialect": explicit_dialect,
+    }
+
+
+def test_build_tts_session_request_rejects_unknown_explicit_dialect() -> None:
+    with pytest.raises(ValueError, match="Unsupported Volcengine TTS dialect"):
+        build_tts_session_request(
+            speaker="zh_female_vv_uranus_bigtts",
+            audio_format="pcm",
+            sample_rate=24000,
+            dialect="cantonese",
+        )
 
 
 def test_parse_tts_subtitle_payload_uses_vendor_word_timings() -> None:

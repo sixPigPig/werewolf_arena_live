@@ -172,12 +172,14 @@ class RecordingVoicePreviewTtsClient:
         speaker: str,
         text_chunks: list[str],
         context_texts: list[str] | tuple[str, ...] | None = None,
+        dialect: str = "",
     ) -> AsyncIterator[bytes]:
         self.calls.append(
             {
                 "speaker": speaker,
                 "text_chunks": text_chunks,
                 "context_texts": list(context_texts or ()),
+                "dialect": dialect,
             }
         )
         if self.error is not None:
@@ -985,6 +987,7 @@ def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
             "speaker": "zh_female_vv_uranus_bigtts",
             "text_chunks": ["我先听完这一轮，", "再给出判断。"],
             "context_texts": payload["context_texts"],
+            "dialect": "sichuan",
         }
     ]
 

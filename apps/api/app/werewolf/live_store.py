@@ -1165,6 +1165,11 @@ class DatabaseLiveStore:
                     and isinstance(voice_snapshot.get("effective_context_texts"), list)
                     else None
                 ),
+                "tts_dialect": (
+                    str(voice_snapshot.get("tts_dialect") or "") or None
+                    if voice_snapshot is not None
+                    else None
+                ),
                 "voice_config_version": (
                     voice_snapshot.get("voice_config_version")
                     if voice_snapshot is not None

@@ -58,6 +58,7 @@ class TtsClient(Protocol):
         speaker: str,
         text_chunks: list[str],
         context_texts: list[str] | tuple[str, ...] | None = None,
+        dialect: str = "",
     ) -> AsyncIterator[TtsSynthesisItem]:
         pass
 
@@ -915,6 +916,8 @@ class LiveVoiceStreamService:
             "speaker": utterance.speaker,
             "text_chunks": chunks,
         }
+        if utterance.tts_dialect:
+            synthesize_kwargs["dialect"] = utterance.tts_dialect
         if utterance.effective_context_texts and supports_tts_context_texts(
             resource_id=self.config.resource_id,
             speaker=utterance.speaker,
@@ -2033,6 +2036,7 @@ def _apply_voice_snapshot(
     speaker = snapshot.get("speaker")
     delivery = snapshot.get("effective_delivery")
     context_texts = snapshot.get("effective_context_texts")
+    tts_dialect = snapshot.get("tts_dialect")
     voice_config_version = snapshot.get("voice_config_version")
     mapping_version = snapshot.get("delivery_mapping_version")
     return replace(
@@ -2048,6 +2052,11 @@ def _apply_voice_snapshot(
         )
         if isinstance(context_texts, list)
         else (),
+        tts_dialect=(
+            tts_dialect.strip()
+            if isinstance(tts_dialect, str) and tts_dialect.strip()
+            else ""
+        ),
         voice_config_version=(
             voice_config_version
             if type(voice_config_version) is int and voice_config_version >= 1

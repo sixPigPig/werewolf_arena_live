@@ -29,6 +29,7 @@ class V2MatchPlayer:
     team: str
     alive: bool
     tts_speaker: str | None
+    tts_dialect: str | None
     model_provider: str
     model_id: str | None
     model_parameters: dict[str, Any]
@@ -493,6 +494,9 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
                 team="werewolves" if assignment.role_key == "werewolf" else "villagers",
                 alive=state.alive,
                 tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
+                tts_dialect=(
+                    str(profile["tts_dialect"]) if profile.get("tts_dialect") else None
+                ),
                 model_provider=str(profile["model_provider"]),
                 model_id=str(profile["model"]),
                 model_parameters=dict(profile.get("model_parameters") or {}),

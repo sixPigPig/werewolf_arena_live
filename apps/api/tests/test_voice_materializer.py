@@ -302,12 +302,14 @@ class CapturingTtsClient:
         speaker: str,
         text_chunks: list[str],
         context_texts: list[str] | None = None,
+        dialect: str = "",
     ):
         self.calls.append(
             {
                 "speaker": speaker,
                 "text_chunks": text_chunks,
                 "context_texts": context_texts,
+                "dialect": dialect,
             }
         )
         yield b"\x00\x01" * 2400
@@ -377,9 +379,10 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
             text="我不同意这个票型。",
             voice_snapshot={
                 "enabled": True,
-                "speaker": "zh_female_gaolengyujie_uranus_bigtts",
+                "speaker": "zh_female_vv_uranus_bigtts",
                 "effective_delivery": delivery,
                 "effective_context_texts": contexts,
+                "tts_dialect": "sichuan",
                 "voice_config_version": 7,
                 "delivery_mapping_version": "delivery-v1",
             },
@@ -400,9 +403,10 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
 
     assert client.calls == [
         {
-            "speaker": "zh_female_gaolengyujie_uranus_bigtts",
+            "speaker": "zh_female_vv_uranus_bigtts",
             "text_chunks": ["我不同意这个票型。"],
             "context_texts": contexts,
+            "dialect": "sichuan",
         }
     ]
     utterance_id = deterministic_voice_utterance_id(key[0], key[1], "player")
@@ -410,16 +414,18 @@ def test_dynamic_player_job_uses_enqueue_time_voice_snapshot(
         job = db.get(VoiceMaterializationJobRecord, key)
         utterance = db.get(VoiceUtteranceRecord, utterance_id)
         assert job is not None
-        assert job.speaker == "zh_female_gaolengyujie_uranus_bigtts"
+        assert job.speaker == "zh_female_vv_uranus_bigtts"
         assert job.effective_delivery == delivery
         assert job.effective_context_texts == contexts
+        assert job.tts_dialect == "sichuan"
         assert job.voice_config_version == 7
         assert job.delivery_mapping_version == "delivery-v1"
         assert job.tts_request_source == "committed_speech_segment"
         assert utterance is not None
-        assert utterance.speaker == "zh_female_gaolengyujie_uranus_bigtts"
+        assert utterance.speaker == "zh_female_vv_uranus_bigtts"
         assert utterance.effective_delivery == delivery
         assert utterance.effective_context_texts == contexts
+        assert utterance.tts_dialect == "sichuan"
         assert utterance.voice_config_version == 7
         assert utterance.delivery_mapping_version == "delivery-v1"
         assert utterance.tts_request_source == "committed_speech_segment"
@@ -474,6 +480,7 @@ def test_dynamic_clone_voice_keeps_say_but_omits_unsupported_context_texts(
             "speaker": "S_clone_voice_001",
             "text_chunks": ["这句话仍然应当正常合成。"],
             "context_texts": None,
+            "dialect": "",
         }
     ]
     utterance_id = deterministic_voice_utterance_id(key[0], key[1], "player")

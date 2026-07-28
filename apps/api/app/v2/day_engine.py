@@ -1174,6 +1174,7 @@ class V2DayEngine:
                 actor_id=player.player_id,
                 audience=audience,
                 speaker=player.tts_speaker,
+                dialect=player.tts_dialect,
                 model_provider=player.model_provider,
                 model_id=player.model_id,
                 model_parameters=player.model_parameters,

@@ -46,13 +46,18 @@ from app.v2.role_assignment import V2RoleAssignmentError, assign_private_roles
 from app.v2.tts_client import (
     _AUDIO_SERVER,
     _CONNECTION_STARTED,
+    _FULL_SERVER,
+    _SESSION_FINISHED,
     _START_SESSION,
     _TASK_REQUEST,
     _WITH_EVENT,
+    V2TtsClient,
+    _TtsFrame,
     _decode_frame,
     _encode_event,
     _receive,
 )
+from app.v2 import tts_client as v2_tts
 from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
 
 
@@ -70,6 +75,80 @@ def _identity() -> V2PresentationIdentity:
         storage_key="v2_game_0000000000000001/v2_voice_0000000000000001.wav",
         subtitle_text="欢迎来到这场实时狼人杀对局。",
     )
+
+
+def test_v2_tts_sends_documented_explicit_dialect_in_additions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[tuple[int, dict[str, Any]]] = []
+    frames = iter(
+        [
+            _TtsFrame(message_type=_AUDIO_SERVER, event=None, payload=b"pcm"),
+            _TtsFrame(
+                message_type=_FULL_SERVER,
+                event=_SESSION_FINISHED,
+                payload=b"",
+            ),
+        ]
+    )
+
+    class FakeWebsocket:
+        async def close(self) -> None:
+            return None
+
+    async def connect(*_args: object, **_kwargs: object) -> FakeWebsocket:
+        return FakeWebsocket()
+
+    async def send_event(
+        _websocket: object,
+        event: int,
+        payload: bytes,
+        _session_id: str | None = None,
+    ) -> None:
+        sent.append((event, json.loads(payload)))
+
+    async def expect_event(*_args: object, **_kwargs: object) -> _TtsFrame:
+        return _TtsFrame(
+            message_type=_FULL_SERVER,
+            event=_CONNECTION_STARTED,
+            payload=b"",
+        )
+
+    async def receive(*_args: object, **_kwargs: object) -> _TtsFrame:
+        return next(frames)
+
+    monkeypatch.setattr(v2_tts.websockets, "connect", connect)
+    monkeypatch.setattr(v2_tts, "_send_event", send_event)
+    monkeypatch.setattr(v2_tts, "_expect_event", expect_event)
+    monkeypatch.setattr(v2_tts, "_receive", receive)
+    client = V2TtsClient(
+        enabled=True,
+        api_key="key",
+        resource_id="seed-tts-2.0",
+        ws_url="wss://example.test",
+        speaker="zh_female_vv_uranus_bigtts",
+        sample_rate=24000,
+        first_chunk_seconds=1,
+        idle_seconds=1,
+    )
+
+    async def collect_audio() -> list[bytes]:
+        return [
+            chunk
+            async for chunk in client.synthesize(
+                text="这是一句四川话测试。",
+                attempt_id="v2_tts_test",
+                dialect="northeast",
+            )
+        ]
+
+    audio = asyncio.run(collect_audio())
+
+    assert audio == [b"pcm"]
+    start_session = next(payload for event, payload in sent if event == _START_SESSION)
+    assert json.loads(start_session["req_params"]["additions"]) == {
+        "explicit_dialect": "dongbei"
+    }
 
 
 def test_directed_audience_merges_public_and_private_stage_events_only() -> None:

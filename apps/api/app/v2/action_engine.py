@@ -83,6 +83,7 @@ class V2TtsPort(Protocol):
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        dialect: str | None = None,
         check_cancellation: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]: ...
 
@@ -142,6 +143,7 @@ class V2SpeechSpec:
     actor_id: str = "judge"
     audience: str = "all"
     speaker: str | None = None
+    dialect: str | None = None
     model_provider: str | None = None
     model_id: str | None = None
     model_parameters: dict[str, Any] | None = None
@@ -604,6 +606,7 @@ class V2ActionEngine:
                     "attempt_id": tts_attempt_id,
                     "sentence_ms": sentence_ms,
                     "speaker": speaker,
+                    "dialect": spec.dialect,
                     "judge_configuration_version": (
                         judge_configuration.version if judge_configuration is not None else None
                     ),
@@ -623,6 +626,7 @@ class V2ActionEngine:
                 text=speech_text,
                 attempt_id=tts_attempt_id,
                 speaker=speaker,
+                dialect=spec.dialect,
                 check_cancellation=check_cancellation,
             ):
                 check_cancellation()

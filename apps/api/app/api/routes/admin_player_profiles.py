@@ -114,6 +114,7 @@ class PlayerVoicePreviewTtsClient(Protocol):
         speaker: str,
         text_chunks: list[str],
         context_texts: list[str] | tuple[str, ...] | None = None,
+        dialect: str = "",
     ) -> AsyncIterator[TtsSynthesisItem]: ...
 
 
@@ -220,6 +221,7 @@ async def preview_player_profile_voice(
             speaker=speaker,
             text_chunks=chunk_text_for_tts(request_body.say),
             context_texts=context_texts,
+            dialect=request_body.dialect or "",
         ):
             if not isinstance(item, bytes):
                 continue

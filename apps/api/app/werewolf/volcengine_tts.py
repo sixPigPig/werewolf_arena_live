@@ -32,6 +32,11 @@ TTS_NAMESPACE = "BidirectionalTTS"
 TTS_USER_ID = "werewolf-arena-live"
 CONTEXT_TEXTS_RESOURCE_ID = "seed-tts-2.0"
 _PRESET_BIG_MODEL_SPEAKER_RE = re.compile(r"^[a-z0-9_]+_uranus_bigtts$")
+_EXPLICIT_DIALECTS = {
+    "sichuan": "sichuan",
+    "shaanxi": "shaanxi",
+    "northeast": "dongbei",
+}
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,7 @@ def build_tts_session_request(
     audio_format: str,
     sample_rate: int,
     context_texts: list[str] | tuple[str, ...] | None = None,
+    dialect: str = "",
 ) -> dict[str, Any]:
     request = {
         "user": {"uid": TTS_USER_ID},
@@ -150,9 +156,22 @@ def build_tts_session_request(
         text.strip()[:500]
         for text in context_texts or ()
         if isinstance(text, str) and text.strip()
-    ][:4]
+    ][:1]
+    additions: dict[str, Any] = {}
     if safe_contexts:
-        request["req_params"]["context_texts"] = safe_contexts
+        additions["context_texts"] = safe_contexts
+    normalized_dialect = dialect.strip().lower()
+    if normalized_dialect:
+        try:
+            additions["explicit_dialect"] = _EXPLICIT_DIALECTS[normalized_dialect]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported Volcengine TTS dialect: {dialect}") from exc
+    if additions:
+        request["req_params"]["additions"] = json.dumps(
+            additions,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     return request
 
 
@@ -175,6 +194,7 @@ class VolcengineTtsClient:
         speaker: str,
         text_chunks: list[str],
         context_texts: list[str] | tuple[str, ...] | None = None,
+        dialect: str = "",
     ) -> AsyncIterator[TtsSynthesisItem]:
         if not self.config.available:
             raise RuntimeError("Volcengine TTS is not configured")
@@ -212,6 +232,7 @@ class VolcengineTtsClient:
                 audio_format=self.config.audio_format,
                 sample_rate=self.config.sample_rate,
                 context_texts=context_texts,
+                dialect=dialect,
             )
             await _await_with_timeout(
                 protocol.start_session(

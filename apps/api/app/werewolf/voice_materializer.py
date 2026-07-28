@@ -228,6 +228,7 @@ class VoiceMaterializer:
                         for item in (job.effective_context_texts or [])
                         if isinstance(item, str)
                     ),
+                    tts_dialect=job.tts_dialect or "",
                     voice_config_version=job.voice_config_version,
                     delivery_mapping_version=job.delivery_mapping_version,
                 )
@@ -296,6 +297,8 @@ class VoiceMaterializer:
             "speaker": utterance.speaker,
             "text_chunks": text_chunks,
         }
+        if utterance.tts_dialect:
+            synthesize_kwargs["dialect"] = utterance.tts_dialect
         if utterance.effective_context_texts and supports_tts_context_texts(
             resource_id=self.config.resource_id,
             speaker=utterance.speaker,
@@ -472,6 +475,9 @@ def _equivalent_complete_voice_exists(
             VoiceUtteranceRecord.run_id == utterance.run_id,
             VoiceUtteranceRecord.audience == utterance.audience,
             VoiceUtteranceRecord.speaker_kind == utterance.speaker_kind,
+            VoiceUtteranceRecord.speaker == utterance.speaker,
+            func.coalesce(VoiceUtteranceRecord.tts_dialect, "")
+            == utterance.tts_dialect,
             VoiceUtteranceRecord.status == "complete",
         )
     )

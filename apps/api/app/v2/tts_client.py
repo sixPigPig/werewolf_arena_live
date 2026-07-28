@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import websockets
 
+from app.werewolf.volcengine_tts import build_tts_session_request
+
 
 _FULL_CLIENT = 0x1
 _FULL_SERVER = 0x9
@@ -73,6 +75,7 @@ class V2TtsClient:
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        dialect: str | None = None,
         check_cancellation: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]:
         _check(check_cancellation)
@@ -113,20 +116,17 @@ class V2TtsClient:
                 timeout=8.0,
                 check_cancellation=check_cancellation,
             )
+            session_request = build_tts_session_request(
+                speaker=selected_speaker,
+                audio_format="pcm",
+                sample_rate=self._sample_rate,
+                dialect=dialect or "",
+            )
+            session_request["user"]["uid"] = "werewolf-arena-live-v2"
+            session_request["event"] = _START_SESSION
+            session_request["req_params"]["audio_params"]["enable_subtitle"] = False
             session_payload = json.dumps(
-                {
-                    "user": {"uid": "werewolf-arena-live-v2"},
-                    "event": _START_SESSION,
-                    "namespace": "BidirectionalTTS",
-                    "req_params": {
-                        "speaker": selected_speaker,
-                        "audio_params": {
-                            "enable_subtitle": False,
-                            "format": "pcm",
-                            "sample_rate": self._sample_rate,
-                        },
-                    },
-                },
+                session_request,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode()

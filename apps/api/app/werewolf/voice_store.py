@@ -31,6 +31,7 @@ def text_hash_for_voice(
     sample_rate: int,
     text: str,
     context_texts: tuple[str, ...] | list[str] = (),
+    dialect: str = "",
     delivery_mapping_version: str | None = None,
 ) -> str:
     payload = "\0".join(
@@ -39,6 +40,7 @@ def text_hash_for_voice(
             audio_format,
             str(sample_rate),
             text,
+            dialect,
             delivery_mapping_version or "",
             *context_texts,
         )
@@ -67,6 +69,7 @@ class DatabaseVoiceStore:
             sample_rate=sample_rate,
             text=utterance.text,
             context_texts=utterance.effective_context_texts,
+            dialect=utterance.tts_dialect,
             delivery_mapping_version=utterance.delivery_mapping_version,
         )
         record = self.db.get(VoiceUtteranceRecord, utterance.utterance_id)
@@ -90,6 +93,7 @@ class DatabaseVoiceStore:
                 speaker=utterance.speaker,
                 effective_delivery=utterance.effective_delivery,
                 effective_context_texts=list(utterance.effective_context_texts) or None,
+                tts_dialect=utterance.tts_dialect or None,
                 voice_config_version=utterance.voice_config_version,
                 delivery_mapping_version=utterance.delivery_mapping_version,
                 tts_request_source=utterance.tts_request_source,
@@ -883,6 +887,7 @@ def _raise_for_incompatible_upsert(
             tuple(record.effective_context_texts or ()),
             utterance.effective_context_texts,
         ),
+        ("tts_dialect", record.tts_dialect or "", utterance.tts_dialect),
         ("voice_config_version", record.voice_config_version, utterance.voice_config_version),
         (
             "delivery_mapping_version",

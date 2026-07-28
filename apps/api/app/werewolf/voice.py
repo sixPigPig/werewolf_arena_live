@@ -119,6 +119,7 @@ class VoiceUtterance:
     audience: VoiceAudience = "player_public"
     effective_delivery: dict[str, Any] | None = None
     effective_context_texts: tuple[str, ...] = ()
+    tts_dialect: str = ""
     voice_config_version: int | None = None
     delivery_mapping_version: str | None = None
     tts_request_source: str | None = None

@@ -793,3 +793,16 @@ def test_text_hash_includes_voice_settings() -> None:
         sample_rate=24000,
         text="hello",
     )
+    assert text_hash_for_voice(
+        speaker="speaker-a",
+        audio_format="pcm",
+        sample_rate=24000,
+        text="hello",
+        dialect="sichuan",
+    ) != text_hash_for_voice(
+        speaker="speaker-a",
+        audio_format="pcm",
+        sample_rate=24000,
+        text="hello",
+        dialect="shaanxi",
+    )

@@ -1995,6 +1995,7 @@ class GameEngine:
             payload["voice_snapshot"] = {
                 "enabled": player.voice_enabled,
                 "speaker": player.tts_speaker,
+                "tts_dialect": player.tts_dialect,
                 "effective_delivery": copy.deepcopy(
                     action_log.effective_delivery
                 ),
@@ -5454,6 +5455,7 @@ class GameEngine:
                 parsed_payload["voice_snapshot"] = {
                     "enabled": player.voice_enabled,
                     "speaker": player.tts_speaker,
+                    "tts_dialect": player.tts_dialect,
                     "effective_delivery": copy.deepcopy(
                         action_log.effective_delivery
                     ),
@@ -6577,6 +6579,7 @@ class GameEngine:
         return {
             "enabled": player.voice_enabled,
             "speaker": player.tts_speaker,
+            "tts_dialect": player.tts_dialect,
             "effective_delivery": copy.deepcopy(effective_delivery),
             "effective_context_texts": compile_context_texts(
                 effective_delivery,
@@ -7354,6 +7357,7 @@ class GameEngine:
             {
                 "enabled": player.voice_enabled,
                 "speaker": player.tts_speaker,
+                "tts_dialect": player.tts_dialect,
                 "effective_delivery": copy.deepcopy(effective_delivery),
                 "effective_context_texts": effective_context_texts.copy(),
                 "voice_config_version": player.voice_config_version,

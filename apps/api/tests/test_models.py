@@ -1039,6 +1039,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
         "error_message",
         "effective_delivery",
         "effective_context_texts",
+        "tts_dialect",
         "voice_config_version",
         "delivery_mapping_version",
         "tts_request_source",
@@ -1077,6 +1078,7 @@ def test_voice_utterance_table_matches_expected_schema() -> None:
     _assert_text_column(table.c.error_message, nullable=True)
     _assert_json_column(table.c.effective_delivery, nullable=True)
     _assert_json_column(table.c.effective_context_texts, nullable=True)
+    _assert_string_column(table.c.tts_dialect, length=16, nullable=True)
     assert table.c.voice_config_version.nullable is True
     _assert_string_column(table.c.delivery_mapping_version, length=40, nullable=True)
     _assert_string_column(table.c.tts_request_source, length=40, nullable=True)

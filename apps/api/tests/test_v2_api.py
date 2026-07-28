@@ -186,6 +186,7 @@ class FakeV2TtsClient:
     def __init__(self) -> None:
         self.call_count = 0
         self.speakers: list[str | None] = []
+        self.dialects: list[str | None] = []
         self.first_chunk = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -196,10 +197,12 @@ class FakeV2TtsClient:
         text: str,
         attempt_id: str,
         speaker: str | None = None,
+        dialect: str | None = None,
         check_cancellation: Any = None,
     ) -> AsyncIterator[bytes]:
         self.call_count += 1
         self.speakers.append(speaker)
+        self.dialects.append(dialect)
         assert text.endswith(("。", "！", "？"))
         assert attempt_id.startswith("v2_tts_")
         yield PCM_CHUNK
@@ -1509,7 +1512,12 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
-    created = client.post("/api/v2/games", json=_six_player_create_request())
+    tts_client = client.app.state.v2_test_tts_client
+    create_request = _six_player_create_request()
+    for profile in create_request["lobby_snapshot"]["player_configs"]:
+        profile["tts_speaker"] = "zh_female_vv_uranus_bigtts"
+        profile["tts_dialect"] = "sichuan"
+    created = client.post("/api/v2/games", json=create_request)
     assert created.status_code == 201, created.text
     identifiers = created.json()
 
@@ -1555,6 +1563,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     assert "night.progress_changed" not in god_types
     assert "狼人请睁眼，请依次商议今晚的袭击目标。" in god_texts
     assert "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。" in god_texts
+    assert "sichuan" in tts_client.dialects
     player_contexts = model_client.decision_contexts
     assert player_contexts
     assert any(
