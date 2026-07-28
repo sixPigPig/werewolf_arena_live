@@ -8,7 +8,7 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from app.judge_configuration import RuntimeJudgeConfiguration
@@ -116,6 +116,21 @@ class V2BroadcastPort(Protocol):
 
 
 @dataclass(frozen=True)
+class V2DecisionContract:
+    kind: Literal["speech", "target", "boolean"]
+    speech_mode: Literal[
+        "required",
+        "optional",
+        "forbidden",
+        "required_if_true",
+    ] = "required"
+    target_mode: Literal["none", "required", "optional"] = "none"
+    boolean_field: str | None = None
+    true_meaning: str | None = None
+    false_meaning: str | None = None
+
+
+@dataclass(frozen=True)
 class V2SpeechSpec:
     action_type: str
     phase_id: str
@@ -132,9 +147,9 @@ class V2SpeechSpec:
     model_parameters: dict[str, Any] | None = None
     activation_id: str | None = None
     output_kind: str = "public_speech"
+    decision_contract: V2DecisionContract = V2DecisionContract(kind="speech")
     context: dict[str, Any] | None = None
     allowed_target_ids: tuple[str, ...] | None = None
-    target_optional: bool = False
     model_players: tuple[V2ModelPlayerReference, ...] = ()
 
 
@@ -353,10 +368,11 @@ class V2ActionEngine:
                 model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
                 if model_provider is None or model_id is None:
                     raise V2ModelError("model_not_configured")
+                model_parameters, thinking_source = _action_model_parameters(spec)
                 model_target = self._model_client.resolve_model_target(
                     model_provider=model_provider,
                     model_id=model_id,
-                    model_parameters=spec.model_parameters or {},
+                    model_parameters=model_parameters,
                 )
                 model_context = project_model_action_context(
                     context,
@@ -399,6 +415,7 @@ class V2ActionEngine:
                             "thinking",
                             "default",
                         ),
+                        "thinking_source": thinking_source,
                         "judge_configuration_version": None,
                         "actor_kind": spec.actor_kind,
                         "actor_id": spec.actor_id,
@@ -424,9 +441,13 @@ class V2ActionEngine:
                 model_decision = replace(
                     model_decision,
                     target_player_id=resolved_target,
-                    speech=sanitize_model_speech(
-                        model_decision.speech,
-                        players=spec.model_players,
+                    speech=(
+                        sanitize_model_speech(
+                            model_decision.speech,
+                            players=spec.model_players,
+                        )
+                        if model_decision.speech is not None
+                        else None
                     ),
                 )
                 self._repository.append_event(
@@ -439,6 +460,25 @@ class V2ActionEngine:
                         "first_token_ms": model_decision.first_token_ms,
                     },
                 )
+                parsed_output: dict[str, Any] = {
+                    "target_player_ref": (
+                        original_target if spec.model_players else None
+                    ),
+                    "target_player_id": resolved_target,
+                    "speech": model_decision.speech,
+                }
+                if (
+                    model_decision.boolean_field is not None
+                    and model_decision.boolean_value is not None
+                ):
+                    parsed_output[model_decision.boolean_field] = (
+                        model_decision.boolean_value
+                    )
+                fallback_raw_output = {
+                    key: value
+                    for key, value in parsed_output.items()
+                    if key != "target_player_ref" and value is not None
+                }
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_response_received",
@@ -450,20 +490,12 @@ class V2ActionEngine:
                             model_decision.raw_response
                             if model_decision.raw_response is not None
                             else json.dumps(
-                                {
-                                    "target_player_id": original_target,
-                                    "speech": model_decision.speech,
-                                },
+                                fallback_raw_output,
                                 ensure_ascii=False,
                             )
                         ),
-                        "parsed_output": {
-                            "target_player_ref": (
-                                original_target if spec.model_players else None
-                            ),
-                            "target_player_id": resolved_target,
-                            "speech": model_decision.speech,
-                        },
+                        "parsed_output": parsed_output,
+                        "repair_kind": model_decision.repair_kind,
                         "first_token_ms": model_decision.first_token_ms,
                         "completed_ms": model_decision.completed_ms,
                     },
@@ -471,34 +503,34 @@ class V2ActionEngine:
                 model_request_completed = True
                 normalized_target = resolved_target
                 normalization_reason: str | None = None
-                if spec.allowed_target_ids is None:
+                if spec.decision_contract.kind != "target":
                     if original_target is not None:
                         normalized_target = None
                         normalization_reason = "targetless_action"
                 elif original_target is not None and resolved_target is None:
                     normalized_target = (
                         None
-                        if spec.target_optional
+                        if spec.decision_contract.target_mode == "optional"
                         else _fallback_target(
                             action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids,
+                            allowed_target_ids=spec.allowed_target_ids or (),
                         )
                     )
                     normalization_reason = "target_not_allowed"
                 elif normalized_target is None:
-                    if not spec.target_optional:
+                    if spec.decision_contract.target_mode == "required":
                         normalized_target = _fallback_target(
                             action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids,
+                            allowed_target_ids=spec.allowed_target_ids or (),
                         )
                         normalization_reason = "required_target_missing"
-                elif normalized_target not in spec.allowed_target_ids:
+                elif normalized_target not in (spec.allowed_target_ids or ()):
                     normalized_target = (
                         None
-                        if spec.target_optional
+                        if spec.decision_contract.target_mode == "optional"
                         else _fallback_target(
                             action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids,
+                            allowed_target_ids=spec.allowed_target_ids or (),
                         )
                     )
                     normalization_reason = "target_not_allowed"
@@ -523,6 +555,21 @@ class V2ActionEngine:
                 speech_text = model_decision.speech
                 sentence_ms = model_decision.completed_ms
             check_cancellation()
+            if speech_text is None:
+                self._repository.complete_silent_action(
+                    claim=claim,
+                    next_live_state=spec.success_live_state,
+                    next_phase_state=spec.success_phase_state,
+                )
+                await broadcaster.broadcast_json(
+                    live_state(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        state=spec.success_live_state,
+                    ),
+                    audience=spec.audience,
+                )
+                return V2ActionResult(decision=model_decision)
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
             voice_asset_id = f"v2_voice_{uuid4().hex[:16]}"
@@ -691,15 +738,21 @@ class V2ActionEngine:
             failure_kind, failure_code = _failure(exc)
             if model_attempt_id is not None and not model_request_completed:
                 try:
+                    failure_payload: dict[str, Any] = {
+                        "action_id": claim.action_id,
+                        "attempt_id": model_attempt_id,
+                        "failure_kind": failure_kind,
+                        "failure_code": failure_code,
+                    }
+                    if (
+                        isinstance(exc, V2QualityError)
+                        and exc.raw_response is not None
+                    ):
+                        failure_payload["raw_response"] = exc.raw_response
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_request_failed",
-                        payload={
-                            "action_id": claim.action_id,
-                            "attempt_id": model_attempt_id,
-                            "failure_kind": failure_kind,
-                            "failure_code": failure_code,
-                        },
+                        payload=failure_payload,
                     )
                 except Exception:
                     logger.exception("Live V2 could not persist model request failure")
@@ -770,6 +823,7 @@ def _action_context(
     action_id: str,
     spec: V2SpeechSpec,
 ) -> dict[str, Any]:
+    output_contract = _output_contract(spec)
     return {
         "schema_version": 1,
         "action_id": action_id,
@@ -778,18 +832,7 @@ def _action_context(
         "phase_id": spec.phase_id,
         "actor": {"kind": spec.actor_kind, "id": spec.actor_id},
         "objective": spec.objective,
-        "output_contract": {
-            "kind": spec.output_kind,
-            "language": "zh-CN",
-            "target_policy": (
-                {"mode": "none", "allowed_target_ids": []}
-                if spec.allowed_target_ids is None
-                else {
-                    "mode": "optional" if spec.target_optional else "required",
-                    "allowed_target_ids": list(spec.allowed_target_ids),
-                }
-            ),
-        },
+        "output_contract": output_contract,
         "influence": {
             "schema_version": 1,
             "status": "disabled",
@@ -799,6 +842,84 @@ def _action_context(
         },
         **(spec.context or {}),
     }
+
+
+def _action_model_parameters(
+    spec: V2SpeechSpec,
+) -> tuple[dict[str, Any], str]:
+    parameters = dict(spec.model_parameters or {})
+    if spec.decision_contract.kind == "boolean":
+        parameters["thinking"] = "disabled"
+        return parameters, "action_boolean_policy"
+    return parameters, "model_configuration"
+
+
+def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
+    contract = spec.decision_contract
+    speech: dict[str, Any] = {
+        "type": "string",
+        "mode": contract.speech_mode,
+    }
+    if contract.speech_mode in {"required", "required_if_true"}:
+        speech["min_length"] = 1
+    output: dict[str, Any] = {
+        "kind": contract.kind,
+        "presentation_kind": spec.output_kind,
+        "language": "zh-CN",
+        "speech": speech,
+    }
+    if contract.kind == "speech":
+        output["required_fields"] = (
+            ["speech"] if contract.speech_mode == "required" else []
+        )
+        return output
+    if contract.kind == "target":
+        if contract.target_mode == "none":
+            raise V2LiveProtocolError("target contract requires a target mode")
+        if contract.target_mode == "required" and not spec.allowed_target_ids:
+            raise V2LiveProtocolError(
+                "required target contract requires allowed targets"
+            )
+        output["target_field"] = "target_player_id"
+        output["target_policy"] = {
+            "mode": contract.target_mode,
+            "allowed_target_ids": list(spec.allowed_target_ids or ()),
+        }
+        output["required_fields"] = [
+            *(
+                ["target_player_id"]
+                if contract.target_mode == "required"
+                else []
+            ),
+            *(
+                ["speech"]
+                if contract.speech_mode == "required"
+                else []
+            ),
+        ]
+        return output
+    if not contract.boolean_field:
+        raise V2LiveProtocolError("boolean contract requires a semantic field")
+    output["field"] = contract.boolean_field
+    output["required_fields"] = [
+        contract.boolean_field,
+        *(
+            ["speech"]
+            if contract.speech_mode == "required"
+            else []
+        ),
+    ]
+    output["boolean"] = {
+        "type": "boolean",
+        "true_means": contract.true_meaning,
+        "false_means": contract.false_meaning,
+    }
+    if contract.speech_mode == "required_if_true":
+        speech["condition"] = {
+            "field": contract.boolean_field,
+            "equals": True,
+        }
+    return output
 
 
 def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> str:

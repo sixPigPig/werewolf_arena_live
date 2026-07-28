@@ -4,7 +4,12 @@ from collections import defaultdict
 import logging
 from typing import Any
 
-from app.v2.action_engine import V2ActionEngine, V2BroadcastPort, V2SpeechSpec
+from app.v2.action_engine import (
+    V2ActionEngine,
+    V2BroadcastPort,
+    V2DecisionContract,
+    V2SpeechSpec,
+)
 from app.v2.match_repository import (
     V2ExileResult,
     V2MatchPlayer,
@@ -13,6 +18,7 @@ from app.v2.match_repository import (
 )
 from app.v2.model_context import (
     V2ModelPlayerReference,
+    build_actor_information,
     build_public_match_state,
     build_public_rule_contract,
     private_authoritative_facts,
@@ -258,12 +264,20 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="sheriff_run",
-                objective="决定是否竞选警长；参选则选择自己的 player_id，不参选则为 null",
-                candidates=[player],
-                optional=True,
+                objective="决定是否竞选警长；run_for_sheriff=true 表示参选",
+                candidates=[],
+                optional=False,
                 output_kind="public_decision",
+                decision_contract=V2DecisionContract(
+                    kind="boolean",
+                    boolean_field="run_for_sheriff",
+                    true_meaning="竞选警长",
+                    false_meaning="不竞选警长",
+                ),
             )
-            is_running = decision.target_player_id == player.player_id
+            if not isinstance(decision.boolean_value, bool):
+                raise V2DayRuntimeError("sheriff_run_invalid_decision")
+            is_running = decision.boolean_value
             self._repository.append_event(
                 game_id=game_id,
                 event_type="sheriff_run_decided",
@@ -313,12 +327,20 @@ class V2DayEngine:
                 player=candidate,
                 broadcaster=broadcaster,
                 action_type="sheriff_withdraw",
-                objective="决定是否退水；退水则选择自己的 player_id，不退水则为 null",
-                candidates=[candidate],
-                optional=True,
-                output_kind="public_decision",
+                objective="决定是否退水；withdraw=true 表示退水，false 表示不退水",
+                candidates=[],
+                optional=False,
+                output_kind="sheriff_withdraw_decision",
+                decision_contract=V2DecisionContract(
+                    kind="boolean",
+                    boolean_field="withdraw",
+                    true_meaning="退水",
+                    false_meaning="不退水",
+                ),
             )
-            withdrew = decision.target_player_id == candidate.player_id
+            if not isinstance(decision.boolean_value, bool):
+                raise V2DayRuntimeError("sheriff_withdraw_invalid_decision")
+            withdrew = decision.boolean_value
             self._repository.append_event(
                 game_id=game_id,
                 event_type="sheriff_withdraw_decided",
@@ -790,8 +812,32 @@ class V2DayEngine:
             payload={
                 "round_no": state.round_no,
                 "action_type": action_type,
+                "eligible_voter_ids": [item.player_id for item in voters],
+                "ineligible_voter_ids": [
+                    item.player_id
+                    for item in state.players
+                    if item.alive
+                    and item.player_id not in {voter.player_id for voter in voters}
+                ],
+                "candidate_player_ids": [item.player_id for item in candidates],
+                "weighted": weighted,
+                "sheriff_player_id": state.sheriff_player_id,
+                "sheriff_vote_weight": (
+                    float(state.rule.get("sheriff_vote_weight") or 1)
+                    if weighted and state.sheriff_player_id is not None
+                    else None
+                ),
+                "voter_weights": {
+                    voter.player_id: (
+                        float(state.rule.get("sheriff_vote_weight") or 1)
+                        if weighted and voter.player_id == state.sheriff_player_id
+                        else 1.0
+                    )
+                    for voter in voters
+                },
                 "totals": dict(totals),
                 "leaders": _leaders(dict(totals)),
+                "identity_reveal": "none",
             },
         )
         return dict(totals)
@@ -850,19 +896,45 @@ class V2DayEngine:
         state = self._repository.snapshot(game_id)
         if not bool(state.rule.get("werewolf_self_explosion_enabled")):
             return False
+        action_effect = _self_explosion_action_effect(
+            state=state,
+            stage=stage,
+            pre_sheriff=pre_sheriff,
+        )
+        flow_description = (
+            "当前警长竞选会被中断并按照本局警徽规则处理"
+            if pre_sheriff
+            else "当天剩余流程中止"
+        )
         decision = await self._player_action(
             game_id=game_id,
             player=player,
             broadcaster=broadcaster,
             action_type="werewolf_self_explosion",
-            objective="秘密决定是否现在自爆；自爆则选择自己的 player_id，不自爆则为 null",
-            candidates=[player],
-            optional=True,
+            objective=(
+                "秘密决定是否立即自爆；explode=true 表示立即自爆。"
+                "自爆只会使你本人立即出局并公开确认狼人身份，不会选择、"
+                f"杀死或带走其他玩家；自爆后{flow_description}。"
+            ),
+            candidates=[],
+            optional=False,
             audience="god_view",
             output_kind="private_decision",
-            extra_context={"public_stage": stage},
+            decision_contract=V2DecisionContract(
+                kind="boolean",
+                boolean_field="explode",
+                speech_mode="required_if_true",
+                true_meaning="立即自爆",
+                false_meaning="不自爆",
+            ),
+            extra_context={
+                "public_stage": stage,
+                "current_action_effect": action_effect,
+            },
         )
-        exploded = decision.target_player_id == player.player_id
+        if not isinstance(decision.boolean_value, bool):
+            raise V2DayRuntimeError("werewolf_self_explosion_invalid_decision")
+        exploded = decision.boolean_value
         self._repository.append_event(
             game_id=game_id,
             event_type="werewolf_self_explosion_decided",
@@ -1070,6 +1142,7 @@ class V2DayEngine:
         candidates: list[V2MatchPlayer],
         optional: bool,
         output_kind: str,
+        decision_contract: V2DecisionContract | None = None,
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
     ) -> V2ModelDecision:
@@ -1078,6 +1151,14 @@ class V2DayEngine:
         private_facts = self._repository.private_knowledge(
             game_id=game_id,
             player_id=player.player_id,
+        )
+        resolved_contract = decision_contract or (
+            V2DecisionContract(kind="speech")
+            if output_kind == "public_speech"
+            else V2DecisionContract(
+                kind="target",
+                target_mode="optional" if optional else "required",
+            )
         )
         decision = await self._actions.run_player_decision(
             game_id=game_id,
@@ -1097,12 +1178,12 @@ class V2DayEngine:
                 model_id=player.model_id,
                 model_parameters=player.model_parameters,
                 output_kind=output_kind,
+                decision_contract=resolved_contract,
                 allowed_target_ids=(
-                    None
-                    if output_kind == "public_speech"
-                    else tuple(item.player_id for item in candidates)
+                    tuple(item.player_id for item in candidates)
+                    if resolved_contract.kind == "target"
+                    else None
                 ),
-                target_optional=optional,
                 model_players=tuple(
                     V2ModelPlayerReference(
                         player_id=item.player_id,
@@ -1113,13 +1194,20 @@ class V2DayEngine:
                 ),
                 context={
                     "round_no": state.round_no,
-                    "actor_private": {
-                        "player_id": player.player_id,
-                        "seat": player.seat,
-                        "role_key": player.role_key,
-                        "team": player.team,
-                        "persona": player.persona,
-                    },
+                    **build_actor_information(
+                        player_id=player.player_id,
+                        seat=player.seat,
+                        role_key=player.role_key,
+                        team=player.team,
+                        persona=player.persona,
+                        alive=player.alive,
+                        sheriff_player_id=state.sheriff_player_id,
+                        sheriff_badge_state=state.sheriff_badge_state,
+                        rule=state.rule,
+                        player_state=player.state,
+                        private_facts=private_facts,
+                        current_action_type=action_type,
+                    ),
                     "private_authoritative_facts": private_authoritative_facts(
                         private_facts
                     ),
@@ -1135,7 +1223,7 @@ class V2DayEngine:
                         }
                         for item in candidates
                     ],
-                    "public_history": list(state.public_history[-60:]),
+                    "public_history": list(state.public_history),
                     "sheriff_player_id": state.sheriff_player_id,
                     "public_rule_contract": build_public_rule_contract(
                         rule=state.rule,
@@ -1219,6 +1307,50 @@ def _leaders(totals: dict[str, float]) -> list[str]:
         return []
     highest = max(totals.values())
     return sorted(player_id for player_id, value in totals.items() if value == highest)
+
+
+def _self_explosion_action_effect(
+    *,
+    state: V2MatchSnapshot,
+    stage: str,
+    pre_sheriff: bool,
+) -> dict[str, Any]:
+    if pre_sheriff:
+        policy = str(state.rule.get("sheriff_badge_bomb_policy") or "none")
+        next_explosion_count = state.pre_sheriff_explosion_count + 1
+        badge_result = (
+            "destroyed"
+            if policy == "double" and next_explosion_count >= 2
+            else "pending"
+        )
+        remaining_day_flow = "sheriff_election_interrupted"
+    else:
+        policy = None
+        next_explosion_count = None
+        badge_result = state.sheriff_badge_state
+        remaining_day_flow = "terminated"
+    return {
+        "action_type": "werewolf_self_explosion",
+        "source": "frozen_rules_and_current_stage",
+        "target_mode": "none",
+        "if_executed": {
+            "actor_eliminated": True,
+            "actor_role_publicly_confirmed": "werewolf",
+            "target_allowed": False,
+            "other_players_affected": False,
+            "other_players_eliminated": False,
+            "remaining_day_flow": remaining_day_flow,
+            "sheriff_badge_result": badge_result,
+            "pre_sheriff_explosion_policy": policy,
+            "pre_sheriff_explosion_count_after_action": next_explosion_count,
+        },
+        "public_stage": stage,
+        "speech_has_gameplay_effect": False,
+        "instruction": (
+            "自爆只会让行动狼人本人出局并公开确认狼人身份；"
+            "不会选择、杀死或带走其他玩家，speech 也不会产生额外游戏效果。"
+        ),
+    }
 
 
 def _required_target(decision: V2ModelDecision) -> str:

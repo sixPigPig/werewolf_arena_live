@@ -20,6 +20,7 @@ from app.v2.models import (
     V2GameRecordEvent,
     V2GameRun,
     V2KnowledgeFact,
+    V2LivePresentation,
     V2MatchState,
     V2PlayerState,
     V2RoleAssignment,
@@ -53,6 +54,8 @@ class V2NightRuntimeState:
     snapshot: dict[str, Any]
     rule: dict[str, Any]
     max_rounds: int
+    sheriff_player_id: str | None
+    sheriff_badge_state: str
     players: tuple[V2NightPlayer, ...]
 
     def player(self, player_id: str) -> V2NightPlayer:
@@ -175,6 +178,9 @@ class V2NightRepository:
             )
             players = _players(db, game)
             rule = _compiled_rule(game, snapshot)
+            match = db.get(V2MatchState, game_id)
+            if match is None:
+                raise V2RepositoryError("night match state is missing")
             return V2NightRuntimeState(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
@@ -185,6 +191,8 @@ class V2NightRepository:
                 snapshot=snapshot,
                 rule=rule,
                 max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
+                sheriff_player_id=match.sheriff_player_id,
+                sheriff_badge_state=match.sheriff_badge_state,
                 players=players,
             )
 
@@ -263,7 +271,32 @@ class V2NightRepository:
             if row is None or row.status != "open":
                 raise V2RepositoryError("ability activation is not open")
             knowledge_ids: list[str] = []
-            for owner_scope, owner_id, fact in knowledge:
+            durable_knowledge = list(knowledge)
+            if activation.actor_player_id is not None:
+                durable_knowledge.append(
+                    (
+                        "player",
+                        activation.actor_player_id,
+                        {
+                            "fact_type": "private_ability_action_committed",
+                            "payload": {
+                                "ability_id": activation.ability_id,
+                                "night_no": state.round_no,
+                                "decision": {
+                                    key: value
+                                    for key, value in decision.items()
+                                    if key != "speech"
+                                },
+                                "result": dict(result),
+                                "resolution_scope": (
+                                    "法官已接受本次私有动作；这里只记录动作决定与资源使用，"
+                                    "不额外公开其他玩家身份。"
+                                ),
+                            },
+                        },
+                    )
+                )
+            for owner_scope, owner_id, fact in durable_knowledge:
                 fact_id = f"v2_fact_{uuid4().hex[:16]}"
                 knowledge_ids.append(fact_id)
                 db.add(
@@ -592,6 +625,8 @@ class V2NightRepository:
             snapshot=state.snapshot,
             rule=state.rule,
             max_rounds=state.max_rounds,
+            sheriff_player_id=state.sheriff_player_id,
+            sheriff_badge_state=state.sheriff_badge_state,
             players=self.current_players(state.game_id),
         )
 
@@ -800,13 +835,49 @@ class V2NightRepository:
                         V2GameRecordEvent.event_type.in_(public_types),
                     )
                     .order_by(V2GameRecordEvent.record_seq.desc())
-                    .limit(60)
                 )
             )
             rows.reverse()
-            return [
-                {"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows
+            history = [
+                {
+                    "source_event_id": row.event_id,
+                    "record_seq": row.record_seq,
+                    "event_type": row.event_type,
+                    "payload": dict(row.payload or {}),
+                }
+                for row in rows
             ]
+            presentations = list(
+                db.scalars(
+                    select(V2LivePresentation)
+                    .where(
+                        V2LivePresentation.game_id == game_id,
+                        V2LivePresentation.actor_kind == "player",
+                        V2LivePresentation.audience == "all",
+                        V2LivePresentation.state == "closed",
+                    )
+                    .order_by(V2LivePresentation.source_event_id)
+                )
+            )
+            action_types = _action_types_by_id(db, game_id)
+            history.extend(
+                {
+                    "source_event_id": row.source_event_id,
+                    "record_seq": row.source_event_id,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": _phase_round_no(row.phase_id),
+                        "stage": action_types.get(row.action_id, row.phase_id),
+                        "action_id": row.action_id,
+                        "phase_id": row.phase_id,
+                        "player_id": row.actor_id,
+                        "speech": row.subtitle_text,
+                    },
+                }
+                for row in presentations
+            )
+            history.sort(key=lambda item: int(item["record_seq"]))
+            return history
 
     def current_players(self, game_id: str) -> tuple[V2NightPlayer, ...]:
         with self._session_factory() as db:
@@ -1015,6 +1086,38 @@ def _night_round_no(phase_id: str) -> int:
         if round_no >= 2:
             return round_no
     raise V2RepositoryError("invalid V2 night phase id")
+
+
+def _action_types_by_id(db: Session, game_id: str) -> dict[str, str]:
+    rows = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.event_type == "action_opened",
+            )
+        )
+    )
+    action_types: dict[str, str] = {}
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        context = payload.get("context")
+        if not isinstance(context, dict):
+            continue
+        action_id = payload.get("action_id")
+        action_type = context.get("action_type")
+        if isinstance(action_id, str) and isinstance(action_type, str):
+            action_types[action_id] = action_type
+    return action_types
+
+
+def _phase_round_no(phase_id: str) -> int:
+    if phase_id == "first_night":
+        return 1
+    if "_" in phase_id:
+        value = phase_id.rsplit("_", 1)[-1]
+        if value.isdigit() and int(value) >= 1:
+            return int(value)
+    return 1
 
 
 def _day_round_no(phase_id: str) -> int:

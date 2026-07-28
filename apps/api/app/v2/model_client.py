@@ -7,6 +7,7 @@ import json
 import re
 import time
 from typing import Any
+import unicodedata
 
 import httpx
 
@@ -23,19 +24,23 @@ class V2ModelError(RuntimeError):
 
 
 class V2QualityError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, raw_response: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.raw_response = raw_response
 
 
 @dataclass(frozen=True)
 class V2ModelDecision:
     target_player_id: str | None
-    speech: str
+    speech: str | None
     provider_request_id: str
     first_token_ms: int
     completed_ms: int
     raw_response: str | None = None
+    boolean_field: str | None = None
+    boolean_value: bool | None = None
+    repair_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +154,17 @@ class V2ModelClient:
             target=target,
             check_cancellation=check_cancellation,
         )
-        target_player_id, normalized_speech = _decision_fields(raw)
+        output_contract = action_context.get("output_contract")
+        repair_kind = _decision_repair_kind(raw, output_contract)
+        try:
+            (
+                target_player_id,
+                normalized_speech,
+                boolean_field,
+                boolean_value,
+            ) = _decision_fields(raw, output_contract)
+        except V2QualityError as exc:
+            raise V2QualityError(exc.code, raw_response=raw) from exc
         return V2ModelDecision(
             target_player_id=target_player_id,
             speech=normalized_speech,
@@ -157,6 +172,9 @@ class V2ModelClient:
             first_token_ms=first_token_ms,
             completed_ms=completed_ms,
             raw_response=raw,
+            boolean_field=boolean_field,
+            boolean_value=boolean_value,
+            repair_kind=repair_kind,
         )
 
     async def _stream_text(
@@ -539,6 +557,46 @@ def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
     context_json = json.dumps(action_context, ensure_ascii=False, separators=(",", ":"))
+    output_contract = action_context.get("output_contract")
+    if not isinstance(output_contract, dict):
+        raise V2ModelError("model_decision_contract_missing")
+    kind = output_contract.get("kind")
+    speech_instruction = _speech_output_instruction(output_contract)
+    if kind == "boolean":
+        field = output_contract.get("field")
+        if not isinstance(field, str) or not field.strip():
+            raise V2ModelError("model_decision_contract_invalid")
+        boolean = output_contract.get("boolean")
+        boolean = boolean if isinstance(boolean, dict) else {}
+        output_instruction = (
+            f"输出一个 JSON 对象，决定字段必须是 {field}，且必须为布尔值。"
+            f"true 表示{boolean.get('true_means') or '执行该动作'}，"
+            f"false 表示{boolean.get('false_means') or '不执行该动作'}。"
+            f"{speech_instruction}"
+            "不要输出 target_player_id。"
+        )
+    elif kind == "target":
+        target_policy = output_contract.get("target_policy")
+        target_policy = target_policy if isinstance(target_policy, dict) else {}
+        target_mode = target_policy.get("mode")
+        output_instruction = (
+            "输出一个 JSON 对象，使用 target_player_id 表示目标。"
+            "需要选择目标时，target_player_id 必须是候选列表中的 seat_N 引用；"
+            + (
+                "该动作必须选择一个候选目标。"
+                if target_mode == "required"
+                else "该动作允许放弃，放弃时 target_player_id 为 null。"
+            )
+            + f"{speech_instruction}"
+        )
+    elif kind == "speech":
+        output_instruction = (
+            "输出一个 JSON 对象，只使用 speech 表示本次发言。"
+            f"{speech_instruction}"
+            "不要输出 target_player_id。"
+        )
+    else:
+        raise V2ModelError("model_decision_contract_invalid")
     return [
         {
             "role": "system",
@@ -547,17 +605,31 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                     "type": "input_text",
                     "text": (
                         "你正在扮演一名狼人杀玩家。只根据给出的实时动作上下文做决定，"
-                        "不得使用未提供的私密信息。输出一个 JSON 对象，其中包含"
-                        "target_player_id 和 speech 两个字段。需要选择目标时，"
-                        "target_player_id 必须是候选列表中的 seat_N 引用；无需选择目标或"
-                        "允许放弃时可为 null。严格遵守 output_contract.target_policy；"
-                        "speech 是准备直接播报的自然中文，可以包含多句话。"
+                        "不得使用未提供的私密信息。"
+                        f"{output_instruction}"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
+                        "self_identity 是法官私下确认的当前玩家真实身份；"
+                        "role_capabilities 来自真实角色，public_office_capabilities "
+                        "来自警长等公开职位，两者相加但互不替代，警长职位不会赋予神职能力；"
+                        "ability_runtime_state 描述这些角色能力当前是否已消耗、剩余次数"
+                        "以及本次动作窗口能否执行；current_action_effect 是法官根据冻结"
+                        "规则与当前阶段给出的本次动作机械效果，speech 本身不会产生游戏效果；"
                         "上下文中的 public_rule_contract 是本局冻结的公开规则；"
+                        "role_information_boundaries 是所有玩家都知道的角色信息可见边界，"
+                        "不代表对应角色已经公开；"
                         "public_match_state 是法官确认的当前公开存活状态；"
-                        "private_authoritative_facts 是当前玩家被法官确认知晓的私有事实；"
-                        "authoritative_public_facts 是法官公开确认的事实；"
-                        "public_statements 只是玩家说法，可能真实、撒谎或判断错误。"
+                        "private_judge_facts 是当前玩家被法官确认知晓的私有事实；"
+                        "public_judge_facts 和 public_role_confirmations 是法官公开确认的事实；"
+                        "canonical_public_timeline 是按 source_event_id 去重后的公开法官事件"
+                        "时间线，public_event_counters 是基于该时间线的确定性计数；"
+                        "同一 source_event_id 在不同字段中出现仍是同一事件，只能计算一次；"
+                        "vote_snapshots 是公开票型但不揭示身份；"
+                        "public_statements 和 player_claims 只是玩家说法，"
+                        "可能真实、撒谎或判断错误。"
+                        "public_statement_ledger 是较早发言中带 source_event_id 的逐字说法"
+                        "片段，同样不是法官事实；history_coverage 描述本次历史投影覆盖范围。"
+                        "普通死亡或放逐不公开身份，只有 public_role_confirmations "
+                        "中的座位属于公开坐实身份。"
                         "这些信息只界定当前玩家知道什么，如何判断、是否公开私有事实以及"
                         "采用何种策略均由你自主决定。"
                     ),
@@ -574,6 +646,24 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
             ],
         },
     ]
+
+
+def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
+    speech = output_contract.get("speech")
+    speech = speech if isinstance(speech, dict) else {}
+    mode = speech.get("mode")
+    if mode == "required":
+        return "speech 必须是准备直接播报的非空自然中文，可以包含多句话。"
+    if mode == "optional":
+        return "speech 可省略或为 null；若提供，必须是可直接播报的非空自然中文。"
+    if mode == "forbidden":
+        return "不得输出 speech。"
+    if mode == "required_if_true":
+        return (
+            "决定字段为 true 时 speech 必须是可直接播报的非空自然中文；"
+            "为 false 时不要发言，speech 应省略或为 null。"
+        )
+    raise V2ModelError("model_decision_contract_invalid")
 
 
 def _sse_data(line: str) -> dict[str, Any] | None:
@@ -598,8 +688,18 @@ def _decision_object(raw: str) -> dict[str, Any]:
     if 0 <= start < end:
         candidates.append(raw[start : end + 1])
     for candidate in candidates:
-        repaired = _repair_structural_smart_quotes(candidate)
-        for serialized in dict.fromkeys((candidate, repaired)):
+        delimiter_repaired = _repair_compatibility_key_delimiter(candidate)
+        normalized = _normalize_json_syntax_nfkc(delimiter_repaired)
+        normalized_repaired = _repair_compatibility_key_delimiter(normalized)
+        serialized_candidates = (
+            candidate,
+            _repair_structural_smart_quotes(candidate),
+            normalized,
+            _repair_structural_smart_quotes(normalized),
+            normalized_repaired,
+            _repair_structural_smart_quotes(normalized_repaired),
+        )
+        for serialized in dict.fromkeys(serialized_candidates):
             try:
                 value = json.loads(serialized)
             except json.JSONDecodeError:
@@ -608,6 +708,55 @@ def _decision_object(raw: str) -> dict[str, Any]:
                 return value
             raise V2QualityError("model_decision_invalid_shape")
     raise V2QualityError("model_decision_invalid_json")
+
+
+def _repair_compatibility_key_delimiter(value: str) -> str:
+    return re.sub(
+        (
+            r'(?P<prefix>[{｛,，]\s*)"'
+            r'(?P<key>[A-Za-z_][A-Za-z0-9_]*)'
+            r'(?P<delimiter>[:：])"'
+        ),
+        r'\g<prefix>"\g<key>"\g<delimiter>"',
+        value,
+    )
+
+
+def _normalize_json_syntax_nfkc(value: str) -> str:
+    normalized: list[str] = []
+    in_string = False
+    string_is_key = False
+    escaped = False
+    for char in value:
+        if in_string:
+            if escaped:
+                normalized.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                normalized.append(char)
+                escaped = True
+                continue
+            if char in {'"', "＂"}:
+                normalized.append('"')
+                in_string = False
+                string_is_key = False
+                continue
+            normalized.append(
+                unicodedata.normalize("NFKC", char) if string_is_key else char
+            )
+            continue
+
+        compatible = unicodedata.normalize("NFKC", char)
+        normalized.append(compatible)
+        if compatible == '"':
+            previous = next(
+                (item for item in reversed(normalized[:-1]) if not item.isspace()),
+                "",
+            )
+            in_string = True
+            string_is_key = previous in {"{", ","}
+    return "".join(normalized)
 
 
 def _repair_structural_smart_quotes(value: str) -> str:
@@ -619,24 +768,338 @@ def _repair_structural_smart_quotes(value: str) -> str:
     return re.sub(r"”(?=\s*[,}])", '"', repaired)
 
 
-def _decision_fields(raw: str) -> tuple[str | None, str]:
+def _decision_fields(
+    raw: str,
+    output_contract: Any,
+) -> tuple[str | None, str | None, str | None, bool | None]:
+    if not isinstance(output_contract, dict):
+        raise V2QualityError("model_decision_contract_missing")
+    kind = output_contract.get("kind")
+    if kind == "boolean":
+        field = output_contract.get("field")
+        if not isinstance(field, str) or not field.strip():
+            raise V2QualityError("model_decision_contract_invalid")
+        try:
+            value = _decision_payload(
+                _decision_object(raw),
+                output_contract=output_contract,
+            )
+        except V2QualityError:
+            boolean_value = _boolean_fragment(raw, field=field)
+            if boolean_value is None:
+                raise
+            speech = _fallback_speech(
+                raw,
+                output_contract=output_contract,
+                boolean_value=boolean_value,
+            )
+        else:
+            boolean_value = value.get(field)
+            if not isinstance(boolean_value, bool):
+                raise V2QualityError("model_decision_invalid_boolean")
+            speech = _speech_field(
+                value.get("speech"),
+                output_contract=output_contract,
+                boolean_value=boolean_value,
+            )
+        return None, speech, field, boolean_value
+    if kind == "target":
+        try:
+            value = _decision_object(raw)
+        except V2QualityError:
+            return (
+                _target_fragment(raw),
+                _fallback_speech(raw, output_contract=output_contract),
+                None,
+                None,
+            )
+        value = _decision_payload(value, output_contract=output_contract)
+        target_player_id = value.get("target_player_id")
+        if target_player_id is not None and not (
+            isinstance(target_player_id, str) and target_player_id.strip()
+        ):
+            target_player_id = None
+        speech = _speech_field(
+            value.get("speech"),
+            output_contract=output_contract,
+        )
+        return (
+            target_player_id.strip() if target_player_id else None,
+            speech,
+            None,
+            None,
+        )
+    if kind == "speech":
+        try:
+            value = _decision_object(raw)
+        except V2QualityError:
+            speech = _fallback_speech(raw, output_contract=output_contract)
+        else:
+            value = _decision_payload(value, output_contract=output_contract)
+            speech = _speech_field(
+                value.get("speech"),
+                output_contract=output_contract,
+            )
+        return None, speech, None, None
+    raise V2QualityError("model_decision_contract_invalid")
+
+
+def _decision_repair_kind(raw: str, output_contract: Any) -> str | None:
+    if not isinstance(output_contract, dict):
+        return None
+    if output_contract.get("kind") not in {"boolean", "speech", "target"}:
+        return None
     try:
         value = _decision_object(raw)
     except V2QualityError:
-        return None, _required_speech(
-            raw,
-            error_code="model_decision_invalid_speech",
-        )
-    target_player_id = value.get("target_player_id")
-    if target_player_id is not None and not (
-        isinstance(target_player_id, str) and target_player_id.strip()
-    ):
-        target_player_id = None
-    speech = _required_speech(
-        value.get("speech"),
-        error_code="model_decision_invalid_speech",
+        stripped = _strip_json_fence(raw)
+        if _looks_like_structured_speech(stripped):
+            return "structured_speech_fragment_recovered"
+        return "plain_text_speech_fallback"
+    if isinstance(value.get("output"), dict) or isinstance(value.get("decision"), dict):
+        return "nested_output_object_recovered"
+    if {"schema_version", "action_id", "action_type"}.intersection(value):
+        return "metadata_wrapper_recovered"
+    allowed_fields = _expected_output_fields(output_contract)
+    if allowed_fields.intersection(value) and set(value) - allowed_fields:
+        return "extra_output_fields_ignored"
+    return None
+
+
+def _speech_field(
+    value: Any,
+    *,
+    output_contract: dict[str, Any],
+    boolean_value: bool | None = None,
+) -> str | None:
+    speech_contract = output_contract.get("speech")
+    if not isinstance(speech_contract, dict):
+        raise V2QualityError("model_decision_contract_invalid")
+    mode = speech_contract.get("mode")
+    if mode == "forbidden":
+        if value is None or value == "":
+            return None
+        raise V2QualityError("model_decision_unexpected_speech")
+    if mode == "required_if_true" and boolean_value is False:
+        if value is not None and not isinstance(value, str):
+            raise V2QualityError("model_decision_invalid_speech")
+        return None
+    required = mode == "required" or (
+        mode == "required_if_true" and boolean_value is True
     )
-    return (target_player_id.strip() if target_player_id else None), speech
+    if mode not in {"required", "optional", "required_if_true"}:
+        raise V2QualityError("model_decision_contract_invalid")
+    if value is None:
+        if required:
+            raise V2QualityError("model_decision_invalid_speech")
+        return None
+    if not isinstance(value, str):
+        raise V2QualityError("model_decision_invalid_speech")
+    speech = value.strip()
+    if speech:
+        if _looks_like_structured_speech(speech):
+            raise V2QualityError("model_decision_structured_speech_leak")
+        return speech
+    if required:
+        raise V2QualityError("model_decision_invalid_speech")
+    return None
+
+
+def _fallback_speech(
+    raw: str,
+    *,
+    output_contract: dict[str, Any],
+    boolean_value: bool | None = None,
+) -> str | None:
+    stripped = _strip_json_fence(raw)
+    if _looks_like_context_echo(stripped):
+        raise V2QualityError("model_decision_structured_speech_leak")
+    if _looks_like_structured_speech(stripped):
+        recovered = _json_string_fragment(stripped, field="speech")
+        if recovered is None or _looks_like_structured_speech(recovered):
+            raise V2QualityError("model_decision_structured_speech_leak")
+        return _speech_field(
+            recovered,
+            output_contract=output_contract,
+            boolean_value=boolean_value,
+        )
+    return _speech_field(
+        raw,
+        output_contract=output_contract,
+        boolean_value=boolean_value,
+    )
+
+
+def _boolean_fragment(raw: str, *, field: str) -> bool | None:
+    stripped = _strip_json_fence(raw)
+    if _looks_like_context_echo(stripped):
+        return None
+    match = re.search(
+        rf'"{re.escape(field)}"\s*:\s*(true|false)(?=\s*[,}}])',
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return match.group(1).lower() == "true"
+
+
+def _target_fragment(raw: str) -> str | None:
+    stripped = _strip_json_fence(raw)
+    if _looks_like_context_echo(stripped):
+        return None
+    match = re.search(
+        r'"target_player_id"\s*:\s*"([^"\\]+)"',
+        stripped,
+    )
+    if match is None:
+        return None
+    target = match.group(1).strip()
+    return target or None
+
+
+def _strip_json_fence(raw: str) -> str:
+    stripped = raw.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_newline = stripped.find("\n")
+    if first_newline < 0:
+        return stripped
+    stripped = stripped[first_newline + 1 :]
+    if stripped.rstrip().endswith("```"):
+        stripped = stripped.rstrip()[:-3]
+    return stripped.strip()
+
+
+def _looks_like_context_echo(value: str) -> bool:
+    prefix = value[:1_500]
+    return any(
+        marker in prefix
+        for marker in (
+            '"output_contract"',
+            '"public_rule_contract"',
+            '"public_match_state"',
+            '"actor_private"',
+            '"private_authoritative_facts"',
+            '"self_identity"',
+            '"ability_runtime_state"',
+            '"current_action_effect"',
+            '"private_judge_facts"',
+            '"public_judge_facts"',
+            '"canonical_public_timeline"',
+            '"public_event_counters"',
+            '"current_information_summary"',
+            '"public_statements"',
+        )
+    )
+
+
+def _decision_payload(
+    value: dict[str, Any],
+    *,
+    output_contract: dict[str, Any],
+) -> dict[str, Any]:
+    output = value.get("output")
+    if isinstance(output, dict):
+        return output
+    decision = value.get("decision")
+    if isinstance(decision, dict):
+        return decision
+    if _expected_output_fields(output_contract).intersection(value):
+        return value
+    if _is_context_echo_object(value):
+        raise V2QualityError("model_decision_structured_speech_leak")
+    return value
+
+
+def _expected_output_fields(output_contract: dict[str, Any]) -> set[str]:
+    kind = output_contract.get("kind")
+    if kind == "boolean":
+        field = output_contract.get("field")
+        return {"speech", field} if isinstance(field, str) else {"speech"}
+    if kind == "target":
+        return {"target_player_id", "speech"}
+    if kind == "speech":
+        return {"speech"}
+    return set()
+
+
+def _is_context_echo_object(value: dict[str, Any]) -> bool:
+    context_fields = {
+        "output_contract",
+        "public_rule_contract",
+        "public_match_state",
+        "actor_private",
+        "private_authoritative_facts",
+        "self_identity",
+        "ability_runtime_state",
+        "current_action_effect",
+        "private_judge_facts",
+        "public_judge_facts",
+        "canonical_public_timeline",
+        "public_event_counters",
+        "current_information_summary",
+        "public_statements",
+    }
+    return any(
+        field in value and isinstance(value[field], (dict, list))
+        for field in context_fields
+    )
+
+
+def _looks_like_structured_speech(value: str) -> bool:
+    stripped = value.lstrip()
+    return stripped.startswith(("{", "[", "```json", "```JSON"))
+
+
+def _json_string_fragment(raw: str, *, field: str) -> str | None:
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*"', raw)
+    if match is None:
+        return None
+    value_start = match.end()
+    chars: list[str] = []
+    index = value_start
+    while index < len(raw):
+        char = raw[index]
+        if char == "\\":
+            decoded, next_index = _decode_json_escape(raw, index)
+            chars.append(decoded)
+            index = next_index
+            continue
+        if char == '"':
+            tail = raw[index + 1 :]
+            if re.match(r"\s*(?:[,}])", tail) or not tail.strip():
+                break
+            chars.append(char)
+            index += 1
+            continue
+        chars.append(char)
+        index += 1
+    recovered = "".join(chars).strip()
+    return recovered or None
+
+
+def _decode_json_escape(raw: str, slash_index: int) -> tuple[str, int]:
+    if slash_index + 1 >= len(raw):
+        return "\\", slash_index + 1
+    escape = raw[slash_index + 1]
+    simple = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+    }
+    if escape in simple:
+        return simple[escape], slash_index + 2
+    if escape == "u" and slash_index + 6 <= len(raw):
+        code = raw[slash_index + 2 : slash_index + 6]
+        if re.fullmatch(r"[0-9a-fA-F]{4}", code):
+            return chr(int(code, 16)), slash_index + 6
+    return escape, slash_index + 2
 
 
 def _required_speech(value: Any, *, error_code: str) -> str:

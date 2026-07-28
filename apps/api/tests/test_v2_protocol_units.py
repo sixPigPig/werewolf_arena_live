@@ -6,10 +6,16 @@ import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
+from typing import Any
 import wave
 
 import pytest
 
+from app.v2.action_engine import (
+    V2DecisionContract,
+    V2SpeechSpec,
+    _action_model_parameters,
+)
 from app.v2.director_projection import project_director_scene
 from app.v2.god_view_access import (
     issue_god_view_access_token,
@@ -129,9 +135,29 @@ def test_decision_fields_accept_multi_sentence_text_and_extra_fields() -> None:
 ```json
 {"target_player_id":" player-2 ","speech":"先听二号怎么说。之后我再判断！","note":"ignored"}
 ```"""
-    assert _decision_fields(raw) == (
+    assert _decision_fields(raw, _target_contract()) == (
         "player-2",
         "先听二号怎么说。之后我再判断！",
+        None,
+        None,
+    )
+
+
+def test_decision_fields_ignore_scalar_identity_metadata_from_real_response() -> None:
+    raw = json.dumps(
+        {
+            "target_player_id": "seat_9",
+            "speech": "这一票投给9号。",
+            "self_identity": "villager",
+        },
+        ensure_ascii=False,
+    )
+
+    assert _decision_fields(raw, _target_contract()) == (
+        "seat_9",
+        "这一票投给9号。",
+        None,
+        None,
     )
 
 
@@ -143,27 +169,328 @@ def test_decision_fields_repairs_structural_smart_quote_from_real_response() -> 
 }
 ```"""
 
-    assert _decision_fields(raw) == (
+    assert _decision_fields(raw, _target_contract()) == (
         "system-player-03",
         "3号周野，你先把自己的逻辑补齐。你到底想带什么节奏？",
+        None,
+        None,
     )
 
 
 def test_decision_fields_keep_only_fundamental_failures() -> None:
-    assert _decision_fields("我先保留意见，再听后面的发言。") == (
+    assert _decision_fields(
+        "我先保留意见，再听后面的发言。",
+        _target_contract(),
+    ) == (
         None,
         "我先保留意见，再听后面的发言。",
+        None,
+        None,
     )
-    assert _decision_fields('{"speech":"我先保留意见。"}') == (
+    assert _decision_fields(
+        '{"speech":"我先保留意见。"}',
+        _target_contract(),
+    ) == (
         None,
         "我先保留意见。",
+        None,
+        None,
     )
-    assert _decision_fields('{"target_player_id":3,"speech":"我投三号。"}') == (
+    assert _decision_fields(
+        '{"target_player_id":3,"speech":"我投三号。"}',
+        _target_contract(),
+    ) == (
         None,
         "我投三号。",
+        None,
+        None,
     )
     with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
-        _decision_fields('{"target_player_id":null,"speech":"  "}')
+        _decision_fields(
+            '{"target_player_id":null,"speech":"  "}',
+            _target_contract(),
+        )
+
+
+def test_decision_fields_recovers_clean_speech_from_truncated_json_wrapper() -> None:
+    raw = (
+        '{"speech":"我是7号，今天站边12号。\\n'
+        '2号昨天的票型需要解释，我暂时不会跟票'
+    )
+    assert _decision_fields(raw, {"kind": "speech", "speech": {"mode": "required"}}) == (
+        None,
+        "我是7号，今天站边12号。\n2号昨天的票型需要解释，我暂时不会跟票",
+        None,
+        None,
+    )
+
+
+def test_decision_fields_recovers_target_and_speech_from_truncated_json() -> None:
+    raw = (
+        '{"target_player_id":"seat_4","speech":"我选择查验4号，'
+        "因为他的站边变化最明显"
+    )
+    assert _decision_fields(raw, _target_contract()) == (
+        "seat_4",
+        "我选择查验4号，因为他的站边变化最明显",
+        None,
+        None,
+    )
+
+
+def test_decision_fields_extracts_speech_from_safe_nested_output_wrapper() -> None:
+    raw = json.dumps(
+        {
+            "action_id": "v2_action_real",
+            "action_type": "sheriff_campaign_speech",
+            "output": {"speech": "8号竞选警长，我会把票型和站边讲清楚。"},
+            "actor_id": "seat_8",
+        },
+        ensure_ascii=False,
+    )
+
+    assert _decision_fields(
+        raw,
+        {"kind": "speech", "speech": {"mode": "required"}},
+    ) == (
+        None,
+        "8号竞选警长，我会把票型和站边讲清楚。",
+        None,
+        None,
+    )
+
+
+def test_decision_fields_extracts_target_from_safe_nested_decision_wrapper() -> None:
+    raw = json.dumps(
+        {
+            "action_id": "v2_action_real",
+            "action_type": "ability_witch.heal_decision",
+            "actor": {"kind": "player", "id": "seat_7"},
+            "decision": {"target_player_id": "seat_1"},
+            "speech": None,
+        },
+        ensure_ascii=False,
+    )
+
+    assert _decision_fields(
+        raw,
+        {
+            "kind": "target",
+            "target_policy": {"mode": "optional"},
+            "speech": {"mode": "optional"},
+        },
+    ) == (
+        "seat_1",
+        None,
+        None,
+        None,
+    )
+
+
+def test_decision_fields_extracts_speech_from_safe_metadata_wrapper() -> None:
+    raw = json.dumps(
+        {
+            "schema_version": 1,
+            "action_id": "v2_action_real",
+            "action_type": "day_debate_speech",
+            "speech": "12号接着盘，先把上一轮票型摆出来。",
+        },
+        ensure_ascii=False,
+    )
+
+    assert _decision_fields(
+        raw,
+        {"kind": "speech", "speech": {"mode": "required"}},
+    ) == (
+        None,
+        "12号接着盘，先把上一轮票型摆出来。",
+        None,
+        None,
+    )
+
+
+def test_decision_fields_ignores_structured_metadata_when_output_fields_are_valid() -> None:
+    raw = json.dumps(
+        {
+            "target_player_id": "seat_3",
+            "speech": "今晚建议选择3号。",
+            "self_identity": {
+                "player_id": "seat_1",
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    assert _decision_fields(raw, _target_contract()) == (
+        "seat_3",
+        "今晚建议选择3号。",
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"speech":"{\\"schema_version\\":1,\\"action_id\\":\\"v2_action_echo\\"}"}',
+        '```json\n{"schema_version":1,"output_contract":{"kind":"speech"}',
+    ],
+)
+def test_decision_fields_rejects_structured_context_as_broadcast_speech(
+    raw: str,
+) -> None:
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, {"kind": "speech", "speech": {"mode": "required"}})
+
+
+def test_boolean_decisions_use_semantic_field_and_speech_policy() -> None:
+    withdraw_contract = _boolean_contract("withdraw", "required")
+    assert _decision_fields(
+        '{"withdraw":true,"speech":"9号选择退水。"}',
+        withdraw_contract,
+    ) == (None, "9号选择退水。", "withdraw", True)
+    assert _decision_fields(
+        '{"withdraw":false,"speech":"9号不退水，继续参选。"}',
+        withdraw_contract,
+    ) == (None, "9号不退水，继续参选。", "withdraw", False)
+
+    for raw in (
+        '{"speech":"9号选择退水。"}',
+        '{"withdraw":"true","speech":"9号选择退水。"}',
+        '{"withdraw":null,"speech":"9号选择退水。"}',
+    ):
+        with pytest.raises(V2QualityError, match="model_decision_invalid_boolean"):
+            _decision_fields(raw, withdraw_contract)
+    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+        _decision_fields(
+            '{"withdraw":true,"speech":"  "}',
+            withdraw_contract,
+        )
+
+
+def test_boolean_decision_recovers_real_truncated_json_response() -> None:
+    raw = (
+        '{"run_for_sheriff":true,"speech":"9号上警。'
+        '我会把发言顺序和矛盾一条条捋清楚。"'
+    )
+
+    assert _decision_fields(
+        raw,
+        _boolean_contract("run_for_sheriff", "required"),
+    ) == (
+        None,
+        "9号上警。我会把发言顺序和矛盾一条条捋清楚。",
+        "run_for_sheriff",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_speech"),
+    [
+        (
+            '{"run_for_sheriff"：false，"speech"："12号不上警，先听发言。"}',
+            "12号不上警，先听发言。",
+        ),
+        (
+            '{"run_for_sheriff": false, "speech："我是12号，这轮不上警。"}',
+            "我是12号，这轮不上警。",
+        ),
+    ],
+)
+def test_boolean_decision_nfkc_recovers_fullwidth_json_punctuation(
+    raw: str,
+    expected_speech: str,
+) -> None:
+    assert _decision_fields(
+        raw,
+        _boolean_contract("run_for_sheriff", "required"),
+    ) == (
+        None,
+        expected_speech,
+        "run_for_sheriff",
+        False,
+    )
+
+
+def test_required_if_true_allows_silent_false_but_requires_true_speech() -> None:
+    contract = _boolean_contract("explode", "required_if_true")
+    assert _decision_fields('{"explode":false}', contract) == (
+        None,
+        None,
+        "explode",
+        False,
+    )
+    assert _decision_fields(
+        '{"explode":false,"speech":"我暂时不自爆。"}',
+        contract,
+    ) == (None, None, "explode", False)
+    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+        _decision_fields('{"explode":true}', contract)
+    assert _decision_fields(
+        '{"explode":true,"speech":"我选择自爆！"}',
+        contract,
+    ) == (None, "我选择自爆！", "explode", True)
+
+
+def test_boolean_actions_disable_thinking_without_changing_other_parameters() -> None:
+    parameters, source = _action_model_parameters(
+        V2SpeechSpec(
+            action_type="werewolf_self_explosion",
+            phase_id="day_1",
+            required_phase_state="public_discussion_open",
+            objective="决定是否自爆",
+            success_live_state="ready",
+            success_phase_state="public_discussion_open",
+            model_parameters={"thinking": "enabled", "max_tokens": 16384},
+            decision_contract=V2DecisionContract(
+                kind="boolean",
+                boolean_field="explode",
+                speech_mode="required_if_true",
+            ),
+        )
+    )
+
+    assert parameters == {"thinking": "disabled", "max_tokens": 16384}
+    assert source == "action_boolean_policy"
+
+
+def test_non_boolean_actions_keep_configured_thinking() -> None:
+    parameters, source = _action_model_parameters(
+        V2SpeechSpec(
+            action_type="day_debate_speech",
+            phase_id="day_1",
+            required_phase_state="public_discussion_open",
+            objective="发表分析",
+            success_live_state="ready",
+            success_phase_state="public_discussion_open",
+            model_parameters={"thinking": "enabled", "max_tokens": 16384},
+        )
+    )
+
+    assert parameters == {"thinking": "enabled", "max_tokens": 16384}
+    assert source == "model_configuration"
+
+
+def _target_contract() -> dict[str, Any]:
+    return {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "required"},
+    }
+
+
+def _boolean_contract(field: str, speech_mode: str) -> dict[str, Any]:
+    return {
+        "kind": "boolean",
+        "field": field,
+        "speech": {"mode": speech_mode},
+    }
 
 
 def test_sse_parser_rejects_malformed_provider_events() -> None:

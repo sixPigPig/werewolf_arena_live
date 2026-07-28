@@ -32,6 +32,7 @@ from app.v2.match_repository import V2MatchRepository
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelTarget,
+    V2QualityError,
     build_model_request_payload,
 )
 from app.v2.models import (
@@ -76,6 +77,7 @@ class FakeV2ModelClient:
         self.release.set()
         self.decision_contexts: list[dict[str, Any]] = []
         self.decline_action_types: set[str] = set()
+        self.quality_failure_action_types: set[str] = set()
         self.unexpected_speech_target: str | None = None
 
     def resolve_model_target(
@@ -122,28 +124,61 @@ class FakeV2ModelClient:
         assert attempt_id.startswith("v2_model_")
         assert target.provider == "agent_plan"
         assert target.model_id in {"private-model-id", "test-model"}
+        if action_context["action_type"] in self.quality_failure_action_types:
+            boolean_field = action_context["output_contract"].get("field")
+            raise V2QualityError(
+                "model_decision_invalid_speech",
+                raw_response=json.dumps(
+                    {boolean_field or "decision": True},
+                    separators=(",", ":"),
+                ),
+            )
         candidates = action_context["candidates"]
-        if action_context["action_type"] in self.decline_action_types:
+        output_contract = action_context["output_contract"]
+        boolean_field: str | None = None
+        boolean_value: bool | None = None
+        speech: str | None = (
+            "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。"
+        )
+        if output_contract["kind"] == "boolean":
+            boolean_field = output_contract["field"]
+            boolean_value = (
+                action_context["action_type"] not in self.decline_action_types
+            )
+            target = None
+            if (
+                not boolean_value
+                and output_contract["speech"]["mode"] == "required_if_true"
+            ):
+                speech = None
+        elif action_context["action_type"] in self.decline_action_types:
             target = None
         elif candidates:
             target = candidates[0]["player_id"]
-        elif action_context["output_contract"]["kind"] == "public_speech":
+        elif output_contract["kind"] == "speech":
             target = self.unexpected_speech_target
         else:
             target = None
+        raw_output = (
+            {
+                boolean_field: boolean_value,
+                **({"speech": speech} if speech is not None else {}),
+            }
+            if boolean_field is not None
+            else {
+                "target_player_id": target,
+                "speech": speech,
+            }
+        )
         return V2ModelDecision(
             target_player_id=target,
-            speech="我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。",
+            speech=speech,
             provider_request_id="provider-decision-test",
             first_token_ms=11,
             completed_ms=29,
-            raw_response=json.dumps(
-                {
-                    "target_player_id": target,
-                    "speech": "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。",
-                },
-                ensure_ascii=False,
-            ),
+            raw_response=json.dumps(raw_output, ensure_ascii=False),
+            boolean_field=boolean_field,
+            boolean_value=boolean_value,
         )
 
 
@@ -1536,29 +1571,68 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        "private_authoritative_facts" in context
+        "private_judge_facts" in context
+        and "ability_runtime_state" in context
+        and "current_action_effect" in context
         and "public_match_state" in context
+        and "role_information_boundaries" in context
+        and "canonical_public_timeline" in context
+        and "public_event_counters" in context
         and "information_semantics" in context
         and "public_rules" not in context
         and "allowed_knowledge" not in context
         for context in player_contexts
     )
     assert all(
-        "knowledge" not in context["actor_private"]
+        "knowledge" not in context["self_identity"]
         for context in player_contexts
-        if "actor_private" in context
+        if "self_identity" in context
     )
-    seer_day_contexts = [
+    seer_contexts = [
         context
         for context in player_contexts
-        if context.get("actor_private", {}).get("role_key") == "seer"
+        if context.get("self_identity", {}).get("role_key") == "seer"
     ]
-    assert seer_day_contexts
-    assert any(
-        fact.get("fact_type") == "investigation_alignment"
-        for context in seer_day_contexts
-        for fact in context["private_authoritative_facts"]
+    assert seer_contexts
+    assert all(
+        [
+            item["ability_id"]
+            for item in context["role_capabilities"]["abilities"]
+        ]
+        == ["seer.investigate"]
+        for context in seer_contexts
     )
+    surviving_seer_day_contexts = [
+        context
+        for context in seer_contexts
+        if not context["action_type"].startswith("ability_")
+    ]
+    if surviving_seer_day_contexts:
+        assert any(
+            fact.get("fact_type") == "investigation_alignment"
+            for context in surviving_seer_day_contexts
+            for fact in context["private_judge_facts"]
+        )
+    contexts_after_heal_use = [
+        context
+        for context in player_contexts
+        if any(
+            fact.get("fact_type") == "private_ability_action_committed"
+            and fact.get("payload", {}).get("ability_id") == "witch.heal"
+            and fact.get("payload", {}).get("result", {}).get("heal_used") is True
+            for fact in context["private_judge_facts"]
+        )
+    ]
+    if contexts_after_heal_use:
+        assert all(
+            next(
+                item
+                for item in context["ability_runtime_state"]["abilities"]
+                if item["ability_id"] == "witch.heal"
+            )["resource_status"]
+            == "consumed"
+            for context in contexts_after_heal_use
+        )
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
@@ -1609,6 +1683,14 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         )
         assert len(facts) >= 5
         assert sum(item.fact_type == "investigation_alignment" for item in facts) >= 1
+        assert sum(
+            item.fact_type == "private_ability_action_committed" for item in facts
+        ) >= 4
+        assert all(
+            item.payload["resolution_scope"].startswith("法官已接受本次私有动作")
+            for item in facts
+            if item.fact_type == "private_ability_action_committed"
+        )
         assert all(
             len(item.payload["normalized_sha256"]) == 64
             for item in facts
@@ -1708,20 +1790,25 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         any(
             fact.get("fact_type") == "consensus_rule"
             and "你的选择自动成为团队一致目标" in str(fact.get("payload"))
-            for fact in context["private_authoritative_facts"]
+            for fact in context["private_judge_facts"]
         )
         for context in wolf_night_contexts
+    )
+    assert any(
+        fact.get("fact_type") == "private_ability_action_committed"
+        for context in wolf_night_contexts
+        for fact in context["private_judge_facts"]
     )
     seer_day_contexts = [
         context
         for context in day_contexts
-        if context["actor_private"]["role_key"] == "seer"
+        if context["self_identity"]["role_key"] == "seer"
     ]
     assert seer_day_contexts
     assert any(
         fact.get("fact_type") == "investigation_alignment"
         for context in seer_day_contexts
-        for fact in context["private_authoritative_facts"]
+        for fact in context["private_judge_facts"]
     )
 
 
@@ -1734,7 +1821,11 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
     model_client.decline_action_types.add("werewolf_self_explosion")
     model_client.decline_action_types.add("exile_vote")
     model_client.unexpected_speech_target = "model-added-irrelevant-target"
-    created = client.post("/api/v2/games", json=_advanced_create_request())
+    request = _advanced_create_request()
+    request["lobby_snapshot"]["rule_set"][
+        "werewolf_self_explosion_enabled"
+    ] = True
+    created = client.post("/api/v2/games", json=request)
     assert created.status_code == 201, created.text
     identifiers = created.json()
 
@@ -1796,8 +1887,170 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
         assert "平安夜" not in discussion.payload["text"]
         if "出局" in dawn.payload["text"]:
             assert "平安夜" not in dawn.payload["text"]
-        assert any(
-            context["action_type"] == "sheriff_run" for context in model_client.decision_contexts
+        sheriff_run_contexts = [
+            context
+            for context in model_client.decision_contexts
+            if context["action_type"] == "sheriff_run"
+        ]
+        assert sheriff_run_contexts
+        assert all(
+            context["output_contract"]["kind"] == "boolean"
+            and context["output_contract"]["field"] == "run_for_sheriff"
+            and context["output_contract"]["speech"]["mode"] == "required"
+            for context in sheriff_run_contexts
+        )
+        withdraw_contexts = [
+            context
+            for context in model_client.decision_contexts
+            if context["action_type"] == "sheriff_withdraw"
+        ]
+        assert withdraw_contexts
+        assert all(
+            context["candidates"] == []
+            and context["output_contract"]
+            == {
+                "kind": "boolean",
+                "presentation_kind": "sheriff_withdraw_decision",
+                "language": "zh-CN",
+                "speech": {
+                    "type": "string",
+                    "mode": "required",
+                    "min_length": 1,
+                },
+                "field": "withdraw",
+                "required_fields": ["withdraw", "speech"],
+                "boolean": {
+                    "type": "boolean",
+                    "true_means": "退水",
+                    "false_means": "不退水",
+                },
+            }
+            for context in withdraw_contexts
+        )
+        withdraw_events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                    V2GameRecordEvent.event_type == "sheriff_withdraw_decided",
+                )
+            )
+        )
+        withdraw_responses = [
+            event
+            for event in db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                    V2GameRecordEvent.event_type == "model_response_received",
+                )
+            )
+            if isinstance(event.payload.get("parsed_output"), dict)
+            and isinstance(event.payload["parsed_output"].get("withdraw"), bool)
+        ]
+        assert withdraw_events
+        assert len(withdraw_responses) == len(withdraw_events)
+        assert all(event.payload["withdrew"] is True for event in withdraw_events)
+        assert all(
+            event.payload["parsed_output"]["withdraw"] is True
+            for event in withdraw_responses
+        )
+        self_explosion_responses = [
+            event
+            for event in db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                    V2GameRecordEvent.event_type == "model_response_received",
+                )
+            )
+            if isinstance(event.payload.get("parsed_output"), dict)
+            and event.payload["parsed_output"].get("explode") is False
+        ]
+        assert self_explosion_responses
+        silent_action_ids = {
+            event.payload["action_id"] for event in self_explosion_responses
+        }
+        action_events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game.game_id,
+                )
+            )
+        )
+        assert all(
+            not (
+                event.event_type in {"speech_opened", "tts_stream_started"}
+                and event.payload.get("action_id") in silent_action_ids
+            )
+            for event in action_events
+        )
+        assert silent_action_ids <= {
+            event.payload["action_id"]
+            for event in action_events
+            if event.event_type == "action_succeeded"
+            and event.payload.get("result")
+            == "decision_recorded_without_presentation"
+        }
+        self_explosion_contexts = [
+            context
+            for context in model_client.decision_contexts
+            if context["action_type"] == "werewolf_self_explosion"
+        ]
+        assert self_explosion_contexts
+        assert all(
+            context["output_contract"]["kind"] == "boolean"
+            and context["output_contract"]["field"] == "explode"
+            and context["output_contract"]["speech"]["mode"]
+            == "required_if_true"
+            and context["current_action_effect"]["target_mode"] == "none"
+            and context["current_action_effect"]["if_executed"][
+                "actor_eliminated"
+            ]
+            is True
+            and context["current_action_effect"]["if_executed"][
+                "target_allowed"
+            ]
+            is False
+            and context["current_action_effect"]["if_executed"][
+                "other_players_affected"
+            ]
+            is False
+            and context["current_action_effect"]["if_executed"][
+                "other_players_eliminated"
+            ]
+            is False
+            and context["current_action_effect"]["if_executed"][
+                "remaining_day_flow"
+            ]
+            == (
+                "sheriff_election_interrupted"
+                if context["public_stage"] == "pre_sheriff_election"
+                else "terminated"
+            )
+            and "不会选择、杀死或带走其他玩家"
+            in context["current_action_effect"]["instruction"]
+            and "不会选择、杀死或带走其他玩家" in context["objective"]
+            for context in self_explosion_contexts
+        )
+        ability_contexts = [
+            context
+            for context in model_client.decision_contexts
+            if context["action_type"].startswith("ability_")
+        ]
+        assert ability_contexts
+        assert all(
+            context["output_contract"]["kind"] == "target"
+            for context in ability_contexts
+        )
+        assert all(
+            context["output_contract"]["speech"]["mode"] == (
+                "required"
+                if context["action_type"]
+                in {
+                    "ability_werewolf.attack_decision",
+                    "ability_hunter.death_shot_decision",
+                }
+                else "optional"
+            )
+            for context in ability_contexts
         )
         instances = {
             item.ability_instance_id: item.ability_id
@@ -1873,10 +2126,63 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
     fact_contexts = [
         context
         for context in model_client.contexts
-        if context.get("authoritative_public_facts")
+        if context.get("public_judge_facts")
     ]
     assert fact_contexts
     assert all("public_history" not in context for context in fact_contexts)
+
+
+def test_withdraw_quality_failure_persists_exact_raw_model_response(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.decline_action_types.update(
+        {
+            "ability_witch.heal_decision",
+            "werewolf_self_explosion",
+        }
+    )
+    model_client.quality_failure_action_types.add("sheriff_withdraw")
+    identifiers = client.post("/api/v2/games", json=_advanced_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") == "failed":
+                break
+
+    with session_factory() as db:
+        failure = db.scalar(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == identifiers["game_id"],
+                V2GameRecordEvent.event_type == "model_request_failed",
+            )
+            .order_by(V2GameRecordEvent.record_seq.desc())
+        )
+        assert failure is not None
+        assert failure.payload["failure_code"] == "model_decision_invalid_speech"
+        assert failure.payload["raw_response"] == '{"withdraw":true}'
+
+    assert client.post("/api/v1/admin/dev-login").status_code == 200
+    detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
+    assert detail.status_code == 200, detail.text
+    failed_request = next(
+        request
+        for request in detail.json()["model_requests"]
+        if request["status"] == "failed"
+        and request["action_type"] == "sheriff_withdraw"
+    )
+    assert failed_request["failure_code"] == "model_decision_invalid_speech"
+    assert failed_request["raw_response"] == '{"withdraw":true}'
+    assert failed_request["output_source"] == "persisted"
 
 
 def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> None:

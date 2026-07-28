@@ -12,6 +12,7 @@ from app.v2.models import (
     V2GameRecordEvent,
     V2GameRun,
     V2KnowledgeFact,
+    V2LivePresentation,
     V2MatchState,
     V2PlayerState,
     V2RoleAssignment,
@@ -539,11 +540,71 @@ def _public_history(db: Session, game_id: str) -> tuple[dict[str, Any], ...]:
                 V2GameRecordEvent.event_type.in_(_PUBLIC_HISTORY_TYPES),
             )
             .order_by(V2GameRecordEvent.record_seq.desc())
-            .limit(80)
         )
     )
     rows.reverse()
-    return tuple({"event_type": row.event_type, "payload": dict(row.payload or {})} for row in rows)
+    history = [
+        {
+            "source_event_id": row.event_id,
+            "record_seq": row.record_seq,
+            "event_type": row.event_type,
+            "payload": dict(row.payload or {}),
+        }
+        for row in rows
+    ]
+    presentations = list(
+        db.scalars(
+            select(V2LivePresentation)
+            .where(
+                V2LivePresentation.game_id == game_id,
+                V2LivePresentation.actor_kind == "player",
+                V2LivePresentation.audience == "all",
+                V2LivePresentation.state == "closed",
+            )
+            .order_by(V2LivePresentation.source_event_id)
+        )
+    )
+    action_types = _action_types_by_id(db, game_id)
+    history.extend(
+        {
+            "source_event_id": row.source_event_id,
+            "record_seq": row.source_event_id,
+            "event_type": "public_player_speech_presented",
+            "payload": {
+                "round_no": _round_no(row.phase_id),
+                "stage": action_types.get(row.action_id, row.phase_id),
+                "action_id": row.action_id,
+                "phase_id": row.phase_id,
+                "player_id": row.actor_id,
+                "speech": row.subtitle_text,
+            },
+        }
+        for row in presentations
+    )
+    history.sort(key=lambda item: int(item["record_seq"]))
+    return tuple(history)
+
+
+def _action_types_by_id(db: Session, game_id: str) -> dict[str, str]:
+    rows = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.event_type == "action_opened",
+            )
+        )
+    )
+    action_types: dict[str, str] = {}
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        context = payload.get("context")
+        if not isinstance(context, dict):
+            continue
+        action_id = payload.get("action_id")
+        action_type = context.get("action_type")
+        if isinstance(action_id, str) and isinstance(action_type, str):
+            action_types[action_id] = action_type
+    return action_types
 
 
 def _winner(db: Session, game: V2GameRecord) -> str | None:

@@ -864,6 +864,8 @@ def _admin_model_requests(
         parsed_output = response_payload.get("parsed_output")
         raw_response = response_payload.get("raw_response")
         if not isinstance(raw_response, str):
+            raw_response = failure_payload.get("raw_response")
+        if not isinstance(raw_response, str):
             raw_response = None
         if not isinstance(parsed_output, dict):
             parsed_output = None

@@ -418,6 +418,38 @@ class V2ActionRepository:
                 },
             )
 
+    def complete_silent_action(
+        self,
+        *,
+        claim: V2ActionClaim,
+        next_live_state: str,
+        next_phase_state: str,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, claim.game_id)
+            _raise_if_stop_requested(db, game)
+            if game.status != "generating":
+                raise V2RepositoryError(
+                    f"cannot complete silent action from {game.status}"
+                )
+            if game.phase_id != claim.phase_id:
+                raise V2RepositoryError("action phase changed before completion")
+            game.status = next_live_state
+            game.phase_state = next_phase_state
+            _run(db, claim.run_id).status = next_live_state
+            _append_event(
+                db,
+                game=game,
+                run_id=claim.run_id,
+                event_type="action_succeeded",
+                payload={
+                    "action_id": claim.action_id,
+                    "activation_id": claim.activation_id,
+                    "result": "decision_recorded_without_presentation",
+                    "phase_id": claim.phase_id,
+                },
+            )
+
     def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)

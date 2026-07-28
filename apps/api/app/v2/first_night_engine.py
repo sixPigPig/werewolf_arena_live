@@ -7,11 +7,13 @@ from typing import Any, Awaitable, Callable
 from app.v2.action_engine import (
     V2ActionEngine,
     V2BroadcastPort,
+    V2DecisionContract,
     V2SpeechSpec,
 )
 from app.v2.model_client import V2ModelDecision
 from app.v2.model_context import (
     V2ModelPlayerReference,
+    build_actor_information,
     build_public_match_state,
     build_public_rule_contract,
     private_authoritative_facts,
@@ -879,11 +881,21 @@ class V2NightEngine:
             owner_player_id=player.player_id,
             allowed_knowledge=knowledge,
         )
+        historical_private_facts = self._repository.player_knowledge(
+            game_id=state.game_id,
+            player_id=player.player_id,
+        )
+        current_action_knowledge = {
+            fact_type: payload
+            for fact_type, payload in knowledge.items()
+            if fact_type != "known_investigations"
+        }
+        action_type = f"ability_{activation.ability_id}_decision"
         decision = await self._actions.run_player_decision(
             game_id=state.game_id,
             broadcaster=broadcaster,
             spec=V2SpeechSpec(
-                action_type=f"ability_{activation.ability_id}_decision",
+                action_type=action_type,
                 phase_id=(f"day_{state.round_no}" if audience == "all" else state.phase_id),
                 required_phase_state=(
                     "dawn_reactions_ready" if audience == "all" else "night_running"
@@ -902,8 +914,19 @@ class V2NightEngine:
                 model_parameters=player.model_parameters,
                 activation_id=activation.activation_id,
                 output_kind="decision_and_speech",
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    target_mode="optional" if optional else "required",
+                    speech_mode=(
+                        "required"
+                        if (
+                            audience == "all"
+                            or activation.ability_id == "werewolf.attack"
+                        )
+                        else "optional"
+                    ),
+                ),
                 allowed_target_ids=tuple(item.player_id for item in candidates),
-                target_optional=optional,
                 model_players=tuple(
                     V2ModelPlayerReference(
                         player_id=item.player_id,
@@ -916,10 +939,24 @@ class V2NightEngine:
                     "ability_id": activation.ability_id,
                     "ability_instance_id": activation.ability_instance_id,
                     "activation_id": activation.activation_id,
-                    "actor_profile": player.persona,
-                    "private_authoritative_facts": private_authoritative_facts(
-                        knowledge
+                    **build_actor_information(
+                        player_id=player.player_id,
+                        seat=player.seat,
+                        role_key=player.role_key,
+                        team=player.team,
+                        persona=player.persona,
+                        alive=player.alive,
+                        sheriff_player_id=state.sheriff_player_id,
+                        sheriff_badge_state=state.sheriff_badge_state,
+                        rule=state.rule,
+                        private_facts=historical_private_facts,
+                        current_action_type=action_type,
+                        current_action_knowledge=current_action_knowledge,
                     ),
+                    "private_authoritative_facts": [
+                        *private_authoritative_facts(historical_private_facts),
+                        *private_authoritative_facts(current_action_knowledge),
+                    ],
                     "public_match_state": build_public_match_state(
                         round_no=state.round_no,
                         players=state.players,

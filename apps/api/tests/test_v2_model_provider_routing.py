@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_client import V2ModelClient, V2ModelError
+from app.v2.model_client import V2ModelClient, V2ModelError, V2QualityError
 
 
 def _client(
@@ -32,8 +32,8 @@ def _action_context() -> dict[str, Any]:
         "action_type": "day_speech",
         "candidates": [],
         "output_contract": {
-            "kind": "public_speech",
-            "target_policy": "none",
+            "kind": "speech",
+            "speech": {"mode": "required"},
         },
     }
 
@@ -138,6 +138,109 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["max_tokens"] == 2048
     assert "temperature" not in payload
+
+
+def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "deepseek-withdraw-request-id"},
+            text=(
+                'data: {"id":"chatcmpl-withdraw","choices":[{"delta":'
+                '{"content":"{\\"withdraw\\":true,'
+                '\\"speech\\":\\"9号选择退水。\\"}"}}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context={
+                "action_type": "sheriff_withdraw",
+                "candidates": [],
+                "output_contract": {
+                    "kind": "boolean",
+                    "field": "withdraw",
+                    "boolean": {
+                        "true_means": "退水",
+                        "false_means": "不退水",
+                    },
+                    "speech": {"mode": "required"},
+                    "required_fields": ["withdraw", "speech"],
+                },
+            },
+            attempt_id="v2_model_test_withdraw",
+            target=target,
+        )
+    )
+
+    assert decision.boolean_field == "withdraw"
+    assert decision.boolean_value is True
+    assert decision.target_player_id is None
+    assert decision.speech == "9号选择退水。"
+    payload = json.loads(requests[0].content)
+    system_text = payload["messages"][0]["content"]
+    assert "决定字段必须是 withdraw" in system_text
+    assert "不要输出 target_player_id" in system_text
+
+
+def test_sheriff_withdraw_quality_error_keeps_exact_raw_response() -> None:
+    raw_response = '{"withdraw":true}'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {
+                "id": "chatcmpl-invalid-withdraw",
+                "choices": [{"delta": {"content": raw_response}}],
+            }
+        )
+        return httpx.Response(
+            200,
+            text=f"data: {event}\n\ndata: [DONE]\n\n",
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_invalid_speech",
+    ) as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context={
+                    "action_type": "sheriff_withdraw",
+                    "candidates": [],
+                    "output_contract": {
+                        "kind": "boolean",
+                        "field": "withdraw",
+                        "boolean": {
+                            "true_means": "退水",
+                            "false_means": "不退水",
+                        },
+                        "speech": {"mode": "required"},
+                        "required_fields": ["withdraw", "speech"],
+                    },
+                },
+                attempt_id="v2_model_test_invalid_withdraw",
+                target=target,
+            )
+        )
+
+    assert caught.value.raw_response == raw_response
 
 
 def test_provider_credentials_are_required_without_cross_provider_fallback() -> None:
