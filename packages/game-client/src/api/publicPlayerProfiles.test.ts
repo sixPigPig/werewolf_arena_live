@@ -81,15 +81,15 @@ describe("public player profile endpoints", () => {
     );
   });
 
-  it("merges favorite ids without confusing them with editorial featured state", () => {
+  it("puts viewer favorites first without confusing them with editorial featured state", () => {
     const featured = { ...profile("featured"), featured: true };
     const favorite = profile("favorite");
 
     expect(
       mergePlayerProfileFavorites([featured, favorite], ["favorite"]),
     ).toEqual([
-      { ...featured, is_favorite: false },
       { ...favorite, is_favorite: true },
+      { ...featured, is_favorite: false },
     ]);
   });
 

@@ -5,6 +5,7 @@ import type {
   AdminPlayerProfileList,
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
+  PlayerProfileMoveRequest,
   PlayerProfileOptions,
   PlayerTtsSpeakerOptions,
   PlayerProfileTransitionRequest,
@@ -148,6 +149,7 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
     voice_enabled: true,
     voice_config_version: 3,
     status: "draft",
+    display_order: null,
     version: 2,
     published_at: null,
     published_by: null,
@@ -159,6 +161,7 @@ const FIXTURE_PROFILES: AdminPlayerProfile[] = [
     display_name: "旧夜观星",
     short_description: "已从 C 端下线的历史玩家。",
     status: "archived",
+    display_order: null,
     version: 7,
     published_at: "2026-06-18T08:00:00Z",
     deleted_at: "2026-07-01T08:00:00Z",
@@ -322,7 +325,7 @@ export async function createPreviewPlayerProfile(
   const profile = fixtureProfile({
     ...request,
     id: `preview-created-${previewSequence++}`,
-    display_order: previewProfiles.length + 1,
+    display_order: null,
     status: "draft",
     version: 1,
     created_at: now,
@@ -389,6 +392,10 @@ export async function transitionPreviewPlayerProfile(
       action === "archive"
         ? "archived"
         : "published",
+    display_order:
+      action === "archive"
+        ? null
+        : nextPreviewPublishedDisplayOrder(),
     published_at: action === "archive" ? current.published_at : now,
     deleted_at: action === "archive" ? now : null,
     published_by:
@@ -399,7 +406,48 @@ export async function transitionPreviewPlayerProfile(
     version: current.version + 1,
   };
   replacePreviewProfile(updated);
+  if (action === "archive") {
+    normalizePreviewPublishedDisplayOrder();
+  }
   return cloneProfile(updated);
+}
+
+export async function movePreviewPlayerProfile(
+  profileId: string,
+  request: PlayerProfileMoveRequest,
+) {
+  const current = findPreviewProfile(profileId);
+  assertVersion(current, request.expected_version);
+  if (current.status !== "published") {
+    throw invalidState("只有已发布玩家可以调整 C 端顺序。");
+  }
+  const published = previewProfiles
+    .filter((profile) => profile.status === "published")
+    .toSorted(
+      (left, right) =>
+        (left.display_order ?? Number.MAX_SAFE_INTEGER) -
+        (right.display_order ?? Number.MAX_SAFE_INTEGER),
+    );
+  const currentIndex = published.findIndex((profile) => profile.id === profileId);
+  const targetIndex = currentIndex + (request.direction === "up" ? -1 : 1);
+  if (targetIndex < 0 || targetIndex >= published.length) {
+    return cloneProfile(current);
+  }
+  [published[currentIndex], published[targetIndex]] = [
+    published[targetIndex],
+    published[currentIndex],
+  ];
+  const now = new Date().toISOString();
+  published.forEach((profile, index) => {
+    replacePreviewProfile({
+      ...profile,
+      display_order: index + 1,
+      updated_at: now,
+      updated_by: "preview-super-admin",
+      version: profile.version + 1,
+    });
+  });
+  return cloneProfile(findPreviewProfile(profileId));
 }
 
 export function resetPreviewPlayerProfiles() {
@@ -547,8 +595,34 @@ function compareProfiles(
   const multiplier = direction === "asc" ? 1 : -1;
   const leftValue = left[field];
   const rightValue = right[field];
+  if (leftValue === null) return 1;
+  if (rightValue === null) return -1;
   if (typeof leftValue === "number" && typeof rightValue === "number") {
     return (leftValue - rightValue) * multiplier;
   }
   return String(leftValue).localeCompare(String(rightValue), "zh-Hans-CN") * multiplier;
+}
+
+function nextPreviewPublishedDisplayOrder() {
+  return (
+    Math.max(
+      0,
+      ...previewProfiles
+        .filter((profile) => profile.status === "published")
+        .map((profile) => profile.display_order ?? 0),
+    ) + 1
+  );
+}
+
+function normalizePreviewPublishedDisplayOrder() {
+  previewProfiles
+    .filter((profile) => profile.status === "published")
+    .toSorted(
+      (left, right) =>
+        (left.display_order ?? Number.MAX_SAFE_INTEGER) -
+        (right.display_order ?? Number.MAX_SAFE_INTEGER),
+    )
+    .forEach((profile, index) => {
+      replacePreviewProfile({ ...profile, display_order: index + 1 });
+    });
 }

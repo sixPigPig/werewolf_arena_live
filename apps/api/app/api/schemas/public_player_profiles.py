@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.schemas.common import PaginationResponse
 
@@ -25,7 +25,7 @@ class PublicPlayerProfileResponse(BaseModel):
     leadership_tendency: int
     talkativeness: int
     example_messages: list[str]
-    display_order: int
+    display_order: int = Field(ge=1)
     featured: bool
     tags: list[str]
 

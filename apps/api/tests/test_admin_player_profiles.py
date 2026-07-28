@@ -303,6 +303,7 @@ def test_admin_create_is_draft_and_uses_exact_safe_response_contract(
     assert payload["published_at"] is None
     assert payload["published_by"] is None
     assert payload["featured"] is False
+    assert payload["display_order"] is None
     assert {
         "favorite",
         "owner_user_id",
@@ -516,16 +517,19 @@ def test_lifecycle_controls_public_visibility_versions_and_audit(
     assert published["version"] == 2
     assert published["published_at"] is not None
     assert published["published_by"] == "1"
+    assert published["display_order"] == 1
     assert visible.status_code == 200
     assert archived["status"] == "archived"
     assert archived["version"] == 3
     assert archived["deleted_at"] is not None
     assert archived["featured"] is False
+    assert archived["display_order"] is None
     assert hidden_again.status_code == 404
     assert restored["status"] == "published"
     assert restored["version"] == 4
     assert restored["deleted_at"] is None
     assert restored["published_at"] != published["published_at"]
+    assert restored["display_order"] == 1
     assert visible_again.status_code == 200
 
     with context.session_factory() as db:
@@ -542,6 +546,83 @@ def test_lifecycle_controls_public_visibility_versions_and_audit(
         "admin.player_profile.archive",
         "admin.player_profile.restore",
     ]
+
+
+def test_admin_move_archive_and_restore_maintain_dense_public_order(
+    context: AdminProfilesContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, csrf_token = _login(context, monkeypatch)
+    drafts = [
+        _create_draft(context, csrf_token, display_name=name)
+        for name in ("一号", "二号", "三号")
+    ]
+    assert [draft["display_order"] for draft in drafts] == [None, None, None]
+
+    published = [
+        _transition(context, csrf_token, draft, "publish")
+        for draft in drafts
+    ]
+    assert [profile["display_order"] for profile in published] == [1, 2, 3]
+
+    moved = context.client.post(
+        f"/api/v1/admin/player-profiles/{published[2]['id']}/move",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "expected_version": published[2]["version"],
+            "direction": "up",
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["display_order"] == 2
+
+    after_move = context.client.get(
+        "/api/v1/admin/player-profiles",
+        params={"page_size": 100, "sort": "display_order"},
+    ).json()["items"]
+    assert [profile["display_name"] for profile in after_move] == [
+        "一号",
+        "三号",
+        "二号",
+    ]
+    assert [profile["display_order"] for profile in after_move] == [1, 2, 3]
+
+    archived = _transition(context, csrf_token, moved.json(), "archive")
+    assert archived["display_order"] is None
+    after_archive = context.client.get(
+        "/api/v1/admin/player-profiles",
+        params={"page_size": 100, "sort": "display_order"},
+    ).json()["items"]
+    published_after_archive = [
+        profile for profile in after_archive if profile["status"] == "published"
+    ]
+    assert [profile["display_name"] for profile in published_after_archive] == [
+        "一号",
+        "二号",
+    ]
+    assert [profile["display_order"] for profile in published_after_archive] == [1, 2]
+
+    restored = _transition(context, csrf_token, archived, "restore")
+    assert restored["display_order"] == 3
+    public_items = context.client.get(
+        "/api/v1/public/player-profiles?page_size=100"
+    ).json()["items"]
+    assert [profile["display_name"] for profile in public_items] == [
+        "一号",
+        "二号",
+        "三号",
+    ]
+    assert [profile["display_order"] for profile in public_items] == [1, 2, 3]
+
+    with context.session_factory() as db:
+        move_audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "admin.player_profile.move",
+                AuditEvent.resource_id == published[2]["id"],
+            )
+        )
+    assert move_audit is not None
+    assert move_audit.result == "success"
 
 
 def test_stale_update_returns_409_current_version_and_audits_both_versions(
@@ -1049,6 +1130,7 @@ def test_mapper_version_rejects_a_real_two_session_lost_update(tmp_path) -> None
                     model=_model_name(),
                     status="published",
                     published_at=datetime.now(UTC),
+                    display_order=1,
                 ),
             ]
         )
@@ -1320,6 +1402,7 @@ def test_admin_requires_an_existing_unconfigured_model_to_be_replaced(
                 model="retired-model",
                 status="published",
                 published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         db.commit()
@@ -1378,13 +1461,10 @@ def test_public_response_is_published_only_and_recursively_omits_internal_fields
                     personality_id="balanced",
                     personality_text="公开人格",
                     appearance_id="default",
-                    avatar_prompt="internal prompt",
                     avatar_image_url="https://legacy.example/avatar.png",
-                    avatar_image_path="/secret/path.png",
                     avatar_image_mime="image/png",
                     status="published",
                     published_at=now,
-                    owner_user_id=42,
                     display_order=1,
                 ),
                 VirtualPlayerProfile(
@@ -1394,7 +1474,7 @@ def test_public_response_is_published_only_and_recursively_omits_internal_fields
                     model="legacy-model",
                     status="draft",
                     published_at=None,
-                    display_order=2,
+                    display_order=None,
                 ),
             ]
         )
@@ -1437,6 +1517,7 @@ def test_admin_never_returns_legacy_external_avatar_url(
                 avatar_image_url="https://tracker.example/avatar.png",
                 status="published",
                 published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         db.commit()
@@ -1449,7 +1530,7 @@ def test_admin_never_returns_legacy_external_avatar_url(
     assert response.json()["avatar_image_url"] == ""
 
 
-def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
+def test_legacy_gate_blocks_content_writes_by_default(
     context: AdminProfilesContext,
 ) -> None:
     with context.session_factory() as db:
@@ -1461,6 +1542,7 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
                 model="legacy-model",
                 status="published",
                 published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         db.commit()
@@ -1477,10 +1559,6 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
         "/api/v1/player-profiles/legacy-profile",
         json={"display_name": "匿名篡改"},
     )
-    favorite_patch = context.client.patch(
-        "/api/v1/player-profiles/legacy-profile",
-        json={"favorite": True},
-    )
     delete = context.client.delete("/api/v1/player-profiles/legacy-profile")
     avatar = context.client.post(
         "/api/v1/player-profiles/avatar",
@@ -1493,7 +1571,6 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
 
     assert create.status_code == 403
     assert content_patch.status_code == 403
-    assert favorite_patch.status_code == 403
     assert delete.status_code == 403
     assert avatar.status_code == 403
     assert ai_draft.status_code == 403
@@ -1501,7 +1578,6 @@ def test_legacy_gate_blocks_content_and_favorite_writes_by_default(
         persisted = db.get(VirtualPlayerProfile, "legacy-profile")
     assert persisted is not None
     assert persisted.display_name == "兼容玩家"
-    assert persisted.favorite is False
     assert persisted.version == 1
 
 
@@ -1608,6 +1684,7 @@ def test_legacy_delete_soft_archives_when_explicitly_enabled(
                 model="legacy-model",
                 status="published",
                 published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         db.commit()

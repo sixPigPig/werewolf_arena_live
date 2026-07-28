@@ -33,10 +33,17 @@ export function mergePlayerProfileFavorites(
   favoriteProfileIds: Iterable<string>,
 ): PublicPlayerProfileWithFavorite[] {
   const favoriteIds = new Set(favoriteProfileIds);
-  return profiles.map((profile) => ({
-    ...profile,
-    is_favorite: favoriteIds.has(profile.id),
-  }));
+  return profiles
+    .map((profile) => ({
+      ...profile,
+      is_favorite: favoriteIds.has(profile.id),
+    }))
+    .sort(
+      (left, right) =>
+        Number(right.is_favorite) - Number(left.is_favorite) ||
+        left.display_order - right.display_order ||
+        left.id.localeCompare(right.id),
+    );
 }
 
 function fetchPublicPlayerProfilePage(

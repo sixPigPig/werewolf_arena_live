@@ -197,7 +197,6 @@ def test_settings_disable_admin_development_auth_by_default() -> None:
     assert "http://localhost:5175" in settings.cors_origins
     assert "http://127.0.0.1:5175" in settings.cors_origins
     assert settings.legacy_player_profile_content_writes_enabled is False
-    assert settings.legacy_player_profile_favorite_writes_enabled is False
     assert settings.legacy_judge_voice_generation_enabled is False
     assert settings.werewolf_speech_quality_retry_enabled is True
     assert settings.werewolf_action_budgets_enabled is True
@@ -208,16 +207,6 @@ def test_settings_reject_legacy_player_profile_content_writes_in_production(
 ) -> None:
     monkeypatch.setenv("APP_ENVIRONMENT", "production")
     monkeypatch.setenv("LEGACY_PLAYER_PROFILE_CONTENT_WRITES_ENABLED", "true")
-
-    with pytest.raises(ValidationError, match="cannot be enabled in production"):
-        Settings(_env_file=None)
-
-
-def test_settings_reject_legacy_player_profile_favorite_writes_in_production(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("APP_ENVIRONMENT", "production")
-    monkeypatch.setenv("LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED", "true")
 
     with pytest.raises(ValidationError, match="cannot be enabled in production"):
         Settings(_env_file=None)

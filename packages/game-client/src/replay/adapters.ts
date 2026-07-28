@@ -69,7 +69,6 @@ function normalizePlayers(players: RawGameReplayResponse["state"]["players"]) {
     personality_id: player.personality_id ?? "balanced",
     personality: player.personality ?? "",
     appearance_id: player.appearance_id ?? "default",
-    avatar_prompt: player.avatar_prompt ?? "",
     avatar_image_url: player.avatar_image_url ?? "",
     profile_id: player.profile_id ?? null,
     tags: player.tags ?? [],

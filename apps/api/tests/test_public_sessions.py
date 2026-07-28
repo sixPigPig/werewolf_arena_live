@@ -43,7 +43,6 @@ def public_context(monkeypatch: pytest.MonkeyPatch) -> PublicTestContext:
     monkeypatch.setattr(settings, "public_cors_origins", [MOBILE_ORIGIN])
     monkeypatch.setattr(settings, "cors_origins", [MOBILE_ORIGIN])
     monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", False)
-    monkeypatch.setattr(settings, "legacy_player_profile_favorite_writes_enabled", False)
     public_session_creation_limiter.reset()
     public_favorite_write_limiter.reset()
 
@@ -115,7 +114,6 @@ def _seed_profiles(context: PublicTestContext) -> None:
                     model="test-model",
                     status="published",
                     published_at=now,
-                    favorite=True,
                     featured=True,
                     display_order=17,
                     avatar_image_url="https://tracker.example/avatar.png",
@@ -295,7 +293,6 @@ def test_favorites_are_isolated_idempotent_and_never_mutate_global_profile(
         profile = db.get(VirtualPlayerProfile, "published-profile")
         favorites = list(db.scalars(select(UserFavoritePlayerProfile)))
     assert profile is not None
-    assert profile.favorite is True
     assert profile.featured is True
     assert profile.display_order == 17
     assert profile.version == 1

@@ -286,7 +286,6 @@ class Player:
     personality_id: str = "balanced"
     personality: str = ""
     appearance_id: str = "default"
-    avatar_prompt: str = ""
     avatar_image_url: str = ""
     profile_id: str | None = None
     tts_speaker: str = ""
@@ -320,7 +319,6 @@ class Player:
             "personality_id": self.personality_id,
             "personality": self.personality,
             "appearance_id": self.appearance_id,
-            "avatar_prompt": self.avatar_prompt,
             "avatar_image_url": self.avatar_image_url,
             "profile_id": self.profile_id,
             "tts_speaker": self.tts_speaker,

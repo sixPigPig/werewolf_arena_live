@@ -97,14 +97,17 @@ function PlayerDossier({ favoriteStateAvailable, profile }: PlayerDossierProps) 
           </span>
         )}
         <div className="mobile-player-detail-copy">
-          <span>
-            {favoriteStateAvailable
-              ? profile.is_favorite
-                ? "收藏档案"
-                : "普通档案"
-              : profile.featured
-                ? "精选档案"
-                : "玩家档案"}
+          <span className="mobile-player-badges">
+            {profile.featured ? (
+              <span className="mobile-player-featured">推荐</span>
+            ) : null}
+            {favoriteStateAvailable && profile.is_favorite ? (
+              <span className="mobile-player-favorite">收藏</span>
+            ) : null}
+            {!profile.featured &&
+            (!favoriteStateAvailable || !profile.is_favorite) ? (
+              <span>玩家档案</span>
+            ) : null}
           </span>
           <h2>{profile.display_name}</h2>
           <p>{profile.short_description || "暂无简介"}</p>

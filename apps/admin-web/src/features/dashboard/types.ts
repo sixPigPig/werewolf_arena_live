@@ -109,7 +109,6 @@ export type AdminSettings = {
   };
   compatibility: {
     legacy_content_writes_enabled: boolean;
-    legacy_favorite_writes_enabled: boolean;
     legacy_voice_generation_enabled: boolean;
   };
   workers: {

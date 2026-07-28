@@ -220,7 +220,9 @@ export function LobbyLineupSection({
 
             return (
               <button
-                aria-label={`选择 ${seat} 号座位，当前为 ${displayName}`}
+                aria-label={`选择 ${seat} 号座位，当前为 ${displayName}${
+                  profile?.featured ? "，管理端推荐" : ""
+                }`}
                 aria-pressed={activeSeat === seat}
                 className={[
                   "mobile-lobby-seat-card",
@@ -252,6 +254,9 @@ export function LobbyLineupSection({
                 <span className="mobile-lobby-seat-number">
                   {String(seat).padStart(2, "0")}
                 </span>
+                {profile?.featured ? (
+                  <span className="mobile-lobby-seat-featured">推荐</span>
+                ) : null}
                 <strong>{displayName}</strong>
               </button>
             );

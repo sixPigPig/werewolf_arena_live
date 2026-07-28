@@ -1,23 +1,28 @@
-import Alert from "antd/es/alert";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Result from "antd/es/result";
 import Space from "antd/es/space";
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAdminSession } from "@/features/auth/session-context";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function ForbiddenPage() {
+  const { notification } = AntApp.useApp();
   const navigate = useNavigate();
   const { error, logout, pendingAction, session } = useAdminSession();
-  const [logoutFailed, setLogoutFailed] = useState(false);
 
   async function handleLogout() {
-    setLogoutFailed(false);
     try {
       await logout();
-    } catch {
-      setLogoutFailed(true);
+    } catch (logoutError) {
+      notification.error({
+        description: adminOperationErrorDescription(
+          logoutError,
+          "退出失败，请稍后重试。",
+        ),
+        title: "退出失败",
+      });
     }
   }
 
@@ -44,9 +49,6 @@ export default function ForbiddenPage() {
           <Space orientation="vertical" size={8}>
             <span>当前后台身份无权访问这个页面。如果工作职责已变更，请联系超级管理员调整权限。</span>
             {error?.requestId ? <small>请求编号：{error.requestId}</small> : null}
-            {logoutFailed ? (
-              <Alert role="alert" title={error?.message ?? "退出失败，请稍后重试。"} type="error" />
-            ) : null}
           </Space>
         }
         title={<h1 id="forbidden-title">没有访问权限</h1>}

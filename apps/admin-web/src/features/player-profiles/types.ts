@@ -33,7 +33,7 @@ export type AdminPlayerProfile = {
   base_delivery_instruction?: string | null;
   voice_enabled?: boolean;
   voice_config_version?: number;
-  display_order: number;
+  display_order: number | null;
   featured: boolean;
   tags: string[];
   status: PlayerProfileStatus;
@@ -125,6 +125,11 @@ export type UpdatePlayerProfileRequest = Partial<PlayerProfileEditableFields> & 
 export type PlayerProfileTransitionRequest = {
   expected_version: number;
   reason: string;
+};
+
+export type PlayerProfileMoveRequest = {
+  expected_version: number;
+  direction: "up" | "down";
 };
 
 export type PlayerVoicePreviewDeliveryInput = {

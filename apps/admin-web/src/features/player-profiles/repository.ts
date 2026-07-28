@@ -7,6 +7,7 @@ import {
   getPlayerProfileOptions,
   getPlayerTtsSpeakerOptions,
   listAdminPlayerProfiles,
+  moveAdminPlayerProfile,
   previewAdminPlayerProfileVoice,
   transitionAdminPlayerProfile,
   updateAdminPlayerProfile,
@@ -18,6 +19,7 @@ import {
   getPreviewPlayerProfileOptions,
   getPreviewPlayerTtsSpeakerOptions,
   listPreviewPlayerProfiles,
+  movePreviewPlayerProfile,
   previewPlayerProfileVoice,
   transitionPreviewPlayerProfile,
   updatePreviewPlayerProfile,
@@ -26,6 +28,7 @@ import { useAdminSession } from "@/features/auth/session-context";
 import type {
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
+  PlayerProfileMoveRequest,
   PlayerProfileTransitionRequest,
   PlayerVoicePreviewRequest,
   UpdatePlayerProfileRequest,
@@ -70,6 +73,10 @@ export function usePlayerProfileRepository() {
         runtimeMode === "preview"
           ? updatePreviewPlayerProfile(profileId, request)
           : updateAdminPlayerProfile(profileId, request, csrfToken),
+      move: (profileId: string, request: PlayerProfileMoveRequest) =>
+        runtimeMode === "preview"
+          ? movePreviewPlayerProfile(profileId, request)
+          : moveAdminPlayerProfile(profileId, request, csrfToken),
       transition: (
         profileId: string,
         action: "archive" | "publish" | "restore",

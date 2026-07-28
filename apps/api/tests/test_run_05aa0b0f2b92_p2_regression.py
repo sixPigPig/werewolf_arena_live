@@ -38,7 +38,6 @@ def _config(
         personality_id=personality_id,
         personality="",
         appearance_id="default",
-        avatar_prompt="",
         tags=(),
         avatar_asset_id=avatar_asset_id,
         catchphrases=(catchphrase,),

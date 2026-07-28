@@ -12,6 +12,7 @@ import type {
   AdminPlayerProfileList,
   CreatePlayerProfileRequest,
   PlayerProfileListParams,
+  PlayerProfileMoveRequest,
   PlayerProfileOptions,
   PlayerTtsSpeakerOptions,
   PlayerProfileTransitionRequest,
@@ -141,10 +142,27 @@ export async function transitionAdminPlayerProfile(
   );
 }
 
+export async function moveAdminPlayerProfile(
+  profileId: string,
+  request: PlayerProfileMoveRequest,
+  csrfToken: string,
+) {
+  return writePlayerProfile(
+    `${PLAYER_PROFILES_PATH}/${encodeURIComponent(profileId)}/move`,
+    "POST",
+    request,
+    csrfToken,
+  );
+}
+
 async function writePlayerProfile(
   path: string,
   method: "PATCH" | "POST",
-  body: CreatePlayerProfileRequest | PlayerProfileTransitionRequest | UpdatePlayerProfileRequest,
+  body:
+    | CreatePlayerProfileRequest
+    | PlayerProfileMoveRequest
+    | PlayerProfileTransitionRequest
+    | UpdatePlayerProfileRequest,
   csrfToken: string,
 ) {
   const value = await adminApiFetch<unknown>(path, {

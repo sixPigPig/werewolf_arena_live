@@ -15,6 +15,16 @@ const SORT_FIELDS: PlayerProfileSortField[] = [
 export function playerProfileListParamsFromSearch(
   searchParams: URLSearchParams,
 ): PlayerProfileListParams {
+  const sort =
+    enumValue(searchParams.get("sort"), SORT_FIELDS) ?? "display_order";
+  const requestedDirection = searchParams.get("direction");
+  const direction =
+    requestedDirection === "asc" || requestedDirection === "desc"
+      ? requestedDirection
+      : sort === "updated_at" || sort === "created_at"
+        ? "desc"
+        : "asc";
+
   return {
     page: positiveInteger(searchParams.get("page"), 1),
     page_size: boundedPageSize(searchParams.get("page_size")),
@@ -22,9 +32,8 @@ export function playerProfileListParamsFromSearch(
     status: enumValue(searchParams.get("status"), STATUSES),
     model: optionalValue(searchParams.get("model")),
     personality_id: optionalValue(searchParams.get("personality_id")),
-    sort:
-      enumValue(searchParams.get("sort"), SORT_FIELDS) ?? "updated_at",
-    direction: searchParams.get("direction") === "asc" ? "asc" : "desc",
+    sort,
+    direction,
   };
 }
 

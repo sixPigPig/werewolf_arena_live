@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -273,7 +274,6 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
             "personality_id": "cautious",
             "appearance_id": "moonlit",
             "personality_text": "   ",
-            "avatar_prompt": "  silver moon portrait  ",
             "tags": [" 控场 ", "夜晚", "控场", "", " 夜晚 "],
         },
     )
@@ -285,9 +285,7 @@ def test_create_profile_normalizes_and_fills_defaults() -> None:
     assert payload["personality_id"] == "cautious"
     assert payload["personality_text"] == default_personality_text("cautious")
     assert payload["appearance_id"] == "moonlit"
-    assert payload["avatar_prompt"] == "silver moon portrait"
     assert payload["tags"] == ["控场", "夜晚"]
-    assert payload["owner_user_id"] is None
 
     with TestingSessionLocal() as session:
         profiles = session.query(VirtualPlayerProfile).all()
@@ -319,7 +317,34 @@ def test_create_profile_returns_rich_character_defaults() -> None:
     assert payload["leadership_tendency"] == 3
     assert payload["talkativeness"] == 3
     assert payload["example_messages"] == []
-    assert payload["favorite"] is False
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("favorite", True),
+        ("owner_user_id", 7),
+        ("avatar_prompt", "unused prompt"),
+        ("avatar_image_path", "/tmp/unused.png"),
+    ],
+)
+def test_legacy_create_rejects_removed_profile_fields(
+    field_name: str,
+    value: object,
+) -> None:
+    response = client.post(
+        "/api/v1/player-profiles",
+        json={
+            "display_name": "旧字段测试",
+            "model_provider": TEST_MODEL_PROVIDER,
+            "model": "deepseek-v4-flash",
+            field_name: value,
+        },
+    )
+
+    assert response.status_code == 422
+    with TestingSessionLocal() as session:
+        assert session.query(VirtualPlayerProfile).count() == 0
 
 
 def test_upload_avatar_image_returns_database_asset_url() -> None:
@@ -697,7 +722,6 @@ def test_patch_profile_binds_database_avatar_asset_id() -> None:
     assert stored is not None
     assert stored.avatar_asset_id == uploaded["avatar_asset_id"]
     assert stored.avatar_image_url == uploaded["avatar_image_url"]
-    assert stored.avatar_image_path == ""
 
 
 def test_patch_profile_binds_database_avatar_asset_from_explicit_url() -> None:
@@ -777,7 +801,6 @@ def test_patch_profile_clears_database_avatar_asset_when_set_to_null() -> None:
     assert stored.avatar_asset_id is None
     assert stored.avatar_image_url == ""
     assert stored.avatar_image_mime == ""
-    assert stored.avatar_image_path == ""
 
 
 def test_patch_profile_normalizes_legacy_system_avatar_url() -> None:
@@ -858,20 +881,17 @@ def test_patch_profile_rejects_legacy_file_url() -> None:
     )
 
 
-def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> None:
+def test_patch_display_name_only_preserves_unresolved_avatar_url() -> None:
     with TestingSessionLocal() as session:
         profile = VirtualPlayerProfile(
             id="profile-with-missing-legacy-avatar",
-            owner_user_id=None,
             display_name="旧头像字段玩家",
             model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
             appearance_id="default",
-            avatar_prompt="",
             avatar_image_url="/api/v1/player-profiles/avatar/missing.png",
-            avatar_image_path="legacy/path/missing.png",
             avatar_image_mime="image/png",
             avatar_asset_id=None,
             short_description="",
@@ -885,8 +905,10 @@ def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> Non
             leadership_tendency=3,
             talkativeness=3,
             example_messages=[],
-            favorite=False,
             tags=[],
+            status="published",
+            published_at=datetime.now(UTC),
+            display_order=1,
         )
         session.add(profile)
         session.commit()
@@ -911,7 +933,6 @@ def test_patch_display_name_only_preserves_missing_legacy_avatar_fields() -> Non
     assert stored.avatar_asset_id is None
     assert stored.avatar_image_url == "/api/v1/player-profiles/avatar/missing.png"
     assert stored.avatar_image_mime == "image/png"
-    assert stored.avatar_image_path == "legacy/path/missing.png"
 
 
 def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> None:
@@ -925,16 +946,13 @@ def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> No
         )
         profile = VirtualPlayerProfile(
             id="profile-with-db-avatar-to-preserve",
-            owner_user_id=None,
             display_name="DB 头像字段玩家",
             model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
             appearance_id="default",
-            avatar_prompt="",
             avatar_image_url="/legacy/stored-url.png",
-            avatar_image_path="legacy/path/stored.png",
             avatar_image_mime="image/png",
             avatar_asset_id=asset.id,
             short_description="",
@@ -948,8 +966,10 @@ def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> No
             leadership_tendency=3,
             talkativeness=3,
             example_messages=[],
-            favorite=False,
             tags=[],
+            status="published",
+            published_at=datetime.now(UTC),
+            display_order=1,
         )
         session.add(profile)
         session.commit()
@@ -976,7 +996,6 @@ def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> No
     assert stored.avatar_asset_id == "uploaded-preserve-on-name-change"
     assert stored.avatar_image_url == "/legacy/stored-url.png"
     assert stored.avatar_image_mime == "image/png"
-    assert stored.avatar_image_path == "legacy/path/stored.png"
 
 
 def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
@@ -990,16 +1009,13 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
         )
         profile = VirtualPlayerProfile(
             id="profile-with-stale-avatar-url",
-            owner_user_id=None,
             display_name="旧 URL 玩家",
             model_provider=TEST_MODEL_PROVIDER,
             model="gpt-4.1-mini",
             personality_id="balanced",
             personality_text="custom text",
             appearance_id="default",
-            avatar_prompt="",
             avatar_image_url="/api/v1/player-profiles/avatar/stale.png",
-            avatar_image_path="",
             avatar_image_mime="image/png",
             avatar_asset_id=asset.id,
             short_description="",
@@ -1013,8 +1029,10 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
             leadership_tendency=3,
             talkativeness=3,
             example_messages=[],
-            favorite=False,
             tags=[],
+            status="published",
+            published_at=datetime.now(UTC),
+            display_order=1,
         )
         session.add(profile)
         session.commit()
@@ -1070,93 +1088,6 @@ def test_list_profiles_keeps_default_order_after_profile_updates() -> None:
     assert profiles[0]["display_name"] == updated_a["display_name"]
 
 
-def test_patch_favorite_moves_profile_when_legacy_favorite_flag_is_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "legacy_player_profile_favorite_writes_enabled", True)
-    created_a = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "A",
-            "model_provider": TEST_MODEL_PROVIDER,
-            "model": "model-a",
-        },
-    ).json()
-    created_b = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "B",
-            "model_provider": TEST_MODEL_PROVIDER,
-            "model": "model-b",
-        },
-    ).json()
-    created_c = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "C",
-            "model_provider": TEST_MODEL_PROVIDER,
-            "model": "model-c",
-        },
-    ).json()
-
-    favorite_response = client.patch(
-        f"/api/v1/player-profiles/{created_b['id']}",
-        json={"favorite": True},
-    )
-
-    assert favorite_response.status_code == 200
-    assert favorite_response.json()["favorite"] is True
-    assert favorite_response.json()["display_order"] == 1
-    response = client.get("/api/v1/player-profiles")
-    assert response.status_code == 200
-    favorite_profiles = response.json()["profiles"]
-    assert [profile["id"] for profile in favorite_profiles] == [
-        created_b["id"],
-        created_a["id"],
-        created_c["id"],
-    ]
-    assert [profile["display_order"] for profile in favorite_profiles] == [1, 2, 3]
-
-    unfavorite_response = client.patch(
-        f"/api/v1/player-profiles/{created_b['id']}",
-        json={"favorite": False},
-    )
-
-    assert unfavorite_response.status_code == 200
-    assert unfavorite_response.json()["favorite"] is False
-    assert unfavorite_response.json()["display_order"] == 3
-    response = client.get("/api/v1/player-profiles")
-    assert response.status_code == 200
-    unfavorite_profiles = response.json()["profiles"]
-    assert [profile["id"] for profile in unfavorite_profiles] == [
-        created_a["id"],
-        created_c["id"],
-        created_b["id"],
-    ]
-    assert [profile["display_order"] for profile in unfavorite_profiles] == [1, 2, 3]
-
-
-def test_patch_favorite_is_disabled_by_default() -> None:
-    created = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "A",
-            "model_provider": TEST_MODEL_PROVIDER,
-            "model": "model-a",
-        },
-    ).json()
-
-    response = client.patch(
-        f"/api/v1/player-profiles/{created['id']}",
-        json={"favorite": True},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == (
-        "Legacy player profile favorite writes are disabled"
-    )
-
-
 def test_get_patch_delete_profile() -> None:
     created = client.post(
         "/api/v1/player-profiles",
@@ -1202,7 +1133,7 @@ def test_get_patch_delete_profile() -> None:
     assert missing_response.json()["detail"] == "Player profile not found"
 
 
-@pytest.mark.parametrize("field_name", ["display_name", "model", "avatar_prompt", "tags"])
+@pytest.mark.parametrize("field_name", ["display_name", "model", "tags"])
 def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None:
     created = client.post(
         "/api/v1/player-profiles",
@@ -1213,7 +1144,6 @@ def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None
             "personality_id": "balanced",
             "personality_text": "custom text",
             "appearance_id": "default",
-            "avatar_prompt": "moonlit portrait",
             "tags": ["old"],
         },
     ).json()
@@ -1241,14 +1171,6 @@ def test_patch_profile_rejects_null_non_nullable_fields(field_name: str) -> None
         (
             {"display_name": "Valid", "model": "gpt-4.1-mini", "appearance_id": "neon"},
             "Unknown appearance_id: neon",
-        ),
-        (
-            {
-                "display_name": "Valid",
-                "model": "gpt-4.1-mini",
-                "avatar_prompt": "x" * 1001,
-            },
-            None,
         ),
         (
             {
@@ -1351,7 +1273,6 @@ def test_create_profile_persists_rich_character_settings() -> None:
             "leadership_tendency": 5,
             "talkativeness": 4,
             "example_messages": ["我认为 3 号这一轮的视角不完整，先听后置位补充。"],
-            "favorite": True,
         },
     )
 
@@ -1363,7 +1284,6 @@ def test_create_profile_persists_rich_character_settings() -> None:
     assert payload["risk_tolerance"] == 2
     assert payload["leadership_tendency"] == 5
     assert payload["example_messages"] == ["我认为 3 号这一轮的视角不完整，先听后置位补充。"]
-    assert payload["favorite"] is True
 
 
 def test_create_profile_normalizes_rich_character_lists() -> None:
@@ -1559,7 +1479,6 @@ def test_patch_profile_persists_rich_character_settings() -> None:
             "leadership_tendency": 5,
             "talkativeness": 4,
             "example_messages": ["这一轮我会先压 7 号解释票型。"],
-            "favorite": True,
         },
     )
 
@@ -1576,7 +1495,6 @@ def test_patch_profile_persists_rich_character_settings() -> None:
     assert patched["leadership_tendency"] == 5
     assert patched["talkativeness"] == 4
     assert patched["example_messages"] == ["这一轮我会先压 7 号解释票型。"]
-    assert patched["favorite"] is True
 
     with TestingSessionLocal() as session:
         stored = session.get(VirtualPlayerProfile, created["id"])
@@ -1587,4 +1505,3 @@ def test_patch_profile_persists_rich_character_settings() -> None:
     assert stored.strategy_profile == "pressure_attacker"
     assert stored.risk_tolerance == 4
     assert stored.example_messages == ["这一轮我会先压 7 号解释票型。"]
-    assert stored.favorite is True

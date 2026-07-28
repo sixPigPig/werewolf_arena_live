@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { previewJudgeConfiguration } from "@/features/judge-configuration/preview";
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute() {
@@ -95,7 +96,7 @@ describe("admin judge configuration flow", () => {
     );
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 
-    await screen.findByText("法官配置已保存");
+    await expectAdminNotification("法官配置已保存");
     const patch = fetchMock.mock.calls.find(
       ([input, init]) =>
         String(input).endsWith("/api/v1/admin/judge-configuration") &&

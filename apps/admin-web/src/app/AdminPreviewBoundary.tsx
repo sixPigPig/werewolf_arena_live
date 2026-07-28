@@ -17,7 +17,7 @@ export function AdminPreviewBoundary() {
       theme={adminTheme}
       wave={{ disabled: true }}
     >
-      <AntApp component={false}>
+      <AntApp component={false} notification={{ placement: "bottomRight" }}>
         <AdminRuntimeBoundary runtimeMode={runtimeMode} />
       </AntApp>
     </ConfigProvider>

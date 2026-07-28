@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, text, update
+from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -193,7 +193,7 @@ def test_game_profile_selection_only_uses_published_profiles() -> None:
                     model="model-a",
                     status="draft",
                     published_at=None,
-                    display_order=2,
+                    display_order=None,
                 ),
                 VirtualPlayerProfile(
                     id="archived-for-game",
@@ -203,7 +203,7 @@ def test_game_profile_selection_only_uses_published_profiles() -> None:
                     status="archived",
                     published_at=datetime.now(UTC),
                     deleted_at=datetime.now(UTC),
-                    display_order=3,
+                    display_order=None,
                 ),
             ]
         )
@@ -235,9 +235,10 @@ def test_game_profile_config_drops_unmanaged_external_avatar_url() -> None:
                 display_name="旧外链头像玩家",
                 model_provider="deepseek",
                 model="model-a",
-                avatar_image_url="https://tracker.example/avatar.png",
-                status="published",
-                published_at=datetime.now(UTC),
+                    avatar_image_url="https://tracker.example/avatar.png",
+                    status="published",
+                    published_at=datetime.now(UTC),
+                    display_order=1,
             )
         )
         session.commit()
@@ -304,6 +305,9 @@ def add_virtual_profiles(
         "gothic-female-2",
     ]
     with TestingSessionLocal() as session:
+        first_display_order = (
+            session.query(func.max(VirtualPlayerProfile.display_order)).scalar() or 0
+        )
         session.add_all(
             [
                 VirtualPlayerProfile(
@@ -322,8 +326,10 @@ def add_virtual_profiles(
                     appearance_id=(
                         appearances[(index - 1) % len(appearances)] if diverse else "default"
                     ),
-                    avatar_prompt="",
                     tags=[],
+                    status="published",
+                    published_at=datetime.now(UTC),
+                    display_order=first_display_order + index,
                 )
                 for index, profile_id in enumerate(profile_ids, start=1)
             ]
@@ -2396,11 +2402,13 @@ def test_create_game_run_resolves_profile_configs(
                 personality_id="cautious",
                 personality_text="谨慎控场，避免过早暴露身份。",
                 appearance_id="gothic-female-2",
-                avatar_prompt="silver moon portrait",
                 avatar_image_url="/player-avatars/gothic-female-2.png",
                 avatar_image_mime="image/png",
                 avatar_asset_id="system-gothic-female-2",
                 tags=["控场"],
+                status="published",
+                published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         session.commit()
@@ -2461,7 +2469,6 @@ def test_create_game_run_resolves_profile_configs(
         "personality_id": "aggressive",
         "personality": expected_personality,
         "appearance_id": "crimson",
-        "avatar_prompt": "silver moon portrait",
         "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
         "avatar_asset_id": "system-gothic-female-2",
         "catchphrases": [],
@@ -2702,7 +2709,6 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                 "personality_id": "cautious",
                 "personality": "谨慎控场。",
                 "appearance_id": "moonlit",
-                "avatar_prompt": "silver moon portrait",
                 "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
                 "avatar_asset_id": None,
                 "catchphrases": [],
@@ -2768,7 +2774,6 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
             "personality_id": "cautious",
             "personality": "谨慎控场。",
             "appearance_id": "moonlit",
-            "avatar_prompt": "silver moon portrait",
             "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
             "avatar_asset_id": None,
             "catchphrases": [],

@@ -84,7 +84,6 @@ export function parseAdminSettings(value: unknown): AdminSettings {
     },
     compatibility: {
       legacy_content_writes_enabled: booleanValue(compatibility.legacy_content_writes_enabled, "legacy_content_writes_enabled"),
-      legacy_favorite_writes_enabled: booleanValue(compatibility.legacy_favorite_writes_enabled, "legacy_favorite_writes_enabled"),
       legacy_voice_generation_enabled: booleanValue(compatibility.legacy_voice_generation_enabled, "legacy_voice_generation_enabled"),
     },
     workers: {

@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Checkbox from "antd/es/checkbox";
 import Input from "antd/es/input";
 import InputNumber from "antd/es/input-number";
@@ -12,7 +13,7 @@ import { cleanRuleSetInput, defaultRuleSetInput, formErrorsFromApi, inputFromRul
 import { ruleSetKeys } from "./query-keys";
 import { useRuleSetRepository } from "./repository";
 import RuleSetTransitionDialog from "./RuleSetTransitionDialog";
-import { presentRuleSetError, type RuleSetErrorContext } from "./error-presentation";
+import { presentRuleSetError } from "./error-presentation";
 import type { AdminRuleSetDetail, RuleContract, RuleContractClause, RuleSetOptions, RuleSetStatus, RuleSetValidation, RuleSetWarning } from "./types";
 
 type ValidationView = RuleSetValidation & { revision_lock_version: number };
@@ -30,46 +31,53 @@ export default function RuleSetEditorPage() {
 }
 
 function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; initialDetail?: AdminRuleSetDetail; isNew: boolean }) {
-  const repository = useRuleSetRepository(); const queryClient = useQueryClient(); const navigate = useNavigate(); const { session } = useAdminSession();
+  const { notification } = AntApp.useApp(); const repository = useRuleSetRepository(); const queryClient = useQueryClient(); const navigate = useNavigate(); const { session } = useAdminSession();
   const permissions = session?.permissions ?? []; const canWrite = hasAdminPermission(permissions, "rules.write"); const canPublish = hasAdminPermission(permissions, "rules.publish"); const canSetDefault = hasAdminPermission(permissions, "rules.set_default"); const canArchive = hasAdminPermission(permissions, "rules.archive");
   const [detail, setDetail] = useState(initialDetail); const initial = initialDetail ? inputFromRuleSet(initialDetail, options) : defaultRuleSetInput(options);
   const [draft, setDraft] = useState<RuleSetFormInput>(initial); const [errors, setErrors] = useState<RuleSetFormErrors>({});
-  const [requestError, setRequestError] = useState<Error | null>(null); const [requestErrorContext, setRequestErrorContext] = useState<RuleSetErrorContext>("save"); const [conflict, setConflict] = useState(false); const [validation, setValidation] = useState<ValidationView | null>(null);
+  const [conflict, setConflict] = useState(false); const [validation, setValidation] = useState<ValidationView | null>(null);
   const [pending, setPending] = useState<"save" | "validate" | "reload" | null>(null); const [baseline, setBaseline] = useState(JSON.stringify(cleanRuleSetInput(initial, options))); const allowNavigation = useRef(false);
-  const [transition, setTransition] = useState<Transition | null>(null); const [transitionOpener, setTransitionOpener] = useState<HTMLButtonElement | null>(null); const [transitionPending, setTransitionPending] = useState(false); const [transitionError, setTransitionError] = useState<string | null>(null); const [announcement, setAnnouncement] = useState<{ id: number; message: string } | null>(null); const announcementSequence = useRef(0);
+  const [transition, setTransition] = useState<Transition | null>(null); const [transitionOpener, setTransitionOpener] = useState<HTMLButtonElement | null>(null); const [transitionPending, setTransitionPending] = useState(false);
   const cleaned = cleanRuleSetInput(draft, options); const isDirty = JSON.stringify(cleaned) !== baseline;
   const canQueryPublished = options.statuses.some(({ value }) => value === "published");
   const editable = canWrite && detail?.status !== "archived"; const blocker = useBlocker(({ currentLocation, nextLocation }) => !allowNavigation.current && isDirty && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}` !== `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`);
   useBeforeUnload(useCallback((event) => { if (isDirty) event.preventDefault(); }, [isDirty]), { capture: true });
   const publishedRules = useQuery({ queryKey: [...ruleSetKeys.lists, "transition", detail?.id], queryFn: ({ signal }) => listAllPublishedRules(repository, options, signal), enabled: Boolean(canQueryPublished && detail && (transition === "default" || (transition === "archive" && detail.is_default))) });
 
-  function announce(message: string) { announcementSequence.current += 1; setAnnouncement({ id: announcementSequence.current, message }); }
   function markChanged() { setValidation(null); }
   function changeConfig<K extends keyof RuleSetFormInput["config"]>(key: K, value: RuleSetFormInput["config"][K]) { setDraft((current) => ({ ...current, config: { ...current.config, [key]: value } })); setErrors((current) => ({ ...current, [key]: undefined, form: undefined })); markChanged(); }
   async function save(event: FormEvent) {
     event.preventDefault(); const nextErrors = validateRuleSetInput(draft, options); setErrors(nextErrors); if (Object.keys(nextErrors).length) return;
-    setPending("save"); setRequestErrorContext("save"); setRequestError(null); setConflict(false);
+    setPending("save"); setConflict(false);
     try {
       const saved = isNew ? await repository.create(cleaned) : await repository.updateDraft(detail!.id, { expected_rule_set_lock_version: detail!.lock_version, expected_revision_lock_version: detail!.draft_revision?.lock_version ?? null, display_order: cleaned.display_order, config: cleaned.config });
       const fresh = await repository.get(saved.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options)));
       await Promise.all([queryClient.invalidateQueries({ queryKey: ruleSetKeys.lists }), queryClient.invalidateQueries({ queryKey: ruleSetKeys.detail(saved.id) })]);
+      notification.success({ title: isNew ? "规则草稿已创建" : "草稿已保存" });
       if (isNew) { allowNavigation.current = true; navigate(`/content/rules/${encodeURIComponent(saved.id)}`); }
-      else announce("草稿已保存");
-    } catch (error) { setErrors(formErrorsFromApi(error)); if (isAdminApiError(error) && (error.status === 409 || error.status === 412)) setConflict(true); setRequestError(error as Error); }
+    } catch (error) {
+      setErrors(formErrorsFromApi(error));
+      if (isAdminApiError(error) && (error.status === 409 || error.status === 412)) setConflict(true);
+      notification.error({ description: presentRuleSetError(error, "save"), title: "规则草稿保存失败" });
+    }
     finally { setPending(null); }
   }
   async function validateSaved() {
-    const revision = detail?.draft_revision; if (!revision) return; setPending("validate"); setRequestErrorContext("validate"); setRequestError(null);
-    try { const result = await repository.validate(detail.id, { expected_revision_lock_version: revision.lock_version }); setValidation({ ...result, revision_lock_version: revision.lock_version }); setErrors(formErrorsFromApi({ warnings: result.errors })); announce(result.valid ? "规则校验通过" : "规则校验未通过"); }
-    catch (error) { setErrors(formErrorsFromApi(error)); setRequestError(error as Error); }
+    const revision = detail?.draft_revision; if (!revision) return; setPending("validate");
+    try {
+      const result = await repository.validate(detail.id, { expected_revision_lock_version: revision.lock_version }); setValidation({ ...result, revision_lock_version: revision.lock_version }); setErrors(formErrorsFromApi({ warnings: result.errors }));
+      if (result.valid) notification.success({ title: "规则校验通过" });
+      else notification.warning({ description: "请根据页面中的校验结果修改规则。", title: "规则校验未通过" });
+    }
+    catch (error) { setErrors(formErrorsFromApi(error)); notification.error({ description: presentRuleSetError(error, "validate"), title: "规则校验请求失败" }); }
     finally { setPending(null); }
   }
-  async function reload() { if (!detail || pending) return; setPending("reload"); setRequestErrorContext("reload"); setRequestError(null); try { const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setConflict(false); setValidation(null); } catch (error) { setRequestError(error as Error); } finally { setPending(null); } }
+  async function reload() { if (!detail || pending) return; setPending("reload"); try { const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setConflict(false); setValidation(null); notification.success({ title: "已加载服务器最新版本" }); } catch (error) { notification.error({ description: presentRuleSetError(error, "reload"), title: "重新加载失败" }); } finally { setPending(null); } }
 
-  function openTransition(next: Transition, opener: HTMLButtonElement) { if (transitionPending || isDirty) return; setTransitionError(null); setTransitionOpener(opener); setTransition(next); }
+  function openTransition(next: Transition, opener: HTMLButtonElement) { if (transitionPending || isDirty) return; setTransitionOpener(opener); setTransition(next); }
   function closeTransition() { if (transitionPending) return; setTransition(null); setTransitionOpener(null); }
   async function confirmTransition(reason: string, replacementId: string | null) {
-    if (!detail || !transition || transitionPending) return; setTransitionPending(true); setTransitionError(null); setAnnouncement(null);
+    if (!detail || !transition || transitionPending) return; setTransitionPending(true);
     try {
       if (transition === "publish") {
         const revision = detail.draft_revision; if (!revision || !validation?.valid || validation.revision_lock_version !== revision.lock_version || isDirty) return;
@@ -88,8 +96,8 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       }
       const completed = transition; const fresh = await repository.get(detail.id); setDetail(fresh); const next = inputFromRuleSet(fresh, options); setDraft(next); setBaseline(JSON.stringify(cleanRuleSetInput(next, options))); setValidation(null); setConflict(false); setTransition(null); setTransitionOpener(null);
       await Promise.all([queryClient.invalidateQueries({ queryKey: ruleSetKeys.lists }), queryClient.invalidateQueries({ queryKey: ruleSetKeys.detail(detail.id) })]);
-      announce({ publish: "规则已发布", default: "已设为默认规则", archive: "规则已归档", restore: "规则已恢复" }[completed]);
-    } catch (error) { setTransitionError(transitionMessage(error)); }
+      notification.success({ title: { publish: "规则已发布", default: "已设为默认规则", archive: "规则已归档", restore: "规则已恢复" }[completed] });
+    } catch (error) { notification.error({ description: transitionMessage(error), title: "规则生命周期操作失败" }); }
     finally { setTransitionPending(false); }
   }
 
@@ -99,7 +107,6 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
 
   return <div className="admin-page rule-set-editor-page"><header className="page-heading rule-set-heading"><div><span className="page-kicker">CONTENT / RULES</span><h1>{isNew ? "新建游戏规则" : "游戏规则详情"}</h1>{detail ? <p><span>{STATUS[detail.status]}</span>{detail.is_default ? " · 默认规则" : ""} · 规则锁版本 {detail.lock_version} · 草稿版本 {detail.draft_revision?.revision_no ?? "无"}</p> : <p>创建结构化规则草稿</p>}</div>{!editable ? <span className="page-readiness-badge">只读权限</span> : null}</header>
     <div className="rule-set-editor-layout"><div className="rule-set-editor-main">
-    {announcement ? <p aria-live="polite" className="rule-set-notice" key={announcement.id} role="status">{announcement.message}</p> : null}
     <form className="rule-set-form" onSubmit={save}><fieldset disabled={!editable || pending !== null}><legend>结构化规则配置</legend>
       <Field label="规则 ID" error={errors.id}><Input aria-label="规则 ID" onChange={(e) => { setDraft({ ...draft, id: e.target.value }); markChanged(); }} readOnly={!isNew} value={draft.id} /></Field>
       <Field label="显示顺序" error={errors.display_order}><InputNumber aria-label="显示顺序" min={0} onChange={(value) => { setDraft((current) => ({ ...current, display_order: value ?? Number.NaN })); markChanged(); }} value={Number.isFinite(draft.display_order) ? draft.display_order : null} /></Field>
@@ -115,7 +122,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       <Choice label="发言规则" value={draft.config.speech_policy} choices={options.speech_policies} onChange={(v) => changeConfig("speech_policy", v as typeof draft.config.speech_policy)} error={errors.speech_policy} />
       <Check label="允许狼人自爆" checked={draft.config.werewolf_self_explosion_enabled} onChange={(v) => changeConfig("werewolf_self_explosion_enabled", v)} />
       <Field label="警徽规则" error={errors.sheriff_badge_bomb_policy}><Select aria-label="警徽规则" disabled={!draft.config.sheriff_enabled} onChange={(value) => changeConfig("sheriff_badge_bomb_policy", value as typeof draft.config.sheriff_badge_bomb_policy)} options={options.sheriff_badge_bomb_policies.map((item) => ({ label: item.label, value: item.value }))} value={draft.config.sheriff_enabled ? draft.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0]?.value} /></Field>
-    </fieldset>{errors.form ? <p className="rule-set-error" role="alert">{errors.form}</p> : null}{requestError ? <p className="rule-set-error" role="alert">{presentRuleSetError(requestError, requestErrorContext)}</p> : null}{editable ? <div className="rule-set-form-actions"><button disabled={pending !== null} type="submit">保存草稿</button><button disabled={isNew || isDirty || !detail?.draft_revision || pending !== null} onClick={() => void validateSaved()} type="button">校验规则</button>{canPublish ? <button disabled={!validation?.valid || validation.revision_lock_version !== detail?.draft_revision?.lock_version || isDirty || pending !== null} onClick={(event) => openTransition("publish", event.currentTarget)} type="button">发布规则</button> : null}</div> : null}</form>
+    </fieldset>{errors.form ? <p className="rule-set-error" role="alert">{errors.form}</p> : null}{editable ? <div className="rule-set-form-actions"><button disabled={pending !== null} type="submit">保存草稿</button><button disabled={isNew || isDirty || !detail?.draft_revision || pending !== null} onClick={() => void validateSaved()} type="button">校验规则</button>{canPublish ? <button disabled={!validation?.valid || validation.revision_lock_version !== detail?.draft_revision?.lock_version || isDirty || pending !== null} onClick={(event) => openTransition("publish", event.currentTarget)} type="button">发布规则</button> : null}</div> : null}</form>
     {conflict ? <section className="rule-set-conflict" role="alert"><h2>规则版本冲突</h2><p>本地草稿已保留，请重新加载服务器版本后再合并。</p><button disabled={pending !== null} onClick={() => void reload()} type="button">{pending === "reload" ? "正在重新加载..." : "重新加载服务器版本"}</button></section> : null}
     {displayedContract ? <RuleContractPanel contract={displayedContract} /> : null}
     </div><aside aria-label="规则摘要" className="rule-set-summary"><section><h2>配置摘要</h2><p>配置人数：{playerCount(draft)} 人</p><p>阵容：{roleSummary(draft, options) || "暂无角色"}</p>{detail ? <><p>生命周期：{STATUS[detail.status]}{detail.is_default ? " · 默认规则" : ""}</p><p>当前草稿修订：{revisionSummary(detail.draft_revision)}</p><p>当前发布修订：{revisionSummary(detail.published_revision)}</p><p>累计使用：{detail.usage.game_count} 场游戏 / {detail.usage.live_count} 场直播</p>{detail.warnings.map((warning) => <p key={`${warning.code}-${warning.path}`} role="alert">{warning.message}</p>)}</> : <p>尚未保存的新规则</p>}</section>
@@ -124,7 +131,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
     {detail && canArchive && detail.status === "archived" ? <button disabled={transitionPending || isDirty} onClick={(event) => openTransition("restore", event.currentTarget)} type="button">恢复规则</button> : null}</div>{detail && isDirty && (canSetDefault || canArchive) ? <p role="status">请先保存草稿或放弃修改，再执行生命周期操作。</p> : null}
     {detail && !canQueryPublished && ((canSetDefault && detail.status === "published" && !detail.is_default) || (canArchive && detail.is_default)) ? <p role="status">规则选项未提供已发布规则查询，暂不能执行相关生命周期操作。</p> : null}
     {validation ? <section aria-label="校验结果" className="rule-set-validation"><h2>{validation.valid ? "校验通过" : "校验失败"}</h2>{validation.errors.length ? <ul aria-label="校验错误">{validation.errors.map((warning) => <li key={`${warning.code}-${warning.path}`}><Warning warning={warning} /></li>)}</ul> : null}{validation.warnings.length ? <ul aria-label="校验警告">{validation.warnings.map((warning) => <li key={`${warning.code}-${warning.path}`}><Warning warning={warning} /></li>)}</ul> : null}{validation.content_hash ? <p>内容哈希：{validation.content_hash.slice(0, 12)}</p> : null}{validation.rule_text_preview ? <pre>{validation.rule_text_preview}</pre> : null}</section> : null}</aside></div>
-    {transitionDialog ? <RuleSetTransitionDialog candidates={transition === "archive" && detail?.is_default ? transitionCandidates : undefined} candidatesError={publishedRules.isError} candidatesPending={publishedRules.isFetching} confirmLabel={transitionDialog.confirmLabel} description={transitionDialog.description} error={transitionError} onCancel={closeTransition} onConfirm={(reason, replacementId) => void confirmTransition(reason, replacementId)} opener={transitionOpener} pending={transitionPending} pendingLabel={transitionDialog.pendingLabel} reasonMaxLength={options.constraints.reason_max_length} reasonMinLength={options.constraints.reason_min_length} requiresReplacement={transition === "archive" && detail?.is_default} title={transitionDialog.title} /> : null}
+    {transitionDialog ? <RuleSetTransitionDialog candidates={transition === "archive" && detail?.is_default ? transitionCandidates : undefined} candidatesError={publishedRules.isError} candidatesPending={publishedRules.isFetching} confirmLabel={transitionDialog.confirmLabel} description={transitionDialog.description} error={null} onCancel={closeTransition} onConfirm={(reason, replacementId) => void confirmTransition(reason, replacementId)} opener={transitionOpener} pending={transitionPending} pendingLabel={transitionDialog.pendingLabel} reasonMaxLength={options.constraints.reason_max_length} reasonMinLength={options.constraints.reason_min_length} requiresReplacement={transition === "archive" && detail?.is_default} title={transitionDialog.title} /> : null}
     {blocker.state === "blocked" ? <UnsavedChangesDialog onDiscard={() => blocker.proceed()} onKeepEditing={() => blocker.reset()} /> : null}
     {detail ? <section className="rule-set-history"><h2>版本历史</h2><div aria-label="版本历史横向滚动区" className="rule-set-history-scroll" tabIndex={0}><ul aria-label="版本历史">{detail.revisions.slice(0, 50).map((revision) => <li key={revision.id}>版本 {revision.revision_no} · {revision.state} · 发布时间：{revision.published_at ? formatDate(revision.published_at) : "未发布"} · 发布人：{revision.published_by ?? "无"} · 哈希前缀：{revision.content_hash?.slice(0, 12) ?? "无"} · {revision.usage.game_count} 场游戏 / {revision.usage.live_count} 场直播</li>)}</ul></div></section> : null}
   </div>;

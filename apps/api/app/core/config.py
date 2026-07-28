@@ -60,7 +60,6 @@ class Settings(BaseSettings):
         le=365 * 24 * 60 * 60,
     )
     legacy_player_profile_content_writes_enabled: bool = False
-    legacy_player_profile_favorite_writes_enabled: bool = False
     legacy_judge_voice_generation_enabled: bool = False
     werewolf_lineup_quality_mode: Literal["observe", "repair", "enforce"] = "repair"
     werewolf_speech_quality_retry_enabled: bool = True
@@ -283,13 +282,6 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "LEGACY_PLAYER_PROFILE_CONTENT_WRITES_ENABLED cannot be enabled in production"
-            )
-        if (
-            self.app_environment == "production"
-            and self.legacy_player_profile_favorite_writes_enabled
-        ):
-            raise ValueError(
-                "LEGACY_PLAYER_PROFILE_FAVORITE_WRITES_ENABLED cannot be enabled in production"
             )
         if self.app_environment == "production" and self.legacy_judge_voice_generation_enabled:
             raise ValueError(

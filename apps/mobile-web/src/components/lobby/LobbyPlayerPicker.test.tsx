@@ -47,6 +47,7 @@ function PickerHarness() {
   const profiles = [
     buildProfile("alpha", {
       display_name: "暗巷观星",
+      featured: true,
       is_favorite: true,
     }),
     buildProfile("beta", {
@@ -108,6 +109,7 @@ describe("LobbyPlayerPicker", () => {
         name: "筛选玩家，当前 全部玩家、全部策略",
       }),
     ).toBeVisible();
+    expect(screen.getByText("推荐")).toBeVisible();
 
     await user.type(search, "观星");
 

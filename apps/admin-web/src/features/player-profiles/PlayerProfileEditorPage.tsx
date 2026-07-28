@@ -1,8 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Checkbox from "antd/es/checkbox";
 import Input from "antd/es/input";
 import InputNumber from "antd/es/input-number";
 import Select from "antd/es/select";
+import Tag from "antd/es/tag";
 import {
   cloneElement,
   type FormEvent,
@@ -48,6 +50,7 @@ import type {
   PlayerProfileStatus,
   PlayerTtsSpeakerOption,
 } from "@/features/player-profiles/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
   draft: "草稿",
@@ -174,6 +177,7 @@ function PlayerProfileEditor({
   ttsSpeakersError: boolean;
   ttsSpeakersPending: boolean;
 }) {
+  const { notification } = AntApp.useApp();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
@@ -214,15 +218,12 @@ function PlayerProfileEditor({
     formatMultilineList(initialInput.example_messages),
   );
   const [formErrors, setFormErrors] = useState<PlayerProfileFormErrors>({});
-  const [requestError, setRequestError] = useState<AdminApiError | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState<AdminApiError | null>(null);
   const [pendingAction, setPendingAction] = useState<
     "ai-draft" | "save" | TransitionAction | null
   >(null);
   const [transitionAction, setTransitionAction] =
     useState<TransitionAction | null>(null);
-  const [transitionError, setTransitionError] = useState<string | null>(null);
   const [voicePreviewSay, setVoicePreviewSay] = useState(
     "我先听完这一轮，再给出我的判断。",
   );
@@ -234,8 +235,6 @@ function PlayerProfileEditor({
   });
   const [voicePreview, setVoicePreview] =
     useState<AdminPlayerVoicePreview | null>(null);
-  const [voicePreviewError, setVoicePreviewError] =
-    useState<AdminApiError | null>(null);
   const [voicePreviewPending, setVoicePreviewPending] = useState(false);
   const allowNavigation = useRef(false);
   const baseline = useRef(JSON.stringify(initialInput));
@@ -313,9 +312,7 @@ function PlayerProfileEditor({
   ) {
     setDraft((current) => ({ ...current, [field]: value }));
     setFormErrors((current) => ({ ...current, [field]: undefined, form: undefined }));
-    setSuccessMessage(null);
     setVoicePreview(null);
-    setVoicePreviewError(null);
   }
 
   function updateTurnDelivery(
@@ -324,7 +321,6 @@ function PlayerProfileEditor({
   ) {
     setTurnDelivery((current) => ({ ...current, [field]: value }));
     setVoicePreview(null);
-    setVoicePreviewError(null);
   }
 
   function updateGender(gender: PlayerGender) {
@@ -344,9 +340,7 @@ function PlayerProfileEditor({
       tts_dialect: undefined,
       form: undefined,
     }));
-    setSuccessMessage(null);
     setVoicePreview(null);
-    setVoicePreviewError(null);
   }
 
   function updateTtsSpeaker(speaker: string | null) {
@@ -368,9 +362,7 @@ function PlayerProfileEditor({
       tts_dialect: undefined,
       form: undefined,
     }));
-    setSuccessMessage(null);
     setVoicePreview(null);
-    setVoicePreviewError(null);
   }
 
   async function previewDraftVoice() {
@@ -379,7 +371,6 @@ function PlayerProfileEditor({
     }
     setVoicePreviewPending(true);
     setVoicePreview(null);
-    setVoicePreviewError(null);
     try {
       const result = await repository.previewVoice({
         say: voicePreviewSay.trim(),
@@ -399,22 +390,15 @@ function PlayerProfileEditor({
         },
       });
       setVoicePreview(result);
+      notification.success({ title: "玩家语音试听已生成" });
     } catch (error) {
-      setVoicePreviewError(
-        error instanceof AdminApiError
-          ? error
-          : new AdminApiError({
-              cause: error,
-              problem: {
-                type: "about:blank",
-                title: "语音试听失败",
-                status: 0,
-                detail: "语音试听未能完成，请稍后重试。",
-                code: "admin_player_voice_preview_request_failed",
-                request_id: null,
-              },
-            }),
-      );
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "语音试听未能完成，请稍后重试。",
+        ),
+        title: "语音试听失败",
+      });
     } finally {
       setVoicePreviewPending(false);
     }
@@ -425,8 +409,6 @@ function PlayerProfileEditor({
       return;
     }
     setPendingAction("ai-draft");
-    setRequestError(null);
-    setSuccessMessage(null);
     try {
       const generated = await repository.generateAiDraft();
       setDraft((current) => ({ ...current, ...generated }));
@@ -434,9 +416,12 @@ function PlayerProfileEditor({
       setTagInput(formatCommaList(generated.tags));
       setExampleInput(formatMultilineList(generated.example_messages));
       setFormErrors({});
-      setSuccessMessage("AI 草稿已填入，请审核后保存");
+      notification.success({
+        description: "请审核生成内容后再保存。",
+        title: "AI 草稿已填入",
+      });
     } catch (error) {
-      handleRequestError(error);
+      handleRequestError(error, "AI 草稿生成失败");
     } finally {
       setPendingAction(null);
     }
@@ -456,9 +441,7 @@ function PlayerProfileEditor({
     }
 
     setPendingAction("save");
-    setRequestError(null);
     setConflict(null);
-    setSuccessMessage(null);
     try {
       const updated = isNew
         ? await repository.create({ ...cleaned, featured: false })
@@ -469,10 +452,10 @@ function PlayerProfileEditor({
       queryClient.setQueryData(playerProfileKeys.detail(updated.id), updated);
       await queryClient.invalidateQueries({ queryKey: playerProfileKeys.lists() });
       if (isNew) {
+        notification.success({ title: "玩家草稿已创建" });
         allowNavigation.current = true;
         navigate(`/content/players/${encodeURIComponent(updated.id)}`, {
           replace: true,
-          state: { notice: "草稿已创建" },
         });
         return;
       }
@@ -484,15 +467,15 @@ function PlayerProfileEditor({
       setExampleInput(formatMultilineList(nextInput.example_messages));
       baseline.current = JSON.stringify(nextInput);
       setFormErrors({});
-      setSuccessMessage("玩家资料已保存");
+      notification.success({ title: "玩家资料已保存" });
     } catch (error) {
-      handleRequestError(error);
+      handleRequestError(error, "玩家资料保存失败");
     } finally {
       setPendingAction(null);
     }
   }
 
-  function handleRequestError(error: unknown) {
+  function handleRequestError(error: unknown, title: string) {
     const apiError =
       error instanceof AdminApiError
         ? error
@@ -510,34 +493,48 @@ function PlayerProfileEditor({
     if (apiError.status === 409) {
       setConflict(apiError);
       setTransitionAction(null);
+      notification.warning({
+        description: "本地表单仍然保留，请重新加载服务器最新版本后再处理。",
+        title: "玩家版本已发生变化",
+      });
       return;
     }
     if (apiError.status === 422 && apiError.fieldErrors.length > 0) {
       const errors = formErrorsFromApi(apiError.fieldErrors);
       setFormErrors(errors);
-      setTransitionError(apiError.message);
       focusFirstInvalidField(errors);
+      notification.error({
+        description: adminOperationErrorDescription(
+          apiError,
+          "请检查表单字段后重试。",
+        ),
+        title,
+      });
       return;
     }
-    setRequestError(apiError);
-    setTransitionError(apiError.message);
+    notification.error({
+      description: adminOperationErrorDescription(
+        apiError,
+        "玩家操作未能完成，请稍后重试。",
+      ),
+      title,
+    });
   }
 
   async function confirmTransition(reason: string) {
     if (!profile || !transitionAction || isDirty) {
       if (isDirty) {
-        setTransitionError("请先保存当前修改，再执行生命周期操作。");
+        notification.warning({ title: "请先保存当前修改" });
       }
       return;
     }
     setPendingAction(transitionAction);
-    setTransitionError(null);
-    setRequestError(null);
     setConflict(null);
+    const completedAction = transitionAction;
     try {
       const updated = await repository.transition(
         profile.id,
-        transitionAction,
+        completedAction,
         { expected_version: profile.version, reason },
       );
       queryClient.setQueryData(playerProfileKeys.detail(updated.id), updated);
@@ -547,15 +544,16 @@ function PlayerProfileEditor({
       setDraft(nextInput);
       baseline.current = JSON.stringify(nextInput);
       setTransitionAction(null);
-      setSuccessMessage(
-        transitionAction === "archive"
+      notification.success({
+        title:
+          completedAction === "archive"
           ? "玩家已归档"
-          : transitionAction === "restore"
+          : completedAction === "restore"
             ? "玩家已恢复发布"
             : "玩家已发布",
-      );
+      });
     } catch (error) {
-      handleRequestError(error);
+      handleRequestError(error, "玩家生命周期操作失败");
     } finally {
       setPendingAction(null);
     }
@@ -618,11 +616,6 @@ function PlayerProfileEditor({
           当前为本地预览数据，不会请求或修改真实 Admin API。
         </div>
       ) : null}
-      {successMessage ? (
-        <div aria-live="polite" className="player-editor-notice is-success" role="status">
-          {successMessage}
-        </div>
-      ) : null}
       {conflict ? (
         <div aria-live="assertive" className="player-conflict-banner" role="alert">
           <div>
@@ -637,14 +630,6 @@ function PlayerProfileEditor({
           </button>
         </div>
       ) : null}
-      {requestError ? (
-        <div aria-live="assertive" className="player-request-error" role="alert">
-          <strong>{requestError.problem.title}</strong>
-          <span>{requestError.message}</span>
-          {requestError.requestId ? <small>请求编号：{requestError.requestId}</small> : null}
-        </div>
-      ) : null}
-
       <form className="player-editor-layout" noValidate onSubmit={saveProfile}>
         <div className="player-editor-form-column">
           <fieldset
@@ -1018,7 +1003,6 @@ function PlayerProfileEditor({
                         onChange={(event) => {
                           setVoicePreviewSay(event.target.value);
                           setVoicePreview(null);
-                          setVoicePreviewError(null);
                         }}
                         rows={3}
                         value={voicePreviewSay}
@@ -1089,13 +1073,6 @@ function PlayerProfileEditor({
                   >
                     {voicePreviewPending ? "正在合成..." : "试听当前草稿"}
                   </button>
-                  {voicePreviewError ? (
-                    <div className="player-voice-preview-error" role="alert">
-                      <strong>{voicePreviewError.problem.title}</strong>
-                      <span>{voicePreviewError.message}</span>
-                      <code>错误码：{voicePreviewError.problem.code}</code>
-                    </div>
-                  ) : null}
                   {voicePreview ? (
                     <div className="player-voice-preview-result" role="status">
                       <VoicePreviewAudio preview={voicePreview} />
@@ -1289,12 +1266,9 @@ function PlayerProfileEditor({
         <PlayerTransitionDialog
           actionLabel={TRANSITION_COPY[transitionAction].actionLabel}
           description={TRANSITION_COPY[transitionAction].description}
-          error={transitionError}
+          error={null}
           key={transitionAction}
-          onClose={() => {
-            setTransitionAction(null);
-            setTransitionError(null);
-          }}
+          onClose={() => setTransitionAction(null)}
           onConfirm={(reason) => void confirmTransition(reason)}
           pending={pendingAction === transitionAction}
           title={TRANSITION_COPY[transitionAction].title}
@@ -1400,16 +1374,31 @@ function TtsSpeakerField({
     ...(legacyOption ? [legacyOption] : []),
     ...options,
   ];
-  const selectOptions = displayedOptions.map((option) => ({
-    label: (
-      <span className="player-speaker-value">
-        <code>{option.voice_type || "继承全局"}</code>
-        <span>{option.name}</span>
-      </span>
-    ),
-    searchText: `${option.voice_type} ${option.name}`,
-    value: option.voice_type,
-  }));
+  const selectOptions = displayedOptions.map((option) => {
+    const dialectLabels = option.dialects.map((dialect) => dialect.label);
+    return {
+      label: (
+        <span className="player-speaker-value">
+          <code>{option.voice_type || "继承全局"}</code>
+          <span>
+            {dialectLabels.length > 0 ? (
+              <Tag color="blue" title={dialectLabels.join("、")}>
+                支持方言
+              </Tag>
+            ) : null}
+            {option.name}
+          </span>
+        </span>
+      ),
+      searchText: [
+        option.voice_type,
+        option.name,
+        dialectLabels.length > 0 ? "支持方言" : "",
+        ...dialectLabels,
+      ].join(" "),
+      value: option.voice_type,
+    };
+  });
   return (
     <div className="player-form-field player-speaker-field is-wide">
       <span>玩家音色</span>

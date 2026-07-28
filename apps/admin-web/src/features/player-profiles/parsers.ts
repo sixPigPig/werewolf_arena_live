@@ -73,9 +73,6 @@ export function parseAdminPlayerProfileAiDraft(
 
 export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
   const record = recordValue(value);
-  if ("favorite" in record) {
-    throw invalidContract("Admin 玩家 DTO 不允许包含 favorite");
-  }
   const status = stringValue(record.status);
   if (!PROFILE_STATUSES.includes(status as PlayerProfileStatus)) {
     throw invalidContract("玩家状态无效");
@@ -108,7 +105,7 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
     talkativeness: tendency(record.talkativeness, "talkativeness"),
     example_messages: stringArray(record.example_messages, "example_messages"),
     ...optionalVoiceFields(record),
-    display_order: nonNegativeInteger(record.display_order, "display_order"),
+    display_order: nullablePositiveInteger(record.display_order, "display_order"),
     featured: booleanValue(record.featured, "featured"),
     tags: stringArray(record.tags, "tags"),
     status: status as PlayerProfileStatus,
@@ -438,6 +435,10 @@ function nonNegativeInteger(value: unknown, field: string) {
     throw invalidContract(`${field} 不是非负整数`);
   }
   return value;
+}
+
+function nullablePositiveInteger(value: unknown, field: string) {
+  return value === null ? null : positiveInteger(value, field);
 }
 
 function tendency(value: unknown, field: string) {

@@ -278,7 +278,12 @@ export function LobbyPlayerPicker({
                   />
                 )}
                 <span className="mobile-profile-row-copy">
-                  <strong>{profile.display_name}</strong>
+                  <span className="mobile-profile-row-title">
+                    <strong>{profile.display_name}</strong>
+                    {profile.featured ? (
+                      <span className="mobile-profile-row-featured">推荐</span>
+                    ) : null}
+                  </span>
                   <small>{formatStrategyLabel(profile.strategy_profile)}</small>
                   {seatStatusLabel ? <em>{seatStatusLabel}</em> : null}
                 </span>

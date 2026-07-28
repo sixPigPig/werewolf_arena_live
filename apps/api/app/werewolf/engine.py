@@ -955,7 +955,6 @@ def initialize_game_state(
             personality_id=player_config.personality_id if player_config else "balanced",
             personality=player_config.personality if player_config else "",
             appearance_id=player_config.appearance_id if player_config else "default",
-            avatar_prompt=player_config.avatar_prompt if player_config else "",
             avatar_image_url=player_config.avatar_image_url if player_config else "",
             profile_id=player_config.profile_id if player_config else None,
             tts_speaker=player_config.tts_speaker if player_config else "",

@@ -2708,7 +2708,6 @@ def test_fact_prompt_coverage_uses_the_same_public_seat_projection() -> None:
                 personality_id="balanced",
                 personality="",
                 appearance_id="default",
-                avatar_prompt="",
                 tags=(),
             )
             for index, name in enumerate(custom_names, start=1)
@@ -2907,7 +2906,6 @@ def test_player_action_prompt_uses_seat_labels_and_maps_choice_to_internal_name(
                 personality_id="balanced",
                 personality="",
                 appearance_id="default",
-                avatar_prompt="",
                 tags=(),
             )
             for index, name in enumerate(custom_names, start=1)
@@ -3181,7 +3179,6 @@ def test_initialize_game_state_applies_player_config_snapshot() -> None:
         personality_id="analytical",
         personality="重视票型和前后逻辑。",
         appearance_id="moonlit",
-        avatar_prompt="silver moon portrait",
         tags=("控场", "夜晚"),
         avatar_image_url="/api/v1/player-profiles/avatar/profile-alpha.png",
     )
@@ -3202,7 +3199,6 @@ def test_initialize_game_state_applies_player_config_snapshot() -> None:
     assert player.personality_id == "analytical"
     assert player.personality == "重视票型和前后逻辑。"
     assert player.appearance_id == "moonlit"
-    assert player.avatar_prompt == "silver moon portrait"
     assert player.avatar_image_url == "/api/v1/player-profiles/avatar/profile-alpha.png"
     assert player.tags == ["控场", "夜晚"]
     assert state.players[1].gamestate is not None
@@ -3220,7 +3216,6 @@ def test_initialize_game_state_rejects_duplicate_config_seats() -> None:
             personality_id="balanced",
             personality="",
             appearance_id="default",
-            avatar_prompt="",
             tags=(),
         ),
         PlayerConfig(
@@ -3231,7 +3226,6 @@ def test_initialize_game_state_rejects_duplicate_config_seats() -> None:
             personality_id="balanced",
             personality="",
             appearance_id="default",
-            avatar_prompt="",
             tags=(),
         ),
     ]
@@ -3258,7 +3252,6 @@ def test_initialize_game_state_rejects_duplicate_effective_names() -> None:
             personality_id="balanced",
             personality="",
             appearance_id="default",
-            avatar_prompt="",
             tags=(),
         ),
         PlayerConfig(
@@ -3269,7 +3262,6 @@ def test_initialize_game_state_rejects_duplicate_effective_names() -> None:
             personality_id="balanced",
             personality="",
             appearance_id="default",
-            avatar_prompt="",
             tags=(),
         ),
     ]
@@ -3296,7 +3288,6 @@ def test_player_config_without_model_falls_back_to_role_model() -> None:
             personality_id="balanced",
             personality="稳健推进。",
             appearance_id="default",
-            avatar_prompt="",
             tags=(),
         )
         for seat in range(1, rule_set.player_count + 1)
@@ -3386,7 +3377,7 @@ def test_compose_player_profile_prompt_falls_back_for_unknown_strategy() -> None
     assert "狼人杀策略: 稳健观察，按证据推进，不轻易极端站边。" in prompt
 
 
-def test_player_from_dict_defaults_legacy_profile_fields() -> None:
+def test_player_from_dict_defaults_profile_fields() -> None:
     player = player_from_dict(
         {
             "name": "张三",
@@ -3400,7 +3391,6 @@ def test_player_from_dict_defaults_legacy_profile_fields() -> None:
     assert player.personality_id == "balanced"
     assert player.personality == ""
     assert player.appearance_id == "default"
-    assert player.avatar_prompt == ""
     assert player.avatar_image_url == ""
     assert player.tags == []
 

@@ -81,6 +81,7 @@ def _seed_dashboard(session_factory: sessionmaker[Session]) -> dict[str, str]:
                     status="published",
                     published_at=now,
                     featured=True,
+                    display_order=1,
                 ),
                 GameSessionRecord(
                     session_id="game-session-alpha",

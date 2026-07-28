@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -380,6 +381,8 @@ def test_disabling_a_model_used_by_active_profiles_is_rejected(model_admin_clien
                 model_provider="agent_plan",
                 model="agent-fast",
                 status="published",
+                published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         db.commit()

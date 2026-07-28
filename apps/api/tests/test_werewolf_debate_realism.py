@@ -419,7 +419,6 @@ def test_lineup_quality_warnings_detects_homogeneous_profiles() -> None:
             personality_id="analytical",
             personality=ANALYTICAL_PERSONALITY,
             appearance_id="default",
-            avatar_prompt="",
             tags=("控场", "复盘"),
         )
         for seat in range(1, 5)
@@ -453,7 +452,6 @@ def test_lineup_quality_warnings_from_players_handles_normal_player_dict_tags() 
             "personality_id": "analytical",
             "personality": ANALYTICAL_PERSONALITY,
             "appearance_id": "default",
-            "avatar_prompt": "",
             "tags": ["控场", "复盘"],
         }
         for seat in range(1, 5)
@@ -487,7 +485,6 @@ def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags(
             "personality_id": "analytical",
             "personality": ANALYTICAL_PERSONALITY,
             "appearance_id": "default",
-            "avatar_prompt": "",
             "tags": "控场",
         },
         {
@@ -498,7 +495,6 @@ def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags(
             "personality_id": "analytical",
             "personality": ANALYTICAL_PERSONALITY,
             "appearance_id": "default",
-            "avatar_prompt": "",
             "tags": 7,
         },
         {
@@ -509,7 +505,6 @@ def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags(
             "personality_id": "analytical",
             "personality": ANALYTICAL_PERSONALITY,
             "appearance_id": "default",
-            "avatar_prompt": "",
             "tags": None,
         },
         {
@@ -520,7 +515,6 @@ def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags(
             "personality_id": "analytical",
             "personality": ANALYTICAL_PERSONALITY,
             "appearance_id": "default",
-            "avatar_prompt": "",
         },
     ]
 

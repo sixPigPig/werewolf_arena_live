@@ -1,7 +1,7 @@
 import PlusOutlined from "@ant-design/icons/es/icons/PlusOutlined";
 import ReloadOutlined from "@ant-design/icons/es/icons/ReloadOutlined";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Alert from "antd/es/alert";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Card from "antd/es/card";
 import Checkbox from "antd/es/checkbox";
@@ -34,6 +34,7 @@ import type { AdminUserItem, AdminUserListParams } from "@/features/admin-users/
 import { hasAdminPermission } from "@/features/auth/permissions";
 import { useAdminSession } from "@/features/auth/session-context";
 import type { AdminRole } from "@/features/auth/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 const roleLabels: Record<AdminRole, string> = {
   content_editor: "内容编辑",
@@ -45,9 +46,9 @@ const roleLabels: Record<AdminRole, string> = {
 type DialogState = { mode: "create" } | { mode: "edit"; user: AdminUserItem };
 
 export default function AdminUsersPage() {
+  const { notification } = AntApp.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const [dialog, setDialog] = useState<DialogState | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
   const params = paramsFromSearch(searchParams);
@@ -90,22 +91,49 @@ export default function AdminUsersPage() {
           ),
     onError: (error) => {
       if (isAdminApiError(error) && error.code === "admin_user_version_conflict") {
-        setNotice("账号已被其他管理员更新，列表已刷新，请重新打开后操作。");
+        notification.warning({
+          description: "列表已刷新，请重新打开账号后操作。",
+          title: "账号已被其他管理员更新",
+        });
         setDialog(null);
         void queryClient.invalidateQueries({ queryKey: adminUserKeys.all });
+        return;
       }
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "账号操作失败，请稍后重试。",
+        ),
+        title: "账号保存失败",
+      });
     },
     onSuccess: (user, input) => {
       setDialog(null);
-      setNotice(input.mode === "create" ? `已开通 ${user.email}` : `已更新 ${user.email}`);
+      notification.success({
+        title:
+          input.mode === "create"
+            ? `已开通 ${user.email}`
+            : `已更新 ${user.email}`,
+      });
       void queryClient.invalidateQueries({ queryKey: adminUserKeys.all });
     },
   });
   const revoke = useMutation({
     mutationFn: ({ user, reason }: { user: AdminUserItem; reason: string }) =>
       revokeAdminUserSessions(user.id, reason, session?.csrf_token ?? ""),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "撤销会话失败，请稍后重试。",
+        ),
+        title: "撤销会话失败",
+      });
+    },
     onSuccess: (result) => {
-      setNotice(`已撤销 ${result.revoked_count} 个会话`);
+      notification.success({
+        title: `已撤销 ${result.revoked_count} 个会话`,
+      });
       setDialog(null);
       void queryClient.invalidateQueries({ queryKey: adminUserKeys.all });
     },
@@ -198,7 +226,6 @@ export default function AdminUsersPage() {
         title="后台账号"
       />
 
-      {notice ? <Alert closable onClose={() => setNotice(null)} role="status" showIcon title={notice} type="success" /> : null}
       <Card title="筛选条件">
         <form
           className="ant-admin-filter-grid"
@@ -298,7 +325,6 @@ export default function AdminUsersPage() {
         <AccountDialog
           canManageRoles={canManageRoles}
           currentUserId={session?.user.id ?? ""}
-          error={save.error ?? revoke.error}
           key={dialog.mode === "create" ? "create" : dialog.user.id}
           onClose={() => setDialog(null)}
           onRevoke={(user, reason) => revoke.mutate({ reason, user })}
@@ -314,7 +340,6 @@ export default function AdminUsersPage() {
 function AccountDialog({
   canManageRoles,
   currentUserId,
-  error,
   onClose,
   onRevoke,
   onSave,
@@ -325,7 +350,6 @@ function AccountDialog({
   currentUserId: string;
   canManageRoles: boolean;
   pending: boolean;
-  error: unknown;
   onClose: () => void;
   onSave: (input: { mode: "create" | "edit"; user?: AdminUserItem; email: string; displayName: string; role: AdminRole; isActive: boolean; reason: string }) => void;
   onRevoke: (user: AdminUserItem, reason: string) => void;
@@ -391,9 +415,6 @@ function AccountDialog({
           <Input.TextArea minLength={3} onChange={(event) => setReason(event.target.value)} required rows={3} value={reason} />
         </label>
         {isSelf ? <Typography.Text type="secondary">当前账号不能修改自身角色或停用自身。</Typography.Text> : null}
-        {error ? (
-          <Alert role="alert" showIcon title={isAdminApiError(error) ? error.message : "账号操作失败，请稍后重试。"} type="error" />
-        ) : null}
         <Flex gap={8} justify="flex-end" wrap>
           {user && user.active_session_count > 0 ? (
             <Button danger disabled={pending || reason.trim().length < 3} onClick={() => onRevoke(user, reason)}>

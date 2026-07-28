@@ -26,7 +26,6 @@ def _config(
         personality_id=personality,
         personality="",
         appearance_id=appearance,
-        avatar_prompt="",
         tags=(),
         avatar_asset_id=avatar_asset_id,
         catchphrases=(catchphrase,) if catchphrase else (),

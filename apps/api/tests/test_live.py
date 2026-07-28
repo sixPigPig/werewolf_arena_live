@@ -788,7 +788,6 @@ def sensitive_player_config() -> PlayerConfig:
         personality_id="secret",
         personality="personality-secret",
         appearance_id="secret",
-        avatar_prompt="avatar-secret",
         tags=("tag-secret",),
     )
 

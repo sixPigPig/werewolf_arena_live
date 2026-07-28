@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Input from "antd/es/input";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -23,8 +24,10 @@ import type {
   AdminLiveRunVoiceCounts,
 } from "@/features/live-runs/types";
 import type { AdminRunP2Diagnostics } from "@/features/p2-quality/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function LiveRunDetailPage() {
+  const { notification } = AntApp.useApp();
   const { runId } = useParams();
   const { session } = useAdminSession();
   const navigate = useNavigate();
@@ -32,7 +35,6 @@ export default function LiveRunDetailPage() {
   const [debugRequestedFor, setDebugRequestedFor] = useState<string | null>(null);
   const [controlAction, setControlAction] =
     useState<AdminLiveRunControlAction | null>(null);
-  const [controlNotice, setControlNotice] = useState<string | null>(null);
   const debugRequested = Boolean(runId && debugRequestedFor === runId);
   const canReadDebug = Boolean(
     session?.permissions.includes("*") ||
@@ -78,20 +80,32 @@ export default function LiveRunDetailPage() {
         reason,
         session?.csrf_token ?? "",
       ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "运行控制请求失败，请稍后重试。",
+        ),
+        title: "运行控制失败",
+      });
+    },
     onSuccess: async (result) => {
       setControlAction(null);
       await queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all });
       if (result.action === "resume") {
+        notification.success({ title: "对局已从检查点恢复" });
         void navigate(`/operations/runs/${encodeURIComponent(result.run_id)}`);
         return;
       }
-      setControlNotice(
-        result.run_status === "canceled"
+      notification.success({
+        description:
+          result.run_status === "canceled"
           ? "Worker 租约已过期，失联运行已安全终止。"
           : runQuery.data?.worker_state === "stale"
             ? "打断请求已持久化；若租约仍过期，当前 API Worker 会安全接管并终止运行。"
-          : "打断请求已提交；Worker 会停止新请求并尽快关闭当前模型流。",
-      );
+            : "Worker 会停止新请求并尽快关闭当前模型流。",
+        title: "打断请求已提交",
+      });
       await runQuery.refetch();
     },
   });
@@ -154,14 +168,11 @@ export default function LiveRunDetailPage() {
       {canControl ? (
         <RunControlPanel
           action={controlAction}
-          error={controlMutation.isError ? controlMutation.error : null}
-          notice={controlNotice}
           onCancel={() => {
             setControlAction(null);
             controlMutation.reset();
           }}
           onOpen={(action) => {
-            setControlNotice(null);
             controlMutation.reset();
             setControlAction(action);
           }}
@@ -435,8 +446,6 @@ function formatMilliseconds(value: number | null) {
 
 function RunControlPanel({
   action,
-  error,
-  notice,
   onCancel,
   onOpen,
   onSubmit,
@@ -444,8 +453,6 @@ function RunControlPanel({
   run,
 }: {
   action: AdminLiveRunControlAction | null;
-  error: Error | null;
-  notice: string | null;
   onCancel: () => void;
   onOpen: (action: AdminLiveRunControlAction) => void;
   onSubmit: (reason: string) => void;
@@ -517,7 +524,6 @@ function RunControlPanel({
           </button>
         ) : null}
       </div>
-      {notice ? <p className="live-run-control-notice">{notice}</p> : null}
       {action ? (
         <div className="live-run-control-confirmation" role="group">
           <label htmlFor="live-run-control-reason">操作原因</label>
@@ -540,7 +546,6 @@ function RunControlPanel({
                 ? "确认后将夺取过期租约并复用当前运行；旧 Worker 的后续写入会被拒绝。"
                 : "确认后将创建新的运行，原运行及审计记录保持不变。"}
           </p>
-          {error ? <div role="alert">{error.message}</div> : null}
           <div>
             <button disabled={pending} onClick={onCancel} type="button">
               取消

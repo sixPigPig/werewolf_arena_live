@@ -623,16 +623,13 @@ def test_migrate_player_avatar_assets_command_imports_legacy_files(
         session.add(
             VirtualPlayerProfile(
                 id="legacy-profile",
-                owner_user_id=None,
                 display_name="旧图玩家",
                 model_provider="deepseek",
                 model="deepseek-v4-flash",
                 personality_id="balanced",
                 personality_text="稳健推进。",
                 appearance_id="default",
-                avatar_prompt="",
                 avatar_image_url="/api/v1/player-profiles/avatar/legacy.png",
-                avatar_image_path="",
                 avatar_image_mime="image/png",
                 tags=[],
             )
@@ -679,16 +676,13 @@ def test_migrate_player_avatar_assets_command_reuses_and_counts_missing_files(
             session.add(
                 VirtualPlayerProfile(
                     id=profile_id,
-                    owner_user_id=None,
                     display_name=profile_id,
                     model_provider="deepseek",
                     model="deepseek-v4-flash",
                     personality_id="balanced",
                     personality_text="稳健推进。",
                     appearance_id="default",
-                    avatar_prompt="",
                     avatar_image_url=f"/api/v1/player-profiles/avatar/{filename}",
-                    avatar_image_path="",
                     avatar_image_mime="image/png",
                     tags=[],
                 )

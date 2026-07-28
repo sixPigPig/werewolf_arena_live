@@ -63,11 +63,21 @@ class VirtualPlayerProfile(Base):
             "voice_config_version >= 1",
             name="ck_virtual_player_profiles_voice_version_positive",
         ),
+        CheckConstraint(
+            "(status = 'published' AND display_order IS NOT NULL AND display_order >= 1) OR "
+            "(status IN ('draft', 'archived') AND display_order IS NULL)",
+            name="ck_virtual_player_profiles_display_order_lifecycle",
+        ),
         Index(
             "ix_virtual_player_profiles_status_display_order",
             "status",
             "display_order",
             "id",
+        ),
+        Index(
+            "uq_virtual_player_profiles_published_display_order",
+            "display_order",
+            unique=True,
         ),
         Index(
             "ix_virtual_player_profiles_status_model",
@@ -95,16 +105,13 @@ class VirtualPlayerProfile(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80), nullable=False)
     model_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(120), nullable=False)
     personality_id: Mapped[str] = mapped_column(String(40), nullable=False, default="balanced")
     personality_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     appearance_id: Mapped[str] = mapped_column(String(40), nullable=False, default="default")
-    avatar_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    avatar_image_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_image_mime: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     avatar_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("player_avatar_assets.id"),
@@ -157,8 +164,7 @@ class VirtualPlayerProfile(Base):
         nullable=False,
         default=list,
     )
-    display_order: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
-    favorite: Mapped[bool] = mapped_column(nullable=False, default=False)
+    display_order: Mapped[int | None] = mapped_column(nullable=True, default=None)
     featured: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -169,14 +175,13 @@ class VirtualPlayerProfile(Base):
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="published",
-        server_default="published",
+        default="draft",
+        server_default="draft",
     )
     version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True).evaluates_none(),
         nullable=True,
-        server_default=func.now(),
     )
     published_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

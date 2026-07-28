@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import AntApp from "antd/es/app";
 
 import { AdminSessionContext } from "@/features/auth/session-context";
 import ModelsPage from "@/features/models/ModelsPage";
@@ -9,6 +10,7 @@ import {
   expectAntdSelectLabel,
   selectAntdOption,
 } from "@/tests/antd-select";
+import { expectAdminNotification } from "@/tests/admin-notification";
 
 function renderModelsPage() {
   const queryClient = new QueryClient({
@@ -16,32 +18,34 @@ function renderModelsPage() {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <AdminSessionContext.Provider
-        value={{
-          clearError: vi.fn(),
-          error: null,
-          loginWithDevSession: vi.fn(),
-          logout: vi.fn(),
-          pendingAction: null,
-          refreshSession: vi.fn(),
-          runtimeMode: "authenticated",
-          session: {
-            user: {
-              id: "1",
-              email: "admin@example.test",
-              display_name: "模型管理员",
-              role: "super_admin",
+      <AntApp notification={{ placement: "bottomRight" }}>
+        <AdminSessionContext.Provider
+          value={{
+            clearError: vi.fn(),
+            error: null,
+            loginWithDevSession: vi.fn(),
+            logout: vi.fn(),
+            pendingAction: null,
+            refreshSession: vi.fn(),
+            runtimeMode: "authenticated",
+            session: {
+              user: {
+                id: "1",
+                email: "admin@example.test",
+                display_name: "模型管理员",
+                role: "super_admin",
+              },
+              permissions: ["settings.read", "settings.manage"],
+              csrf_token: "csrf-models",
+              session_expires_at: "2999-01-01T00:00:00Z",
             },
-            permissions: ["settings.read", "settings.manage"],
-            csrf_token: "csrf-models",
-            session_expires_at: "2999-01-01T00:00:00Z",
-          },
-          status: "authenticated",
-          unauthenticatedReason: null,
-        }}
-      >
-        <ModelsPage />
-      </AdminSessionContext.Provider>
+            status: "authenticated",
+            unauthenticatedReason: null,
+          }}
+        >
+          <ModelsPage />
+        </AdminSessionContext.Provider>
+      </AntApp>
     </QueryClientProvider>,
   );
 }
@@ -83,6 +87,7 @@ describe("model management flow", () => {
     expect(screen.getByText("手动同步")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "更新 Agent Plan 模型" }));
+    await expectAdminNotification("Agent Plan 模型已同步");
     await waitFor(() => {
       const fetchMock = vi.mocked(fetch);
       expect(
@@ -98,6 +103,7 @@ describe("model management flow", () => {
     await user.click(proText);
     await user.click(within(details!).getByLabelText("允许虚拟玩家使用"));
     await user.click(within(details!).getByRole("button", { name: "保存配置" }));
+    await expectAdminNotification("deepseek-v4-pro 配置已保存");
 
     await waitFor(() => {
       const patch = vi.mocked(fetch).mock.calls.find(([input, init]) =>

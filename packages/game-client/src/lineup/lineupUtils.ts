@@ -5,7 +5,6 @@ export type LineupPlayerProfile = {
   model_provider: string;
   model: string;
   personality_id: string;
-  favorite?: boolean;
   is_favorite?: boolean;
 };
 
@@ -179,7 +178,7 @@ export function summarizeLineup(
 }
 
 function isPlayerProfileFavorite(profile: LineupPlayerProfile) {
-  return profile.is_favorite ?? profile.favorite ?? false;
+  return profile.is_favorite ?? false;
 }
 
 export function removeInvalidProfileRefs(

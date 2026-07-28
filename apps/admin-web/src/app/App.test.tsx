@@ -53,7 +53,7 @@ describe("admin app routes", () => {
     const router = renderRoute("/content/players");
 
     await user.click(
-      await screen.findByRole("link", { name: "编辑 雾灯听风" }),
+      await screen.findByRole("button", { name: "编辑 雾灯听风" }),
     );
 
     expect(

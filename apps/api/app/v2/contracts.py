@@ -98,7 +98,6 @@ class V2LobbyPlayerSnapshot(BaseModel):
     personality_id: str | None = Field(default=None, max_length=80)
     personality: str | None = Field(default=None, max_length=4000)
     appearance_id: str | None = Field(default=None, max_length=80)
-    avatar_prompt: str | None = Field(default=None, max_length=1000)
     avatar_image_url: str | None = Field(default=None, max_length=2000)
     avatar_asset_id: str | None = Field(default=None, max_length=120)
     catchphrases: list[str] | None = Field(default=None, max_length=20)

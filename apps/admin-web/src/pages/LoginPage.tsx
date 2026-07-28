@@ -1,25 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Card from "antd/es/card";
 import Divider from "antd/es/divider";
 import Flex from "antd/es/flex";
 import Spin from "antd/es/spin";
 import Typography from "antd/es/typography";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
 import { getAdminLoginOptions } from "@/features/auth/auth-api";
 import { isAdminDevLoginEnabled } from "@/features/auth/runtime-config";
 import { useAdminSession } from "@/features/auth/session-context";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function LoginPage() {
+  const { notification } = AntApp.useApp();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [submitted, setSubmitted] = useState(false);
   const {
     clearError,
-    error,
     loginWithDevSession,
     pendingAction,
     status,
@@ -39,6 +40,25 @@ export default function LoginPage() {
     ? loginOptions.data.oidc_start_path
     : null;
 
+  useEffect(() => {
+    if (unauthenticatedReason === "signed-out") {
+      notification.success({
+        key: "admin-signed-out",
+        title: "已安全退出后台",
+      });
+    }
+  }, [notification, unauthenticatedReason]);
+
+  useEffect(() => {
+    if (oidcError) {
+      notification.error({
+        description: oidcErrorMessage(oidcError),
+        key: "admin-oidc-login-error",
+        title: "企业账号登录失败",
+      });
+    }
+  }, [notification, oidcError]);
+
   if (status === "loading") {
     return (
       <main className="auth-page">
@@ -57,12 +77,18 @@ export default function LoginPage() {
   async function handleDevLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     clearError();
-    setSubmitted(true);
     try {
       await loginWithDevSession();
+      notification.success({ title: "登录成功" });
       navigate(returnTo, { replace: true });
-    } catch {
-      // The provider exposes a structured, user-safe error below.
+    } catch (error) {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "登录失败，请重新尝试。",
+        ),
+        title: "登录失败",
+      });
     }
   }
 
@@ -85,10 +111,6 @@ export default function LoginPage() {
           {unauthenticatedReason === "expired" ? (
             <Alert role="status" showIcon title="会话已过期。请重新登录后继续。" type="warning" />
           ) : null}
-          {unauthenticatedReason === "signed-out" ? (
-            <Alert role="status" showIcon title="已安全退出后台。" type="success" />
-          ) : null}
-
           {oidcStartPath ? (
             <Button
               block
@@ -129,30 +151,6 @@ export default function LoginPage() {
             />
           ) : null}
 
-          {oidcError ? (
-            <Alert
-              description={oidcErrorMessage(oidcError)}
-              role="alert"
-              showIcon
-              title="企业账号登录失败"
-              type="error"
-            />
-          ) : null}
-
-          {submitted && error ? (
-            <Alert
-              description={
-                <Flex gap={2} vertical>
-                  <span>{error.message}</span>
-                  {error.requestId ? <small>请求编号：{error.requestId}</small> : null}
-                </Flex>
-              }
-              role="alert"
-              showIcon
-              title={error.problem.title}
-              type="error"
-            />
-          ) : null}
         </Flex>
 
         <Divider />

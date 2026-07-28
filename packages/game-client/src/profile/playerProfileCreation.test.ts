@@ -20,7 +20,6 @@ function profile(
 
   return {
     id,
-    owner_user_id: null,
     display_name,
     model_provider: "deepseek",
     model: "deepseek-chat",
@@ -38,9 +37,7 @@ function profile(
     talkativeness: 3,
     example_messages: [],
     display_order: 1,
-    favorite: false,
     appearance_id: "default",
-    avatar_prompt: "",
     avatar_asset_id: null,
     avatar_image_url: "",
     avatar_image_mime: "",

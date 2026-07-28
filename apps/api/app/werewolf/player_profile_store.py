@@ -10,17 +10,14 @@ from typing import Any
 @dataclass
 class StoredPlayerProfile:
     id: str
-    owner_user_id: int | None
     display_name: str
     model_provider: str
     model: str
     personality_id: str
     personality_text: str
     appearance_id: str
-    avatar_prompt: str
     avatar_asset_id: str | None
     avatar_image_url: str
-    avatar_image_path: str
     avatar_image_mime: str
     short_description: str
     background_story: str
@@ -33,7 +30,6 @@ class StoredPlayerProfile:
     leadership_tendency: int
     talkativeness: int
     example_messages: list[str]
-    favorite: bool
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -85,7 +81,6 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
     created_at = _parse_datetime(payload.get("created_at"))
     return StoredPlayerProfile(
         id=profile_id,
-        owner_user_id=_optional_int(payload.get("owner_user_id")),
         display_name=display_name,
         model_provider=model_provider,
         model=model,
@@ -96,10 +91,8 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
             else payload.get("personality") or ""
         ),
         appearance_id=appearance_id,
-        avatar_prompt=str(payload.get("avatar_prompt") or ""),
         avatar_asset_id=_optional_string(payload.get("avatar_asset_id")),
         avatar_image_url=str(payload.get("avatar_image_url") or ""),
-        avatar_image_path=str(payload.get("avatar_image_path") or ""),
         avatar_image_mime=str(payload.get("avatar_image_mime") or ""),
         short_description=str(payload.get("short_description") or ""),
         background_story=str(payload.get("background_story") or ""),
@@ -112,7 +105,6 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         leadership_tendency=_int_from_payload(payload.get("leadership_tendency"), default=3),
         talkativeness=_int_from_payload(payload.get("talkativeness"), default=3),
         example_messages=_strings_from_payload(payload.get("example_messages")),
-        favorite=_bool_from_payload(payload.get("favorite"), default=False),
         tags=_tags_from_payload(payload.get("tags")),
         created_at=created_at,
         updated_at=_parse_datetime(payload.get("updated_at"), fallback=created_at),
@@ -140,20 +132,6 @@ def _int_from_payload(value: object, *, default: int) -> int:
     if parsed is None:
         return default
     return parsed
-
-
-def _bool_from_payload(value: object, *, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
-    if value is None:
-        return default
-    return bool(value)
 
 
 def _parse_datetime(value: object, fallback: datetime | None = None) -> datetime:

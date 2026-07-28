@@ -412,7 +412,6 @@
 .model-provider-panel,
 .player-filter-panel,
 .player-lifecycle-panel,
-.player-list-panel,
 .rule-contract-panel,
 .rule-set-filter-panel,
 .rule-set-list-panel,
@@ -553,7 +552,6 @@
 }
 
 .game-pagination button,
-.player-pagination button,
 .rule-set-pagination button,
 .voice-pagination button {
   min-height: 32px;
@@ -565,7 +563,6 @@
 }
 
 .game-pagination button:hover:not(:disabled),
-.player-pagination button:hover:not(:disabled),
 .rule-set-pagination button:hover:not(:disabled),
 .voice-pagination button:hover:not(:disabled) {
   border-color: #0958d9;

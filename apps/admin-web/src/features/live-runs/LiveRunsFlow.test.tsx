@@ -17,6 +17,7 @@ import {
   contractLiveRunItem,
 } from "@/features/live-runs/test-fixtures";
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
@@ -337,10 +338,8 @@ describe("admin live run flow", () => {
     await user.type(reason, "模型持续超时，停止本次运行");
     await user.click(screen.getByRole("button", { name: "确认打断" }));
 
-    expect(
-      await screen.findByText(/停止新请求并尽快关闭当前模型流/),
-    ).toBeInTheDocument();
-    expect(screen.getByText("打断请求已提交")).toBeInTheDocument();
+    const notification = await expectAdminNotification("打断请求已提交");
+    expect(notification).toHaveTextContent("停止新请求并尽快关闭当前模型流");
     expect(screen.queryByRole("button", { name: "打断对局" })).toBeNull();
   });
 
@@ -398,6 +397,7 @@ describe("admin live run flow", () => {
     await user.type(screen.getByLabelText("操作原因"), "服务恢复，继续执行");
     await user.click(screen.getByRole("button", { name: "确认恢复" }));
 
+    await expectAdminNotification("对局已从检查点恢复");
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(
         "/operations/runs/run_resumed123",

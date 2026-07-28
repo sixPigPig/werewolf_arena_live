@@ -17,7 +17,6 @@ class PlayerConfig:
     personality_id: str
     personality: str
     appearance_id: str
-    avatar_prompt: str
     tags: tuple[str, ...]
     avatar_image_url: str = ""
     avatar_asset_id: str | None = None
@@ -43,7 +42,6 @@ class PlayerConfig:
             "personality_id": self.personality_id,
             "personality": self.personality,
             "appearance_id": self.appearance_id,
-            "avatar_prompt": self.avatar_prompt,
             "avatar_image_url": self.avatar_image_url,
             "avatar_asset_id": self.avatar_asset_id,
             "catchphrases": list(self.catchphrases),
@@ -121,11 +119,6 @@ def player_config_from_profile(
             or _profile_string(profile, "appearance_id")
             or "default"
         ),
-        avatar_prompt=(
-            _override_string(overrides, "avatar_prompt")
-            or _profile_string(profile, "avatar_prompt")
-            or ""
-        ),
         avatar_image_url=(
             _override_string(overrides, "avatar_image_url")
             or _profile_avatar_image_url(profile)
@@ -201,7 +194,6 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         personality_id=clean_optional_string(data.get("personality_id")) or "balanced",
         personality=clean_optional_string(data.get("personality")) or "",
         appearance_id=clean_optional_string(data.get("appearance_id")) or "default",
-        avatar_prompt=clean_optional_string(data.get("avatar_prompt")) or "",
         avatar_image_url=clean_optional_string(data.get("avatar_image_url")) or "",
         avatar_asset_id=clean_optional_string(data.get("avatar_asset_id")),
         catchphrases=_tags_from_value(data.get("catchphrases")),

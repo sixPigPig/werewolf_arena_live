@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Input from "antd/es/input";
 import Select from "antd/es/select";
@@ -39,8 +40,10 @@ import { adminGameKeys } from "@/features/game-records/query-keys";
 import { controlAdminLiveRun } from "@/features/live-runs/api";
 import { adminLiveRunKeys } from "@/features/live-runs/query-keys";
 import type { AdminGameListItem } from "@/features/game-records/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function GameRecordsPage() {
+  const { notification } = AntApp.useApp();
   const { session } = useAdminSession();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -85,9 +88,16 @@ export default function GameRecordsPage() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) =>
       deleteAdminGame(sessionId, session?.csrf_token ?? ""),
-    onSuccess: async () => {
+    onError: (error) => {
+      notification.error({
+        description: presentGameDeleteError(error),
+        title: "删除对局失败",
+      });
+    },
+    onSuccess: async (_, sessionId) => {
       setDeleteState(null);
       await queryClient.invalidateQueries({ queryKey: adminGameKeys.lists() });
+      notification.success({ title: `对局 ${sessionId} 已删除` });
     },
   });
   const interruptMutation = useMutation({
@@ -98,12 +108,22 @@ export default function GameRecordsPage() {
         reason,
         session?.csrf_token ?? "",
       ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "打断请求提交失败，请稍后重试。",
+        ),
+        title: "打断对局失败",
+      });
+    },
     onSuccess: async () => {
       setInterruptState(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: adminGameKeys.lists() }),
         queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all }),
       ]);
+      notification.success({ title: "打断请求已提交" });
     },
   });
 
@@ -388,11 +408,7 @@ export default function GameRecordsPage() {
 
       {deleteState ? (
         <GameDeleteDialog
-          error={
-            deleteMutation.isError
-              ? presentGameDeleteError(deleteMutation.error)
-              : null
-          }
+          error={null}
           game={deleteState.game}
           onClose={closeDeleteDialog}
           onConfirm={() =>
@@ -404,7 +420,7 @@ export default function GameRecordsPage() {
       ) : null}
       {interruptState ? (
         <GameInterruptDialog
-          error={interruptMutation.isError ? interruptMutation.error : null}
+          error={null}
           onClose={closeInterruptDialog}
           onConfirm={(reason) =>
             interruptMutation.mutate({

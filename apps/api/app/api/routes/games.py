@@ -189,7 +189,6 @@ class CreatePlayerConfigRequest(BaseModel):
     personality: str | None = None
     personality_text: str | None = None
     appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
-    avatar_prompt: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = Field(default=None, max_length=8)
 
 

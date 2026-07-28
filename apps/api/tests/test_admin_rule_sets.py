@@ -230,6 +230,7 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                     status="published",
                     published_at=now,
                     deleted_at=None,
+                    display_order=index + 1,
                 )
             )
         db.add(
@@ -253,6 +254,7 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                 status="published",
                 published_at=now,
                 deleted_at=now,
+                display_order=4,
             )
         )
         for seat_number in range(1, 6):

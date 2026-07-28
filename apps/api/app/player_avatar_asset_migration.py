@@ -72,7 +72,6 @@ def migrate_player_avatar_assets(
             profile.avatar_asset_id = asset.id
             profile.avatar_image_url = avatar_asset_url(asset.id)
             profile.avatar_image_mime = asset.content_type
-            profile.avatar_image_path = ""
             updated_count += 1
         db.commit()
     except (OSError, SQLAlchemyError, ValueError) as exc:

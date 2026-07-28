@@ -17,6 +17,7 @@ import {
   contractGameModelRequests,
 } from "@/features/game-records/test-fixtures";
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
@@ -202,6 +203,7 @@ describe("admin game record flow", () => {
 
     await user.click(screen.getByRole("button", { name: "确认删除" }));
 
+    await expectAdminNotification("对局 game_1234abcd 已删除");
     expect(
       await screen.findByRole("heading", { name: "还没有对局记录" }),
     ).toBeInTheDocument();
@@ -283,6 +285,7 @@ describe("admin game record flow", () => {
     expect(within(dialog).getByText(/run_1234abcd/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "确认打断" }));
 
+    await expectAdminNotification("打断请求已提交");
     expect(await screen.findByText("正在打断")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "打断对局 game_1234abcd" }),
@@ -794,6 +797,7 @@ describe("admin game record flow", () => {
     await user.click(
       await screen.findByRole("button", { name: "重试质量评估" }),
     );
+    await expectAdminNotification("质量评估已重新执行");
     await waitFor(() => expect(detailCalls).toBeGreaterThan(1));
     expect(
       fetchMock.mock.calls.filter(([input]) =>

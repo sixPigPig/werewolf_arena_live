@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { contractJudgeVoiceList } from "@/features/voice-assets/test-fixtures";
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { selectAntdOption } from "@/tests/antd-select";
 
 function renderRoute(path: string) {
@@ -188,9 +189,11 @@ describe("admin voice asset flow", () => {
     await screen.findByRole("heading", { name: "法官语音资产" });
     await user.click(screen.getByRole("button", { name: "生成缺失语音" }));
 
+    await expectAdminNotification("语音生成任务已创建");
     const status = await screen.findByRole("status", { name: "语音生成任务" });
     expect(status).toHaveTextContent("生成任务：已完成");
     expect(status).toHaveTextContent("2 / 2");
+    await expectAdminNotification("语音生成任务已完成");
   });
 
   it("enforces deep-link and navigation permission", async () => {

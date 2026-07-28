@@ -1155,7 +1155,6 @@ a {
 }
 
 .player-filter-panel,
-.player-list-panel,
 .player-form-section,
 .player-preview-card,
 .player-lifecycle-panel,
@@ -1211,112 +1210,6 @@ a {
   font-size: 11px;
 }
 
-.player-list-panel {
-  overflow: hidden;
-}
-
-.player-list-heading {
-  display: flex;
-  min-height: 72px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 16px 20px;
-  border-bottom: 1px solid #eaecf0;
-}
-
-.player-list-heading > div {
-  min-width: 0;
-}
-
-.player-list-heading span {
-  color: #667085;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-}
-
-.player-list-heading h2 {
-  margin: 4px 0 0;
-  font-size: 17px;
-}
-
-.player-list-heading p {
-  margin: 0;
-  color: #667085;
-  font-size: 11px;
-}
-
-.player-admin-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.player-admin-row {
-  display: grid;
-  grid-template-columns:
-    minmax(210px, 1.4fr) minmax(112px, 0.65fr) minmax(175px, 1fr)
-    minmax(120px, 0.7fr) minmax(185px, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-  min-height: 92px;
-  padding: 14px 20px;
-  border-bottom: 1px solid #f2f4f7;
-}
-
-.player-admin-row:last-child {
-  border-bottom: 0;
-}
-
-.player-admin-row:hover {
-  background: #fcfcfd;
-}
-
-.player-admin-identity,
-.player-admin-status-cell,
-.player-admin-model-cell,
-.player-admin-tags-cell,
-.player-admin-updated-cell {
-  display: flex;
-  min-width: 0;
-}
-
-.player-admin-identity {
-  align-items: center;
-  gap: 11px;
-}
-
-.player-admin-identity > span:last-child,
-.player-admin-model-cell,
-.player-admin-updated-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.player-admin-identity strong,
-.player-admin-model-cell strong,
-.player-admin-updated-cell strong {
-  overflow: hidden;
-  color: #344054;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-admin-identity small,
-.player-admin-model-cell small,
-.player-admin-updated-cell small,
-.player-admin-tags-cell small {
-  overflow: hidden;
-  color: #98a2b3;
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-admin-avatar,
 .player-preview-avatar {
   display: grid;
   overflow: hidden;
@@ -1328,13 +1221,6 @@ a {
   font-weight: 800;
 }
 
-.player-admin-avatar {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-}
-
-.player-admin-avatar img,
 .player-preview-avatar img,
 .player-avatar-readonly img {
   width: 100%;
@@ -1342,13 +1228,7 @@ a {
   object-fit: cover;
 }
 
-.player-admin-status-cell {
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.player-status-badge,
-.player-featured-badge {
+.player-status-badge {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
@@ -1374,17 +1254,6 @@ a {
   background: #f2f4f7;
 }
 
-.player-featured-badge {
-  color: #175cd3;
-  background: #eff8ff;
-}
-
-.player-admin-tags-cell {
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.player-admin-tags-cell > span,
 .player-preview-tags > span {
   padding: 3px 7px;
   border-radius: 999px;
@@ -1392,119 +1261,6 @@ a {
   background: #f2f4f7;
   font-size: 9px;
   white-space: nowrap;
-}
-
-.player-admin-action-cell {
-  justify-self: end;
-}
-
-.player-empty-state,
-.player-list-error {
-  display: flex;
-  min-height: 280px;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  padding: 36px 20px;
-  text-align: center;
-}
-
-.player-empty-state > span {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  place-items: center;
-  border-radius: 14px;
-  color: #175cd3;
-  background: #eff8ff;
-  font-weight: 800;
-}
-
-.player-empty-state h3,
-.player-list-error h3 {
-  margin: 12px 0 5px;
-  font-size: 15px;
-}
-
-.player-empty-state p,
-.player-list-error p {
-  max-width: 480px;
-  margin: 0;
-  color: #667085;
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.player-list-error small {
-  margin-top: 8px;
-  color: #98a2b3;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
-}
-
-.player-list-error button {
-  margin-top: 16px;
-  padding: 8px 12px;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.player-list-loading {
-  display: grid;
-  gap: 10px;
-  padding: 20px;
-}
-
-.player-list-loading > span {
-  display: block;
-  height: 70px;
-  border-radius: 10px;
-  background: linear-gradient(90deg, #f2f4f7, #fcfcfd, #f2f4f7);
-  background-size: 200% 100%;
-  animation: player-skeleton 1.2s linear infinite;
-}
-
-.player-list-loading p {
-  margin: 0;
-  color: #667085;
-  font-size: 11px;
-  text-align: center;
-}
-
-@keyframes player-skeleton {
-  to {
-    background-position: -200% 0;
-  }
-}
-
-.player-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 14px 20px;
-  border-top: 1px solid #eaecf0;
-  background: #fcfcfd;
-}
-
-.player-pagination button {
-  min-height: 34px;
-  padding: 7px 11px;
-  border: 1px solid #d0d5dd;
-  border-radius: 7px;
-  color: #344054;
-  background: #ffffff;
-  font-size: 10px;
-}
-
-.player-pagination button:disabled {
-  opacity: 0.45;
-}
-
-.player-pagination span {
-  color: #667085;
-  font-size: 10px;
 }
 
 .player-back-link {
@@ -5163,15 +4919,6 @@ a {
     grid-template-columns: 1fr 1fr;
   }
 
-  .player-admin-row {
-    grid-template-columns: minmax(200px, 1.3fr) minmax(110px, 0.6fr) minmax(160px, 1fr) auto;
-  }
-
-  .player-admin-tags-cell,
-  .player-admin-updated-cell {
-    display: none;
-  }
-
   .game-filter-panel form {
     grid-template-columns: repeat(3, minmax(120px, 1fr));
   }
@@ -5298,41 +5045,6 @@ a {
 
   .player-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .player-admin-list {
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-    background: #f9fafb;
-  }
-
-  .player-admin-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 15px;
-    border: 1px solid #eaecf0;
-    border-radius: 12px;
-    background: #ffffff;
-  }
-
-  .player-admin-identity,
-  .player-admin-model-cell {
-    grid-column: 1;
-  }
-
-  .player-admin-status-cell,
-  .player-admin-action-cell {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .player-admin-model-cell {
-    padding-left: 59px;
-  }
-
-  .player-admin-action-cell {
-    grid-row: 2;
   }
 
   .player-tendency-grid {
@@ -5527,16 +5239,6 @@ a {
 
   .player-form-field.is-wide {
     grid-column: auto;
-  }
-
-  .player-list-heading,
-  .player-pagination {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .player-pagination {
-    align-items: center;
   }
 
   .player-dialog-actions {

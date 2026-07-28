@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -49,8 +50,10 @@ import type {
   AdminGameP2Quality,
   AdminPublicOutcome,
 } from "@/features/p2-quality/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function GameRecordDetailPage() {
+  const { notification } = AntApp.useApp();
   const { sessionId } = useParams();
   const queryClient = useQueryClient();
   const [debugRequestedFor, setDebugRequestedFor] = useState<string | null>(
@@ -153,11 +156,21 @@ export default function GameRecordDetailPage() {
         sessionId!,
         session?.csrf_token ?? "",
       ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "质量评估重试失败，请稍后重试。",
+        ),
+        title: "质量评估重试失败",
+      });
+    },
     onSuccess: async () => {
       setQualityIssuesRequestedFor(null);
       await queryClient.invalidateQueries({
         queryKey: adminGameKeys.detail(sessionId ?? "missing"),
       });
+      notification.success({ title: "质量评估已重新执行" });
     },
   });
   const interruptMutation = useMutation({
@@ -168,6 +181,15 @@ export default function GameRecordDetailPage() {
         reason,
         session?.csrf_token ?? "",
       ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "打断请求提交失败，请稍后重试。",
+        ),
+        title: "打断对局失败",
+      });
+    },
     onSuccess: async () => {
       setInterruptState(null);
       await Promise.all([
@@ -176,6 +198,7 @@ export default function GameRecordDetailPage() {
         }),
         queryClient.invalidateQueries({ queryKey: adminLiveRunKeys.all }),
       ]);
+      notification.success({ title: "打断请求已提交" });
     },
   });
 
@@ -294,7 +317,7 @@ export default function GameRecordDetailPage() {
         onRetryEvaluation={() => qualityRetry.mutate()}
         onRetryIssues={() => void qualityIssuesQuery.refetch()}
         quality={game.quality_evaluation}
-        retryError={qualityRetry.isError}
+        retryError={false}
         retryPending={qualityRetry.isPending}
       />
 
@@ -444,7 +467,7 @@ export default function GameRecordDetailPage() {
       ) : null}
       {interruptState ? (
         <GameInterruptDialog
-          error={interruptMutation.isError ? interruptMutation.error : null}
+          error={null}
           onClose={() => {
             if (interruptMutation.isPending) return;
             interruptMutation.reset();

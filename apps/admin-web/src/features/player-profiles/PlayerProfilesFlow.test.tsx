@@ -14,6 +14,7 @@ import {
   getOpenAntdOptions,
   selectAntdOption,
 } from "@/tests/antd-select";
+import { expectAdminNotification } from "@/tests/admin-notification";
 
 function renderRoute(path: string) {
   const queryClient = new QueryClient({
@@ -46,17 +47,47 @@ describe("admin player profile flow", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderRoute("/content/players");
 
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(
-      await screen.findByRole("list", { name: "虚拟玩家列表" }),
+      screen.getByRole("columnheader", { name: "状态 / C 端" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("暮鸦归票")).toBeInTheDocument();
-    expect(screen.getByText("雾灯听风")).toBeInTheDocument();
+    expect(await screen.findByText("暮鸦归票")).toBeInTheDocument();
+    expect(await screen.findByText("雾灯听风")).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(
       Array.from(document.querySelectorAll<HTMLImageElement>("img")).every(
         (image) => image.src.startsWith("data:"),
       ),
     ).toBe(true);
+  });
+
+  it("defaults to C-end order and exposes the published position controls", async () => {
+    renderRoute("/content/players");
+
+    const playerName = await screen.findByText("暮鸦归票");
+    expect(playerName.closest("table")).not.toBeNull();
+    expectAntdSelectLabel(screen.getByLabelText("排序"), "C 端顺序");
+    expect(await screen.findByText("C 端 #1")).toBeInTheDocument();
+    const playerRow = playerName.closest("tr");
+    expect(playerRow).not.toBeNull();
+    const upButton = playerRow!.querySelector<HTMLButtonElement>(
+      '[aria-label="上移 暮鸦归票"]',
+    );
+    const downButton = playerRow!.querySelector<HTMLButtonElement>(
+      '[aria-label="下移 暮鸦归票"]',
+    );
+    const editButton = playerRow!.querySelector<HTMLButtonElement>(
+      '[aria-label="编辑 暮鸦归票"]',
+    );
+    expect(upButton).not.toBeNull();
+    expect(downButton).not.toBeNull();
+    expect(editButton).not.toBeNull();
+    expect(upButton).toBeDisabled();
+    expect(downButton).toBeEnabled();
+    expect(upButton).toHaveClass("ant-btn-sm");
+    expect(downButton).toHaveClass("ant-btn-sm");
+    expect(editButton).toHaveClass("ant-btn-sm");
+    expect(screen.getAllByText("未进入 C 端顺序")).toHaveLength(2);
   });
 
   it("shows each player's configured speaker and dialect in the list", async () => {
@@ -93,7 +124,7 @@ describe("admin player profile flow", () => {
     await user.type(screen.getByLabelText("搜索玩家"), "不存在的简介");
     await user.click(screen.getByRole("button", { name: "搜索" }));
     expect(
-      await screen.findByRole("heading", { name: "没有符合条件的玩家" }),
+      await screen.findByText(/没有符合条件的玩家/),
     ).toBeInTheDocument();
     expect(router.state.location.search).toContain(
       `q=${encodeURIComponent("不存在的简介")}`,
@@ -119,7 +150,8 @@ describe("admin player profile flow", () => {
 
     await user.click(screen.getByRole("button", { name: "AI 生成草稿" }));
 
-    expect(await screen.findByText("AI 草稿已填入，请审核后保存")).toBeInTheDocument();
+    const notification = await expectAdminNotification("AI 草稿已填入");
+    expect(notification).toHaveTextContent("请审核生成内容后再保存");
     expect(nameInput).toHaveValue("月影听风");
     expectAntdSelectLabel(screen.getByLabelText("默认模型"), "DeepSeek V4 Flash");
     expect(screen.getByRole("button", { name: "保存草稿" })).toBeEnabled();
@@ -139,6 +171,7 @@ describe("admin player profile flow", () => {
         /^\/content\/players\/preview-created-/,
       ),
     );
+    await expectAdminNotification("玩家草稿已创建");
     expect(
       await screen.findByRole("heading", { level: 1, name: "新建测试玩家" }),
     ).toBeInTheDocument();
@@ -157,7 +190,7 @@ describe("admin player profile flow", () => {
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "保存修改" }));
-    expect(await screen.findByText("玩家资料已保存")).toBeInTheDocument();
+    await expectAdminNotification("玩家资料已保存");
     expect(publishButton).toBeEnabled();
 
     await user.click(publishButton);
@@ -174,7 +207,7 @@ describe("admin player profile flow", () => {
     await user.clear(reason);
     await user.type(reason, "内容审核已经通过");
     await user.click(screen.getByRole("button", { name: "确认发布" }));
-    expect(await screen.findByText("玩家已发布")).toBeInTheDocument();
+    await expectAdminNotification("玩家已发布");
     expect(screen.queryByRole("alertdialog", { name: "发布虚拟玩家" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
   });
@@ -228,7 +261,7 @@ describe("admin player profile flow", () => {
     await user.type(instructionInput, "  自然接话  ");
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
-    expect(await screen.findByText("玩家资料已保存")).toBeInTheDocument();
+    await expectAdminNotification("玩家资料已保存");
     expect(instructionInput).toHaveValue("自然接话");
     expect(
       screen.getByText(/当前生效：zh_female_vv_uranus_bigtts/),
@@ -242,11 +275,10 @@ describe("admin player profile flow", () => {
     const speaker = screen.getByRole("combobox", { name: "玩家音色" });
 
     await user.click(speaker);
-    expect(
-      getOpenAntdOptions().some((option) =>
-        option.textContent?.includes("zh_female_vv_uranus_bigtts"),
-      ),
-    ).toBe(true);
+    const dialectSpeaker = getOpenAntdOptions().find((option) =>
+      option.textContent?.includes("zh_female_vv_uranus_bigtts"),
+    );
+    expect(dialectSpeaker).toHaveTextContent("支持方言");
     expect(
       getOpenAntdOptions().some((option) =>
         option.textContent?.includes("zh_male_m191_uranus_bigtts"),
@@ -256,11 +288,11 @@ describe("admin player profile flow", () => {
 
     await selectAntdOption(user, gender, "男");
     await user.click(speaker);
-    expect(
-      getOpenAntdOptions().some((option) =>
-        option.textContent?.includes("zh_male_m191_uranus_bigtts"),
-      ),
-    ).toBe(true);
+    const standardSpeaker = getOpenAntdOptions().find((option) =>
+      option.textContent?.includes("zh_male_m191_uranus_bigtts"),
+    );
+    expect(standardSpeaker).toBeDefined();
+    expect(standardSpeaker).not.toHaveTextContent("支持方言");
     expect(
       getOpenAntdOptions().some((option) =>
         option.textContent?.includes("zh_female_vv_uranus_bigtts"),
@@ -345,12 +377,12 @@ describe("admin player profile flow", () => {
     expectAntdSelectLabel(speakerSelect, /clone-speaker.*当前已保存/);
     await user.click(screen.getByRole("button", { name: "试听当前草稿" }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("试听音色不支持");
-    expect(alert).toHaveTextContent(
+    const notification = await expectAdminNotification("语音试听失败");
+    expect(notification).toHaveTextContent("试听音色不支持");
+    expect(notification).toHaveTextContent(
       "错误码：admin_player_voice_preview_context_unsupported",
     );
-    expect(alert).not.toHaveTextContent("API Key");
+    expect(notification).not.toHaveTextContent("API Key");
   });
 
   it("keeps the voice section absent for legacy profiles", async () => {
@@ -391,12 +423,12 @@ describe("admin player profile flow", () => {
     await user.click(screen.getByRole("button", { name: "归档" }));
     await user.type(screen.getByLabelText("操作原因"), "内容运营下线");
     await user.click(screen.getByRole("button", { name: "确认归档" }));
-    expect(await screen.findByText("玩家已归档")).toBeInTheDocument();
+    await expectAdminNotification("玩家已归档");
 
     await user.click(screen.getByRole("button", { name: "恢复发布" }));
     await user.type(screen.getByLabelText("操作原因"), "内容重新审核通过");
     await user.click(screen.getByRole("button", { name: "确认恢复" }));
-    expect(await screen.findByText("玩家已恢复发布")).toBeInTheDocument();
+    await expectAdminNotification("玩家已恢复发布");
   });
 
   it("uses authenticated server pagination and hides writes from a read-only principal", async () => {
@@ -439,9 +471,11 @@ describe("admin player profile flow", () => {
 
     expect(await screen.findByText("服务器玩家")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "新建玩家草稿" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看 服务器玩家" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "查看 服务器玩家" }),
+    ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(screen.getByTitle("下一页"));
     await waitFor(() => expect(router.state.location.search).toContain("page=2"));
     await waitFor(() =>
       expect(
@@ -505,7 +539,7 @@ describe("admin player profile flow", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "无法读取玩家内容" }),
+      await screen.findByText("无法读取玩家内容"),
     ).toBeInTheDocument();
     expect(screen.getByText("请求编号：req-player-error")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新加载" })).toBeInTheDocument();

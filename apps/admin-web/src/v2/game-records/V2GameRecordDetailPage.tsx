@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Descriptions from "antd/es/descriptions";
 import Drawer from "antd/es/drawer";
@@ -52,6 +53,7 @@ import {
   ReadableModelOutput,
   ReadableRawEvents,
 } from "@/v2/game-records/request-presentation";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 import type {
   V2GameRecordEvent,
   V2GameRecordDetail,
@@ -111,6 +113,7 @@ function V2GameRecordWorkspace({
   onBack: () => void;
   refreshedAt: number;
 }) {
+  const { notification } = AntApp.useApp();
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
   const timeline = useMemo(() => buildV2Timeline(game), [game]);
@@ -137,6 +140,15 @@ function V2GameRecordWorkspace({
         stopReason.trim(),
         session?.csrf_token ?? "",
       ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "暂时无法打断对局，请稍后重试。",
+        ),
+        title: "打断 V2 对局失败",
+      });
+    },
     onSuccess: async () => {
       setStopDialogOpen(false);
       await Promise.all([
@@ -145,6 +157,7 @@ function V2GameRecordWorkspace({
         }),
         queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
       ]);
+      notification.success({ title: "V2 对局打断请求已提交" });
     },
   });
 
@@ -430,18 +443,6 @@ function V2GameRecordWorkspace({
           rows={3}
           value={stopReason}
         />
-        {stopMutation.isError ? (
-          <Alert
-            message="打断请求未成功"
-            description={
-              isAdminApiError(stopMutation.error)
-                ? stopMutation.error.message
-                : "暂时无法打断对局，请稍后重试。"
-            }
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </AdminPage>
   );

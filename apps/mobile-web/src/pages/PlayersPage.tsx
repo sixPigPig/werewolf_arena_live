@@ -71,9 +71,14 @@ export function PlayersPage() {
                 <div className="mobile-player-card-body">
                   <div className="mobile-player-card-heading">
                     <h2>{profile.display_name}</h2>
-                    {favoritesQuery.isSuccess && profile.is_favorite ? (
-                      <span className="mobile-player-favorite">收藏</span>
-                    ) : null}
+                    <span className="mobile-player-badges">
+                      {profile.featured ? (
+                        <span className="mobile-player-featured">推荐</span>
+                      ) : null}
+                      {favoritesQuery.isSuccess && profile.is_favorite ? (
+                        <span className="mobile-player-favorite">收藏</span>
+                      ) : null}
+                    </span>
                   </div>
                   <p className="mobile-player-model">{profile.model}</p>
                   {profile.short_description ? (

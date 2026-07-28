@@ -122,7 +122,6 @@ class AdminSettingsAuthentication(BaseModel):
 
 class AdminSettingsCompatibility(BaseModel):
     legacy_content_writes_enabled: bool
-    legacy_favorite_writes_enabled: bool
     legacy_voice_generation_enabled: bool
 
 

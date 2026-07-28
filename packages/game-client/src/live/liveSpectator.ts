@@ -19,7 +19,6 @@ export type LivePlayer = {
   personalityId: string;
   personality: string;
   appearanceId: string;
-  avatarPrompt: string;
   avatarImageUrl: string;
   profileId: string | null;
   tags: string[];
@@ -174,10 +173,6 @@ function initializePlayers(state: MutableLiveSpectatorState, event: LiveGameEven
       typeof player.appearance_id === "string"
         ? player.appearance_id
         : existing.appearanceId;
-    existing.avatarPrompt =
-      typeof player.avatar_prompt === "string"
-        ? player.avatar_prompt
-        : existing.avatarPrompt;
     existing.avatarImageUrl =
       typeof player.avatar_image_url === "string"
         ? player.avatar_image_url
@@ -322,7 +317,6 @@ function ensurePlayer(
     personalityId: "balanced",
     personality: "",
     appearanceId: "default",
-    avatarPrompt: "",
     avatarImageUrl: "",
     profileId: null,
     tags: [],

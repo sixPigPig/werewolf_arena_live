@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { dispatchAdminSessionExpired } from "@/api/client";
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 
 const fullSession = {
   user: {
@@ -109,9 +110,7 @@ describe("admin session flow", () => {
     expect(devLoginCall?.[1]?.body).toBeUndefined();
 
     await user.click(screen.getByRole("button", { name: "退出" }));
-    expect(
-      await screen.findByText("已安全退出后台。"),
-    ).toBeInTheDocument();
+    await expectAdminNotification("已安全退出后台");
 
     const logoutCall = fetchMock.mock.calls.find(([input]) =>
       String(input).endsWith("/logout"),
@@ -197,7 +196,8 @@ describe("admin session flow", () => {
       "/login?oidcError=admin_oidc_account_not_provisioned&returnTo=%2Foperations%2Fruns",
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const notification = await expectAdminNotification("企业账号登录失败");
+    expect(notification).toHaveTextContent(
       "该企业账号尚未获得后台权限",
     );
     expect(screen.queryByText(/client_secret|id_token/i)).toBeNull();

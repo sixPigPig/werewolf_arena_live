@@ -128,6 +128,21 @@ describe("PlayersPage", () => {
     );
   });
 
+  it("shows admin recommendations independently from user favorites", async () => {
+    gameClientMocks.listPublicPlayerProfiles.mockResolvedValue([
+      buildProfile({
+        id: "moon-hunter",
+        display_name: "月下猎人",
+        featured: true,
+      }),
+    ]);
+
+    renderWithQueryClient(<PlayersPage />);
+
+    expect(await screen.findByText("推荐")).toBeVisible();
+    expect(screen.getByText("收藏")).toBeVisible();
+  });
+
   it("shows loading copy while reading player profiles", () => {
     gameClientMocks.listPublicPlayerProfiles.mockReturnValue(
       new Promise(() => undefined),

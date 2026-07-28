@@ -47,7 +47,6 @@ export default function SettingsPage() {
         <SettingsSection
           rows={[
             ["旧内容写入", flag(data.compatibility.legacy_content_writes_enabled)],
-            ["旧收藏写入", flag(data.compatibility.legacy_favorite_writes_enabled)],
             ["旧语音生成", flag(data.compatibility.legacy_voice_generation_enabled)],
             ["TTS", flag(data.tts_enabled)],
           ]}

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Mapping
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -37,6 +37,7 @@ PlayerProfileSort = Literal[
     "created_at",
     "-created_at",
 ]
+PlayerProfileMoveDirection = Literal["up", "down"]
 
 _EDITABLE_PROFILE_FIELDS = frozenset(
     {
@@ -46,7 +47,6 @@ _EDITABLE_PROFILE_FIELDS = frozenset(
         "personality_id",
         "personality_text",
         "appearance_id",
-        "avatar_prompt",
         "avatar_asset_id",
         "avatar_image_url",
         "avatar_image_mime",
@@ -69,7 +69,6 @@ _EDITABLE_PROFILE_FIELDS = frozenset(
         "leadership_tendency",
         "talkativeness",
         "example_messages",
-        "favorite",
         "featured",
         "tags",
     }
@@ -228,14 +227,16 @@ def create_player_profile(
         raise PlayerProfileValidationError(str(exc)) from exc
 
     now = datetime.now(UTC)
-    legacy_favorite = bool(data.get("favorite", False))
-    featured = bool(data.get("featured", legacy_favorite))
+    featured = bool(data.get("featured", False))
     if initial_status != "published" and featured:
         raise PlayerProfileValidationError("Draft player profiles cannot be featured")
+    display_order: int | None = None
+    if initial_status == "published":
+        _lock_display_order_scope(db)
+        display_order = _next_profile_display_order(db)
 
     profile = VirtualPlayerProfile(
         id=str(uuid.uuid4()),
-        owner_user_id=None,
         display_name=str(data["display_name"]),
         model_provider=str(data["model_provider"]),
         model=str(data["model"]),
@@ -243,9 +244,7 @@ def create_player_profile(
         personality_text=str(data.get("personality_text") or "")
         or default_personality_text(personality_id),
         appearance_id=appearance_id,
-        avatar_prompt=str(data.get("avatar_prompt") or ""),
         avatar_image_url=resolved_avatar.url,
-        avatar_image_path="",
         avatar_image_mime=resolved_avatar.mime,
         avatar_asset_id=resolved_avatar.id,
         short_description=str(data.get("short_description") or ""),
@@ -268,8 +267,7 @@ def create_player_profile(
         leadership_tendency=int(data.get("leadership_tendency") or 3),
         talkativeness=int(data.get("talkativeness") or 3),
         example_messages=list(data.get("example_messages") or []),
-        display_order=_next_profile_display_order(db),
-        favorite=legacy_favorite,
+        display_order=display_order,
         featured=featured,
         tags=list(data.get("tags") or []),
         status=initial_status,
@@ -358,7 +356,6 @@ def update_player_profile(
         allow_external_avatar_url=allow_external_avatar_url,
     )
 
-    favorite_changed = "favorite" in data and data["favorite"] != profile.favorite
     if "featured" in data and bool(data["featured"]) and profile.status != "published":
         raise PlayerProfileValidationError("Only published player profiles can be featured")
 
@@ -372,13 +369,6 @@ def update_player_profile(
         profile.personality_text = default_personality_text(personality_id)
     elif "personality_text" in data and not profile.personality_text:
         profile.personality_text = default_personality_text(profile.personality_id)
-
-    if favorite_changed:
-        _move_profile_to_display_position(
-            db,
-            profile,
-            1 if profile.favorite else "end",
-        )
 
     profile.updated_by_user_id = actor_user_id
     profile.updated_at = datetime.now(UTC)
@@ -418,8 +408,10 @@ def publish_player_profile(
             current_status=profile.status,
             target_status="published",
         )
+    _lock_display_order_scope(db)
     now = datetime.now(UTC)
     profile.status = "published"
+    profile.display_order = _next_profile_display_order(db)
     profile.published_at = now
     profile.published_by_user_id = actor_user_id
     profile.updated_by_user_id = actor_user_id
@@ -443,13 +435,17 @@ def archive_player_profile(
             current_status=profile.status,
             target_status="archived",
         )
+    _lock_display_order_scope(db)
     now = datetime.now(UTC)
     profile.status = "archived"
+    profile.display_order = None
     profile.featured = False
     profile.deleted_at = now
     profile.updated_by_user_id = actor_user_id
     profile.updated_at = now
     _flush_with_conflict(db, profile)
+    _compact_published_display_order(db, actor_user_id=actor_user_id)
+    db.refresh(profile)
     return profile
 
 
@@ -468,8 +464,10 @@ def restore_player_profile(
             current_status=profile.status,
             target_status="published",
         )
+    _lock_display_order_scope(db)
     now = datetime.now(UTC)
     profile.status = "published"
+    profile.display_order = _next_profile_display_order(db)
     profile.featured = False
     profile.deleted_at = None
     profile.published_at = now
@@ -478,6 +476,47 @@ def restore_player_profile(
     profile.updated_at = now
     _flush_with_conflict(db, profile)
     return profile
+
+
+def move_published_player_profile(
+    db: Session,
+    profile_id: str,
+    *,
+    direction: PlayerProfileMoveDirection,
+    expected_version: int | None,
+    actor_user_id: int | None,
+) -> VirtualPlayerProfile:
+    _lock_display_order_scope(db)
+    profile = get_player_profile(db, profile_id)
+    _ensure_version(profile, expected_version)
+    if profile.status != "published":
+        raise PlayerProfileTransitionError(
+            profile_id,
+            current_status=profile.status,
+            target_status="published",
+        )
+    profiles = _published_profiles_for_update(db)
+    current_index = next(
+        (index for index, candidate in enumerate(profiles) if candidate.id == profile_id),
+        None,
+    )
+    if current_index is None:
+        raise PlayerProfileNotFound(profile_id)
+    target_index = current_index + (-1 if direction == "up" else 1)
+    if target_index < 0 or target_index >= len(profiles):
+        return profile
+
+    ordered_ids = [candidate.id for candidate in profiles]
+    ordered_ids[current_index], ordered_ids[target_index] = (
+        ordered_ids[target_index],
+        ordered_ids[current_index],
+    )
+    _rewrite_published_display_order(
+        db,
+        ordered_ids,
+        actor_user_id=actor_user_id,
+    )
+    return get_player_profile(db, profile_id)
 
 
 def _apply_avatar_update(
@@ -505,7 +544,6 @@ def _apply_avatar_update(
         updates["avatar_asset_id"] = None
         updates["avatar_image_url"] = ""
         updates["avatar_image_mime"] = ""
-        updates["avatar_image_path"] = ""
         return
 
     avatar_asset_id = updates.get(
@@ -534,7 +572,6 @@ def _apply_avatar_update(
     updates["avatar_asset_id"] = resolved_avatar.id
     updates["avatar_image_url"] = resolved_avatar.url
     updates["avatar_image_mime"] = resolved_avatar.mime
-    updates["avatar_image_path"] = ""
 
 
 def _validate_presets(
@@ -573,31 +610,99 @@ def _flush_with_conflict(db: Session, profile: VirtualPlayerProfile) -> None:
 
 
 def _next_profile_display_order(db: Session) -> int:
-    current_max = db.query(func.max(VirtualPlayerProfile.display_order)).scalar()
+    current_max = (
+        db.query(func.max(VirtualPlayerProfile.display_order))
+        .filter(VirtualPlayerProfile.status == "published")
+        .scalar()
+    )
     return int(current_max or 0) + 1
 
 
-def _move_profile_to_display_position(
+def _compact_published_display_order(
     db: Session,
-    profile: VirtualPlayerProfile,
-    position: int | Literal["end"],
+    *,
+    actor_user_id: int | None,
 ) -> None:
-    profiles = (
+    ordered_ids = [profile.id for profile in _published_profiles_for_update(db)]
+    _rewrite_published_display_order(
+        db,
+        ordered_ids,
+        actor_user_id=actor_user_id,
+    )
+
+
+def _published_profiles_for_update(db: Session) -> list[VirtualPlayerProfile]:
+    query = (
         db.query(VirtualPlayerProfile)
         .filter(VirtualPlayerProfile.status == "published")
         .order_by(VirtualPlayerProfile.display_order.asc(), VirtualPlayerProfile.id.asc())
+    )
+    if db.get_bind().dialect.name != "sqlite":
+        query = query.with_for_update()
+    return list(query.all())
+
+
+def _rewrite_published_display_order(
+    db: Session,
+    ordered_ids: list[str],
+    *,
+    actor_user_id: int | None,
+) -> None:
+    if not ordered_ids:
+        return
+    current_max = (
+        db.query(func.max(VirtualPlayerProfile.display_order))
+        .filter(VirtualPlayerProfile.status == "published")
+        .scalar()
+    )
+    temporary_offset = int(current_max or 0) + len(ordered_ids) + 1
+    db.query(VirtualPlayerProfile).filter(
+        VirtualPlayerProfile.status == "published"
+    ).update(
+        {
+            VirtualPlayerProfile.display_order:
+                VirtualPlayerProfile.display_order + temporary_offset
+        },
+        synchronize_session=False,
+    )
+    db.expire_all()
+    now = datetime.now(UTC)
+    profiles_by_id = {
+        profile.id: profile
+        for profile in db.query(VirtualPlayerProfile)
+        .filter(VirtualPlayerProfile.id.in_(ordered_ids))
         .all()
-    )
-    remaining_profiles = [candidate for candidate in profiles if candidate.id != profile.id]
-    target_index = (
-        len(remaining_profiles)
-        if position == "end"
-        else max(0, min(position - 1, len(remaining_profiles)))
-    )
-    reordered_profiles = remaining_profiles.copy()
-    reordered_profiles.insert(target_index, profile)
-    for display_order, candidate in enumerate(reordered_profiles, start=1):
-        candidate.display_order = display_order
+    }
+    if set(profiles_by_id) != set(ordered_ids):
+        raise PlayerProfileValidationError(
+            "Published player profile order changed while reordering."
+        )
+    for display_order, profile_id in enumerate(ordered_ids, start=1):
+        profile = profiles_by_id[profile_id]
+        if profile.status != "published":
+            raise PlayerProfileValidationError(
+                "Only published player profiles can be reordered."
+            )
+        profile.display_order = display_order
+        profile.updated_by_user_id = actor_user_id
+        profile.updated_at = now
+    try:
+        db.flush()
+    except StaleDataError as exc:
+        raise PlayerProfileVersionConflict(
+            ordered_ids[0],
+            current_version=current_player_profile_version(db, ordered_ids[0]),
+        ) from exc
+
+
+def _lock_display_order_scope(db: Session) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text(
+                "LOCK TABLE virtual_player_profiles "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
+        )
 
 
 def _apply_sort(query: Query, sort: PlayerProfileSort) -> Query:
@@ -610,6 +715,8 @@ def _apply_sort(query: Query, sort: PlayerProfileSort) -> Query:
         "created_at": VirtualPlayerProfile.created_at,
     }[field_name]
     order = column.desc() if descending else column.asc()
+    if field_name == "display_order":
+        order = order.nullslast()
     return query.order_by(order, VirtualPlayerProfile.id.asc())
 
 

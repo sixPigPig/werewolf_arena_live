@@ -80,7 +80,6 @@ export type V2LobbyPlayerSnapshot = {
   personality_id?: string;
   personality?: string;
   appearance_id?: string;
-  avatar_prompt?: string;
   avatar_image_url?: string;
   avatar_asset_id?: string | null;
   catchphrases?: string[];

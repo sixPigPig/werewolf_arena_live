@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Input, { type InputRef } from "antd/es/input";
 import Select from "antd/es/select";
@@ -66,13 +67,21 @@ function RuleRow({ canWrite, onDuplicate, rule }: { canWrite: boolean; onDuplica
 }
 
 function DuplicateDialog({ close, idPattern, onSuccess, repository, source }: { close: () => void; idPattern: string; onSuccess: (id: string) => Promise<void>; repository: ReturnType<typeof useRuleSetRepository>; source: AdminRuleSet }) {
+  const { notification } = AntApp.useApp();
   const [errors, setErrors] = useState<{ id?: string; name?: string }>({});
   const firstField = useRef<InputRef>(null); const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => { firstField.current?.focus(); }, []);
-  const mutation = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => repository.duplicate(source.id, { expected_source_lock_version: source.lock_version, new_rule_set_id: id, new_name: name }), onSuccess: (_, values) => onSuccess(values.id) });
+  const mutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => repository.duplicate(source.id, { expected_source_lock_version: source.lock_version, new_rule_set_id: id, new_name: name }),
+    onError: (error) => notification.error({ description: presentRuleSetError(error, "duplicate"), title: "复制规则失败" }),
+    onSuccess: async (_, values) => {
+      notification.success({ title: "规则草稿已复制" });
+      await onSuccess(values.id);
+    },
+  });
   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const id = String(form.get("id") ?? "").trim(); const name = String(form.get("name") ?? "").trim(); const next = { id: new RegExp(idPattern).test(id) ? undefined : "请输入有效的新规则 ID", name: name ? undefined : "请输入新规则名称" }; setErrors(next); if (!next.id && !next.name) mutation.mutate({ id, name }); }
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) { if (event.key === "Escape") { event.preventDefault(); close(); return; } if (event.key !== "Tab") return; const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('input, button:not([disabled])') ?? []); if (!focusable.length) return; const first = focusable[0]; const last = focusable[focusable.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } }
-  return <div aria-describedby="duplicate-rule-description" aria-labelledby="duplicate-rule-title" aria-modal="true" className="rule-set-dialog-backdrop" onKeyDown={handleKeyDown} ref={dialog} role="dialog"><form className="rule-set-dialog" onSubmit={submit}><h2 id="duplicate-rule-title">复制游戏规则</h2><p id="duplicate-rule-description">从 {source.id} 创建独立草稿。</p><label><span>新规则 ID</span><Input aria-label="新规则 ID" aria-describedby={errors.id ? "duplicate-id-error" : undefined} aria-invalid={Boolean(errors.id)} name="id" ref={firstField} />{errors.id ? <small id="duplicate-id-error">{errors.id}</small> : null}</label><label><span>新规则名称</span><Input aria-label="新规则名称" aria-describedby={errors.name ? "duplicate-name-error" : undefined} aria-invalid={Boolean(errors.name)} name="name" />{errors.name ? <small id="duplicate-name-error">{errors.name}</small> : null}</label>{mutation.isError ? <p role="alert">{presentRuleSetError(mutation.error, "duplicate")}</p> : null}<div className="rule-set-dialog-actions"><button onClick={close} type="button">取消</button><button disabled={mutation.isPending} type="submit">确认复制</button></div></form></div>;
+  return <div aria-describedby="duplicate-rule-description" aria-labelledby="duplicate-rule-title" aria-modal="true" className="rule-set-dialog-backdrop" onKeyDown={handleKeyDown} ref={dialog} role="dialog"><form className="rule-set-dialog" onSubmit={submit}><h2 id="duplicate-rule-title">复制游戏规则</h2><p id="duplicate-rule-description">从 {source.id} 创建独立草稿。</p><label><span>新规则 ID</span><Input aria-label="新规则 ID" aria-describedby={errors.id ? "duplicate-id-error" : undefined} aria-invalid={Boolean(errors.id)} name="id" ref={firstField} />{errors.id ? <small id="duplicate-id-error">{errors.id}</small> : null}</label><label><span>新规则名称</span><Input aria-label="新规则名称" aria-describedby={errors.name ? "duplicate-name-error" : undefined} aria-invalid={Boolean(errors.name)} name="name" />{errors.name ? <small id="duplicate-name-error">{errors.name}</small> : null}</label><div className="rule-set-dialog-actions"><button onClick={close} type="button">取消</button><button disabled={mutation.isPending} type="submit">确认复制</button></div></form></div>;
 }
 
 function playerCounts(minimum: number, maximum: number) { return Array.from({ length: maximum - minimum + 1 }, (_, index) => minimum + index); }

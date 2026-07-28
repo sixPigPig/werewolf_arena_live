@@ -240,16 +240,13 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
 
     assert column_names == {
         "id",
-        "owner_user_id",
         "display_name",
         "model_provider",
         "model",
         "personality_id",
         "personality_text",
         "appearance_id",
-        "avatar_prompt",
         "avatar_image_url",
-        "avatar_image_path",
         "avatar_image_mime",
         "avatar_asset_id",
         "short_description",
@@ -273,7 +270,6 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "talkativeness",
         "example_messages",
         "display_order",
-        "favorite",
         "featured",
         "tags",
         "status",
@@ -286,8 +282,6 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "updated_at",
     }
     assert table.c.id.primary_key is True
-    assert table.c.owner_user_id.foreign_keys
-    assert table.c.owner_user_id.index is True
     assert table.c.display_name.nullable is False
     _assert_string_column(table.c.model_provider, length=32, nullable=False)
     assert table.c.model.nullable is False
@@ -311,13 +305,18 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
     assert table.c.updated_at.server_default is not None
     assert table.c.status.server_default is not None
     assert table.c.version.server_default is not None
-    assert table.c.published_at.server_default is not None
+    assert table.c.published_at.server_default is None
     assert table.c.published_by_user_id.foreign_keys
     assert table.c.updated_by_user_id.foreign_keys
     _assert_index(
         table,
         "ix_virtual_player_profiles_status_display_order",
         ["status", "display_order", "id"],
+    )
+    _assert_index(
+        table,
+        "uq_virtual_player_profiles_published_display_order",
+        ["display_order"],
     )
     _assert_index(
         table,
@@ -350,9 +349,7 @@ def test_virtual_player_profile_tag_append_is_persisted() -> None:
             personality_id="balanced",
             personality_text="稳健推进",
             appearance_id="default",
-            avatar_prompt="",
             avatar_image_url="",
-            avatar_image_path="",
             avatar_image_mime="",
             tags=[],
         )
@@ -382,9 +379,7 @@ def test_virtual_player_profile_rich_list_appends_are_persisted() -> None:
             personality_id="balanced",
             personality_text="稳健推进",
             appearance_id="default",
-            avatar_prompt="",
             avatar_image_url="",
-            avatar_image_path="",
             avatar_image_mime="",
             catchphrases=[],
             example_messages=[],
@@ -420,11 +415,11 @@ def test_virtual_player_profile_has_rich_character_columns() -> None:
         "leadership_tendency",
         "talkativeness",
         "example_messages",
-        "display_order",
-        "favorite",
     ):
         assert column_name in table.c
         assert table.c[column_name].nullable is False
+    assert "display_order" in table.c
+    assert table.c.display_order.nullable is True
 
 
 def test_player_avatar_asset_table_is_registered_in_metadata() -> None:

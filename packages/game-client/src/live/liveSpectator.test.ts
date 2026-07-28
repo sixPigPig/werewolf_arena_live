@@ -84,7 +84,6 @@ describe("deriveLiveSpectatorState", () => {
               personality_id: "aggressive",
               personality: "压迫感强，喜欢带节奏",
               appearance_id: "crimson",
-              avatar_prompt: "red cloak and sharp eyes",
               profile_id: "profile_123",
               tags: ["强势", "控场"],
             },
@@ -97,7 +96,6 @@ describe("deriveLiveSpectatorState", () => {
       personalityId: "aggressive",
       personality: "压迫感强，喜欢带节奏",
       appearanceId: "crimson",
-      avatarPrompt: "red cloak and sharp eyes",
       profileId: "profile_123",
       tags: ["强势", "控场"],
     });

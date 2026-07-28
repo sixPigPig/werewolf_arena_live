@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { routes } from "@/routes";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { selectAntdOption } from "@/tests/antd-select";
 
 const rootSession = {
@@ -90,7 +91,7 @@ describe("admin system flows", () => {
     await selectAntdOption(user, screen.getByLabelText("固定角色"), "只读观察员");
     await user.type(screen.getByLabelText("操作原因"), "New support account");
     await user.click(screen.getByRole("button", { name: "确认开通" }));
-    expect(await screen.findByText("已开通 viewer@example.test")).toBeInTheDocument();
+    await expectAdminNotification("已开通 viewer@example.test");
 
     await user.click(screen.getByRole("button", { name: "管理 Operations User" }));
     await user.clear(screen.getByLabelText("显示名称"));
@@ -98,12 +99,12 @@ describe("admin system flows", () => {
     await selectAntdOption(user, screen.getByLabelText("固定角色"), "内容编辑");
     await user.type(screen.getByLabelText("操作原因"), "Team responsibility changed");
     await user.click(screen.getByRole("button", { name: "保存账号" }));
-    expect(await screen.findByText("已更新 operator@example.test")).toBeInTheDocument();
+    await expectAdminNotification("已更新 operator@example.test");
 
     await user.click(screen.getByRole("button", { name: "管理 Primary Operator" }));
     await user.type(screen.getByLabelText("操作原因"), "Security response revocation");
     await user.click(screen.getByRole("button", { name: "撤销全部会话" }));
-    expect(await screen.findByText("已撤销 1 个会话")).toBeInTheDocument();
+    await expectAdminNotification("已撤销 1 个会话");
   });
 
   it("renders minimal audit records and URL-backed filters", async () => {

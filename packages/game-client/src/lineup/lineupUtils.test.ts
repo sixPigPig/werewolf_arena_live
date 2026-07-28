@@ -192,32 +192,6 @@ describe("lineupUtils", () => {
     expect(result).toEqual([{ seat: 1, profile_id: "profile-1" }]);
   });
 
-  it("keeps accepting the legacy favorite field during web coexistence", () => {
-    const result = randomFillEmptySeats(
-      [],
-      [
-        {
-          id: "legacy-favorite",
-          model_provider: "deepseek",
-          model: "DeepSeek",
-          personality_id: "balanced",
-          favorite: true,
-        },
-        {
-          id: "legacy-regular",
-          model_provider: "deepseek",
-          model: "DeepSeek",
-          personality_id: "balanced",
-          favorite: false,
-        },
-      ],
-      2,
-      { favoritesOnly: true, random: () => 0 },
-    );
-
-    expect(result).toEqual([{ seat: 1, profile_id: "legacy-favorite" }]);
-  });
-
   it("summarizes selected profiles, empty seats, favorites, models and personalities", () => {
     expect(
       summarizeLineup(

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { routes } from "@/routes";
@@ -8,6 +8,7 @@ import {
   getOpenAntdOptions,
   selectAntdOption,
 } from "@/tests/antd-select";
+import { expectAdminNotification } from "@/tests/admin-notification";
 import { resetPreviewRuleSets } from "./preview-repository";
 import { fixtureRuleSet, ruleContract, ruleSetOptions, standardConfig } from "./test-fixtures";
 
@@ -315,9 +316,10 @@ describe("rule editor", () => {
     const user = userEvent.setup(); const { router, queryClient } = renderRoute("/content/rules/classic_9"); const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await user.type(await screen.findByLabelText("规则名称"), " saved"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] })); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
-    const firstSaveAnnouncement = screen.getByRole("status"); expect(firstSaveAnnouncement).toHaveTextContent("草稿已保存");
+    const firstSaveAnnouncement = await expectAdminNotification("草稿已保存");
+    await user.click(within(firstSaveAnnouncement).getByRole("button", { name: "Close" }));
     await user.type(screen.getByLabelText("规则名称"), " again"); await user.click(screen.getByRole("button", { name: "保存草稿" }));
-    await waitFor(() => expect(screen.getByRole("status")).not.toBe(firstSaveAnnouncement)); expect(screen.getByRole("status")).toHaveTextContent("草稿已保存");
+    expect(await expectAdminNotification("草稿已保存")).not.toBe(firstSaveAnnouncement);
     await act(async () => { await router.navigate("/content/rules"); });
     expect(screen.queryByRole("dialog", { name: "未保存规则" })).not.toBeInTheDocument();
   });
@@ -417,9 +419,10 @@ describe("rule editor", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     const user = userEvent.setup(); renderRoute("/content/rules/classic_9"); const validate = await screen.findByRole("button", { name: "校验规则" });
-    await user.click(validate); const validAnnouncement = await screen.findByRole("status"); expect(validAnnouncement).toHaveTextContent("规则校验通过");
-    await user.click(validate); const invalidAnnouncement = await screen.findByRole("status"); expect(invalidAnnouncement).toHaveTextContent("规则校验未通过"); expect(invalidAnnouncement).not.toBe(validAnnouncement);
-    await user.click(validate); await waitFor(() => expect(screen.getByRole("status")).not.toBe(invalidAnnouncement)); expect(screen.getByRole("status")).toHaveTextContent("规则校验未通过");
+    await user.click(validate); const validAnnouncement = await expectAdminNotification("规则校验通过");
+    await user.click(validate); const invalidAnnouncement = await expectAdminNotification("规则校验未通过"); expect(invalidAnnouncement).not.toBe(validAnnouncement);
+    await user.click(within(invalidAnnouncement).getByRole("button", { name: "Close" }));
+    await user.click(validate); expect(await expectAdminNotification("规则校验未通过")).not.toBe(invalidAnnouncement);
   });
 
   it("shows contract blockers and keeps publish disabled when P0 coverage is broken", async () => {
@@ -435,7 +438,7 @@ describe("rule editor", () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/classic_9") && !init?.method) { gets += 1; return json(gets === 1 ? detail : { ...published, revisions: [], usage: { game_count: 2, live_count: 0 }, warnings: [] }); } if (url.endsWith("/api/v1/admin/rule-sets/classic_9/validate")) return json({ valid: true, errors: [], warnings: [], compiled_snapshot: null, content_hash: "a".repeat(64), rule_text_preview: "ok" }); if (url.endsWith("/api/v1/admin/rule-sets/classic_9/publish")) { publishCalls += 1; publishBody = JSON.parse(String(init?.body)); return new Promise<Response>((resolve) => { resolvePublish = resolve; }); } throw new Error(`Unexpected request: ${url}`); }));
     const user = userEvent.setup(); const { queryClient } = renderRoute("/content/rules/classic_9"); const invalidate = vi.spyOn(queryClient, "invalidateQueries"); await user.click(await screen.findByRole("button", { name: "校验规则" })); await user.click(await screen.findByRole("button", { name: "发布规则" }));
     const dialog = screen.getByRole("dialog", { name: "发布规则" }); expect(dialog).toHaveAccessibleDescription(); expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument(); const reason = screen.getByLabelText("操作原因"); expect(reason).toHaveAttribute("minlength", "3"); expect(reason).toHaveAttribute("maxlength", "500"); await user.type(reason, "  已完成评审  "); await user.click(screen.getByRole("button", { name: "确认发布" })); await user.click(screen.getByRole("button", { name: "正在发布..." })); expect(publishCalls).toBe(1); expect(publishBody).toEqual({ expected_rule_set_lock_version: 8, expected_revision_lock_version: 7, reason: "已完成评审" }); act(() => resolvePublish?.(json(published)));
-    expect(await screen.findByRole("status")).toHaveTextContent("规则已发布"); expect(gets).toBeGreaterThanOrEqual(2); expect(screen.getByText(/规则锁版本 9/)).toBeInTheDocument(); expect(screen.queryByRole("heading", { name: "校验通过" })).not.toBeInTheDocument(); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] }); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
+    await expectAdminNotification("规则已发布"); expect(gets).toBeGreaterThanOrEqual(2); expect(screen.getByText(/规则锁版本 9/)).toBeInTheDocument(); expect(screen.queryByRole("heading", { name: "校验通过" })).not.toBeInTheDocument(); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "list"] }); expect(invalidate).toHaveBeenCalledWith({ queryKey: ["rule-sets", "detail", "classic_9"] });
   });
 
   it("publish rule dialog manages initial focus, tab containment, escape, and opener restoration", async () => {
@@ -446,7 +449,7 @@ describe("rule editor", () => {
   it("default rule requires rules.set_default and sends the listed current default lock", async () => {
     useServerSession(["rules.read", "rules.set_default"]); const target = { ...fixtureRuleSet("candidate", "published"), lock_version: 4, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; const current = { ...fixtureRuleSet("classic_9", "published", true), lock_version: 11 }; let body: unknown; let gets = 0;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/candidate") && !init?.method) { gets += 1; return json(target); } if (url.includes("/api/v1/admin/rule-sets?") && !init?.method) return json({ items: [current, target], pagination: { page: 1, page_size: 100, total: 2, pages: 1 } }); if (url.endsWith("/api/v1/admin/rule-sets/candidate/set-default")) { body = JSON.parse(String(init?.body)); return json({ ...target, is_default: true, lock_version: 5 }); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/candidate"); expect(await screen.findByRole("button", { name: "设为默认" })).toBeInTheDocument(); expect(screen.queryByRole("button", { name: "归档规则" })).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "设为默认" })); expect(await screen.findByRole("dialog", { name: "设为默认规则" })).toHaveAccessibleDescription(); await user.type(screen.getByLabelText("操作原因"), "  调整默认规则  "); await user.click(screen.getByRole("button", { name: "确认设为默认" })); await waitFor(() => expect(body).toBeDefined()); expect(body).toEqual({ expected_rule_set_lock_version: 4, previous_default_expected_lock_version: 11, reason: "调整默认规则" }); expect(gets).toBeGreaterThanOrEqual(2); expect(await screen.findByRole("status")).toHaveTextContent("已设为默认规则");
+    const user = userEvent.setup(); renderRoute("/content/rules/candidate"); expect(await screen.findByRole("button", { name: "设为默认" })).toBeInTheDocument(); expect(screen.queryByRole("button", { name: "归档规则" })).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "设为默认" })); expect(await screen.findByRole("dialog", { name: "设为默认规则" })).toHaveAccessibleDescription(); await user.type(screen.getByLabelText("操作原因"), "  调整默认规则  "); await user.click(screen.getByRole("button", { name: "确认设为默认" })); await waitFor(() => expect(body).toBeDefined()); expect(body).toEqual({ expected_rule_set_lock_version: 4, previous_default_expected_lock_version: 11, reason: "调整默认规则" }); expect(gets).toBeGreaterThanOrEqual(2); await expectAdminNotification("已设为默认规则");
   });
 
   it("default rule exhausts published pages and uses a later-page default lock", async () => {
@@ -501,7 +504,7 @@ describe("rule editor", () => {
   it("restore rule uses rules.archive, reports bounded transition errors, and trusts refreshed server lifecycle", async () => {
     useServerSession(["rules.read", "rules.archive"]); const archived = { ...fixtureRuleSet("legacy", "archived"), lock_version: 14, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let calls = 0; let gets = 0; let restoreBody: unknown;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/legacy") && !init?.method) { gets += 1; return json(gets === 1 ? archived : { ...archived, status: "draft", lock_version: 15 }); } if (url.endsWith("/api/v1/admin/rule-sets/legacy/restore")) { calls += 1; restoreBody = JSON.parse(String(init?.body)); return calls === 1 ? json({ title: "private raw title", status: 503, detail: "database shard secret", code: "unavailable", request_id: "restore-503" }, 503) : json({ ...archived, status: "published", lock_version: 15 }); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/legacy"); await user.click(await screen.findByRole("button", { name: "恢复规则" })); expect(screen.queryByRole("button", { name: "归档规则" })).not.toBeInTheDocument(); expect(screen.getByRole("dialog", { name: "恢复规则" })).toHaveAccessibleDescription(); await user.type(screen.getByLabelText("操作原因"), "恢复历史规则"); await user.click(screen.getByRole("button", { name: "确认恢复" })); expect(restoreBody).toEqual({ expected_rule_set_lock_version: 14, reason: "恢复历史规则" }); expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法完成操作，请稍后重试"); expect(screen.queryByText(/database shard|private raw/)).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "确认恢复" })); expect(await screen.findByRole("status")).toHaveTextContent("规则已恢复"); expect(screen.getByText("草稿")).toBeInTheDocument(); expect(gets).toBeGreaterThanOrEqual(2);
+    const user = userEvent.setup(); renderRoute("/content/rules/legacy"); await user.click(await screen.findByRole("button", { name: "恢复规则" })); expect(screen.queryByRole("button", { name: "归档规则" })).not.toBeInTheDocument(); expect(screen.getByRole("dialog", { name: "恢复规则" })).toHaveAccessibleDescription(); await user.type(screen.getByLabelText("操作原因"), "恢复历史规则"); await user.click(screen.getByRole("button", { name: "确认恢复" })); expect(restoreBody).toEqual({ expected_rule_set_lock_version: 14, reason: "恢复历史规则" }); const failure = await expectAdminNotification("规则生命周期操作失败"); expect(failure).toHaveTextContent("暂时无法完成操作，请稍后重试"); expect(screen.queryByText(/database shard|private raw/)).not.toBeInTheDocument(); await user.click(screen.getByRole("button", { name: "确认恢复" })); await expectAdminNotification("规则已恢复"); expect(screen.getByText("草稿")).toBeInTheDocument(); expect(gets).toBeGreaterThanOrEqual(2);
   });
 
   it.each((["publish", "default", "archive", "restore"] as const).flatMap((action) => ([409, 412] as const).map((status) => [action, status] as const)))("%s rule keeps its dialog and server state on %s", async (action, status) => {
@@ -516,7 +519,7 @@ describe("rule editor", () => {
   it("archive rule sends null replacement fields for a non-default rule and maps a 422 reason error", async () => {
     useServerSession(["rules.read", "rules.archive"]); const aggregate = { ...fixtureRuleSet("old_rule", "published"), lock_version: 7 }; const detail = { ...aggregate, revisions: [], usage: { game_count: 0, live_count: 0 }, warnings: [] }; let body: unknown;
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => { const url = String(input); const common = serverCommon(url); if (common) return common; if (url.endsWith("/api/v1/admin/rule-sets/old_rule") && !init?.method) return json(detail); if (url.endsWith("/api/v1/admin/rule-sets/old_rule/archive")) { body = JSON.parse(String(init?.body)); return json({ title: "Invalid", status: 422, detail: "raw validation", code: "validation_error", request_id: null, errors: { reason: ["请说明归档原因"] } }, 422); } throw new Error(`Unexpected request: ${url}`); }));
-    const user = userEvent.setup(); renderRoute("/content/rules/old_rule"); await user.click(await screen.findByRole("button", { name: "归档规则" })); expect(screen.queryByLabelText("替代默认规则")).not.toBeInTheDocument(); await user.type(screen.getByLabelText("操作原因"), "不再使用"); await user.click(screen.getByRole("button", { name: "确认归档" })); expect(await screen.findByRole("alert")).toHaveTextContent("操作原因或规则状态不符合要求"); expect(screen.queryByText(/raw validation|请说明归档原因/)).not.toBeInTheDocument(); expect(body).toEqual({ expected_rule_set_lock_version: 7, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "不再使用" });
+    const user = userEvent.setup(); renderRoute("/content/rules/old_rule"); await user.click(await screen.findByRole("button", { name: "归档规则" })); expect(screen.queryByLabelText("替代默认规则")).not.toBeInTheDocument(); await user.type(screen.getByLabelText("操作原因"), "不再使用"); await user.click(screen.getByRole("button", { name: "确认归档" })); const failure = await expectAdminNotification("规则生命周期操作失败"); expect(failure).toHaveTextContent("操作原因或规则状态不符合要求"); expect(screen.queryByText(/raw validation|请说明归档原因/)).not.toBeInTheDocument(); expect(body).toEqual({ expected_rule_set_lock_version: 7, replacement_default_rule_set_id: null, replacement_expected_lock_version: null, reason: "不再使用" });
   });
 
   it("archive rule disables confirmation when a default has no published replacement", async () => {

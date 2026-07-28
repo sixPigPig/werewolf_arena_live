@@ -219,9 +219,6 @@ def get_admin_settings(
             legacy_content_writes_enabled=(
                 settings.legacy_player_profile_content_writes_enabled
             ),
-            legacy_favorite_writes_enabled=(
-                settings.legacy_player_profile_favorite_writes_enabled
-            ),
             legacy_voice_generation_enabled=(
                 settings.legacy_judge_voice_generation_enabled
             ),

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { routes } from "@/routes";
-
+import { expectAdminNotification } from "@/tests/admin-notification";
 
 const gameId = "v2_game_0123456789abcdef";
 const runId = "v2_run_0123456789abcdef";
@@ -89,6 +89,7 @@ describe("Admin V2 game control", () => {
       within(dialog).getByRole("button", { name: "确认打断" }),
     );
 
+    await expectAdminNotification("V2 对局打断请求已提交");
     expect(
       await screen.findByText("对局已由管理员打断"),
     ).toBeInTheDocument();

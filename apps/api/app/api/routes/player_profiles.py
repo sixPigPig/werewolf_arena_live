@@ -84,13 +84,14 @@ def _normalize_limited_strings(value: list[str], *, max_items: int, max_length: 
 
 
 class PlayerProfileBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str = Field(min_length=1, max_length=80)
     model_provider: str = Field(min_length=1, max_length=32)
     model: str = Field(min_length=1, max_length=120)
     personality_id: str = Field(default="balanced", min_length=1, max_length=40)
     personality_text: str = ""
     appearance_id: str = Field(default="default", min_length=1, max_length=40)
-    avatar_prompt: str = Field(default="", max_length=1000)
     avatar_asset_id: str | None = Field(default=None, max_length=80)
     avatar_image_url: str = Field(default="", max_length=1000)
     avatar_image_mime: str = Field(default="", max_length=80)
@@ -105,7 +106,6 @@ class PlayerProfileBase(BaseModel):
     leadership_tendency: int = Field(default=3, ge=1, le=5)
     talkativeness: int = Field(default=3, ge=1, le=5)
     example_messages: list[str] = Field(default_factory=list)
-    favorite: bool = False
     tags: list[str] = Field(default_factory=list)
 
     @field_validator(
@@ -115,7 +115,6 @@ class PlayerProfileBase(BaseModel):
         "personality_id",
         "personality_text",
         "appearance_id",
-        "avatar_prompt",
         "avatar_asset_id",
         "avatar_image_url",
         "avatar_image_mime",
@@ -163,13 +162,14 @@ class CreatePlayerProfileRequest(PlayerProfileBase):
 
 
 class UpdatePlayerProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     model_provider: str | None = Field(default=None, min_length=1, max_length=32)
     model: str | None = Field(default=None, min_length=1, max_length=120)
     personality_id: str | None = Field(default=None, min_length=1, max_length=40)
     personality_text: str | None = None
     appearance_id: str | None = Field(default=None, min_length=1, max_length=40)
-    avatar_prompt: str | None = Field(default=None, max_length=1000)
     avatar_asset_id: str | None = Field(default=None, max_length=80)
     avatar_image_url: str | None = Field(default=None, max_length=1000)
     avatar_image_mime: str | None = Field(default=None, max_length=80)
@@ -184,7 +184,6 @@ class UpdatePlayerProfileRequest(BaseModel):
     leadership_tendency: int | None = Field(default=None, ge=1, le=5)
     talkativeness: int | None = Field(default=None, ge=1, le=5)
     example_messages: list[str] | None = None
-    favorite: bool | None = None
     tags: list[str] | None = None
 
     @model_validator(mode="before")
@@ -201,7 +200,6 @@ class UpdatePlayerProfileRequest(BaseModel):
                 "personality_id",
                 "personality_text",
                 "appearance_id",
-                "avatar_prompt",
                 "avatar_image_url",
                 "avatar_image_mime",
                 "short_description",
@@ -215,7 +213,6 @@ class UpdatePlayerProfileRequest(BaseModel):
                 "leadership_tendency",
                 "talkativeness",
                 "example_messages",
-                "favorite",
                 "tags",
             )
             if field_name in data and data[field_name] is None
@@ -231,7 +228,6 @@ class UpdatePlayerProfileRequest(BaseModel):
         "personality_id",
         "personality_text",
         "appearance_id",
-        "avatar_prompt",
         "avatar_asset_id",
         "avatar_image_url",
         "avatar_image_mime",
@@ -280,14 +276,12 @@ class PlayerProfileResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    owner_user_id: int | None
     display_name: str
     model_provider: str
     model: str
     personality_id: str
     personality_text: str
     appearance_id: str
-    avatar_prompt: str
     avatar_asset_id: str | None
     avatar_image_url: str
     avatar_image_mime: str
@@ -303,7 +297,6 @@ class PlayerProfileResponse(BaseModel):
     talkativeness: int
     example_messages: list[str]
     display_order: int
-    favorite: bool
     tags: list[str]
     created_at: datetime
     updated_at: datetime
@@ -597,10 +590,7 @@ def update_player_profile(
     db: Annotated[Session, Depends(get_db)],
 ) -> PlayerProfileResponse:
     updates = request.model_dump(exclude_unset=True)
-    if set(updates) == {"favorite"}:
-        if not settings.legacy_player_profile_favorite_writes_enabled:
-            _raise_legacy_favorite_writes_disabled()
-    elif not settings.legacy_player_profile_content_writes_enabled:
+    if not settings.legacy_player_profile_content_writes_enabled:
         _raise_legacy_content_writes_disabled()
 
     try:
@@ -670,13 +660,6 @@ def _raise_legacy_content_writes_disabled() -> None:
     raise HTTPException(
         status_code=403,
         detail="Legacy player profile content writes are disabled",
-    )
-
-
-def _raise_legacy_favorite_writes_disabled() -> None:
-    raise HTTPException(
-        status_code=403,
-        detail="Legacy player profile favorite writes are disabled",
     )
 
 

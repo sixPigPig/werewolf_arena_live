@@ -90,7 +90,6 @@ const settings = {
   },
   compatibility: {
     legacy_content_writes_enabled: false,
-    legacy_favorite_writes_enabled: false,
     legacy_voice_generation_enabled: false,
   },
   workers: {

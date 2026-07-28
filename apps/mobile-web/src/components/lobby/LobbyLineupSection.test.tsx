@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import type { PublicPlayerProfileWithFavorite } from "@werewolf-arena/game-client";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,37 @@ const emptyStatus = {
   ctaLabel: "还差 8 位",
   canLaunch: false,
 };
+
+function buildProfile(
+  overrides: Partial<PublicPlayerProfileWithFavorite> = {},
+): PublicPlayerProfileWithFavorite {
+  return {
+    id: "recommended-player",
+    display_name: "推荐玩家",
+    model_provider: "deepseek",
+    model: "test-model",
+    personality_id: "balanced",
+    personality_text: "",
+    appearance_id: "default",
+    avatar_image_url: "",
+    short_description: "",
+    background_story: "",
+    speaking_style: "",
+    catchphrases: [],
+    strategy_profile: "balanced",
+    risk_tolerance: 3,
+    bluffing_tendency: 3,
+    trust_tendency: 3,
+    leadership_tendency: 3,
+    talkativeness: 3,
+    example_messages: [],
+    display_order: 1,
+    featured: true,
+    tags: [],
+    is_favorite: false,
+    ...overrides,
+  };
+}
 
 describe("LobbyLineupSection", () => {
   it("renders visible two-digit seat numbers and opens the requested seat", async () => {
@@ -44,6 +76,33 @@ describe("LobbyLineupSection", () => {
     });
     await user.click(seat);
     expect(onSelectSeat).toHaveBeenCalledWith(1, seat);
+  });
+
+  it("marks admin-recommended players in selected seats", () => {
+    render(
+      <LobbyLineupSection
+        activeSeat={1}
+        canFillSeats
+        favoritesAvailable
+        isBusy={false}
+        launchStatus={emptyStatus}
+        qualityError={null}
+        qualityOverrideConfirmed={false}
+        qualityReport={null}
+        onClear={vi.fn()}
+        onConfirmQualityOverride={vi.fn()}
+        onFill={vi.fn()}
+        onReshuffle={vi.fn()}
+        onSelectSeat={vi.fn()}
+        playerCount={8}
+        profilesBySeat={new Map([[1, buildProfile()]])}
+      />,
+    );
+
+    const seat = screen.getByRole("button", {
+      name: "选择 1 号座位，当前为 推荐玩家，管理端推荐",
+    });
+    expect(within(seat).getByText("推荐")).toBeVisible();
   });
 
   it("keeps fill and destructive clear outside the fixed launch bar", async () => {

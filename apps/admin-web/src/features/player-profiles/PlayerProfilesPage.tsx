@@ -1,11 +1,25 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import AntApp from "antd/es/app";
+import Avatar from "antd/es/avatar";
 import Button from "antd/es/button";
+import Card from "antd/es/card";
+import Flex from "antd/es/flex";
 import Input from "antd/es/input";
+import Pagination from "antd/es/pagination";
 import Select from "antd/es/select";
+import Table, { type ColumnsType } from "antd/es/table";
+import Tag from "antd/es/tag";
+import Typography from "antd/es/typography";
 import { type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
+import { AdminEmpty, AdminError } from "@/components/admin/AdminPage";
 import { hasAdminPermission } from "@/features/auth/permissions";
 import { useAdminSession } from "@/features/auth/session-context";
 import {
@@ -19,6 +33,7 @@ import type {
   PlayerProfileStatus,
   PlayerTtsSpeakerOption,
 } from "@/features/player-profiles/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
   draft: "草稿",
@@ -26,10 +41,19 @@ const STATUS_LABELS: Record<PlayerProfileStatus, string> = {
   archived: "已归档",
 };
 
+const STATUS_COLORS: Record<PlayerProfileStatus, string> = {
+  draft: "warning",
+  published: "success",
+  archived: "default",
+};
+
 export default function PlayerProfilesPage() {
+  const { notification } = AntApp.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const params = playerProfileListParamsFromSearch(searchParams);
   const repository = usePlayerProfileRepository();
+  const queryClient = useQueryClient();
   const { session } = useAdminSession();
   const permissions = session?.permissions ?? [];
   const canWrite = hasAdminPermission(permissions, "players.write");
@@ -50,6 +74,36 @@ export default function PlayerProfilesPage() {
     staleTime: 60 * 60_000,
   });
   const data = profilesQuery.data;
+  const moveProfileMutation = useMutation({
+    mutationFn: ({
+      direction,
+      profile,
+    }: {
+      direction: "up" | "down";
+      profile: AdminPlayerProfile;
+    }) =>
+      repository.move(profile.id, {
+        direction,
+        expected_version: profile.version,
+      }),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "玩家顺序调整失败，请刷新后重试。",
+        ),
+        title: "玩家顺序调整失败",
+      });
+    },
+    onSuccess: async (_, variables) => {
+      await queryClient.invalidateQueries({
+        queryKey: playerProfileKeys.lists(),
+      });
+      notification.success({
+        title: `${variables.profile.display_name} 已${variables.direction === "up" ? "上移" : "下移"}`,
+      });
+    },
+  });
 
   function updateSearch(values: Record<string, string | undefined>) {
     setSearchParams(
@@ -78,6 +132,156 @@ export default function PlayerProfilesPage() {
   const hasFilters = Boolean(
     params.q || params.status || params.model || params.personality_id,
   );
+  const showMoveControls =
+    params.sort === "display_order" && params.direction === "asc";
+  const columns: ColumnsType<AdminPlayerProfile> = [
+    {
+      key: "identity",
+      render: (_, profile) => (
+        <Flex align="center" gap={12}>
+          <Avatar
+            shape="square"
+            size={48}
+            src={profile.avatar_image_url || undefined}
+          >
+            {profile.display_name.charAt(0)}
+          </Avatar>
+          <Flex gap={2} vertical>
+            <Typography.Text strong>{profile.display_name}</Typography.Text>
+            <Typography.Text title={profile.id} type="secondary">
+              {profile.id}
+            </Typography.Text>
+          </Flex>
+        </Flex>
+      ),
+      title: "玩家",
+      width: 250,
+    },
+    {
+      key: "status",
+      render: (_, profile) => (
+        <Flex gap={4} vertical>
+          <Flex gap={4} wrap>
+            <Tag color={STATUS_COLORS[profile.status]}>
+              {STATUS_LABELS[profile.status]}
+            </Tag>
+            {profile.featured ? <Tag color="blue">推荐</Tag> : null}
+          </Flex>
+          <Typography.Text type="secondary">
+            {profile.display_order === null
+              ? "未进入 C 端顺序"
+              : `C 端 #${profile.display_order}`}
+          </Typography.Text>
+        </Flex>
+      ),
+      title: "状态 / C 端",
+      width: 160,
+    },
+    {
+      key: "model",
+      render: (_, profile) => (
+        <Flex gap={2} vertical>
+          <Typography.Text strong>{profile.model}</Typography.Text>
+          <Typography.Text type="secondary">
+            {profile.personality_id} · {profile.strategy_profile}
+          </Typography.Text>
+          <Typography.Text
+            title={profile.tts_speaker ?? "继承全局玩家音色"}
+            type="secondary"
+          >
+            音色：{playerVoiceLabel(profile, ttsSpeakersQuery.data?.items ?? [])}
+          </Typography.Text>
+        </Flex>
+      ),
+      title: "模型 / 音色",
+      width: 240,
+    },
+    {
+      key: "tags",
+      render: (_, profile) =>
+        profile.tags.length > 0 ? (
+          <Flex gap={4} wrap>
+            {profile.tags.slice(0, 2).map((tag) => (
+              <Tag key={tag}>{tag}</Tag>
+            ))}
+          </Flex>
+        ) : (
+          <Typography.Text type="secondary">无标签</Typography.Text>
+        ),
+      title: "标签",
+      width: 150,
+    },
+    {
+      key: "updated",
+      render: (_, profile) => (
+        <Flex gap={2} vertical>
+          <Typography.Text>{formatDateTime(profile.updated_at)}</Typography.Text>
+          <Typography.Text type="secondary">
+            版本 {profile.version} · 操作人 {profile.updated_by ?? "系统"}
+          </Typography.Text>
+        </Flex>
+      ),
+      title: "更新时间",
+      width: 210,
+    },
+    {
+      key: "action",
+      render: (_, profile) => {
+        const canEdit =
+          profile.status !== "archived" &&
+          canWrite &&
+          (profile.status !== "published" || canPublish);
+        const movePending =
+          moveProfileMutation.isPending &&
+          moveProfileMutation.variables.profile.id === profile.id;
+        return (
+          <Flex align="center" gap={4}>
+            {canPublish &&
+            profile.status === "published" &&
+            showMoveControls ? (
+              <>
+                <Button
+                  aria-label={`上移 ${profile.display_name}`}
+                  disabled={movePending || profile.display_order === 1}
+                  onClick={() =>
+                    moveProfileMutation.mutate({ direction: "up", profile })
+                  }
+                  size="small"
+                  type="text"
+                >
+                  上移
+                </Button>
+                <Button
+                  aria-label={`下移 ${profile.display_name}`}
+                  disabled={movePending}
+                  onClick={() =>
+                    moveProfileMutation.mutate({ direction: "down", profile })
+                  }
+                  size="small"
+                  type="text"
+                >
+                  下移
+                </Button>
+              </>
+            ) : null}
+            <Button
+              aria-label={`${canEdit ? "编辑" : "查看"} ${profile.display_name}`}
+              onClick={() =>
+                navigate(
+                  `/content/players/${encodeURIComponent(profile.id)}`,
+                )
+              }
+              size="small"
+            >
+              {canEdit ? "编辑" : "查看"}
+            </Button>
+          </Flex>
+        );
+      },
+      title: "操作",
+      width: 190,
+    },
+  ];
 
   return (
     <div className="admin-page player-profiles-page">
@@ -169,10 +373,10 @@ export default function PlayerProfilesPage() {
                 updateSearch({ sort, direction });
               }}
               options={[
+                { label: "C 端顺序", value: "display_order:asc" },
                 { label: "最近更新", value: "updated_at:desc" },
                 { label: "最近创建", value: "created_at:desc" },
                 { label: "名称 A–Z", value: "display_name:asc" },
-                { label: "C 端顺序", value: "display_order:asc" },
               ]}
               value={`${params.sort}:${params.direction}`}
             />
@@ -208,131 +412,82 @@ export default function PlayerProfilesPage() {
           筛选选项暂时不可用，玩家列表仍可浏览。
         </p>
       ) : null}
-
-      <section aria-labelledby="player-list-title" className="player-list-panel">
-        <div className="player-list-heading">
-          <div>
-            <span>PLAYER LIBRARY</span>
-            <h2 id="player-list-title">玩家内容库</h2>
+      {profilesQuery.isError ? (
+        <AdminError
+          description={
+            isAdminApiError(profilesQuery.error)
+              ? profilesQuery.error.message
+              : "玩家内容服务暂时不可用。"
+          }
+          onRetry={profilesQuery.refetch}
+          requestId={
+            isAdminApiError(profilesQuery.error)
+              ? profilesQuery.error.requestId
+              : null
+          }
+          title="无法读取玩家内容"
+        />
+      ) : (
+        <Card
+          extra={
+            <Typography.Text aria-live="polite" type="secondary">
+              {data ? `共 ${data.pagination.total} 个玩家` : "正在统计..."}
+            </Typography.Text>
+          }
+          styles={{ body: { padding: 0 } }}
+          title={<h2 id="player-list-title">玩家内容库</h2>}
+        >
+          <div aria-label="虚拟玩家列表" role="region">
+            <Table<AdminPlayerProfile>
+              columns={columns}
+              dataSource={data?.items ?? []}
+              loading={
+                profilesQuery.isPending
+                  ? {
+                      description: "正在读取玩家内容...",
+                      spinning: true,
+                    }
+                  : false
+              }
+              locale={{
+                emptyText: (
+                  <AdminEmpty
+                    description={
+                      hasFilters
+                        ? "没有符合条件的玩家；调整或清除筛选条件后重试。"
+                        : canWrite
+                          ? "还没有玩家内容；创建第一份草稿，审核后再发布到 C 端。"
+                          : "当前还没有可浏览的玩家内容。"
+                    }
+                  />
+                ),
+              }}
+              pagination={false}
+              rowKey="id"
+              scroll={{ x: 1200 }}
+            />
           </div>
-          <p aria-live="polite">
-            {data ? `共 ${data.pagination.total} 个玩家` : "正在统计..."}
-          </p>
-        </div>
+        </Card>
+      )}
 
-        {profilesQuery.isPending ? <PlayerListLoading /> : null}
-        {profilesQuery.isError ? (
-          <PlayerListError error={profilesQuery.error} onRetry={profilesQuery.refetch} />
-        ) : null}
-        {data && data.items.length === 0 ? (
-          <div className="player-empty-state">
-            <span aria-hidden="true">人</span>
-            <h3>{hasFilters ? "没有符合条件的玩家" : "还没有玩家内容"}</h3>
-            <p>
-              {hasFilters
-                ? "调整或清除筛选条件后重试。"
-                : canWrite
-                  ? "创建第一份草稿，审核后再发布到 C 端。"
-                  : "当前还没有可浏览的玩家内容。"}
-            </p>
-          </div>
-        ) : null}
-        {data && data.items.length > 0 ? (
-          <ul aria-label="虚拟玩家列表" className="player-admin-list">
-            {data.items.map((profile) => (
-              <PlayerListItem
-                canPublish={canPublish}
-                canWrite={canWrite}
-                key={profile.id}
-                profile={profile}
-                ttsSpeakerOptions={ttsSpeakersQuery.data?.items ?? []}
-              />
-            ))}
-          </ul>
-        ) : null}
-
-        {data && data.pagination.total > 0 ? (
-          <PlayerPagination
-            page={data.pagination.page}
-            pages={data.pagination.pages}
-            setPage={(page) =>
+      {data && data.pagination.total > 0 ? (
+        <Flex justify="flex-end">
+          <Pagination
+            current={data.pagination.page}
+            onChange={(page) =>
               setSearchParams(
                 setPlayerProfileSearchValues(searchParams, {
                   page: String(page),
                 }),
               )
             }
+            pageSize={data.pagination.page_size}
+            showSizeChanger={false}
+            total={data.pagination.total}
           />
-        ) : null}
-      </section>
+        </Flex>
+      ) : null}
     </div>
-  );
-}
-
-function PlayerListItem({
-  canPublish,
-  canWrite,
-  profile,
-  ttsSpeakerOptions,
-}: {
-  canPublish: boolean;
-  canWrite: boolean;
-  profile: AdminPlayerProfile;
-  ttsSpeakerOptions: PlayerTtsSpeakerOption[];
-}) {
-  const canEdit =
-    profile.status !== "archived" &&
-    canWrite &&
-    (profile.status !== "published" || canPublish);
-  const voiceLabel = playerVoiceLabel(profile, ttsSpeakerOptions);
-  return (
-    <li className="player-admin-row">
-      <div className="player-admin-identity">
-        <span className="player-admin-avatar">
-          {profile.avatar_image_url ? (
-            <img alt="" src={profile.avatar_image_url} />
-          ) : (
-            <span aria-hidden="true">{profile.display_name.charAt(0)}</span>
-          )}
-        </span>
-        <span>
-          <strong>{profile.display_name}</strong>
-          <small title={profile.id}>{profile.id}</small>
-        </span>
-      </div>
-      <div className="player-admin-status-cell">
-        <span className={`player-status-badge is-${profile.status}`}>
-          {STATUS_LABELS[profile.status]}
-        </span>
-        {profile.featured ? <span className="player-featured-badge">推荐</span> : null}
-      </div>
-      <div className="player-admin-model-cell">
-        <strong>{profile.model}</strong>
-        <small>{profile.personality_id} · {profile.strategy_profile}</small>
-        <small title={profile.tts_speaker ?? "继承全局玩家音色"}>
-          音色：{voiceLabel}
-        </small>
-      </div>
-      <div className="player-admin-tags-cell">
-        {profile.tags.slice(0, 2).map((tag) => (
-          <span key={tag}>{tag}</span>
-        ))}
-        {profile.tags.length === 0 ? <small>无标签</small> : null}
-      </div>
-      <div className="player-admin-updated-cell">
-        <strong>{formatDateTime(profile.updated_at)}</strong>
-        <small>版本 {profile.version} · 操作人 {profile.updated_by ?? "系统"}</small>
-      </div>
-      <div className="player-admin-action-cell">
-        <Link
-          aria-label={`${canEdit ? "编辑" : "查看"} ${profile.display_name}`}
-          className="admin-secondary-link"
-          to={`/content/players/${encodeURIComponent(profile.id)}`}
-        >
-          {canEdit ? "编辑" : "查看"}
-        </Link>
-      </div>
-    </li>
   );
 }
 
@@ -354,68 +509,6 @@ function playerVoiceLabel(
     (option) => option.id === profile.tts_dialect,
   );
   return `${disabled}${speaker.name}${dialect ? ` · ${dialect.label}` : ""}`;
-}
-
-function PlayerPagination({
-  page,
-  pages,
-  setPage,
-}: {
-  page: number;
-  pages: number;
-  setPage: (page: number) => void;
-}) {
-  return (
-    <nav aria-label="玩家列表分页" className="player-pagination">
-      <button
-        disabled={page <= 1}
-        onClick={() => setPage(page - 1)}
-        type="button"
-      >
-        上一页
-      </button>
-      <span aria-current="page">第 {page} / {Math.max(1, pages)} 页</span>
-      <button
-        disabled={pages === 0 || page >= pages}
-        onClick={() => setPage(page + 1)}
-        type="button"
-      >
-        下一页
-      </button>
-    </nav>
-  );
-}
-
-function PlayerListLoading() {
-  return (
-    <div aria-live="polite" className="player-list-loading" role="status">
-      <span />
-      <span />
-      <span />
-      <p>正在读取玩家内容...</p>
-    </div>
-  );
-}
-
-function PlayerListError({
-  error,
-  onRetry,
-}: {
-  error: Error;
-  onRetry: () => unknown;
-}) {
-  return (
-    <div aria-live="assertive" className="player-list-error" role="alert">
-      <h3>无法读取玩家内容</h3>
-      <p>{error.message}</p>
-      {isAdminApiError(error) && error.requestId ? (
-        <small>请求编号：{error.requestId}</small>
-      ) : null}
-      <button onClick={() => void onRetry()} type="button">
-        重新加载
-      </button>
-    </div>
-  );
 }
 
 function formatDateTime(value: string) {

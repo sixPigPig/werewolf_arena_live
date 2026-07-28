@@ -1,8 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Input from "antd/es/input";
 import Select from "antd/es/select";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
@@ -18,12 +19,15 @@ import type {
   AdminJudgeVoiceLine,
   AdminJudgeVoiceList,
 } from "@/features/voice-assets/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 export default function JudgeVoiceAssetsPage() {
+  const { notification } = AntApp.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
   const [jobId, setJobId] = useState<string | null>(null);
+  const notifiedJobResult = useRef<string | null>(null);
   const params = judgeVoiceListParamsFromSearch(searchParams);
   const voiceQuery = useQuery({
     placeholderData: keepPreviousData,
@@ -47,13 +51,59 @@ export default function JudgeVoiceAssetsPage() {
   const createJob = useMutation({
     mutationFn: (mode: "missing" | "all") =>
       createAdminJudgeVoiceJob(mode, session?.csrf_token ?? ""),
-    onSuccess: (job) => setJobId(job.id),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "无法创建语音生成任务，请稍后重试。",
+        ),
+        title: "语音生成任务创建失败",
+      });
+    },
+    onSuccess: (job) => {
+      notifiedJobResult.current = null;
+      setJobId(job.id);
+      notification.success({ title: "语音生成任务已创建" });
+    },
   });
   useEffect(() => {
     if (jobQuery.data?.status === "completed") {
       void queryClient.invalidateQueries({ queryKey: adminJudgeVoiceKeys.all });
     }
-  }, [jobQuery.data?.status, queryClient]);
+    if (
+      !jobQuery.data ||
+      (jobQuery.data.status !== "completed" &&
+        jobQuery.data.status !== "failed")
+    ) {
+      return;
+    }
+    const resultKey = `${jobQuery.data.id}:${jobQuery.data.status}`;
+    if (notifiedJobResult.current === resultKey) {
+      return;
+    }
+    notifiedJobResult.current = resultKey;
+    if (jobQuery.data.status === "failed") {
+      notification.error({
+        description: jobQuery.data.error_code
+          ? `错误分类：${jobQuery.data.error_code}`
+          : "请稍后重新创建生成任务。",
+        title: "语音生成任务失败",
+      });
+      return;
+    }
+    const description = `已生成 ${jobQuery.data.generated_count} 条，失败 ${jobQuery.data.failed_count} 条。`;
+    if (jobQuery.data.failed_count > 0) {
+      notification.warning({
+        description,
+        title: "语音生成任务已完成，但存在失败项",
+      });
+    } else {
+      notification.success({
+        description,
+        title: "语音生成任务已完成",
+      });
+    }
+  }, [jobQuery.data, notification, queryClient]);
 
   function updateSearch(values: Record<string, string | undefined>) {
     setSearchParams(
@@ -130,9 +180,6 @@ export default function JudgeVoiceAssetsPage() {
         本页只管理法官固定台词资产。玩家音色与基础演绎在玩家档案中配置，两者不会自动联动；修改任一配置都不会改写运行中对局或历史 Replay。
       </p>
 
-      {createJob.isError ? (
-        <p className="game-inline-warning" role="alert">无法创建语音生成任务，请稍后重试。</p>
-      ) : null}
       {jobQuery.data ? (
         <section
           aria-label="语音生成任务"

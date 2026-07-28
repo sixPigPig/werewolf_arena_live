@@ -25,6 +25,7 @@ from app.api.schemas.admin_player_profiles import (
     AdminPlayerProfileAiDraftResponse,
     AdminPlayerProfileCreate,
     AdminPlayerProfileListResponse,
+    AdminPlayerProfileMove,
     AdminPlayerProfileOptionsResponse,
     AdminPlayerProfileResponse,
     AdminPlayerProfileTransition,
@@ -58,6 +59,7 @@ from app.player_profiles.service import (
     current_player_profile_version,
     get_player_profile,
     list_admin_player_profiles,
+    move_published_player_profile,
     publish_player_profile,
     restore_player_profile,
     update_player_profile,
@@ -657,6 +659,65 @@ def update_profile(
         raise _database_unavailable() from exc
     _set_private_headers(request, response)
     return AdminPlayerProfileResponse.model_validate(admin_player_profile_snapshot(profile))
+
+
+@router.post(
+    "/player-profiles/{profile_id}/move",
+    response_model=AdminPlayerProfileResponse,
+)
+def move_profile(
+    profile_id: Annotated[str, Path(min_length=1, max_length=36)],
+    request_body: AdminPlayerProfileMove,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.PLAYERS_PUBLISH)),
+    ],
+    _csrf: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+) -> AdminPlayerProfileResponse:
+    action = "admin.player_profile.move"
+    try:
+        existing = get_player_profile(db, profile_id)
+        before = audit_player_profile_snapshot(existing)
+        profile = move_published_player_profile(
+            db,
+            profile_id,
+            direction=request_body.direction,
+            expected_version=request_body.expected_version,
+            actor_user_id=principal.user.id,
+        )
+        _commit_successful_mutation(
+            db,
+            request=request,
+            principal=principal,
+            action=action,
+            profile=profile,
+            before=before,
+        )
+    except (
+        PlayerProfileNotFound,
+        PlayerProfileVersionConflict,
+        PlayerProfileTransitionError,
+        PlayerProfileValidationError,
+    ) as exc:
+        _raise_profile_problem(
+            db,
+            request=request,
+            principal=principal,
+            action=action,
+            profile_id=profile_id,
+            exc=exc,
+            expected_version=request_body.expected_version,
+        )
+    except RecoverableDatabaseError as exc:
+        db.rollback()
+        raise _database_unavailable() from exc
+    _set_private_headers(request, response)
+    return AdminPlayerProfileResponse.model_validate(
+        admin_player_profile_snapshot(profile)
+    )
 
 
 @router.post(

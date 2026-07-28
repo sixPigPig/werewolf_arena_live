@@ -11,6 +11,7 @@ import SettingOutlined from "@ant-design/icons/es/icons/SettingOutlined";
 import SoundOutlined from "@ant-design/icons/es/icons/SoundOutlined";
 import TeamOutlined from "@ant-design/icons/es/icons/TeamOutlined";
 import Avatar from "antd/es/avatar";
+import AntApp from "antd/es/app";
 import Badge from "antd/es/badge";
 import Breadcrumb from "antd/es/breadcrumb";
 import Button from "antd/es/button";
@@ -36,6 +37,7 @@ import {
   useOverviewQuery,
   useSettingsQuery,
 } from "@/features/dashboard/queries";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 const { Content, Header, Sider } = Layout;
 
@@ -62,9 +64,9 @@ const navigationIcons = {
 };
 
 export function AdminShell() {
+  const { notification } = AntApp.useApp();
   const location = useLocation();
   const [navigationOpen, setNavigationOpen] = useState(false);
-  const [logoutError, setLogoutError] = useState<string | null>(null);
   const { logout, pendingAction, runtimeMode, session } = useAdminSession();
   const activeItem = findAdminNavItem(location.pathname);
   const user = session?.user;
@@ -103,13 +105,16 @@ export function AdminShell() {
   }));
 
   async function handleLogout() {
-    setLogoutError(null);
     try {
       await logout();
     } catch (error) {
-      setLogoutError(
-        error instanceof Error ? error.message : "退出失败，请稍后重试。",
-      );
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "退出失败，请稍后重试。",
+        ),
+        title: "退出失败",
+      });
     }
   }
 
@@ -201,11 +206,6 @@ export function AdminShell() {
           />
           {canReadOverview ? <GlobalAdminSearch runtimeMode={runtimeMode} /> : null}
           <Space className="admin-ant-header-actions" size={10}>
-            {logoutError ? (
-              <Typography.Text aria-live="assertive" role="alert" type="danger">
-                {logoutError}
-              </Typography.Text>
-            ) : null}
             {alertCount > 0 ? (
               <Link
                 aria-label={`${alertCount} 项异常`}

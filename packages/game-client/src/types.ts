@@ -205,7 +205,6 @@ export type RawPlayer = {
   personality_id?: string;
   personality?: string;
   appearance_id?: string;
-  avatar_prompt?: string;
   avatar_asset_id?: string | null;
   avatar_image_url?: string;
   profile_id?: string | null;
@@ -446,7 +445,6 @@ export type GameRunStatus =
 
 export type VirtualPlayerProfile = {
   id: string;
-  owner_user_id: number | null;
   display_name: string;
   model_provider: string;
   model: string;
@@ -464,9 +462,7 @@ export type VirtualPlayerProfile = {
   talkativeness: number;
   example_messages: string[];
   display_order: number;
-  favorite: boolean;
   appearance_id: string;
-  avatar_prompt: string;
   avatar_asset_id: string | null;
   avatar_image_url: string;
   avatar_image_mime: string;
@@ -587,9 +583,7 @@ export type PlayerProfileRequest = {
   leadership_tendency?: number;
   talkativeness?: number;
   example_messages?: string[];
-  favorite?: boolean;
   appearance_id?: string;
-  avatar_prompt?: string;
   avatar_asset_id?: string | null;
   avatar_image_url?: string;
   avatar_image_mime?: string;
@@ -613,9 +607,7 @@ export const DEFAULT_PLAYER_PROFILE_DRAFT: PlayerProfileRequest = {
   leadership_tendency: 3,
   talkativeness: 3,
   example_messages: [],
-  favorite: false,
   appearance_id: "default",
-  avatar_prompt: "",
   avatar_asset_id: "",
   avatar_image_url: "",
   avatar_image_mime: "",
@@ -633,7 +625,6 @@ export type PlayerConfig = {
   personality_id?: string;
   personality?: string;
   appearance_id?: string;
-  avatar_prompt?: string;
   avatar_image_url?: string;
   avatar_asset_id?: string | null;
   catchphrases?: string[];

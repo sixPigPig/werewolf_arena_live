@@ -2,6 +2,7 @@ import {
   createAdminPlayerProfile,
   getPlayerTtsSpeakerOptions,
   listAdminPlayerProfiles,
+  moveAdminPlayerProfile,
   previewAdminPlayerProfileVoice,
   transitionAdminPlayerProfile,
   updateAdminPlayerProfile,
@@ -12,6 +13,7 @@ import {
   parseAdminPlayerVoicePreview,
   parsePlayerTtsSpeakerOptions,
 } from "@/features/player-profiles/parsers";
+import { playerProfileListParamsFromSearch } from "@/features/player-profiles/list-state";
 import type {
   AdminPlayerProfile,
   CreatePlayerProfileRequest,
@@ -189,10 +191,7 @@ describe("admin player profile contract", () => {
     );
   });
 
-  it("rejects legacy favorite and malformed lifecycle data", () => {
-    expect(() =>
-      parseAdminPlayerProfile({ ...contractProfile, favorite: true }),
-    ).toThrow(/favorite/);
+  it("rejects malformed lifecycle data", () => {
     expect(() =>
       parseAdminPlayerProfile({ ...contractProfile, status: "deleted" }),
     ).toThrow(/状态/);
@@ -234,6 +233,47 @@ describe("admin player profile contract", () => {
       personality_id: "analytical",
     });
     expect(options.credentials).toBe("include");
+  });
+
+  it("defaults list state to C-end order without changing date-sort defaults", () => {
+    expect(
+      playerProfileListParamsFromSearch(new URLSearchParams()),
+    ).toMatchObject({
+      sort: "display_order",
+      direction: "asc",
+    });
+    expect(
+      playerProfileListParamsFromSearch(
+        new URLSearchParams({ sort: "updated_at" }),
+      ),
+    ).toMatchObject({
+      sort: "updated_at",
+      direction: "desc",
+    });
+  });
+
+  it("serializes an adjacent C-end order move", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(contractProfile));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await moveAdminPlayerProfile(
+      contractProfile.id,
+      { expected_version: 3, direction: "down" },
+      "csrf-player",
+    );
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "/api/v1/admin/player-profiles/profile-1/move",
+    );
+    expect(options.method).toBe("POST");
+    expect(new Headers(options.headers).get("X-CSRF-Token")).toBe(
+      "csrf-player",
+    );
+    expect(JSON.parse(String(options.body))).toEqual({
+      expected_version: 3,
+      direction: "down",
+    });
   });
 
   it("adds CSRF and expected_version to writes without legacy fields", async () => {

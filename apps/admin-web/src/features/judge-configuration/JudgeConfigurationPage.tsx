@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
+import AntApp from "antd/es/app";
 import Button from "antd/es/button";
 import Card from "antd/es/card";
 import Form from "antd/es/form";
@@ -8,7 +9,6 @@ import Space from "antd/es/space";
 import Typography from "antd/es/typography";
 import { useEffect } from "react";
 
-import { isAdminApiError } from "@/api/problem-details";
 import {
   AdminError,
   AdminLoading,
@@ -24,6 +24,7 @@ import {
 import { previewJudgeConfiguration } from "@/features/judge-configuration/preview";
 import { adminJudgeConfigurationKeys } from "@/features/judge-configuration/query-keys";
 import type { UpdateJudgeConfigurationRequest } from "@/features/judge-configuration/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 const { Text } = Typography;
 
@@ -33,6 +34,7 @@ type JudgeConfigurationForm = Pick<
 >;
 
 export default function JudgeConfigurationPage() {
+  const { notification } = AntApp.useApp();
   const [form] = Form.useForm<JudgeConfigurationForm>();
   const voiceMode = Form.useWatch("voice_mode", form) ?? "fixed";
   const queryClient = useQueryClient();
@@ -49,8 +51,18 @@ export default function JudgeConfigurationPage() {
   const mutation = useMutation({
     mutationFn: (request: UpdateJudgeConfigurationRequest) =>
       updateAdminJudgeConfiguration(request, session?.csrf_token ?? ""),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "法官配置保存失败，请稍后重试。",
+        ),
+        title: "法官配置保存失败",
+      });
+    },
     onSuccess: (configuration) => {
       queryClient.setQueryData(adminJudgeConfigurationKeys.detail, configuration);
+      notification.success({ title: "法官配置已保存" });
     },
   });
   const configuration = configurationQuery.data;
@@ -121,18 +133,6 @@ export default function JudgeConfigurationPage() {
           title="生效范围"
           type="info"
         />
-        {mutation.isError ? (
-          <Alert
-            description={configurationError(mutation.error)}
-            showIcon
-            title="保存失败"
-            type="error"
-          />
-        ) : null}
-        {mutation.isSuccess ? (
-          <Alert showIcon title="法官配置已保存" type="success" />
-        ) : null}
-
         <Card title="播报配置">
           <Form<JudgeConfigurationForm>
             form={form}
@@ -213,11 +213,4 @@ export default function JudgeConfigurationPage() {
       </Space>
     </AdminPage>
   );
-}
-
-function configurationError(error: unknown) {
-  if (isAdminApiError(error)) {
-    return error.problem.detail;
-  }
-  return "法官配置保存失败，请稍后重试。";
 }

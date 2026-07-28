@@ -357,6 +357,11 @@ class AdminPlayerProfileTransition(AdminRequestModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class AdminPlayerProfileMove(AdminRequestModel):
+    expected_version: int = Field(ge=1)
+    direction: Literal["up", "down"]
+
+
 class AdminPlayerVoicePreviewDelivery(AdminRequestModel):
     mood: PlayerDeliveryMood | None = None
     intensity: PlayerDeliveryIntensity | None = None
@@ -456,7 +461,10 @@ class AdminPlayerProfileResponse(BaseModel):
     leadership_tendency: int
     talkativeness: int
     example_messages: list[str]
-    display_order: int
+    display_order: int | None = Field(
+        ge=1,
+        description="Published catalog position; null for drafts and archived profiles."
+    )
     featured: bool
     tags: list[str]
     status: PlayerProfileStatus

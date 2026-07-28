@@ -123,6 +123,21 @@ describe("PlayerDetailPage", () => {
     expect(await screen.findByText("未找到玩家档案")).toBeVisible();
   });
 
+  it("shows admin recommendation and user favorite as separate marks", async () => {
+    gameClientMocks.getPublicPlayerProfile.mockResolvedValue(
+      buildProfile({
+        id: "moon-hunter",
+        display_name: "月下猎人",
+        featured: true,
+      }),
+    );
+
+    renderPlayerDetailRoute();
+
+    expect(await screen.findByText("推荐")).toBeVisible();
+    expect(screen.getByText("收藏")).toBeVisible();
+  });
+
   it("keeps profile content readable when favorites are unavailable", async () => {
     gameClientMocks.listPlayerProfileFavorites.mockRejectedValue(
       new Error("session unavailable"),

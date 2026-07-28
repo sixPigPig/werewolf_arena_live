@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AntApp from "antd/es/app";
 import Checkbox from "antd/es/checkbox";
 import InputNumber from "antd/es/input-number";
 import Select from "antd/es/select";
@@ -29,6 +30,7 @@ import type {
   ModelConfigurationInput,
   ThinkingMode,
 } from "@/features/models/types";
+import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
 type ConfigurationMutation = {
   model: AdminModel;
@@ -36,6 +38,7 @@ type ConfigurationMutation = {
 };
 
 export default function ModelsPage() {
+  const { notification } = AntApp.useApp();
   const queryClient = useQueryClient();
   const { runtimeMode, session } = useAdminSession();
   const canManage = hasAdminPermission(session?.permissions ?? [], "settings.manage");
@@ -49,7 +52,19 @@ export default function ModelsPage() {
   });
   const syncMutation = useMutation({
     mutationFn: () => syncAgentPlanModels(session?.csrf_token ?? ""),
-    onSuccess: (catalog) => queryClient.setQueryData(adminModelKeys.catalog, catalog),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "Agent Plan 模型同步失败。",
+        ),
+        title: "模型同步失败",
+      });
+    },
+    onSuccess: (catalog) => {
+      queryClient.setQueryData(adminModelKeys.catalog, catalog);
+      notification.success({ title: "Agent Plan 模型已同步" });
+    },
   });
   const configurationMutation = useMutation({
     mutationFn: ({ model, input }: ConfigurationMutation) =>
@@ -59,7 +74,21 @@ export default function ModelsPage() {
         input,
         session?.csrf_token ?? "",
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminModelKeys.all }),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "模型配置保存失败。",
+        ),
+        title: "模型配置保存失败",
+      });
+    },
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: adminModelKeys.all });
+      notification.success({
+        title: `${variables.model.model_id} 配置已保存`,
+      });
+    },
   });
   const catalog = catalogQuery.data;
   const agentModels = catalog?.models.filter((model) => model.provider === "agent_plan") ?? [];
@@ -107,13 +136,6 @@ export default function ModelsPage() {
       {catalogQuery.isError ? (
         <ModelError error={catalogQuery.error} fallback="模型目录暂时不可用。" />
       ) : null}
-      {syncMutation.isError ? (
-        <ModelError error={syncMutation.error} fallback="Agent Plan 模型同步失败。" />
-      ) : null}
-      {configurationMutation.isError ? (
-        <ModelError error={configurationMutation.error} fallback="模型配置保存失败。" />
-      ) : null}
-
       {catalog ? (
         <div className="model-provider-sections">
           <ModelProviderSection
