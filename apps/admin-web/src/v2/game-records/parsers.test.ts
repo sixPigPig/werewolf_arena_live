@@ -106,6 +106,15 @@ describe("V2 game record parsers", () => {
             serialized_char_count: 3210,
             recent_statement_count: 3,
             older_claim_count: 2,
+            public_timeline_schema_version: 1,
+            public_timeline_event_count: 3,
+            public_timeline_record_seq_min: 448,
+            public_timeline_record_seq_max: 564,
+            public_timeline_missing_record_seq_count: 0,
+            public_timeline_kind_counts: {
+              player_statement: 1,
+              day_vote: 2,
+            },
           },
           status: "succeeded",
           request_payload: {
@@ -212,6 +221,15 @@ describe("V2 game record parsers", () => {
         serialized_char_count: 3210,
         recent_statement_count: 3,
         older_claim_count: 2,
+        public_timeline_schema_version: 1,
+        public_timeline_event_count: 3,
+        public_timeline_record_seq_min: 448,
+        public_timeline_record_seq_max: 564,
+        public_timeline_missing_record_seq_count: 0,
+        public_timeline_kind_counts: {
+          player_statement: 1,
+          day_vote: 2,
+        },
       },
       passive_observation_count: 1,
     });

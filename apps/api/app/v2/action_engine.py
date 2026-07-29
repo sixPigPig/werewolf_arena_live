@@ -765,6 +765,7 @@ class V2ActionEngine:
                         if isinstance(model_context.get("hard_rules"), dict)
                         else {}
                     ),
+                    model_context=model_context,
                 )
                 self._repository.append_event(
                     game_id=claim.game_id,

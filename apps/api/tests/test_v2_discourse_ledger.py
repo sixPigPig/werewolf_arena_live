@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.v2.discourse_ledger import build_public_discourse_ledger
+from app.v2.discourse_model_view import build_discourse_model_view
 
 
 def _statement(
@@ -85,6 +86,100 @@ def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
     assert paraphrase["source_kind"] == "secondary_unverified_paraphrase"
     assert paraphrase["asserted_relation_type"] == "reported_response"
     assert paraphrase["temporal_relation_status"] == "unverified"
+
+
+def test_ledger_does_not_reuse_seat_8_for_seat_6_self_or_table_questions() -> None:
+    ledger = build_public_discourse_ledger(
+        [
+            _statement(
+                448,
+                speaker_ref="seat_6",
+                stage="day_debate_speech",
+                speech=(
+                    "8号大概率会跳预言家或者跳女巫来搅浑水，你们要心里有数。"
+                    "我为什么要这个警徽？"
+                    "因为我手握查杀，必须有1.5票的归票权确保8号今天出局。"
+                    "后续如果有人对跳预言家，你们看他给的是什么结果——"
+                    "如果他也说查杀8号，那就是蹭我的力度；"
+                    "如果他给的是金水或者查杀别人，那就是狼人悍跳。"
+                ),
+            )
+        ],
+        current_round_no=1,
+        actor_ref="seat_8",
+    )
+
+    assert [
+        (question["exact_quote"], question["addressed_to"], question["status"])
+        for question in ledger["questions"]
+    ] == [
+        ("我为什么要这个警徽？", None, "unresolved_target"),
+        (
+            "后续如果有人对跳预言家，你们看他给的是什么结果——"
+            "如果他也说查杀8号，那就是蹭我的力度；"
+            "如果他给的是金水或者查杀别人，那就是狼人悍跳。",
+            None,
+            "unresolved_target",
+        ),
+    ]
+
+
+def test_ledger_reuses_explicit_addressee_only_for_singular_you_continuation() -> None:
+    ledger = build_public_discourse_ledger(
+        [
+            _statement(
+                449,
+                speaker_ref="seat_6",
+                stage="day_debate_speech",
+                speech=(
+                    "8号先别回避。"
+                    "你今晚具体验谁？"
+                    "我为什么要相信你？"
+                    "大家该怎么看？"
+                    "你们觉得呢？"
+                    "如果有人对跳怎么办？"
+                ),
+            )
+        ],
+        current_round_no=1,
+        actor_ref="seat_8",
+    )
+
+    assert [
+        (question["exact_quote"], question["addressed_to"], question["status"])
+        for question in ledger["questions"]
+    ] == [
+        ("你今晚具体验谁？", "seat_8", "open"),
+        ("我为什么要相信你？", None, "unresolved_target"),
+        ("大家该怎么看？", None, "unresolved_target"),
+        ("你们觉得呢？", None, "unresolved_target"),
+        ("如果有人对跳怎么办？", None, "unresolved_target"),
+    ]
+
+
+def test_discourse_model_view_treats_day_debate_as_public_speech() -> None:
+    ledger = build_public_discourse_ledger(
+        [
+            _statement(
+                450,
+                speaker_ref="seat_6",
+                stage="day_debate_speech",
+                speech="6号今天先听大家发言。",
+            )
+        ],
+        current_round_no=1,
+        actor_ref="seat_8",
+    )
+
+    model_view, _ = build_discourse_model_view(
+        ledger,
+        actor_ref="seat_8",
+        task={"action_type": "day_debate_speech"},
+        candidate_refs=[],
+        latest_vote_result_ref=None,
+    )
+
+    assert model_view["focus"]["profile"] == "public_speech"
 
 
 def test_ledger_only_closes_question_with_later_target_speech() -> None:

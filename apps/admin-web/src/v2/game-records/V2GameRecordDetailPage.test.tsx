@@ -126,7 +126,7 @@ const detail = {
       model_id: "doubao-seed-2-0-lite-260215",
       model_provider: "agent_plan",
       judge_configuration_version: 5,
-      prompt_schema_version: 5,
+      prompt_schema_version: 6,
       prompt_projection: {
         serialized_char_count: 3210,
         ledger_schema_version: 2,
@@ -136,6 +136,15 @@ const detail = {
         current_round_statement_count: 3,
         structured_claim_count: 5,
         open_question_count: 2,
+        public_timeline_schema_version: 1,
+        public_timeline_event_count: 3,
+        public_timeline_record_seq_min: 448,
+        public_timeline_record_seq_max: 564,
+        public_timeline_missing_record_seq_count: 0,
+        public_timeline_kind_counts: {
+          player_statement: 1,
+          day_vote: 2,
+        },
       },
       status: "succeeded",
       request_payload: {
@@ -171,6 +180,67 @@ const detail = {
                     player_count: 9,
                     role_summary: "3 狼人 / 3 神职 / 3 村民",
                     max_rounds: 6,
+                  },
+                  public_timeline: {
+                    schema_version: 1,
+                    source_rules: {
+                      record_seq_clock:
+                        "所有公开事件共用同一条严格递增的时间轴。",
+                    },
+                    events: [
+                      {
+                        record_seq: 448,
+                        kind: "player_statement",
+                        authority: "player_claim_unverified",
+                        source_event_id: "448",
+                        timeline_index: 1,
+                        occurred_in: { period: "day", round_no: 1 },
+                        stage: "sheriff_campaign_speech",
+                        speaker_ref: "seat_6",
+                        statement_ref: "448",
+                      },
+                      {
+                        record_seq: 562,
+                        kind: "day_vote",
+                        authority: "judge_fact",
+                        source_event_id: "562",
+                        timeline_index: 2,
+                        occurred_in: { period: "day", round_no: 1 },
+                        action_type: "sheriff_vote",
+                        voter_ref: "seat_2",
+                        target_ref: "seat_7",
+                        weight: 1,
+                      },
+                      {
+                        record_seq: 564,
+                        kind: "day_vote",
+                        authority: "judge_fact",
+                        source_event_id: "564",
+                        timeline_index: 3,
+                        occurred_in: { period: "day", round_no: 1 },
+                        action_type: "sheriff_vote",
+                        voter_ref: "seat_5",
+                        target_ref: "seat_7",
+                        weight: 1,
+                      },
+                    ],
+                  },
+                  history: {
+                    ledger_schema_version: 2,
+                    model_view_schema_version: 1,
+                    current_round_no: 1,
+                    timeline: [
+                      {
+                        source_event_id: "448",
+                        record_seq: 448,
+                        speaker_ref: "seat_6",
+                        speech: "警徽流：今晚验2号，明晚验5号。",
+                        annotations: [],
+                      },
+                    ],
+                    questions: [],
+                    relations: [],
+                    focus: { profile: "public_speech" },
                   },
                   output_contract: {
                     kind: "public_speech",
@@ -838,19 +908,42 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
     expect(within(inputPanel).getByText("对局配置")).toBeVisible();
     expect(within(inputPanel).getByText("九人标准局")).toBeVisible();
-    expect(within(inputPanel).getByText("公开发言")).toBeVisible();
-    expect(within(inputPanel).getByText("V5")).toBeVisible();
+    expect(within(inputPanel).getAllByText("公开发言")).not.toHaveLength(0);
+    expect(within(inputPanel).getByText("V6")).toBeVisible();
     expect(within(inputPanel).getByText("3,210")).toBeVisible();
     expect(within(inputPanel).getByText("发言账本")).toBeVisible();
     expect(within(inputPanel).getByText("V2")).toBeVisible();
     expect(within(inputPanel).getByText("模型视图")).toBeVisible();
-    expect(within(inputPanel).getByText("V1")).toBeVisible();
+    expect(within(inputPanel).getAllByText("V1")).not.toHaveLength(0);
     expect(within(inputPanel).getByText("完整公开发言")).toBeVisible();
     expect(within(inputPanel).getByText("发言截断")).toBeVisible();
     expect(within(inputPanel).getByText("0（无截断）")).toBeVisible();
     expect(within(inputPanel).getByText("本轮完整发言")).toBeVisible();
     expect(within(inputPanel).getByText("结构化声明")).toBeVisible();
     expect(within(inputPanel).getByText("未回答提问")).toBeVisible();
+    expect(
+      within(inputPanel).getAllByText("统一公开时间线"),
+    ).not.toHaveLength(0);
+    expect(within(inputPanel).getByText("3 个事件")).toBeVisible();
+    expect(within(inputPanel).getByText("#448 – #564")).toBeVisible();
+    expect(within(inputPanel).getByText("玩家发言 × 1")).toBeVisible();
+    expect(within(inputPanel).getByText("白天投票 × 2")).toBeVisible();
+    expect(within(inputPanel).getByText("0（完整）")).toBeVisible();
+    await user.click(
+      within(inputPanel).getByText(
+        "查看统一公开时间线详情（3 个事件）",
+      ),
+    );
+    await waitFor(() =>
+      expect(within(inputPanel).getByText("#448")).toBeVisible(),
+    );
+    expect(within(inputPanel).getByText("#562")).toBeVisible();
+    expect(within(inputPanel).getByText("#564")).toBeVisible();
+    expect(
+      within(inputPanel).getByText("警徽流：今晚验2号，明晚验5号。"),
+    ).toBeVisible();
+    expect(within(inputPanel).getAllByText("seat_7")).toHaveLength(2);
+    expect(within(inputPanel).getByText("发言账本")).toBeVisible();
     expect(
       within(inputPanel).queryByText(/"schema_version"/),
     ).not.toBeInTheDocument();
@@ -919,6 +1012,39 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("derives public timeline evidence from persisted input for older summaries", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "统一时间线兼容验收",
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          prompt_projection: {
+            serialized_char_count: 3210,
+            ledger_schema_version: 2,
+            ledger_statement_count: 9,
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "统一时间线兼容验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+
+    expect(within(inputPanel).getByText("3 个事件")).toBeVisible();
+    expect(within(inputPanel).getByText("#448 – #564")).toBeVisible();
+    expect(within(inputPanel).getByText("玩家发言 × 1")).toBeVisible();
+    expect(within(inputPanel).getByText("白天投票 × 2")).toBeVisible();
   });
 
   it("clears detail and on-demand query cache after leaving the route", async () => {

@@ -8,10 +8,12 @@ from typing import Any
 from app.v2.ability_runtime import normalize_role_key, normalize_team_key
 from app.v2.discourse_ledger import build_public_discourse_ledger
 from app.v2.discourse_model_view import build_discourse_model_view
-from app.v2.model_context_contract import MODEL_PROMPT_SCHEMA_VERSION
+from app.v2.model_context_contract import (
+    MODEL_PROMPT_SCHEMA_VERSION,
+    PUBLIC_TIMELINE_SCHEMA_VERSION,
+)
 
 
-_PUBLIC_JUDGE_FACT_LIMIT = 20
 _PERSONA_TEXT_LIMIT = 600
 
 
@@ -63,15 +65,14 @@ def project_model_action_context_with_metadata(
     private_facts = private_facts if isinstance(private_facts, list) else []
     public_history = context.get("public_history")
     if isinstance(public_history, list) or isinstance(public_history, tuple):
-        facts, statements, role_confirmations, vote_snapshots = _project_public_history(
+        statements, vote_snapshots, public_events = _project_public_history(
             public_history,
             players=players,
         )
     else:
-        facts = []
         statements = []
-        role_confirmations = []
         vote_snapshots = []
+        public_events = []
 
     current_round_no = _current_round_no(source, statements=statements)
     identity = source.get("self_identity")
@@ -109,12 +110,8 @@ def project_model_action_context_with_metadata(
             private_facts=private_facts,
             hard_rules=hard_rules,
         ),
-        "public_state": _model_public_state(
-            source,
-            facts=facts,
-            role_confirmations=role_confirmations,
-            vote_snapshots=vote_snapshots,
-        ),
+        "public_state": _model_public_state(source),
+        "public_timeline": _model_public_timeline(public_events),
         "history": history_view,
         "persona": _compact_persona(source.get("actor_profile")),
         "candidates": candidates,
@@ -146,6 +143,25 @@ def model_prompt_metadata(
     timeline = timeline if isinstance(timeline, list) else []
     questions = questions if isinstance(questions, list) else []
     relations = relations if isinstance(relations, list) else []
+    public_timeline = context.get("public_timeline")
+    public_timeline = public_timeline if isinstance(public_timeline, dict) else {}
+    public_events = public_timeline.get("events")
+    public_events = public_events if isinstance(public_events, list) else []
+    public_record_seqs = [
+        value
+        for item in public_events
+        if isinstance(item, dict)
+        for value in (item.get("record_seq"),)
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    public_timeline_kind_counts: dict[str, int] = {}
+    for item in public_events:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        if not isinstance(kind, str) or not kind:
+            continue
+        public_timeline_kind_counts[kind] = public_timeline_kind_counts.get(kind, 0) + 1
     record_seqs = [
         value
         for item in timeline
@@ -175,6 +191,20 @@ def model_prompt_metadata(
         ),
         "ledger_schema_version": history.get("ledger_schema_version"),
         "model_view_schema_version": history.get("model_view_schema_version"),
+        "public_timeline_schema_version": public_timeline.get("schema_version"),
+        "public_timeline_event_count": len(public_events),
+        "public_timeline_record_seq_min": min(public_record_seqs, default=None),
+        "public_timeline_record_seq_max": max(public_record_seqs, default=None),
+        "public_timeline_missing_record_seq_count": sum(
+            1
+            for item in public_events
+            if isinstance(item, dict)
+            and not (
+                isinstance(item.get("record_seq"), int)
+                and not isinstance(item.get("record_seq"), bool)
+            )
+        ),
+        "public_timeline_kind_counts": public_timeline_kind_counts,
         "current_round_statement_count": len(current_round_statements),
         "current_round_statement_char_count": sum(
             len(str(item.get("speech") or ""))
@@ -404,13 +434,7 @@ def _living_werewolf_teammates(
     return None
 
 
-def _model_public_state(
-    source: dict[str, Any],
-    *,
-    facts: list[dict[str, Any]],
-    role_confirmations: list[dict[str, Any]],
-    vote_snapshots: list[dict[str, Any]],
-) -> dict[str, Any]:
+def _model_public_state(source: dict[str, Any]) -> dict[str, Any]:
     public_match_state = source.get("public_match_state")
     public_match_state = dict(public_match_state) if isinstance(public_match_state, dict) else {}
     sheriff_player_id = source.get("sheriff_player_id")
@@ -421,13 +445,38 @@ def _model_public_state(
         badge_state = office.get("sheriff_badge_state")
         if badge_state is not None:
             public_match_state["sheriff_badge_state"] = badge_state
-    if facts:
-        public_match_state["judge_facts"] = facts[-_PUBLIC_JUDGE_FACT_LIMIT:]
-    if role_confirmations:
-        public_match_state["role_confirmations"] = role_confirmations
-    if vote_snapshots:
-        public_match_state["latest_vote_snapshot"] = vote_snapshots[-1]
     return public_match_state
+
+
+def _model_public_timeline(events: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": PUBLIC_TIMELINE_SCHEMA_VERSION,
+        "source_rules": {
+            "record_seq_clock": (
+                "record_seq 是全部公开事件唯一可比较的时间顺序；数值更小的事件先发生"
+            ),
+            "authority_rule": (
+                "authority=judge_fact 是法官确认的公开事实；"
+                "authority=player_claim_unverified 是玩家原话，不是法官确认"
+            ),
+            "statement_reference_rule": (
+                "kind=player_statement 的 statement_ref 对应 "
+                "history.timeline 中相同 source_event_id 的完整原话"
+            ),
+            "causality_rule": (
+                "后发生的任何公开事件只能用于事后评价，不得被描述为更早行动当时"
+                "已经存在的理由、信息、回答或反应"
+            ),
+            "missing_record_seq_rule": (
+                "缺少 record_seq 的事件只能沿用输入位置，不得与其他事件推断精确先后"
+            ),
+            "duplicate_record_seq_rule": (
+                "若 legacy 输入出现相同 record_seq，则沿用输入顺序展示，"
+                "但不得推断这些同序事件之间的精确因果先后"
+            ),
+        },
+        "events": events,
+    }
 
 
 def _compact_persona(value: Any) -> dict[str, Any]:
@@ -671,21 +720,15 @@ def _role_capabilities(
 ) -> dict[str, Any]:
     werewolf_count = _werewolf_count_from_rule(rule)
     policies = rule.get("ability_policies")
-    attack_policy = (
-        policies.get("werewolf_attack") if isinstance(policies, dict) else None
-    )
+    attack_policy = policies.get("werewolf_attack") if isinstance(policies, dict) else None
     allow_wolf_target = (
-        isinstance(attack_policy, dict)
-        and attack_policy.get("allow_wolf_target") is True
+        isinstance(attack_policy, dict) and attack_policy.get("allow_wolf_target") is True
     )
     allow_no_attack = (
-        isinstance(attack_policy, dict)
-        and attack_policy.get("allow_no_attack") is True
+        isinstance(attack_policy, dict) and attack_policy.get("allow_no_attack") is True
     )
     target_description = (
-        "一名存活玩家（可以选择狼人或自己）"
-        if allow_wolf_target
-        else "一名存活的非狼人玩家"
+        "一名存活玩家（可以选择狼人或自己）" if allow_wolf_target else "一名存活的非狼人玩家"
     )
     optional_description = "，也可以主动空刀" if allow_no_attack else ""
     capabilities: dict[str, list[dict[str, Any]]] = {
@@ -946,9 +989,7 @@ def _night_action_rules(
             "enabled": werewolf_count > 0,
             "actor_scope": "所有存活狼人",
             "target_scope": (
-                "一名存活玩家，可以选择狼人或自己"
-                if allow_wolf_target
-                else "一名存活的非狼人玩家"
+                "一名存活玩家，可以选择狼人或自己" if allow_wolf_target else "一名存活的非狼人玩家"
             ),
             "each_actor_must_choose_target": not allow_no_attack,
             "can_target_self": allow_wolf_target,
@@ -1031,12 +1072,10 @@ def _project_public_history(
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
-    list[dict[str, Any]],
 ]:
-    facts: list[dict[str, Any]] = []
     statements: list[dict[str, Any]] = []
-    role_confirmations: list[dict[str, Any]] = []
     vote_snapshots: list[dict[str, Any]] = []
+    public_events: list[dict[str, Any]] = []
     has_presented_player_speech = any(
         isinstance(item, dict) and item.get("event_type") == "public_player_speech_presented"
         for item in history
@@ -1053,6 +1092,14 @@ def _project_public_history(
         if source_event_id is None:
             source_event_id = f"history_{history_index}"
         record_seq = raw_item.get("record_seq")
+        sequenced_source = {
+            "source_event_id": source_event_id,
+            **(
+                {"record_seq": record_seq}
+                if isinstance(record_seq, int) and not isinstance(record_seq, bool)
+                else {}
+            ),
+        }
         statement_source = {
             "source_kind": "speaker_statement",
             **(
@@ -1066,8 +1113,31 @@ def _project_public_history(
             latest_round = round_no
         projected_payload = _project_value(payload, players=players)
         if event_type == "public_player_speech_presented":
-            statements.append(
+            statement = {
+                "kind": "player_statement",
+                "source_event_id": source_event_id,
+                "occurred_in": {"period": "day", "round_no": latest_round},
+                "stage": projected_payload.get("stage"),
+                "speaker_ref": projected_payload.get("player_id"),
+                "speech": projected_payload.get("speech"),
+                **statement_source,
+            }
+            statements.append(statement)
+            public_events.append(
                 {
+                    "kind": "player_statement",
+                    "authority": "player_claim_unverified",
+                    **sequenced_source,
+                    "occurred_in": statement["occurred_in"],
+                    "stage": statement["stage"],
+                    "speaker_ref": statement["speaker_ref"],
+                    "statement_ref": source_event_id,
+                }
+            )
+            continue
+        if event_type == "day_speech_committed":
+            if not has_presented_player_speech:
+                statement = {
                     "kind": "player_statement",
                     "source_event_id": source_event_id,
                     "occurred_in": {"period": "day", "round_no": latest_round},
@@ -1076,172 +1146,151 @@ def _project_public_history(
                     "speech": projected_payload.get("speech"),
                     **statement_source,
                 }
-            )
-            continue
-        if event_type == "day_speech_committed":
-            if not has_presented_player_speech:
-                statements.append(
+                statements.append(statement)
+                public_events.append(
                     {
                         "kind": "player_statement",
-                        "source_event_id": source_event_id,
-                        "occurred_in": {"period": "day", "round_no": latest_round},
-                        "stage": projected_payload.get("stage"),
-                        "speaker_ref": projected_payload.get("player_id"),
-                        "speech": projected_payload.get("speech"),
-                        **statement_source,
+                        "authority": "player_claim_unverified",
+                        **sequenced_source,
+                        "occurred_in": statement["occurred_in"],
+                        "stage": statement["stage"],
+                        "speaker_ref": statement["speaker_ref"],
+                        "statement_ref": source_event_id,
                     }
                 )
             continue
         if event_type == "day_vote_committed":
-            facts.append(
-                {
-                    "kind": "day_vote",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "day", "round_no": latest_round},
-                    "action_type": projected_payload.get("action_type"),
-                    "voter_ref": projected_payload.get("voter_player_id"),
-                    "target_ref": projected_payload.get("target_player_id"),
-                    "weight": projected_payload.get("weight"),
-                }
-            )
+            fact = {
+                "kind": "day_vote",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "day", "round_no": latest_round},
+                "action_type": projected_payload.get("action_type"),
+                "voter_ref": projected_payload.get("voter_player_id"),
+                "target_ref": projected_payload.get("target_player_id"),
+                "weight": projected_payload.get("weight"),
+            }
+            public_events.append(dict(fact))
             continue
         if event_type == "day_vote_resolved":
-            vote_snapshots.append(
-                {
-                    "kind": "vote_result",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "day", "round_no": latest_round},
-                    "action_type": projected_payload.get("action_type"),
-                    "eligible_voter_refs": projected_payload.get("eligible_voter_ids", []),
-                    "ineligible_voter_refs": projected_payload.get("ineligible_voter_ids", []),
-                    "candidate_refs": projected_payload.get("candidate_player_ids", []),
-                    "weighted": projected_payload.get("weighted"),
-                    "sheriff_ref": projected_payload.get("sheriff_player_id"),
-                    "sheriff_vote_weight": projected_payload.get("sheriff_vote_weight"),
-                    "voter_weights": projected_payload.get("voter_weights", {}),
-                    "totals": projected_payload.get("totals", {}),
-                    "leader_refs": projected_payload.get("leaders", []),
-                    "identity_reveal": "none",
-                }
-            )
+            vote_snapshot = {
+                "kind": "vote_result",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "day", "round_no": latest_round},
+                "action_type": projected_payload.get("action_type"),
+                "eligible_voter_refs": projected_payload.get("eligible_voter_ids", []),
+                "ineligible_voter_refs": projected_payload.get("ineligible_voter_ids", []),
+                "candidate_refs": projected_payload.get("candidate_player_ids", []),
+                "weighted": projected_payload.get("weighted"),
+                "sheriff_ref": projected_payload.get("sheriff_player_id"),
+                "sheriff_vote_weight": projected_payload.get("sheriff_vote_weight"),
+                "voter_weights": projected_payload.get("voter_weights", {}),
+                "totals": projected_payload.get("totals", {}),
+                "leader_refs": projected_payload.get("leaders", []),
+                "identity_reveal": "none",
+            }
+            vote_snapshots.append(vote_snapshot)
+            public_events.append(dict(vote_snapshot))
             continue
         if event_type == "dawn_public_result":
             eliminated = projected_payload.get("dead_player_ids")
             eliminated_refs = eliminated if isinstance(eliminated, list) else []
-            facts.append(
-                {
-                    "kind": "night_result",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "night", "round_no": latest_round},
-                    "announced_in": {"period": "dawn", "round_no": latest_round},
-                    "outcome": "deaths" if eliminated_refs else "peaceful",
-                    "eliminated_player_refs": eliminated_refs,
-                    "role_revealed": False,
-                    "known_role": None,
-                    "identity_reveal": "none",
-                }
-            )
+            fact = {
+                "kind": "night_result",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "night", "round_no": latest_round},
+                "announced_in": {"period": "dawn", "round_no": latest_round},
+                "outcome": "deaths" if eliminated_refs else "peaceful",
+                "eliminated_player_refs": eliminated_refs,
+                "role_revealed": False,
+                "known_role": None,
+                "identity_reveal": "none",
+            }
+            public_events.append(dict(fact))
             continue
         if event_type == "player_exiled":
-            facts.append(
-                {
-                    "kind": "player_eliminated",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "day", "round_no": latest_round},
-                    "public_reason": "exile",
-                    "player_ref": projected_payload.get("player_id"),
-                    "role_revealed": False,
-                    "known_role": None,
-                    "identity_reveal": "none",
-                }
-            )
+            fact = {
+                "kind": "player_eliminated",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "day", "round_no": latest_round},
+                "public_reason": "exile",
+                "player_ref": projected_payload.get("player_id"),
+                "role_revealed": False,
+                "known_role": None,
+                "identity_reveal": "none",
+            }
+            public_events.append(dict(fact))
             continue
         if event_type == "idiot_revealed":
-            confirmation = {
-                "source_event_id": source_event_id,
+            fact = {
+                "kind": "role_revealed",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "day", "round_no": latest_round},
                 "player_ref": projected_payload.get("player_id"),
-                "role_key": "idiot",
-                "confirmation_reason": "idiot_exile_immunity_triggered",
-                "confirmation_status": "confirmed_by_judge",
+                "role_revealed": True,
+                "known_role": "idiot",
+                "survived": bool(projected_payload.get("survived")),
             }
-            role_confirmations.append(confirmation)
-            facts.append(
-                {
-                    "kind": "role_revealed",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "day", "round_no": latest_round},
-                    "player_ref": projected_payload.get("player_id"),
-                    "role_revealed": True,
-                    "known_role": "idiot",
-                    "survived": bool(projected_payload.get("survived")),
-                }
-            )
+            public_events.append(dict(fact))
             continue
         if event_type == "werewolf_self_exploded":
-            role_confirmations.append(
-                {
-                    "source_event_id": source_event_id,
-                    "player_ref": projected_payload.get("player_id"),
-                    "role_key": "werewolf",
-                    "confirmation_reason": "werewolf_self_explosion",
-                    "confirmation_status": "confirmed_by_judge",
-                }
-            )
-            facts.append(
-                {
-                    "kind": "player_eliminated",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {"period": "day", "round_no": latest_round},
-                    "public_reason": "self_explosion",
-                    "player_ref": projected_payload.get("player_id"),
-                    "stage": projected_payload.get("stage"),
-                    "role_revealed": True,
-                    "known_role": "werewolf",
-                    "identity_reveal": "werewolf_confirmed",
-                }
-            )
+            fact = {
+                "kind": "player_eliminated",
+                "authority": "judge_fact",
+                **sequenced_source,
+                "occurred_in": {"period": "day", "round_no": latest_round},
+                "public_reason": "self_explosion",
+                "player_ref": projected_payload.get("player_id"),
+                "stage": projected_payload.get("stage"),
+                "role_revealed": True,
+                "known_role": "werewolf",
+                "identity_reveal": "werewolf_confirmed",
+            }
+            public_events.append(dict(fact))
             continue
         if event_type == "hunter_response_resolved":
             hunter_ref = projected_payload.get("hunter_player_id")
             target_ref = projected_payload.get("target_player_id")
-            if target_ref is not None:
-                role_confirmations.append(
-                    {
-                        "source_event_id": source_event_id,
-                        "player_ref": hunter_ref,
-                        "role_key": "hunter",
-                        "confirmation_reason": "hunter_public_shot",
-                        "confirmation_status": "confirmed_by_judge",
-                    }
-                )
-            facts.append(
-                {
-                    "kind": "hunter_response",
-                    "source_event_id": source_event_id,
-                    "occurred_in": {
-                        "period": projected_payload.get("period") or "day",
-                        "round_no": latest_round,
-                    },
-                    "hunter_ref": hunter_ref,
-                    "target_ref": target_ref,
-                    "hunter_role_revealed": target_ref is not None,
-                    "target_role_revealed": False,
-                    "target_known_role": None,
-                }
-            )
-            continue
-        facts.append(
-            {
-                "kind": event_type,
-                "source_event_id": source_event_id,
+            fact = {
+                "kind": "hunter_response",
+                "authority": "judge_fact",
+                **sequenced_source,
                 "occurred_in": {
-                    "period": _public_event_period(event_type),
+                    "period": projected_payload.get("period") or "day",
                     "round_no": latest_round,
                 },
-                "payload": projected_payload,
+                "hunter_ref": hunter_ref,
+                "target_ref": target_ref,
+                "hunter_role_revealed": target_ref is not None,
+                "target_role_revealed": False,
+                "target_known_role": None,
             }
-        )
-    return facts, statements, role_confirmations, vote_snapshots
+            public_events.append(dict(fact))
+            continue
+        fact = {
+            "kind": event_type,
+            "authority": "judge_fact",
+            **sequenced_source,
+            "occurred_in": {
+                "period": _public_event_period(event_type),
+                "round_no": latest_round,
+            },
+            "payload": projected_payload,
+        }
+        public_events.append(dict(fact))
+
+    if public_events and all(
+        isinstance(item.get("record_seq"), int) and not isinstance(item.get("record_seq"), bool)
+        for item in public_events
+    ):
+        public_events.sort(key=lambda item: int(item["record_seq"]))
+    for timeline_index, event in enumerate(public_events, start=1):
+        event["timeline_index"] = timeline_index
+    return statements, vote_snapshots, public_events
 
 
 def _source_id(value: Any) -> str | None:

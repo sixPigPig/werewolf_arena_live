@@ -1020,6 +1020,7 @@ class V2NightRepository:
             "werewolf_self_exploded",
             "sheriff_elected",
             "sheriff_badge_destroyed",
+            "sheriff_badge_transferred",
             "hunter_response_resolved",
             "dawn_public_result",
         }

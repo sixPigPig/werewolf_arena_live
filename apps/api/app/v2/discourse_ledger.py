@@ -42,6 +42,7 @@ _DIRECT_QUESTION = re.compile(
     r"(?:我(?:现在|想|要)?问|请.{0,12}回答|"
     r"你.{0,18}(?:谁|什么|怎么|为什么|能不能|是否|哪|几号|号码))"
 )
+_SINGULAR_ADDRESSEE_CONTINUATION = re.compile(r"^\s*你(?!们)")
 _OTHER_QUESTION_REPORT = re.compile(r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:问|追问)")
 _SECONDARY_REPORT = re.compile(
     r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,18}"
@@ -243,7 +244,13 @@ def _extract_question(
     ):
         return None, last_addressed_to
 
-    target_ref = addressed_to or last_addressed_to
+    target_ref = addressed_to
+    if (
+        target_ref is None
+        and last_addressed_to is not None
+        and _SINGULAR_ADDRESSEE_CONTINUATION.search(sentence) is not None
+    ):
+        target_ref = last_addressed_to
     source_id = str(utterance["source_event_id"])
     question = {
         "question_id": f"question_{source_id}_{sentence_index}",

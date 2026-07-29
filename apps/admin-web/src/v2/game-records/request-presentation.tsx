@@ -23,6 +23,7 @@ import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
 import type {
   V2GameRecordEvent,
   V2ModelRequest,
+  V2PromptProjection,
 } from "@/v2/game-records/types";
 
 type RequestMessage = {
@@ -33,6 +34,15 @@ type RequestMessage = {
 type StructuredPrompt = {
   intro: string | null;
   value: Record<string, unknown>;
+};
+
+type PublicTimelineSummary = {
+  eventCount: number;
+  kindCounts: Record<string, number>;
+  missingRecordSeqCount: number;
+  recordSeqMax: number | null;
+  recordSeqMin: number | null;
+  schemaVersion: number | null;
 };
 
 const fieldLabels: Record<string, string> = {
@@ -70,6 +80,7 @@ const fieldLabels: Record<string, string> = {
   dead_player_ids: "出局玩家",
   display_name: "玩家名称",
   event_type: "事件类型",
+  events: "公开事件",
   exact_quote: "原话",
   facts: "已知事实",
   game_id: "对局 ID",
@@ -99,6 +110,7 @@ const fieldLabels: Record<string, string> = {
   prior_team_proposals: "此前提议",
   projection_policy_id: "信息投影规则",
   public_state: "公开事实",
+  public_timeline: "统一公开时间线",
   public_history: "公开历史",
   hard_rules: "硬规则",
   history: "公开发言历史",
@@ -184,12 +196,14 @@ const fieldLabels: Record<string, string> = {
   stage: "阶段",
   status: "状态",
   speaker_ref: "发言者",
+  authority: "事实权威性",
   strategy_profile: "策略类型",
   self: "玩家自身与私有事实",
   strength: "影响强度",
   target_optional: "目标可为空",
   target_player_id: "目标玩家",
   target_ref: "目标玩家",
+  voter_ref: "投票玩家",
   target_policy: "目标规则",
   thinking: "思考模式",
   tts_speaker: "语音角色",
@@ -206,19 +220,29 @@ const valueLabels: Record<string, string> = {
   decision: "决策",
   decision_and_speech: "决策 + 发言",
   day_debate: "白天讨论",
+  day_vote: "白天投票",
   day_speech_committed: "白天发言已提交",
   disabled: "未启用",
   god_view: "上帝视角",
+  hunter_response: "猎人响应",
   judge: "法官",
+  judge_fact: "法官确认事实",
+  night_result: "夜间结果",
   none: "无需选择",
   optional: "可选",
   player: "玩家",
+  player_claim_unverified: "玩家声明（未验证）",
+  player_eliminated: "玩家出局",
+  player_statement: "玩家发言",
   private: "私密",
   public: "公开",
   public_speech: "公开发言",
   required: "必须选择",
+  role_revealed: "身份公开",
   sheriff_campaign: "警长竞选",
+  sheriff_vote: "警长投票",
   speech: "发言",
+  vote_result: "投票结果",
 };
 
 export function ReadableModelInput({
@@ -230,6 +254,10 @@ export function ReadableModelInput({
     return <Empty description="这一步没有模型输入" />;
   }
   const messages = requestMessages(request.request_payload);
+  const publicTimeline = summarizePublicTimeline(
+    request.prompt_projection,
+    publicTimelineFromMessages(messages),
+  );
   const serializedCharCount = numericField(
     request.prompt_projection,
     "serialized_char_count",
@@ -377,6 +405,48 @@ export function ReadableModelInput({
             children:
               openQuestionCount === null ? "—" : String(openQuestionCount),
           },
+          ...(publicTimeline
+            ? [
+                {
+                  key: "public-timeline",
+                  label: "统一公开时间线",
+                  children: (
+                    <Space size={6} wrap>
+                      {publicTimeline.schemaVersion === null ? null : (
+                        <Tag>V{publicTimeline.schemaVersion}</Tag>
+                      )}
+                      <Typography.Text>
+                        {publicTimeline.eventCount} 个事件
+                      </Typography.Text>
+                    </Space>
+                  ),
+                },
+                {
+                  key: "public-timeline-range",
+                  label: "记录序号范围",
+                  children: recordSeqRange(publicTimeline),
+                },
+                {
+                  key: "public-timeline-kinds",
+                  label: "时间线事件类型",
+                  children: (
+                    <TimelineKindCounts counts={publicTimeline.kindCounts} />
+                  ),
+                },
+                {
+                  key: "public-timeline-missing-seq",
+                  label: "缺少记录序号",
+                  children:
+                    publicTimeline.missingRecordSeqCount === 0 ? (
+                      "0（完整）"
+                    ) : (
+                      <Tag color="warning">
+                        {publicTimeline.missingRecordSeqCount}
+                      </Tag>
+                    ),
+                },
+              ]
+            : []),
         ]}
         size="small"
       />
@@ -720,9 +790,13 @@ function ActionContext({
       ) : null}
       {groups.length ? (
         <div className="v2-readable-groups">
-          {groups.map(([key, value]) => (
-            <ReadableGroup key={key} label={fieldLabel(key)} value={value} />
-          ))}
+          {groups.map(([key, value]) =>
+            key === "public_timeline" && isRecord(value) ? (
+              <PublicTimelineGroup key={key} value={value} />
+            ) : (
+              <ReadableGroup key={key} label={fieldLabel(key)} value={value} />
+            ),
+          )}
         </div>
       ) : null}
     </div>
@@ -743,6 +817,80 @@ function ReadableGroup({
       </Typography.Text>
       <ReadableValue value={value} />
     </section>
+  );
+}
+
+function PublicTimelineGroup({
+  value,
+}: {
+  value: Record<string, unknown>;
+}) {
+  const summary = summarizePublicTimeline(null, value);
+  const events = Array.isArray(value.events) ? value.events : [];
+  return (
+    <section className="v2-readable-group">
+      <Typography.Text className="v2-readable-group-title" strong>
+        统一公开时间线
+      </Typography.Text>
+      <Collapse
+        items={[
+          {
+            children: (
+              <>
+                {value.source_rules === undefined ? null : (
+                  <ReadableGroup
+                    label={fieldLabel("source_rules")}
+                    value={value.source_rules}
+                  />
+                )}
+                {events.length ? (
+                  <div className="v2-readable-list">
+                    {events.map((event, index) => (
+                      <div className="v2-readable-list-item" key={index}>
+                        <TimelineEventHeader event={event} index={index} />
+                        <ReadableValue value={event} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Empty description="没有公开时间线事件" />
+                )}
+              </>
+            ),
+            key: "public-timeline-details",
+            label: `查看统一公开时间线详情（${summary?.eventCount ?? 0} 个事件）`,
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
+function TimelineEventHeader({
+  event,
+  index,
+}: {
+  event: unknown;
+  index: number;
+}) {
+  if (!isRecord(event)) {
+    return <Typography.Text type="secondary">{index + 1}</Typography.Text>;
+  }
+  const recordSeq = integerNumber(event.record_seq);
+  const kind = typeof event.kind === "string" ? event.kind : null;
+  const authority =
+    typeof event.authority === "string" ? event.authority : null;
+  return (
+    <Space size={6} wrap>
+      <Tag>{recordSeq === null ? `事件 ${index + 1}` : `#${recordSeq}`}</Tag>
+      {kind ? <Tag color="blue">{timelineKindLabel(kind)}</Tag> : null}
+      {authority ? (
+        <Typography.Text type="secondary">
+          {valueLabels[authority] ?? authority}
+        </Typography.Text>
+      ) : null}
+    </Space>
   );
 }
 
@@ -810,6 +958,130 @@ function ReadableValue({
     );
   }
   return displayScalar(value, fieldKey);
+}
+
+function publicTimelineFromMessages(
+  messages: RequestMessage[],
+): Record<string, unknown> | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const structured = parseStructuredPrompt(messages[index].text);
+    if (structured && isRecord(structured.value.public_timeline)) {
+      return structured.value.public_timeline;
+    }
+  }
+  return null;
+}
+
+function summarizePublicTimeline(
+  projection: V2PromptProjection | null,
+  value: Record<string, unknown> | null,
+): PublicTimelineSummary | null {
+  const events = value && Array.isArray(value.events) ? value.events : null;
+  const metadataPresent =
+    projection !== null &&
+    [
+      "public_timeline_schema_version",
+      "public_timeline_event_count",
+      "public_timeline_record_seq_min",
+      "public_timeline_record_seq_max",
+      "public_timeline_missing_record_seq_count",
+      "public_timeline_kind_counts",
+    ].some((key) => projection[key] !== undefined);
+  if (!events && !metadataPresent) return null;
+
+  const eventRecords = (events ?? []).filter(isRecord);
+  const recordSeqs = eventRecords.flatMap((event) => {
+    const recordSeq = integerNumber(event.record_seq);
+    return recordSeq === null ? [] : [recordSeq];
+  });
+  const fallbackKindCounts = eventRecords.reduce<Record<string, number>>(
+    (counts, event) => {
+      if (typeof event.kind === "string" && event.kind) {
+        counts[event.kind] = (counts[event.kind] ?? 0) + 1;
+      }
+      return counts;
+    },
+    {},
+  );
+  const metadataKindCounts = numericRecordField(
+    projection,
+    "public_timeline_kind_counts",
+  );
+
+  return {
+    eventCount:
+      numericField(projection, "public_timeline_event_count") ??
+      events?.length ??
+      0,
+    kindCounts: metadataKindCounts ?? fallbackKindCounts,
+    missingRecordSeqCount:
+      numericField(
+        projection,
+        "public_timeline_missing_record_seq_count",
+      ) ??
+      eventRecords.length - recordSeqs.length,
+    recordSeqMax:
+      numericField(projection, "public_timeline_record_seq_max") ??
+      (recordSeqs.length ? Math.max(...recordSeqs) : null),
+    recordSeqMin:
+      numericField(projection, "public_timeline_record_seq_min") ??
+      (recordSeqs.length ? Math.min(...recordSeqs) : null),
+    schemaVersion:
+      numericField(projection, "public_timeline_schema_version") ??
+      integerNumber(value?.schema_version),
+  };
+}
+
+function numericRecordField(
+  value: Record<string, unknown> | null,
+  key: string,
+): Record<string, number> | null {
+  const candidate = value?.[key];
+  if (!isRecord(candidate)) return null;
+  return Object.fromEntries(
+    Object.entries(candidate).flatMap(([kind, count]) => {
+      const numericCount = integerNumber(count);
+      return numericCount === null ? [] : [[kind, numericCount]];
+    }),
+  );
+}
+
+function integerNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+function recordSeqRange(summary: PublicTimelineSummary) {
+  if (summary.recordSeqMin === null || summary.recordSeqMax === null) return "—";
+  if (summary.recordSeqMin === summary.recordSeqMax) {
+    return `#${summary.recordSeqMin}`;
+  }
+  return `#${summary.recordSeqMin} – #${summary.recordSeqMax}`;
+}
+
+function TimelineKindCounts({
+  counts,
+}: {
+  counts: Record<string, number>;
+}) {
+  const entries = Object.entries(counts).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (!entries.length) {
+    return <Typography.Text type="secondary">无</Typography.Text>;
+  }
+  return (
+    <Space size={[6, 6]} wrap>
+      {entries.map(([kind, count]) => (
+        <Tag key={kind}>
+          {timelineKindLabel(kind)} × {count}
+        </Tag>
+      ))}
+    </Space>
+  );
+}
+
+function timelineKindLabel(kind: string) {
+  return valueLabels[kind] ?? humanize(kind);
 }
 
 function OutputSummary({
@@ -1004,6 +1276,7 @@ function displayScalar(value: unknown, fieldKey?: string): ReactNode {
     fieldKey === "status" ||
     fieldKey === "mode" ||
     fieldKey === "kind" ||
+    fieldKey === "authority" ||
     fieldKey === "audience"
   ) {
     return <Tag>{valueLabels[text] ?? humanize(text)}</Tag>;

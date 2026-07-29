@@ -13,6 +13,7 @@ import type {
   V2ModelRequestPage,
   V2ModelRequestSummary,
   V2PlayerIdentity,
+  V2PromptProjection,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
 
@@ -258,7 +259,7 @@ export function parseV2ModelRequestSummary(
       record.prompt_projection === undefined ||
       record.prompt_projection === null
         ? null
-        : object(record.prompt_projection),
+        : parsePromptProjection(record.prompt_projection),
     status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
     input_source: oneOf(
       record.input_source,
@@ -328,6 +329,54 @@ export function parseV2ModelRequestSummary(
     started_at: date(record.started_at),
     completed_at: nullableDate(record.completed_at),
   };
+}
+
+function parsePromptProjection(value: unknown): V2PromptProjection {
+  const projection = object(value);
+  validateOptionalInteger(
+    projection,
+    "public_timeline_schema_version",
+    1,
+    true,
+  );
+  validateOptionalInteger(
+    projection,
+    "public_timeline_event_count",
+    0,
+  );
+  validateOptionalInteger(
+    projection,
+    "public_timeline_record_seq_min",
+    1,
+    true,
+  );
+  validateOptionalInteger(
+    projection,
+    "public_timeline_record_seq_max",
+    1,
+    true,
+  );
+  validateOptionalInteger(
+    projection,
+    "public_timeline_missing_record_seq_count",
+    0,
+  );
+  if (projection.public_timeline_kind_counts !== undefined) {
+    const counts = object(projection.public_timeline_kind_counts);
+    for (const count of Object.values(counts)) integer(count, 0);
+  }
+  return projection;
+}
+
+function validateOptionalInteger(
+  record: Record<string, unknown>,
+  key: string,
+  minimum: number,
+  nullable = false,
+) {
+  const value = record[key];
+  if (value === undefined || (nullable && value === null)) return;
+  integer(value, minimum);
 }
 
 export function parseV2ModelRequest(value: unknown): V2ModelRequest {

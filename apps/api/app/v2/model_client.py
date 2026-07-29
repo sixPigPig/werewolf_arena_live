@@ -743,12 +743,14 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                     "type": "input_text",
                     "text": (
                         "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
-                        "和 public_state 是权威事实；history 只是玩家公开说法，可能真实、"
-                        "撒谎或判断错误；history.source_rules 规定发言来源和时间因果边界，"
-                        "必须遵守。history.timeline 按 record_seq 保留全部公开发言，"
-                        "annotations、questions 和 relations 只引用这条时间线，不是"
-                        "额外事实。你可以自主判断、伪装身份和制定策略，但不得使用未提供"
-                        "的私密信息，也不要把玩家说法当成法官确认。"
+                        "和 public_state 是当前权威事实。public_timeline.events 是全部公开"
+                        "事件的唯一时间轴，必须按 record_seq 判断跨发言、投票和法官事件"
+                        "的先后；后发生事件只能用于事后评价，不能成为更早行动当时已有的"
+                        "理由、信息、回答或反应。history 是从该时间轴派生的玩家发言与"
+                        "话语标注，可能真实、撒谎或判断错误；player_statement 的"
+                        "statement_ref 对应 history.timeline 的 source_event_id。"
+                        "你可以自主判断、伪装身份和制定策略，但不得使用未提供的私密信息，"
+                        "也不要把玩家说法当成法官确认。"
                         f"{output_instruction}"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
                     ),

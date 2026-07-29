@@ -46,6 +46,7 @@ from app.v2.model_client import (
     V2QualityError,
     build_model_request_payload,
 )
+from app.v2.night_repository import V2NightRepository
 from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
@@ -541,7 +542,8 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "player_count": 2,
             "judge_voice": game.judge_voice_snapshot,
             "model_context_contract": {
-                "prompt_schema_version": 5,
+                "prompt_schema_version": 6,
+                "public_timeline_schema_version": 1,
                 "ledger_schema_version": 2,
                 "model_view_schema_version": 1,
             },
@@ -1687,11 +1689,14 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 5
+        context["prompt_schema_version"] == 6
         and "private_judge_facts" in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "public_state" in context
+        and context["public_timeline"]["schema_version"] == 1
+        and "source_rules" in context["public_timeline"]
+        and "events" in context["public_timeline"]
         and "history" in context
         and context["history"]["ledger_schema_version"] == 2
         and context["history"]["model_view_schema_version"] == 1
@@ -1975,7 +1980,11 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 5
+            event.payload["prompt_schema_version"] == 6
+            and event.payload["prompt_projection"]["public_timeline_schema_version"] == 1
+            and "public_timeline_event_count" in event.payload["prompt_projection"]
+            and "public_timeline_missing_record_seq_count" in event.payload["prompt_projection"]
+            and "public_timeline_kind_counts" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["ledger_schema_version"] == 2
             and event.payload["prompt_projection"]["model_view_schema_version"] == 1
             and "current_round_statement_count" in event.payload["prompt_projection"]
@@ -2084,13 +2093,14 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         "优先讲此刻最在意的判断" in context["task"]["objective"]
         and "通常约250到400字" in context["task"]["objective"]
         and "完整复盘全场" in context["task"]["objective"]
-        and "事后评价" not in context["task"]["objective"]
+        and "后发生的发言、投票或法官事件只能用于事后评价" in context["task"]["objective"]
         and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
         for context in debate_contexts
     )
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
-        context["prompt_schema_version"] == 5
+        context["prompt_schema_version"] == 6
+        and context["public_timeline"]["schema_version"] == 1
         and context["history"]["ledger_schema_version"] == 2
         and context["history"]["model_view_schema_version"] == 1
         and context["output_contract"]["speech"]
@@ -2304,14 +2314,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             visible_vote_ids = [
                 tuple(
                     item["source_event_id"]
-                    for item in (
-                        *context["public_state"].get("judge_facts", []),
-                        *(
-                            [context["public_state"]["latest_vote_snapshot"]]
-                            if "latest_vote_snapshot" in context["public_state"]
-                            else []
-                        ),
-                    )
+                    for item in context["public_timeline"]["events"]
                     if item["kind"] in {"day_vote", "vote_result"}
                 )
                 for context in contexts
@@ -2526,10 +2529,18 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     fact_contexts = [
         context
         for context in model_client.contexts
-        if context.get("public_state", {}).get("judge_facts")
+        if any(
+            event.get("authority") == "judge_fact"
+            for event in context.get("public_timeline", {}).get("events", [])
+        )
     ]
     assert fact_contexts
-    assert all("public_history" not in context for context in fact_contexts)
+    assert all(
+        "public_history" not in context
+        and "judge_facts" not in context.get("public_state", {})
+        and "latest_vote_snapshot" not in context.get("public_state", {})
+        for context in fact_contexts
+    )
 
 
 def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> None:
@@ -3317,6 +3328,13 @@ def test_complete_match_badge_transfer_has_distinct_audit_event(v2_context) -> N
     assert event_row is not None
     assert event_row.payload["from_player_id"] == wolf_ids[0]
     assert event_row.payload["player_id"] == wolf_ids[1]
+    night_history = V2NightRepository(session_factory).public_history(created["game_id"])
+    assert any(
+        item["event_type"] == "sheriff_badge_transferred"
+        and item["source_event_id"] == event_row.event_id
+        and item["record_seq"] == event_row.record_seq
+        for item in night_history
+    )
 
 
 def test_complete_match_hunter_shot_chain_resolves_every_new_death(v2_context) -> None:

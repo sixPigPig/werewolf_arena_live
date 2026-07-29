@@ -143,7 +143,7 @@ def _build_focus(
         else "public_vote"
         if task.get("action_type") in {"day_vote", "sheriff_vote"}
         else "public_speech"
-        if task.get("action_type") == "day_speech"
+        if task.get("action_type") in {"day_speech", "day_debate_speech"}
         else "general"
     )
     focus: dict[str, Any] = {

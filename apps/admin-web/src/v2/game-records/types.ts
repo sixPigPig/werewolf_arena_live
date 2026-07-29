@@ -108,6 +108,15 @@ export type V2VoiceAsset = {
   completed_at: string | null;
 };
 
+export type V2PromptProjection = Record<string, unknown> & {
+  public_timeline_schema_version?: number | null;
+  public_timeline_event_count?: number;
+  public_timeline_record_seq_min?: number | null;
+  public_timeline_record_seq_max?: number | null;
+  public_timeline_missing_record_seq_count?: number;
+  public_timeline_kind_counts?: Record<string, number>;
+};
+
 export type V2ModelRequestSummary = {
   attempt_id: string;
   attempt_no: number;
@@ -129,7 +138,7 @@ export type V2ModelRequestSummary = {
   model_provider: string | null;
   judge_configuration_version: number | null;
   prompt_schema_version: number | null;
-  prompt_projection: Record<string, unknown> | null;
+  prompt_projection: V2PromptProjection | null;
   status: "running" | "succeeded" | "failed";
   input_source: "persisted" | "reconstructed" | "unavailable";
   passive_observation_count: number;
