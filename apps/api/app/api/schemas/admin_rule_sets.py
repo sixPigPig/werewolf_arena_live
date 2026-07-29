@@ -57,6 +57,7 @@ class AdminRuleSetConfig(AdminRuleSetRequest):
     sheriff_vote_weight: float
     speech_policy: Literal["sequential", "sheriff_directed"]
     werewolf_self_explosion_enabled: bool
+    first_night_last_words_enabled: bool
     sheriff_badge_bomb_policy: Literal["none", "double"]
 
 

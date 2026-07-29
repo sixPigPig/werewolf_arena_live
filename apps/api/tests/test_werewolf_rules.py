@@ -109,6 +109,7 @@ def test_rule_set_snapshot_is_json_safe() -> None:
         "sheriff_vote_weight": 1.0,
         "werewolf_self_explosion_enabled": False,
         "exile_last_words_enabled": True,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
@@ -255,6 +256,7 @@ def test_12_player_rule_set_has_sheriff_flow_metadata() -> None:
     assert snapshot["sheriff_vote_weight"] == 1.5
     assert snapshot["werewolf_self_explosion_enabled"] is True
     assert snapshot["exile_last_words_enabled"] is True
+    assert snapshot["first_night_last_words_enabled"] is True
     assert snapshot["sheriff_badge_bomb_policy"] == "double"
     assert snapshot["speech_policy"] == "sheriff_directed"
     assert snapshot["speech_rounds"] == 1
@@ -268,6 +270,7 @@ def test_rule_summaries_are_frontend_friendly() -> None:
     assert summaries[0]["id"] == "classic_8"
     assert summaries[0]["role_summary"] == "2 狼人 / 1 预言家 / 1 守卫 / 4 村民"
     assert summaries[0]["werewolf_self_explosion_enabled"] is False
+    assert summaries[0]["first_night_last_words_enabled"] is False
     assert summaries[0]["sheriff_badge_bomb_policy"] == "none"
     assert summaries[0]["rule_tags"] == ["无警长", "顺序发言", "标准"]
     assert summaries[1]["player_count"] == 6
@@ -279,6 +282,7 @@ def test_rule_summaries_are_frontend_friendly() -> None:
     assert summaries[3]["sheriff_enabled"] is True
     assert summaries[3]["sheriff_vote_weight"] == 1.5
     assert summaries[3]["werewolf_self_explosion_enabled"] is True
+    assert summaries[3]["first_night_last_words_enabled"] is True
     assert summaries[3]["sheriff_badge_bomb_policy"] == "double"
     assert summaries[3]["speech_policy"] == "sheriff_directed"
     assert summaries[3]["rule_tags"] == ["有警长", "警徽 1.5 票", "屠边", "预女猎白"]

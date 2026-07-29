@@ -38,6 +38,7 @@ class PublicRuleSetCatalogItem(BaseModel):
     rule_tags: list[str]
     werewolf_self_explosion_enabled: bool
     exile_last_words_enabled: bool
+    first_night_last_words_enabled: bool
     sheriff_badge_bomb_policy: Literal["none", "double"]
     revision_id: str = Field(min_length=1, max_length=36)
     revision_no: int = Field(ge=1)

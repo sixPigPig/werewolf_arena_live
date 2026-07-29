@@ -87,6 +87,7 @@ _RUNTIME_FIELDS = (
     "sheriff_vote_weight",
     "werewolf_self_explosion_enabled",
     "exile_last_words_enabled",
+    "first_night_last_words_enabled",
     "sheriff_badge_bomb_policy",
     "speech_policy",
     "speech_rounds",
@@ -136,6 +137,7 @@ def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
         "sheriff_vote_weight": float(config.sheriff_vote_weight),
         "speech_policy": config.speech_policy,
         "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
+        "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
     }
 
@@ -321,6 +323,7 @@ def _compile_rule_set(
         rule_tags=config.rule_tags,
         werewolf_self_explosion_enabled=config.werewolf_self_explosion_enabled,
         exile_last_words_enabled=True,
+        first_night_last_words_enabled=config.first_night_last_words_enabled,
         sheriff_badge_bomb_policy=config.sheriff_badge_bomb_policy,
     )
     content_hash = rule_set_content_hash(config)
@@ -363,6 +366,9 @@ def _resolve_snapshot(
             "sheriff_vote_weight": snapshot["sheriff_vote_weight"],
             "speech_policy": snapshot["speech_policy"],
             "werewolf_self_explosion_enabled": snapshot["werewolf_self_explosion_enabled"],
+            "first_night_last_words_enabled": snapshot[
+                "first_night_last_words_enabled"
+            ],
             "sheriff_badge_bomb_policy": snapshot["sheriff_badge_bomb_policy"],
         }
     )
@@ -490,7 +496,11 @@ def _validate_runtime_types(snapshot: Mapping[str, object]) -> None:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"snapshot field {field} must be an integer")
 
-    for field in ("sheriff_enabled", "werewolf_self_explosion_enabled"):
+    for field in (
+        "sheriff_enabled",
+        "werewolf_self_explosion_enabled",
+        "first_night_last_words_enabled",
+    ):
         if not isinstance(snapshot[field], bool):
             raise ValueError(f"snapshot field {field} must be a boolean")
     if "exile_last_words_enabled" in snapshot and not isinstance(
@@ -595,6 +605,9 @@ def _normalize_config_boundary(config: RuleSetConfig) -> RuleSetConfig:
                 "sheriff_vote_weight": config.sheriff_vote_weight,
                 "speech_policy": config.speech_policy,
                 "werewolf_self_explosion_enabled": (config.werewolf_self_explosion_enabled),
+                "first_night_last_words_enabled": (
+                    config.first_night_last_words_enabled
+                ),
                 "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
             }
         )
@@ -693,6 +706,7 @@ def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]
         "sheriff_vote_weight": config.sheriff_vote_weight,
         "speech_policy": config.speech_policy,
         "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
+        "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
     }
 

@@ -41,6 +41,7 @@ def valid_config(**overrides: object) -> dict[str, object]:
         "sheriff_vote_weight": 1,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     }
     value.update(overrides)
@@ -68,6 +69,7 @@ OFFICIAL_CONFIG_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     },
     "starter_6": {
@@ -90,6 +92,7 @@ OFFICIAL_CONFIG_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     },
     "social_8": {
@@ -112,6 +115,7 @@ OFFICIAL_CONFIG_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     },
     "classic_12_seer_witch_hunter_idiot": {
@@ -134,6 +138,7 @@ OFFICIAL_CONFIG_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_vote_weight": 1.5,
         "speech_policy": "sheriff_directed",
         "werewolf_self_explosion_enabled": True,
+        "first_night_last_words_enabled": True,
         "sheriff_badge_bomb_policy": "double",
     },
 }
@@ -184,6 +189,7 @@ OFFICIAL_RUNTIME_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_enabled": False,
         "sheriff_vote_weight": 1.0,
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
@@ -234,6 +240,7 @@ OFFICIAL_RUNTIME_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_enabled": False,
         "sheriff_vote_weight": 1.0,
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
@@ -270,6 +277,7 @@ OFFICIAL_RUNTIME_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_enabled": False,
         "sheriff_vote_weight": 1.0,
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
         "speech_policy": "sequential",
         "speech_rounds": 1,
@@ -347,6 +355,7 @@ OFFICIAL_RUNTIME_GOLDENS: dict[str, dict[str, object]] = {
         "sheriff_enabled": True,
         "sheriff_vote_weight": 1.5,
         "werewolf_self_explosion_enabled": True,
+        "first_night_last_words_enabled": True,
         "sheriff_badge_bomb_policy": "double",
         "speech_policy": "sheriff_directed",
         "speech_rounds": 1,
@@ -355,16 +364,16 @@ OFFICIAL_RUNTIME_GOLDENS: dict[str, dict[str, object]] = {
 }
 
 OFFICIAL_CONFIG_HASHES = {
-    "classic_8": "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131",
-    "starter_6": "f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c",
-    "social_8": "21e1bd2bb495e4479a346724c85a9722477f840afc2c99c389558a52427a0fbc",
+    "classic_8": "104d9818faac73536d50d57ca93eb623ca2dc044a4e334c6b72fcdbb0c2f5cef",
+    "starter_6": "d0e67f0238dbb448afa86fd1b5b02ba303861572962b3054d8a3ea0ad913700f",
+    "social_8": "25c6780c9e94df7729becf64a01a65e879236ae43c7efb0de03ac87312d1a21b",
     "classic_12_seer_witch_hunter_idiot": (
-        "bcae38e48a7791fa0f7ae236c90f1852056938ea60f5447532e5d879260d6da2"
+        "b81db40986fb3be46e377d68dc3870a0137fe78779c5f0997a5eeeb42a5e396a"
     ),
 }
 
 STARTER_6_LEGACY_SNAPSHOT_HASH = (
-    "02f31f4aa42e54f83836bf2d9b68c25291181c91a722136ed6a0a9a0e40ea4fc"
+    "18d0abc90bba675b6442dd8eecc7ccb8ca2066ab5c28b85baba98f82d7ad1ea9"
 )
 
 
@@ -593,6 +602,7 @@ def test_canonical_config_has_only_normalized_management_fields() -> None:
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     }
     assert set(canonical).isdisjoint(
@@ -708,6 +718,7 @@ def test_compiler_rejects_a_configuration_that_fails_validation() -> None:
         "sheriff_enabled",
         "sheriff_vote_weight",
         "werewolf_self_explosion_enabled",
+        "first_night_last_words_enabled",
         "sheriff_badge_bomb_policy",
         "speech_policy",
         "speech_rounds",

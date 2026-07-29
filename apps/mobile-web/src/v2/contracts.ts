@@ -63,6 +63,7 @@ export type V2LobbyRuleSnapshot = {
   rule_tags?: string[];
   werewolf_self_explosion_enabled?: boolean;
   exile_last_words_enabled?: boolean;
+  first_night_last_words_enabled?: boolean;
   sheriff_badge_bomb_policy?: string;
   revision_id?: string;
   revision_no?: number;
@@ -171,6 +172,7 @@ export type V2PublicRuleSnapshot = {
   sheriff_enabled: boolean | null;
   werewolf_self_explosion_enabled: boolean | null;
   exile_last_words_enabled: boolean | null;
+  first_night_last_words_enabled: boolean | null;
 };
 
 export type V2PublicRoleAssignmentStatus = {
@@ -973,6 +975,7 @@ function publicRule(value: unknown): V2PublicRuleSnapshot {
     "sheriff_enabled",
     "werewolf_self_explosion_enabled",
     "exile_last_words_enabled",
+    "first_night_last_words_enabled",
   ]);
   if (!Array.isArray(record.roles) || record.roles.length === 0 || record.roles.length > 24) {
     throw invalid();
@@ -1002,6 +1005,9 @@ function publicRule(value: unknown): V2PublicRuleSnapshot {
       record.werewolf_self_explosion_enabled,
     ),
     exile_last_words_enabled: nullableBoolean(record.exile_last_words_enabled),
+    first_night_last_words_enabled: nullableBoolean(
+      record.first_night_last_words_enabled,
+    ),
   };
 }
 

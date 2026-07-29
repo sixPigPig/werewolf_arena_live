@@ -264,6 +264,9 @@ def compile_ability_runtime_snapshot(
                 rule_set.get("werewolf_self_explosion_enabled")
             ),
             "exile_last_words_enabled": bool(rule_set.get("exile_last_words_enabled")),
+            "first_night_last_words_enabled": bool(
+                rule_set.get("first_night_last_words_enabled")
+            ),
             "sheriff_badge_bomb_policy": str(rule_set.get("sheriff_badge_bomb_policy") or "none"),
         },
         "policies": {

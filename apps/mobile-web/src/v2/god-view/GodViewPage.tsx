@@ -598,6 +598,10 @@ function godSheriffLabel(snapshot: GodViewSnapshot): string {
 
 function statusLabel(value: string): string {
   if (value === "completed") return "已完成";
+  if (value === "used") return "已使用";
+  if (value === "declined") return "本夜主动放弃";
+  if (value === "unavailable") return "本夜不可用";
+  if (value === "skipped") return "本夜跳过";
   if (value === "no_consensus_no_attack") return "两轮未达成一致，空刀";
   return value;
 }

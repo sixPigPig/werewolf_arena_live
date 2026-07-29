@@ -69,6 +69,7 @@ def _raw_config(
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     }
 

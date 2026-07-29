@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from app.v2.action_engine import (
     V2ActionEngine,
@@ -35,6 +35,9 @@ from app.v2.protocol import (
 )
 from app.v2.repository import V2PhaseTransition
 
+if TYPE_CHECKING:
+    from app.v2.day_engine import V2DayEngine
+
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +63,11 @@ class V2NightEngine:
         *,
         repository: V2NightRepository,
         action_engine: V2ActionEngine,
+        day_engine: V2DayEngine,
     ) -> None:
         self._repository = repository
         self._actions = action_engine
+        self._day = day_engine
         self._handlers: dict[str, GroupHandler] = {
             "werewolves": self._run_werewolves,
             "guard": self._run_guard,
@@ -142,6 +147,21 @@ class V2NightEngine:
                 audience="public",
             )
             await broadcaster.broadcast_json(game_phase_changed(resolution.transition))
+            if resolution.transition.phase_state == "sheriff_election_ready":
+                await self._day.run_pre_dawn_sheriff_election(
+                    game_id=game_id,
+                    broadcaster=broadcaster,
+                )
+                dawn_transition = self._repository.ready_dawn_announcement(
+                    game_id=game_id
+                )
+                await broadcaster.broadcast_json(game_phase_changed(dawn_transition))
+            self._repository.reveal_pending_dawn_deaths(
+                game_id=game_id,
+                expected_player_ids=tuple(
+                    item["player_id"] for item in resolution.deaths
+                ),
+            )
             death_seats = [
                 state.player(item["player_id"]).seat for item in resolution.deaths
             ]
@@ -173,6 +193,20 @@ class V2NightEngine:
                 ),
                 audience="public",
             )
+            if (
+                state.round_no == 1
+                and bool(state.rule.get("first_night_last_words_enabled"))
+                and self._repository.current_winner(game_id) is None
+            ):
+                await self._day.run_first_night_last_words(
+                    game_id=game_id,
+                    player_ids=tuple(
+                        item["player_id"]
+                        for item in resolution.deaths
+                        if item["cause"] in {"werewolf_attack", "witch_poison"}
+                    ),
+                    broadcaster=broadcaster,
+                )
             await broadcaster.broadcast_json(
                 night_progress(
                     game_id=state.game_id,
@@ -188,6 +222,11 @@ class V2NightEngine:
                 for hunter_id in self._repository.hunter_reactions(game_id)
                 if hunter_id not in resolved_hunters
             ):
+                if (
+                    self._repository.current_winner(game_id) is not None
+                    and not self._repository.hunter_settlement_can_change_winner(game_id)
+                ):
+                    break
                 self._actions.check_cancellation(game_id)
                 hunter_id = pending_hunters[0]
                 resolved_hunters.add(hunter_id)
@@ -196,26 +235,6 @@ class V2NightEngine:
                     hunter_id=hunter_id,
                     broadcaster=broadcaster,
                 )
-            self._actions.check_cancellation(game_id)
-            winner = self._repository.current_winner(game_id)
-            if winner is not None:
-                current_phase_state = self._repository.current_phase_state(game_id)
-                winner_name = "好人阵营" if winner == "villagers" else "狼人阵营"
-                completed_ok = await self._actions.run_judge_speech(
-                    game_id=game_id,
-                    broadcaster=broadcaster,
-                    spec=V2SpeechSpec(
-                        action_type="judge_game_completed",
-                        phase_id=f"day_{state.round_no}",
-                        required_phase_state=current_phase_state,
-                        objective=f"宣布本局结束，{winner_name}获胜",
-                        success_live_state="ready",
-                        success_phase_state=current_phase_state,
-                        context={"winner": winner, "round_no": state.round_no},
-                    ),
-                )
-                if not completed_ok:
-                    raise V2NightError("game_completed_announcement_failed")
             self._actions.check_cancellation(game_id)
             final_transition = self._repository.finish_night(game_id=game_id)
             await broadcaster.broadcast_json(game_phase_changed(final_transition))
@@ -231,6 +250,24 @@ class V2NightEngine:
                 )
             )
             if final_transition.phase_state == "game_completed":
+                winner = match["winner"]
+                if winner is None:
+                    raise V2NightError("completed_night_has_no_winner")
+                winner_name = "好人阵营" if winner == "villagers" else "狼人阵营"
+                await self._actions.run_judge_speech(
+                    game_id=game_id,
+                    broadcaster=broadcaster,
+                    spec=V2SpeechSpec(
+                        action_type="judge_game_completed",
+                        phase_id=final_transition.phase_id,
+                        required_phase_state="game_completed",
+                        objective=f"宣布本局结束，{winner_name}获胜",
+                        success_live_state="awaiting_observation",
+                        success_phase_state="game_completed",
+                        context={"winner": winner, "round_no": state.round_no},
+                        best_effort=True,
+                    ),
+                )
                 await broadcaster.broadcast_json(
                     live_state(
                         game_id=state.game_id,
@@ -463,7 +500,7 @@ class V2NightEngine:
         self._repository.complete_activation(
             state=state,
             activation=activation,
-            decision={"target_player_id": decision.target_player_id, "speech": decision.speech},
+            decision={"target_player_id": decision.target_player_id},
             result={"effect": "protect_registered"},
             effect_type="protect",
             target_player_id=decision.target_player_id,
@@ -532,7 +569,7 @@ class V2NightEngine:
         self._repository.complete_activation(
             state=state,
             activation=activation,
-            decision={"target_player_id": target.player_id, "speech": decision.speech},
+            decision={"target_player_id": target.player_id},
             result={"alignment": alignment},
             effect_type="investigate",
             target_player_id=target.player_id,
@@ -594,6 +631,16 @@ class V2NightEngine:
                     ability_id=ability_id,
                     reason="owner_not_alive",
                 )
+                await broadcaster.broadcast_json(
+                    ability_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        ability_id=ability_id,
+                        status="skipped",
+                        actor_player_id=witch.player_id if witch is not None else None,
+                    ),
+                    audience="god_view",
+                )
             return
         await self._private_judge(
             state=state,
@@ -617,6 +664,16 @@ class V2NightEngine:
                 "attacked_player_seat": attacked.seat if attacked is not None else None,
             },
         )
+        self._repository.record_player_knowledge(
+            game_id=state.game_id,
+            player_id=witch.player_id,
+            fact_type="witch_attack_observation",
+            payload={
+                "night_no": state.round_no,
+                "attacked_player_id": working.attack_target,
+                "attacked_player_seat": attacked.seat if attacked is not None else None,
+            },
+        )
         heal_used = False
         heal_state = self._repository.ability_state(
             game_id=state.game_id,
@@ -629,17 +686,26 @@ class V2NightEngine:
                     ability_id="witch.heal",
                     reason="heal_already_used",
                 )
+                await self._ability_status(
+                    state, broadcaster, "witch.heal", witch, "unavailable"
+                )
             elif attacked is None:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.heal",
                     reason="no_provisional_attack",
                 )
+                await self._ability_status(
+                    state, broadcaster, "witch.heal", witch, "unavailable"
+                )
             elif attacked.player_id == witch.player_id and state.round_no > 1:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.heal",
                     reason="self_heal_only_allowed_first_night",
+                )
+                await self._ability_status(
+                    state, broadcaster, "witch.heal", witch, "unavailable"
                 )
             else:
                 activation = self._repository.open_activation(
@@ -667,18 +733,25 @@ class V2NightEngine:
                 self._repository.complete_activation(
                     state=state,
                     activation=activation,
-                    decision={
-                        "target_player_id": decision.target_player_id,
-                        "speech": decision.speech,
+                    decision={"target_player_id": decision.target_player_id},
+                    result={
+                        "heal_used": heal_used,
+                        "decision_status": "used" if heal_used else "declined",
                     },
-                    result={"heal_used": heal_used},
                     effect_type="heal" if heal_used else None,
                     target_player_id=decision.target_player_id,
                     ability_state_patch=(
                         {"available": False, "remaining": 0} if heal_used else None
                     ),
                 )
-                await self._ability_completed(state, broadcaster, "witch.heal", witch, decision)
+                await self._ability_completed(
+                    state,
+                    broadcaster,
+                    "witch.heal",
+                    witch,
+                    decision,
+                    status="used" if heal_used else "declined",
+                )
         poison_state = self._repository.ability_state(
             game_id=state.game_id,
             ability_id="witch.poison",
@@ -690,11 +763,17 @@ class V2NightEngine:
                     ability_id="witch.poison",
                     reason="poison_already_used",
                 )
+                await self._ability_status(
+                    state, broadcaster, "witch.poison", witch, "unavailable"
+                )
             elif heal_used:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.poison",
                     reason="heal_poison_mutually_exclusive",
+                )
+                await self._ability_status(
+                    state, broadcaster, "witch.poison", witch, "unavailable"
                 )
             else:
                 poison_candidates = [
@@ -709,6 +788,9 @@ class V2NightEngine:
                         state=state,
                         ability_id="witch.poison",
                         reason="no_eligible_target",
+                    )
+                    await self._ability_status(
+                        state, broadcaster, "witch.poison", witch, "unavailable"
                     )
                 else:
                     activation = self._repository.open_activation(
@@ -739,11 +821,11 @@ class V2NightEngine:
                     self._repository.complete_activation(
                         state=state,
                         activation=activation,
-                        decision={
-                            "target_player_id": decision.target_player_id,
-                            "speech": decision.speech,
+                        decision={"target_player_id": decision.target_player_id},
+                        result={
+                            "poison_used": poison_used,
+                            "decision_status": "used" if poison_used else "declined",
                         },
-                        result={"poison_used": poison_used},
                         effect_type="poison" if poison_used else None,
                         target_player_id=decision.target_player_id,
                         ability_state_patch=(
@@ -751,7 +833,12 @@ class V2NightEngine:
                         ),
                     )
                     await self._ability_completed(
-                        state, broadcaster, "witch.poison", witch, decision
+                        state,
+                        broadcaster,
+                        "witch.poison",
+                        witch,
+                        decision,
+                        status="used" if poison_used else "declined",
                     )
         await self._private_judge(
             state=state,
@@ -787,12 +874,12 @@ class V2NightEngine:
             objective="你已在黎明死亡，决定是否发动猎人技能带走一名存活玩家；放弃则 target_player_id 为 null",
             knowledge={"death_cause_allows_shot": True},
             optional=True,
-            audience="all",
+            audience="god_view",
         )
         self._repository.complete_activation(
             state=reaction_state,
             activation=activation,
-            decision={"target_player_id": decision.target_player_id, "speech": decision.speech},
+            decision={"target_player_id": decision.target_player_id},
             result={"shot_used": decision.target_player_id is not None},
             effect_type="shoot" if decision.target_player_id else None,
             target_player_id=decision.target_player_id,
@@ -910,19 +997,20 @@ class V2NightEngine:
             if fact_type != "known_investigations"
         }
         action_type = f"ability_{activation.ability_id}_decision"
+        is_dawn_reaction = activation.ability_id == "hunter.death_shot"
         decision = await self._actions.run_player_decision(
             game_id=state.game_id,
             broadcaster=broadcaster,
             spec=V2SpeechSpec(
                 action_type=action_type,
-                phase_id=(f"day_{state.round_no}" if audience == "all" else state.phase_id),
+                phase_id=(f"day_{state.round_no}" if is_dawn_reaction else state.phase_id),
                 required_phase_state=(
-                    "dawn_reactions_ready" if audience == "all" else "night_running"
+                    "dawn_reactions_ready" if is_dawn_reaction else "night_running"
                 ),
                 objective=objective,
                 success_live_state="ready",
                 success_phase_state=(
-                    "dawn_reactions_ready" if audience == "all" else "night_running"
+                    "dawn_reactions_ready" if is_dawn_reaction else "night_running"
                 ),
                 actor_kind="player",
                 actor_id=player.player_id,
@@ -933,17 +1021,18 @@ class V2NightEngine:
                 model_id=player.model_id,
                 model_parameters=player.model_parameters,
                 activation_id=activation.activation_id,
-                output_kind="decision_and_speech",
+                output_kind=(
+                    "decision_and_speech"
+                    if activation.ability_id == "werewolf.attack"
+                    else "private_decision"
+                ),
                 decision_contract=V2DecisionContract(
                     kind="target",
                     target_mode="optional" if optional else "required",
                     speech_mode=(
                         "required"
-                        if (
-                            audience == "all"
-                            or activation.ability_id == "werewolf.attack"
-                        )
-                        else "optional"
+                        if activation.ability_id == "werewolf.attack"
+                        else "forbidden"
                     ),
                 ),
                 allowed_target_ids=tuple(item.player_id for item in candidates),
@@ -1015,15 +1104,35 @@ class V2NightEngine:
         ability_id: str,
         player: V2NightPlayer,
         decision: V2ModelDecision,
+        status: str = "completed",
     ) -> None:
         await broadcaster.broadcast_json(
             ability_progress(
                 game_id=state.game_id,
                 run_id=state.run_id,
                 ability_id=ability_id,
-                status="completed",
+                status=status,
                 actor_player_id=player.player_id,
                 target_player_id=decision.target_player_id,
+            ),
+            audience="god_view",
+        )
+
+    async def _ability_status(
+        self,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+        ability_id: str,
+        player: V2NightPlayer,
+        status: str,
+    ) -> None:
+        await broadcaster.broadcast_json(
+            ability_progress(
+                game_id=state.game_id,
+                run_id=state.run_id,
+                ability_id=ability_id,
+                status=status,
+                actor_player_id=player.player_id,
             ),
             audience="god_view",
         )

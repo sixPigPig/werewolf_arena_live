@@ -27,6 +27,7 @@ def valid_config(**overrides: object) -> dict[str, object]:
         "sheriff_vote_weight": 1,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     }
     value.update(overrides)
@@ -110,6 +111,10 @@ def test_validation_returns_stable_codes_and_paths(
         (
             {"werewolf_self_explosion_enabled": 0},
             "werewolf_self_explosion_enabled must be a boolean",
+        ),
+        (
+            {"first_night_last_words_enabled": 0},
+            "first_night_last_words_enabled must be a boolean",
         ),
         (
             {"sheriff_badge_bomb_policy": "single"},

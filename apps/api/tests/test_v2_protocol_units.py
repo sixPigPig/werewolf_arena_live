@@ -688,8 +688,9 @@ def test_public_rule_projection_excludes_internal_rule_fields() -> None:
                     {"role": "村民", "count": 1, "model_group": "private-model-group"},
                 ],
                 "sheriff_enabled": False,
-                "werewolf_self_explosion_enabled": True,
-                "exile_last_words_enabled": True,
+                    "werewolf_self_explosion_enabled": True,
+                    "exile_last_words_enabled": True,
+                    "first_night_last_words_enabled": True,
             },
         }
     )
@@ -705,6 +706,7 @@ def test_public_rule_projection_excludes_internal_rule_fields() -> None:
         "sheriff_enabled": False,
         "werewolf_self_explosion_enabled": True,
         "exile_last_words_enabled": True,
+        "first_night_last_words_enabled": True,
     }
     with pytest.raises(V2PublicProjectionError, match="does not match"):
         project_public_rule_snapshot(

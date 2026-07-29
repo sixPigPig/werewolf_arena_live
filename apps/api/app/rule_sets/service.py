@@ -789,6 +789,7 @@ def _detached_config(config: RuleSetConfig) -> dict[str, object]:
         "sheriff_vote_weight": float(config.sheriff_vote_weight),
         "speech_policy": config.speech_policy,
         "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
+        "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
     }
 

@@ -35,6 +35,7 @@ class V2ActionClaim:
     action_id: str
     phase_id: str
     activation_id: str | None = None
+    best_effort: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,16 +116,29 @@ class V2ActionRepository:
         expected_phase_id: str,
         expected_phase_state: str,
         activation_id: str | None = None,
+        best_effort: bool = False,
     ) -> V2ActionClaim | None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            expected_live_state = "awaiting_observation" if best_effort else "ready"
             if (
-                game.status != "ready"
+                game.status != expected_live_state
                 or game.phase_id != expected_phase_id
                 or game.phase_state != expected_phase_state
             ):
                 return None
+            if best_effort and context.get("action_type") == "judge_game_completed":
+                existing = db.scalar(
+                    select(V2GameRecordEvent.event_id).where(
+                        V2GameRecordEvent.game_id == game_id,
+                        V2GameRecordEvent.event_type == "action_opened",
+                        V2GameRecordEvent.payload["context"]["action_type"].as_string()
+                        == "judge_game_completed",
+                    )
+                )
+                if existing is not None:
+                    return None
             run = _run(db, game.current_run_id)
             if activation_id is not None:
                 activation = db.get(V2AbilityActivation, activation_id)
@@ -136,8 +150,9 @@ class V2ActionRepository:
                 ):
                     raise V2RepositoryError("ability activation cannot claim action")
                 activation.action_id = action_id
-            game.status = "generating"
-            run.status = "generating"
+            if not best_effort:
+                game.status = "generating"
+                run.status = "generating"
             _append_event(
                 db,
                 game=game,
@@ -155,6 +170,7 @@ class V2ActionRepository:
                 action_id=action_id,
                 phase_id=game.phase_id,
                 activation_id=activation_id,
+                best_effort=best_effort,
             )
 
     def append_event(
@@ -193,7 +209,8 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
-            if game.status != "generating":
+            expected_status = "awaiting_observation" if claim.best_effort else "generating"
+            if game.status != expected_status:
                 raise V2RepositoryError(f"cannot open presentation from {game.status}")
             presentation_seq = game.last_presentation_seq + 1
             _append_event(
@@ -273,8 +290,9 @@ class V2ActionRepository:
             )
             db.add(presentation)
             game.last_presentation_seq = presentation_seq
-            game.status = "broadcasting"
-            _run(db, claim.run_id).status = "broadcasting"
+            if not claim.best_effort:
+                game.status = "broadcasting"
+                _run(db, claim.run_id).status = "broadcasting"
         return V2PresentationIdentity(
             game_id=claim.game_id,
             run_id=claim.run_id,
@@ -293,12 +311,20 @@ class V2ActionRepository:
             audience=audience,
         )
 
-    def mark_finalizing(self, *, game_id: str, tts_attempt_id: str, sample_count: int) -> None:
+    def mark_finalizing(
+        self,
+        *,
+        game_id: str,
+        tts_attempt_id: str,
+        sample_count: int,
+        best_effort: bool = False,
+    ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
-            game.status = "finalizing"
-            _run(db, game.current_run_id).status = "finalizing"
+            if not best_effort:
+                game.status = "finalizing"
+                _run(db, game.current_run_id).status = "finalizing"
             _append_event(
                 db,
                 game=game,
@@ -361,6 +387,7 @@ class V2ActionRepository:
         final_sample_cursor: int,
         next_live_state: str,
         next_phase_state: str,
+        best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, identity.game_id)
@@ -376,10 +403,11 @@ class V2ActionRepository:
             presentation.closed_at = _now()
             if game.phase_id != identity.phase_id:
                 raise V2RepositoryError("action phase changed before completion")
-            game.status = next_live_state
-            game.phase_state = next_phase_state
             run = _run(db, identity.run_id)
-            run.status = next_live_state
+            if not best_effort:
+                game.status = next_live_state
+                game.phase_state = next_phase_state
+                run.status = next_live_state
             _append_event(
                 db,
                 game=game,
@@ -424,19 +452,22 @@ class V2ActionRepository:
         claim: V2ActionClaim,
         next_live_state: str,
         next_phase_state: str,
+        best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
-            if game.status != "generating":
+            expected_status = "awaiting_observation" if best_effort else "generating"
+            if game.status != expected_status:
                 raise V2RepositoryError(
                     f"cannot complete silent action from {game.status}"
                 )
             if game.phase_id != claim.phase_id:
                 raise V2RepositoryError("action phase changed before completion")
-            game.status = next_live_state
-            game.phase_state = next_phase_state
-            _run(db, claim.run_id).status = next_live_state
+            if not best_effort:
+                game.status = next_live_state
+                game.phase_state = next_phase_state
+                _run(db, claim.run_id).status = next_live_state
             _append_event(
                 db,
                 game=game,
@@ -559,15 +590,17 @@ class V2ActionRepository:
         failure_kind: str,
         failure_code: str,
         identity: V2PresentationIdentity | None,
+        best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
-            game.status = "failed"
-            game.phase_state = "failed"
             run = _run(db, claim.run_id)
-            run.status = "failed"
-            run.completed_at = _now()
+            if not best_effort:
+                game.status = "failed"
+                game.phase_state = "failed"
+                run.status = "failed"
+                run.completed_at = _now()
             if identity is not None:
                 presentation = db.get(
                     V2LivePresentation,

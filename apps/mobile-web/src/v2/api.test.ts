@@ -254,6 +254,7 @@ describe("fetchV2GodViewIdentitySnapshot", () => {
             sheriff_enabled: false,
             werewolf_self_explosion_enabled: false,
             exile_last_words_enabled: true,
+            first_night_last_words_enabled: false,
           },
           players: [
             {
@@ -333,6 +334,7 @@ describe("fetchV2LiveSnapshot", () => {
             sheriff_enabled: false,
             werewolf_self_explosion_enabled: true,
             exile_last_words_enabled: true,
+            first_night_last_words_enabled: false,
           },
           public_players: [
             {
@@ -437,6 +439,7 @@ describe("fetchV2LiveSnapshot", () => {
               sheriff_enabled: false,
               werewolf_self_explosion_enabled: false,
               exile_last_words_enabled: true,
+              first_night_last_words_enabled: false,
               content_hash: "must-not-leak",
             },
             public_players: [],

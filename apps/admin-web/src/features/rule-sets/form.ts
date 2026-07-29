@@ -5,7 +5,7 @@ export type RuleSetFormErrors = Partial<Record<"id" | "display_order" | "name" |
 
 export function defaultRuleSetInput(options: RuleSetOptions): RuleSetFormInput {
   const roleCounts = Object.fromEntries(options.roles.map((role) => [role.id, role.min_count])) as Record<RuleRoleId, number>;
-  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0].value, sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0], speech_policy: options.speech_policies[0].value, werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0].value } };
+  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0].value, sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0], speech_policy: options.speech_policies[0].value, werewolf_self_explosion_enabled: true, first_night_last_words_enabled: false, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0].value } };
 }
 
 export function inputFromRuleSet(detail: AdminRuleSetDetail, options: RuleSetOptions): RuleSetFormInput {

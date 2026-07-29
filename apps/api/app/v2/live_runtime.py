@@ -255,13 +255,14 @@ class V2LiveRuntime:
             sample_rate=sample_rate,
             judge_configuration_provider=judge_configuration_provider,
         )
-        self._first_night_engine = V2NightEngine(
-            repository=self._night_repository,
-            action_engine=self._action_engine,
-        )
         self._day_engine = V2DayEngine(
             repository=self._match_repository,
             action_engine=self._action_engine,
+        )
+        self._first_night_engine = V2NightEngine(
+            repository=self._night_repository,
+            action_engine=self._action_engine,
+            day_engine=self._day_engine,
         )
         self._engine = V2LiveFlowEngine(
             action_repository=self._repository,

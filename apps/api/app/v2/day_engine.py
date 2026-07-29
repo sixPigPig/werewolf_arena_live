@@ -80,6 +80,49 @@ class V2DayEngine:
         self._actions.check_cancellation(game_id)
         await self._resolve_death_aftermath(game_id=game_id, broadcaster=broadcaster)
 
+    async def run_pre_dawn_sheriff_election(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+    ) -> None:
+        self._actions.check_cancellation(game_id)
+        state = self._repository.snapshot(game_id)
+        actions = set(state.rule.get("day_actions") or [])
+        if not self._should_run_sheriff_election(state, actions):
+            raise V2DayRuntimeError("pre_dawn_sheriff_election_not_configured")
+        await self._open_day_window(
+            state=state,
+            broadcaster=broadcaster,
+            opening_state="sheriff_election_open",
+            action_type="judge_sheriff_election_opening",
+            objective=f"宣布第{state.round_no}天警长竞选开始，并请所有公开存活玩家决定是否参选",
+        )
+        await self._run_sheriff_election(game_id=game_id, broadcaster=broadcaster)
+
+    async def run_first_night_last_words(
+        self,
+        *,
+        game_id: str,
+        player_ids: tuple[str, ...],
+        broadcaster: V2BroadcastPort,
+    ) -> None:
+        state = self._repository.snapshot(game_id)
+        for player_id in sorted(player_ids, key=lambda value: state.player(value).seat):
+            player = state.player(player_id)
+            decision = await self._player_action(
+                game_id=game_id,
+                player=player,
+                broadcaster=broadcaster,
+                action_type="first_night_last_words",
+                objective="你在首夜直接死亡，请发表一次公开遗言；不得声称自己知道具体死亡原因",
+                candidates=[],
+                optional=True,
+                output_kind="public_speech",
+                extra_context={"death_cause_reveal_policy": "hidden"},
+            )
+            self._record_speech(state, player, decision, "first_night_last_words")
+
     async def run(
         self,
         *,
@@ -271,6 +314,7 @@ class V2DayEngine:
                 decision_contract=V2DecisionContract(
                     kind="boolean",
                     boolean_field="run_for_sheriff",
+                    speech_mode="forbidden",
                     true_meaning="竞选警长",
                     false_meaning="不竞选警长",
                 ),
@@ -285,7 +329,6 @@ class V2DayEngine:
                     "round_no": state.round_no,
                     "player_id": player.player_id,
                     "is_running": is_running,
-                    "speech": decision.speech,
                 },
             )
             if is_running:
@@ -334,6 +377,7 @@ class V2DayEngine:
                 decision_contract=V2DecisionContract(
                     kind="boolean",
                     boolean_field="withdraw",
+                    speech_mode="forbidden",
                     true_meaning="退水",
                     false_meaning="不退水",
                 ),
@@ -348,7 +392,6 @@ class V2DayEngine:
                     "round_no": state.round_no,
                     "player_id": candidate.player_id,
                     "withdrew": withdrew,
-                    "speech": decision.speech,
                 },
             )
             if not withdrew:
@@ -509,6 +552,11 @@ class V2DayEngine:
             candidates=candidates,
             optional=False,
             output_kind="public_decision",
+            decision_contract=V2DecisionContract(
+                kind="target",
+                target_mode="required",
+                speech_mode="forbidden",
+            ),
         )
         start = decision.target_player_id
         if start == right.player_id:
@@ -519,7 +567,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_speech_order_selected",
-            payload={"round_no": state.round_no, "order": result, "speech": decision.speech},
+            payload={"round_no": state.round_no, "order": result},
         )
         return result
 
@@ -659,6 +707,11 @@ class V2DayEngine:
             for hunter_id in self._repository.pending_hunters(game_id)
             if hunter_id not in resolved_hunters
         ):
+            if (
+                self._repository.current_winner(game_id) is not None
+                and not self._repository.hunter_settlement_can_change_winner(game_id)
+            ):
+                break
             self._actions.check_cancellation(game_id)
             hunter_id = pending_hunters[0]
             resolved_hunters.add(hunter_id)
@@ -675,7 +728,13 @@ class V2DayEngine:
                 objective="你已死亡且可以发动猎人技能；选择一名存活玩家开枪，或返回 null 放弃",
                 candidates=candidates,
                 optional=True,
-                output_kind="public_death_reaction",
+                output_kind="private_decision",
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    target_mode="optional",
+                    speech_mode="forbidden",
+                ),
+                audience="god_view",
             )
             self._repository.apply_hunter_shot(
                 game_id=game_id,
@@ -703,6 +762,8 @@ class V2DayEngine:
                     cause="hunter_shot",
                     broadcaster=broadcaster,
                 )
+        if self._repository.current_winner(game_id) is not None:
+            return
         await self._resolve_dead_sheriff(game_id=game_id, broadcaster=broadcaster)
 
     async def _resolve_dead_sheriff(
@@ -727,6 +788,11 @@ class V2DayEngine:
             candidates=candidates,
             optional=True,
             output_kind="public_death_reaction",
+            decision_contract=V2DecisionContract(
+                kind="target",
+                target_mode="optional",
+                speech_mode="forbidden",
+            ),
         )
         target_id = decision.target_player_id
         self._repository.set_sheriff(
@@ -771,6 +837,7 @@ class V2DayEngine:
         self._actions.check_cancellation(game_id)
         totals: dict[str, float] = defaultdict(float)
         state = self._repository.snapshot(game_id)
+        committed: list[tuple[V2MatchPlayer, str, float]] = []
         for voter in voters:
             self._actions.check_cancellation(game_id)
             eligible = [item for item in candidates if item.player_id != voter.player_id]
@@ -781,10 +848,16 @@ class V2DayEngine:
                 player=voter,
                 broadcaster=broadcaster,
                 action_type=action_type,
-                objective="从合法候选人中选择一名投票，并公开说明理由",
+                objective="从合法候选人中选择一名投票，只返回目标玩家，不要发言",
                 candidates=eligible,
                 optional=False,
-                output_kind="public_vote",
+                output_kind="private_vote",
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    target_mode="required",
+                    speech_mode="forbidden",
+                ),
+                audience="god_view",
                 extra_context=context,
             )
             target_id = _required_target(decision)
@@ -794,6 +867,13 @@ class V2DayEngine:
                 else 1.0
             )
             totals[target_id] += weight
+            committed.append((voter, target_id, weight))
+
+        # No vote is made public until every eligible virtual player has
+        # completed the same voting batch.  This keeps later model contexts
+        # independent from earlier choices while preserving the durable
+        # per-voter audit records once the batch is complete.
+        for voter, target_id, weight in committed:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_committed",
@@ -803,7 +883,6 @@ class V2DayEngine:
                     "voter_player_id": voter.player_id,
                     "target_player_id": target_id,
                     "weight": weight,
-                    "speech": decision.speech,
                 },
             )
         self._repository.append_event(
@@ -1062,17 +1141,34 @@ class V2DayEngine:
         state = self._repository.snapshot(game_id)
         winner = self._repository.current_winner(game_id)
         if winner is not None:
+            transition = self._repository.finish_day(game_id=game_id, reason=reason)
+            await broadcaster.broadcast_json(game_phase_changed(transition))
+            current = self._repository.snapshot(game_id)
+            await self._broadcast_match_state(current, broadcaster)
             winner_name = "好人阵营" if winner == "villagers" else "狼人阵营"
-            if not await self._judge(
-                state=state,
+            await self._actions.run_judge_speech(
+                game_id=game_id,
                 broadcaster=broadcaster,
-                action_type="judge_game_completed",
-                objective=f"宣布本局结束，{winner_name}获胜",
-                success_phase_state=state.phase_state,
-                context={"winner": winner, "round_no": state.round_no},
-            ):
-                raise V2DayRuntimeError("game_completed_announcement_failed")
-        elif summarize:
+                spec=V2SpeechSpec(
+                    action_type="judge_game_completed",
+                    phase_id=current.phase_id,
+                    required_phase_state="game_completed",
+                    objective=f"宣布本局结束，{winner_name}获胜",
+                    success_live_state="awaiting_observation",
+                    success_phase_state="game_completed",
+                    context={"winner": winner, "round_no": current.round_no},
+                    best_effort=True,
+                ),
+            )
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=current.game_id,
+                    run_id=current.run_id,
+                    state="awaiting_observation",
+                )
+            )
+            return transition
+        if summarize:
             if not await self._judge(
                 state=state,
                 broadcaster=broadcaster,
@@ -1259,6 +1355,8 @@ class V2DayEngine:
         decision: V2ModelDecision,
         stage: str,
     ) -> None:
+        if not decision.speech:
+            return
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_speech_committed",

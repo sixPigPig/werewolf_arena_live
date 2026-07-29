@@ -100,6 +100,7 @@ def _config(*, name: str, player_count: int = 8) -> dict[str, object]:
         "sheriff_vote_weight": 1.0,
         "speech_policy": "sequential",
         "werewolf_self_explosion_enabled": False,
+        "first_night_last_words_enabled": False,
         "sheriff_badge_bomb_policy": "none",
     }
 
@@ -3074,6 +3075,8 @@ def test_every_rule_request_lock_version_layer_is_strict(
         ("sheriff_enabled", "true"),
         ("werewolf_self_explosion_enabled", 0),
         ("werewolf_self_explosion_enabled", "false"),
+        ("first_night_last_words_enabled", 0),
+        ("first_night_last_words_enabled", "false"),
     ],
 )
 def test_rule_config_booleans_reject_integer_and_string_values(

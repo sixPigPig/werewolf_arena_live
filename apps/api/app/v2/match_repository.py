@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,6 +19,10 @@ from app.v2.models import (
     V2RoleAssignment,
 )
 from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
+from app.v2.win_conditions import (
+    hunter_settlement_can_change_winner,
+    winner_from_alive_roles,
+)
 
 
 @dataclass(frozen=True)
@@ -314,6 +319,26 @@ class V2MatchRepository:
             hunter.state = hunter_state
             if target_player_id is not None:
                 _kill(db, game=game, player_id=target_player_id, cause="hunter_shot")
+            db.add(
+                V2KnowledgeFact(
+                    knowledge_fact_id=f"v2_fact_{uuid4().hex[:16]}",
+                    game_id=game_id,
+                    source_activation_id=None,
+                    owner_scope="player",
+                    owner_id=hunter_id,
+                    fact_type="private_ability_action_committed",
+                    payload={
+                        "ability_id": "hunter.death_shot",
+                        "round_no": match.round_no,
+                        "decision": {"target_player_id": target_player_id},
+                        "result": {"shot_used": target_player_id is not None},
+                        "resolution_scope": (
+                            "法官已接受本次私有动作；猎人已明确知道自己的"
+                            "开枪或放弃决定，公开结果由法官另行播报。"
+                        ),
+                    },
+                )
+            )
             _append_event(
                 db,
                 game=game,
@@ -351,6 +376,49 @@ class V2MatchRepository:
                 player_id
                 for player_id, _cause, state in rows
                 if not (state or {}).get("hunter_response_resolved")
+            )
+
+    def hunter_settlement_can_change_winner(self, game_id: str) -> bool:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            rows = list(
+                db.execute(
+                    select(
+                        V2RoleAssignment.player_id,
+                        V2RoleAssignment.role_key,
+                        V2PlayerState.alive,
+                        V2PlayerState.death_cause,
+                        V2PlayerState.state,
+                    )
+                    .join(
+                        V2PlayerState,
+                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
+                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                    )
+                    .where(V2RoleAssignment.game_id == game_id)
+                    .order_by(V2RoleAssignment.seat)
+                )
+            )
+            return hunter_settlement_can_change_winner(
+                living_player_ids=frozenset(
+                    player_id for player_id, _role, alive, _cause, _state in rows if alive
+                ),
+                pending_hunter_ids=tuple(
+                    player_id
+                    for player_id, role, alive, cause, state in rows
+                    if role == "hunter"
+                    and not alive
+                    and cause != "witch_poison"
+                    and not (state or {}).get("hunter_response_resolved")
+                ),
+                role_by_player_id={
+                    player_id: role for player_id, role, _alive, _cause, _state in rows
+                },
+                win_condition=str(
+                    game.ability_snapshot.get("win_condition") or "wolves_gte_others"
+                ),
             )
 
     def finish_day(self, *, game_id: str, reason: str) -> V2PhaseTransition:
@@ -624,16 +692,10 @@ def _winner(db: Session, game: V2GameRecord) -> str | None:
         )
     )
     alive_roles = [role_key for role_key, alive in rows if alive]
-    wolves = sum(role == "werewolf" for role in alive_roles)
-    others = len(alive_roles) - wolves
-    if wolves == 0:
-        return "villagers"
-    win_condition = str(game.ability_snapshot.get("win_condition") or "wolves_gte_others")
-    if win_condition == "slaughter_side":
-        villagers = sum(role == "villager" for role in alive_roles)
-        gods = sum(role not in {"werewolf", "villager"} for role in alive_roles)
-        return "werewolves" if villagers == 0 or gods == 0 else None
-    return "werewolves" if wolves >= others else None
+    return winner_from_alive_roles(
+        alive_roles,
+        win_condition=str(game.ability_snapshot.get("win_condition") or "wolves_gte_others"),
+    )
 
 
 def _kill(db: Session, *, game: V2GameRecord, player_id: str, cause: str) -> None:

@@ -564,6 +564,10 @@ export function LiveV2Page() {
                     <dt>放逐遗言</dt>
                     <dd>{ruleFlagLabel(publicRule.exile_last_words_enabled)}</dd>
                   </div>
+                  <div>
+                    <dt>首夜遗言</dt>
+                    <dd>{ruleFlagLabel(publicRule.first_night_last_words_enabled)}</dd>
+                  </div>
                 </dl>
               </>
             ) : (

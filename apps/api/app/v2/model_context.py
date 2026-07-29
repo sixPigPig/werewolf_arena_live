@@ -197,6 +197,9 @@ def _model_hard_rules(value: Any) -> dict[str, Any]:
             "policy": contract.get("speech_policy"),
             "rounds": contract.get("speech_rounds"),
             "exile_last_words_enabled": bool(contract.get("exile_last_words_enabled")),
+            "first_night_last_words_enabled": bool(
+                contract.get("first_night_last_words_enabled")
+            ),
         },
         "werewolf_self_explosion_enabled": bool(contract.get("werewolf_self_explosion_enabled")),
         "ability_rules": ability_rules,
@@ -453,6 +456,9 @@ def build_public_rule_contract(
         "speech_rounds": int(rule.get("speech_rounds") or 1),
         "werewolf_self_explosion_enabled": bool(rule.get("werewolf_self_explosion_enabled")),
         "exile_last_words_enabled": bool(rule.get("exile_last_words_enabled")),
+        "first_night_last_words_enabled": bool(
+            rule.get("first_night_last_words_enabled")
+        ),
     }
 
 
@@ -937,18 +943,6 @@ def _project_public_history(
                     "weight": projected_payload.get("weight"),
                 }
             )
-            speech = projected_payload.get("speech")
-            if not has_presented_player_speech and isinstance(speech, str) and speech:
-                statements.append(
-                    {
-                        "kind": "player_statement",
-                        "source_event_id": f"{source_event_id}:speech",
-                        "occurred_in": {"period": "day", "round_no": latest_round},
-                        "stage": projected_payload.get("action_type"),
-                        "speaker_ref": projected_payload.get("voter_player_id"),
-                        "speech": speech,
-                    }
-                )
             continue
         if event_type == "day_vote_resolved":
             vote_snapshots.append(

@@ -527,6 +527,7 @@ function identitySnapshot() {
       sheriff_enabled: false,
       werewolf_self_explosion_enabled: false,
       exile_last_words_enabled: true,
+      first_night_last_words_enabled: false,
     },
     players: [
       {

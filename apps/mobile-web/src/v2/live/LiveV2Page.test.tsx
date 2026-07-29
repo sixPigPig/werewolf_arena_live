@@ -684,6 +684,7 @@ function directorSnapshot(liveState: string) {
       sheriff_enabled: false,
       werewolf_self_explosion_enabled: true,
       exile_last_words_enabled: true,
+      first_night_last_words_enabled: false,
     },
     players: [
       {
@@ -751,6 +752,7 @@ function snapshot(
       sheriff_enabled: false,
       werewolf_self_explosion_enabled: true,
       exile_last_words_enabled: true,
+      first_night_last_words_enabled: false,
     },
     public_players: [
       {

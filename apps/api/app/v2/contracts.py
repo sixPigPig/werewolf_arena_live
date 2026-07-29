@@ -70,6 +70,7 @@ class V2LobbyRuleSnapshot(BaseModel):
     rule_tags: list[str] | None = Field(default=None, max_length=20)
     werewolf_self_explosion_enabled: bool | None = None
     exile_last_words_enabled: bool | None = None
+    first_night_last_words_enabled: bool | None = None
     sheriff_badge_bomb_policy: str | None = Field(default=None, max_length=80)
     revision_id: str | None = Field(default=None, max_length=80)
     revision_no: int | None = Field(default=None, ge=1)
@@ -247,6 +248,7 @@ class V2PublicRuleSnapshotResponse(BaseModel):
     sheriff_enabled: bool | None
     werewolf_self_explosion_enabled: bool | None
     exile_last_words_enabled: bool | None
+    first_night_last_words_enabled: bool | None
 
 
 class V2PublicRoleAssignmentStatusResponse(BaseModel):

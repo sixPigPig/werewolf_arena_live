@@ -28,6 +28,7 @@ export type RuleSetSummary = {
   speech_rounds?: number;
   rule_tags?: string[];
   exile_last_words_enabled?: boolean;
+  first_night_last_words_enabled?: boolean;
 };
 
 export type RuleSetsResponse = {

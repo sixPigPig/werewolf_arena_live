@@ -44,6 +44,7 @@ CONFIG_FIELDS = frozenset(
         "sheriff_vote_weight",
         "speech_policy",
         "werewolf_self_explosion_enabled",
+        "first_night_last_words_enabled",
         "sheriff_badge_bomb_policy",
     }
 )
@@ -105,6 +106,10 @@ def normalize_rule_set_config(value: Mapping[str, object]) -> RuleSetConfig:
         werewolf_self_explosion_enabled=_bool(
             value.get("werewolf_self_explosion_enabled"),
             "werewolf_self_explosion_enabled",
+        ),
+        first_night_last_words_enabled=_bool(
+            value.get("first_night_last_words_enabled"),
+            "first_night_last_words_enabled",
         ),
         sheriff_badge_bomb_policy=cast(
             Literal["none", "double"],

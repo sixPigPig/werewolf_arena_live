@@ -110,6 +110,7 @@ class RuleSet:
     rule_tags: tuple[str, ...] = ()
     werewolf_self_explosion_enabled: bool = False
     exile_last_words_enabled: bool = False
+    first_night_last_words_enabled: bool = False
     sheriff_badge_bomb_policy: str = "none"
 
 
@@ -253,6 +254,7 @@ CLASSIC_12_SEER_WITCH_HUNTER_IDIOT = RuleSet(
     sheriff_vote_weight=1.5,
     werewolf_self_explosion_enabled=True,
     exile_last_words_enabled=True,
+    first_night_last_words_enabled=True,
     sheriff_badge_bomb_policy="double",
     speech_policy=SPEECH_POLICY_SHERIFF_DIRECTED,
     rule_tags=("有警长", "警徽 1.5 票", "屠边", "预女猎白"),
@@ -939,6 +941,7 @@ def rule_set_summary(rule_set: RuleSet) -> dict[str, Any]:
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
         "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
         "exile_last_words_enabled": rule_set.exile_last_words_enabled,
+        "first_night_last_words_enabled": rule_set.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
@@ -973,6 +976,7 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
         "sheriff_vote_weight": rule_set.sheriff_vote_weight,
         "werewolf_self_explosion_enabled": rule_set.werewolf_self_explosion_enabled,
         "exile_last_words_enabled": rule_set.exile_last_words_enabled,
+        "first_night_last_words_enabled": rule_set.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": rule_set.sheriff_badge_bomb_policy,
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,

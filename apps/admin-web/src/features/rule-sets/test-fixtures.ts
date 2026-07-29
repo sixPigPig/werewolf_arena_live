@@ -55,7 +55,7 @@ export const standardConfig: RuleSetConfig = {
   name: "标准九人局", description: "标准配置", complexity: "中等", estimated_duration: "45 分钟", rule_tags: ["标准", "九人"],
   role_counts: { werewolf: 3, villager: 3, seer: 1, guard: 0, witch: 1, hunter: 1, idiot: 0 },
   win_condition: "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: 1.5, speech_policy: "sheriff_directed",
-  werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: "double",
+  werewolf_self_explosion_enabled: true, first_night_last_words_enabled: true, sheriff_badge_bomb_policy: "double",
 };
 
 export function fixtureRevision(ruleSetId: string, no: number, state: RuleSetRevision["state"], config: RuleSetConfig = standardConfig): RuleSetRevision {

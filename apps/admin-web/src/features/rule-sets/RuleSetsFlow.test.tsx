@@ -287,9 +287,10 @@ describe("rule editor", () => {
     await user.clear(screen.getByLabelText("显示顺序")); await user.type(screen.getByLabelText("显示顺序"), "4");
     await user.clear(screen.getByLabelText("村民数量")); await user.type(screen.getByLabelText("村民数量"), "5");
     await user.click(screen.getByLabelText("启用警长"));
+    await user.click(screen.getByLabelText("允许首夜遗言"));
     await user.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(createBody).toBeDefined());
-    expect(createBody).toEqual({ id: "new_clean", display_order: 4, config: { name: "清理后的规则", description: "说明", complexity: "简单", estimated_duration: "30 分钟", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 1, villager: 5, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 }, win_condition: "wolves_gte_others", sheriff_enabled: false, sheriff_vote_weight: 1.5, speech_policy: "sequential", werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: "double" } });
+    expect(createBody).toEqual({ id: "new_clean", display_order: 4, config: { name: "清理后的规则", description: "说明", complexity: "简单", estimated_duration: "30 分钟", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 1, villager: 5, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 }, win_condition: "wolves_gte_others", sheriff_enabled: false, sheriff_vote_weight: 1.5, speech_policy: "sequential", werewolf_self_explosion_enabled: true, first_night_last_words_enabled: true, sheriff_badge_bomb_policy: "double" } });
   });
 
   it.each([

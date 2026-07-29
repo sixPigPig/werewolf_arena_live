@@ -79,6 +79,10 @@ def project_public_rule_snapshot(
             rule_set.get("exile_last_words_enabled"),
             "last words flag",
         ),
+        first_night_last_words_enabled=_optional_boolean(
+            rule_set.get("first_night_last_words_enabled"),
+            "first night last words flag",
+        ),
     )
 
 

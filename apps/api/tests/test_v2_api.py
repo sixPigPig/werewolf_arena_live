@@ -79,6 +79,7 @@ class FakeV2ModelClient:
         self.decline_action_types: set[str] = set()
         self.quality_failure_action_types: set[str] = set()
         self.unexpected_speech_target: str | None = None
+        self.force_speech_action_types: set[str] = set()
         self.speech_by_action_type: dict[str, str] = {}
 
     def resolve_model_target(
@@ -143,6 +144,10 @@ class FakeV2ModelClient:
             action_type,
             "我先说明自己的判断。这是第二句话！\n现在执行这次实时决策。",
         )
+        if output_contract["speech"]["mode"] == "forbidden":
+            speech = None
+        if action_type in self.force_speech_action_types:
+            speech = "这是模型违反禁言契约后额外返回的文本。"
         if output_contract["kind"] == "boolean":
             boolean_field = output_contract["field"]
             boolean_value = action_type not in self.decline_action_types
@@ -188,6 +193,7 @@ class FakeV2TtsClient:
         self.first_chunk = threading.Event()
         self.release = threading.Event()
         self.release.set()
+        self.failure_text_fragments: set[str] = set()
 
     async def synthesize(
         self,
@@ -203,6 +209,8 @@ class FakeV2TtsClient:
         self.dialects.append(dialect)
         assert text.endswith(("。", "！", "？"))
         assert attempt_id.startswith("v2_tts_")
+        if any(fragment in text for fragment in self.failure_text_fragments):
+            raise RuntimeError("scripted TTS failure")
         yield PCM_CHUNK
         self.first_chunk.set()
         if not self.release.is_set():
@@ -583,6 +591,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "sheriff_enabled": False,
         "werewolf_self_explosion_enabled": True,
         "exile_last_words_enabled": True,
+        "first_night_last_words_enabled": False,
     }
     assert set(public_rule) == {
         "rule_id",
@@ -594,6 +603,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "sheriff_enabled",
         "werewolf_self_explosion_enabled",
         "exile_last_words_enabled",
+        "first_night_last_words_enabled",
     }
     public_players = snapshot.json()["public_players"]
     assert snapshot.json()["public_role_assignment"] == {
@@ -1872,7 +1882,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         )
 
 
-def test_advanced_rule_opens_sheriff_election_after_first_night(
+def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cutoff(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -1881,6 +1891,9 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
     model_client.decline_action_types.add("werewolf_self_explosion")
     model_client.decline_action_types.add("exile_vote")
     model_client.unexpected_speech_target = "model-added-irrelevant-target"
+    model_client.force_speech_action_types.update(
+        {"ability_witch.heal_decision", "exile_vote"}
+    )
     request = _advanced_create_request()
     request["lobby_snapshot"]["rule_set"]["werewolf_self_explosion_enabled"] = True
     created = client.post("/api/v2/games", json=request)
@@ -1936,12 +1949,18 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             for item in judge_speeches
             if item.payload["template_id"] == "judge_dawn_announcement"
         )
+        sheriff_opening = next(
+            item
+            for item in judge_speeches
+            if item.payload["template_id"] == "judge_sheriff_election_opening"
+        )
         discussion = next(
             item
             for item in judge_speeches
             if item.payload["template_id"] == "judge_public_discussion_opening"
         )
         assert all("进阶玩家" not in item.payload["text"] for item in judge_speeches)
+        assert sheriff_opening.record_seq < dawn.record_seq
         assert dawn.record_seq < discussion.record_seq
         assert dawn.payload["action_id"] != discussion.payload["action_id"]
         assert "白天讨论现在开始" not in dawn.payload["text"]
@@ -1957,7 +1976,7 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
         assert all(
             context["output_contract"]["kind"] == "boolean"
             and context["output_contract"]["field"] == "run_for_sheriff"
-            and context["output_contract"]["speech"]["mode"] == "required"
+            and context["output_contract"]["speech"]["mode"] == "forbidden"
             for context in sheriff_run_contexts
         )
         withdraw_contexts = [
@@ -1975,11 +1994,10 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
                 "language": "zh-CN",
                 "speech": {
                     "type": "string",
-                    "mode": "required",
-                    "min_length": 1,
+                    "mode": "forbidden",
                 },
                 "field": "withdraw",
-                "required_fields": ["withdraw", "speech"],
+                "required_fields": ["withdraw"],
                 "boolean": {
                     "type": "boolean",
                     "true_means": "退水",
@@ -2028,10 +2046,189 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
         silent_action_ids = {event.payload["action_id"] for event in self_explosion_responses}
         action_events = list(
             db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == game.game_id,
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == game.game_id)
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        action_openings = [
+            event
+            for event in action_events
+            if event.event_type == "action_opened"
+            and isinstance(event.payload.get("context"), dict)
+        ]
+        vote_action_types = {
+            "sheriff_vote",
+            "sheriff_runoff_vote",
+            "exile_vote",
+            "exile_runoff_vote",
+        }
+        vote_openings = [
+            event
+            for event in action_openings
+            if event.payload["context"].get("action_type") in vote_action_types
+        ]
+        assert vote_openings
+        assert all(
+            event.payload["context"]["output_contract"]["speech"]["mode"] == "forbidden"
+            and event.payload["context"]["output_contract"]["presentation_kind"]
+            == "private_vote"
+            for event in vote_openings
+        )
+        vote_action_ids = {
+            event.payload["context"]["action_id"] for event in vote_openings
+        }
+        assert all(
+            not (
+                event.event_type in {"speech_opened", "tts_stream_started"}
+                and event.payload.get("action_id") in vote_action_ids
+            )
+            for event in action_events
+        )
+        forced_forbidden_action_ids = {
+            event.payload["context"]["action_id"]
+            for event in action_openings
+            if event.payload["context"].get("action_type")
+            in model_client.force_speech_action_types
+        }
+        assert forced_forbidden_action_ids
+        assert forced_forbidden_action_ids <= {
+            event.payload["action_id"]
+            for event in action_events
+            if event.event_type == "model_decision_speech_normalized"
+            and event.payload.get("reason") == "speech_forbidden"
+        }
+        assert all(
+            not (
+                event.event_type in {"speech_opened", "tts_stream_started"}
+                and event.payload.get("action_id") in forced_forbidden_action_ids
+            )
+            for event in action_events
+        )
+        committed_votes = [
+            event
+            for event in action_events
+            if event.event_type == "day_vote_committed"
+        ]
+        assert committed_votes
+        assert all("speech" not in event.payload for event in committed_votes)
+        vote_context_batches: dict[tuple[str, str, int | None], list[dict[str, Any]]] = {}
+        for context in model_client.decision_contexts:
+            action_type = context["task"]["action_type"]
+            if action_type not in vote_action_types:
+                continue
+            batch_key = (
+                action_type,
+                context["task"]["phase_id"],
+                context["task"].get("vote_round"),
+            )
+            vote_context_batches.setdefault(batch_key, []).append(context)
+        for contexts in vote_context_batches.values():
+            if not contexts:
+                continue
+            visible_vote_ids = [
+                tuple(
+                    item["source_event_id"]
+                    for item in (
+                        *context["public_state"].get("judge_facts", []),
+                        *(
+                            [context["public_state"]["latest_vote_snapshot"]]
+                            if "latest_vote_snapshot" in context["public_state"]
+                            else []
+                        ),
+                    )
+                    if item["kind"] in {"day_vote", "vote_result"}
+                )
+                for context in contexts
+            ]
+            assert len(set(visible_vote_ids)) == 1
+
+        night_window = db.scalar(
+            select(V2ActionWindow).where(
+                V2ActionWindow.game_id == game.game_id,
+                V2ActionWindow.window_type == "night",
+            )
+        )
+        assert night_window is not None
+        direct_first_night_deaths = {
+            item["player_id"] for item in night_window.result["deaths"]
+        }
+        first_night_last_words = [
+            event
+            for event in action_openings
+            if event.payload["context"].get("action_type")
+            == "first_night_last_words"
+        ]
+        assert {
+            event.payload["context"]["actor"]["id"]
+            for event in first_night_last_words
+        } == direct_first_night_deaths
+        first_night_last_word_seats = [
+            next(
+                item.seat
+                for item in db.scalars(
+                    select(V2PlayerState).where(V2PlayerState.game_id == game.game_id)
+                )
+                if item.player_id == event.payload["context"]["actor"]["id"]
+            )
+            for event in first_night_last_words
+        ]
+        assert first_night_last_word_seats == sorted(first_night_last_word_seats)
+        sheriff_run_actor_ids = {
+            event.payload["context"]["actor"]["id"]
+            for event in action_openings
+            if event.payload["context"].get("action_type") == "sheriff_run"
+        }
+        assert direct_first_night_deaths <= sheriff_run_actor_ids
+
+        private_ability_action_ids = {
+            event.payload["context"]["action_id"]
+            for event in action_openings
+            if str(event.payload["context"].get("action_type", "")).startswith(
+                "ability_"
+            )
+            and event.payload["context"].get("action_type")
+            != "ability_werewolf.attack_decision"
+        }
+        assert private_ability_action_ids
+        assert all(
+            not (
+                event.event_type in {"speech_opened", "tts_stream_started"}
+                and event.payload.get("action_id") in private_ability_action_ids
+            )
+            for event in action_events
+        )
+        witch_observations = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == game.game_id,
+                    V2KnowledgeFact.fact_type == "witch_attack_observation",
                 )
             )
+        )
+        assert witch_observations
+        assert all(
+            isinstance(item.payload.get("night_no"), int)
+            and "attacked_player_id" in item.payload
+            for item in witch_observations
+        )
+
+        completion_events = [
+            event for event in action_events if event.event_type == "game_completed"
+        ]
+        assert len(completion_events) == 1
+        completion_seq = completion_events[0].record_seq
+        terminal_openings = [
+            event
+            for event in action_openings
+            if event.payload["context"].get("action_type") == "judge_game_completed"
+        ]
+        assert len(terminal_openings) == 1
+        assert completion_seq < terminal_openings[0].record_seq
+        assert all(
+            event.payload["context"].get("action_type") == "judge_game_completed"
+            for event in action_openings
+            if event.record_seq > completion_seq
         )
         assert all(
             not (
@@ -2083,12 +2280,8 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
             context["output_contract"]["speech"]["mode"]
             == (
                 "required"
-                if context["task"]["action_type"]
-                in {
-                    "ability_werewolf.attack_decision",
-                    "ability_hunter.death_shot_decision",
-                }
-                else "optional"
+                if context["task"]["action_type"] == "ability_werewolf.attack_decision"
+                else "forbidden"
             )
             for context in ability_contexts
         )
@@ -2170,6 +2363,64 @@ def test_advanced_rule_opens_sheriff_election_after_first_night(
     ]
     assert fact_contexts
     assert all("public_history" not in context for context in fact_contexts)
+
+
+def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    tts_client = client.app.state.v2_test_tts_client
+    tts_client.failure_text_fragments.add("本局结束")
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    observed_live_states: list[str] = []
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if isinstance(value.get("live_state"), str):
+                observed_live_states.append(value["live_state"])
+            if value.get("live_state") in {"awaiting_observation", "failed"}:
+                break
+
+    assert observed_live_states[-1] == "awaiting_observation"
+    assert "failed" not in observed_live_states
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and run is not None
+        assert game.status == run.status == "awaiting_observation"
+        assert game.phase_state == "game_completed"
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == game.game_id)
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        completion = [event for event in events if event.event_type == "game_completed"]
+        terminal_openings = [
+            event
+            for event in events
+            if event.event_type == "action_opened"
+            and event.payload.get("context", {}).get("action_type")
+            == "judge_game_completed"
+        ]
+        assert len(completion) == len(terminal_openings) == 1
+        assert completion[0].record_seq < terminal_openings[0].record_seq
+        terminal_action_id = terminal_openings[0].payload["context"]["action_id"]
+        assert any(
+            event.event_type == "action_failed"
+            and event.payload.get("action_id") == terminal_action_id
+            for event in events
+        )
+        assert not any(
+            event.event_type in {"night_runtime_failed", "day_runtime_failed"}
+            for event in events
+        )
 
 
 def test_withdraw_quality_failure_persists_exact_raw_model_response(
@@ -2587,6 +2838,7 @@ def _lobby_create_request() -> dict[str, Any]:
                 "sheriff_enabled": False,
                 "werewolf_self_explosion_enabled": True,
                 "exile_last_words_enabled": True,
+                "first_night_last_words_enabled": False,
             },
             "rule_set_revision_id": "rule_rev_123",
             "seed": 42,
@@ -2707,6 +2959,7 @@ def _advanced_create_request() -> dict[str, Any]:
                 ],
                 "win_condition": "wolves_gte_others",
                 "sheriff_enabled": True,
+                "first_night_last_words_enabled": True,
             },
             "rule_set_revision_id": "rule_rev_advanced_12",
             "seed": 12,

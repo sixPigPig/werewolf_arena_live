@@ -26,6 +26,11 @@ from app.v2.models import (
     V2RoleAssignment,
 )
 from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
+from app.v2.win_conditions import (
+    all_hunter_settlement_branches_terminal,
+    hunter_settlement_can_change_winner,
+    winner_from_alive_roles,
+)
 
 
 @dataclass(frozen=True)
@@ -423,6 +428,12 @@ class V2NightRepository:
             assert row is not None
             row.status = "skipped"
             row.skip_reason = reason
+            decision_status = (
+                "skipped"
+                if reason in {"owner_not_alive", "no_eligible_actor_or_target"}
+                else "unavailable"
+            )
+            row.result = {"decision_status": decision_status}
             row.closed_at = _now()
             _append_event(
                 db,
@@ -432,6 +443,7 @@ class V2NightRepository:
                     "activation_id": activation.activation_id,
                     "ability_id": ability_id,
                     "reason": reason,
+                    "decision_status": decision_status,
                 },
             )
         return activation
@@ -482,9 +494,13 @@ class V2NightRepository:
                 player_state = db.get(V2PlayerState, (state.game_id, item["player_id"]))
                 if player_state is None or not player_state.alive:
                     raise V2RepositoryError("night death target is not alive")
-                player_state.alive = False
-                player_state.death_cause = item["cause"]
-                player_state.death_window_seq = state.window_seq
+                player_state.state = {
+                    **(player_state.state or {}),
+                    "pending_dawn_death": {
+                        "cause": item["cause"],
+                        "window_seq": state.window_seq,
+                    },
+                }
             result = {
                 "deaths": list(resolution.deaths),
                 "peaceful": resolution.peaceful,
@@ -496,7 +512,20 @@ class V2NightRepository:
             previous_phase_id = game.phase_id
             game.phase_seq += 1
             game.phase_id = f"day_{state.round_no}"
-            game.phase_state = "dawn_announcement_ready"
+            match = db.get(V2MatchState, state.game_id)
+            if match is None:
+                raise V2RepositoryError("night match state is missing")
+            should_elect_before_dawn = (
+                state.round_no == 1
+                and bool(game.ability_snapshot.get("sheriff_enabled"))
+                and match.sheriff_badge_state == "pending"
+                and not _pending_terminal_is_inevitable(db, game)
+            )
+            game.phase_state = (
+                "sheriff_election_ready"
+                if should_elect_before_dawn
+                else "dawn_announcement_ready"
+            )
             game.status = "ready"
             _run(db, game.current_run_id).status = "ready"
             transition = V2PhaseTransition(
@@ -516,10 +545,10 @@ class V2NightRepository:
             _append_event(
                 db,
                 game=game,
-                event_type="dawn_public_result",
+                event_type="night_resolution_committed",
                 payload={
                     "round_no": state.round_no,
-                    "dead_player_ids": [item["player_id"] for item in resolution.deaths],
+                    "pending_death_count": len(resolution.deaths),
                 },
             )
             _append_event(
@@ -534,6 +563,81 @@ class V2NightRepository:
             attack_prevented_by=resolution.attack_prevented_by,
             transition=transition,
         )
+
+    def ready_dawn_announcement(self, *, game_id: str) -> V2PhaseTransition:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            if game.phase_state != "sheriff_election_open":
+                raise V2RepositoryError("pre-dawn sheriff election is not complete")
+            game.phase_state = "dawn_announcement_ready"
+            transition = V2PhaseTransition(
+                game_id=game.game_id,
+                run_id=game.current_run_id,
+                phase_seq=game.phase_seq,
+                previous_phase_id=game.phase_id,
+                phase_id=game.phase_id,
+                phase_state=game.phase_state,
+            )
+            _append_event(
+                db,
+                game=game,
+                event_type="game_phase_changed",
+                payload=_transition_payload(transition),
+            )
+            return transition
+
+    def reveal_pending_dawn_deaths(
+        self,
+        *,
+        game_id: str,
+        expected_player_ids: tuple[str, ...],
+    ) -> tuple[dict[str, str], ...]:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            if game.phase_state != "dawn_announcement_ready":
+                raise V2RepositoryError("dawn deaths are not ready to reveal")
+            revealed: list[dict[str, str]] = []
+            rows = list(
+                db.scalars(
+                    select(V2PlayerState)
+                    .where(V2PlayerState.game_id == game_id)
+                    .order_by(V2PlayerState.seat)
+                )
+            )
+            for player_state in rows:
+                pending = (player_state.state or {}).get("pending_dawn_death")
+                if not isinstance(pending, dict):
+                    continue
+                cause = pending.get("cause")
+                window_seq = pending.get("window_seq")
+                if not isinstance(cause, str) or not isinstance(window_seq, int):
+                    raise V2RepositoryError("pending dawn death is invalid")
+                player_state.alive = False
+                player_state.death_cause = cause
+                player_state.death_window_seq = window_seq
+                next_state = dict(player_state.state or {})
+                next_state.pop("pending_dawn_death", None)
+                player_state.state = next_state
+                revealed.append(
+                    {
+                        "player_id": player_state.player_id,
+                        "cause": cause,
+                    }
+                )
+            revealed_ids = tuple(item["player_id"] for item in revealed)
+            if set(revealed_ids) != set(expected_player_ids):
+                raise V2RepositoryError("revealed dawn deaths differ from night resolution")
+            round_no = _day_round_no(game.phase_id)
+            _append_event(
+                db,
+                game=game,
+                event_type="dawn_public_result",
+                payload={
+                    "round_no": round_no,
+                    "dead_player_ids": list(revealed_ids),
+                },
+            )
+            return tuple(revealed)
 
     def hunter_reactions(self, game_id: str) -> tuple[str, ...]:
         with self._session_factory() as db:
@@ -562,6 +666,49 @@ class V2NightRepository:
                 if not (state or {}).get("hunter_response_resolved")
             )
 
+    def hunter_settlement_can_change_winner(self, game_id: str) -> bool:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            rows = list(
+                db.execute(
+                    select(
+                        V2RoleAssignment.player_id,
+                        V2RoleAssignment.role_key,
+                        V2PlayerState.alive,
+                        V2PlayerState.death_cause,
+                        V2PlayerState.state,
+                    )
+                    .join(
+                        V2PlayerState,
+                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
+                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                    )
+                    .where(V2RoleAssignment.game_id == game_id)
+                    .order_by(V2RoleAssignment.seat)
+                )
+            )
+            return hunter_settlement_can_change_winner(
+                living_player_ids=frozenset(
+                    player_id for player_id, _role, alive, _cause, _state in rows if alive
+                ),
+                pending_hunter_ids=tuple(
+                    player_id
+                    for player_id, role, alive, cause, state in rows
+                    if role == "hunter"
+                    and not alive
+                    and cause != "witch_poison"
+                    and not (state or {}).get("hunter_response_resolved")
+                ),
+                role_by_player_id={
+                    player_id: role for player_id, role, _alive, _cause, _state in rows
+                },
+                win_condition=str(
+                    game.ability_snapshot.get("win_condition") or "wolves_gte_others"
+                ),
+            )
+
     def open_dawn_reaction_window(
         self,
         *,
@@ -572,50 +719,65 @@ class V2NightRepository:
             raise V2RepositoryError("hunter response is not configured")
         with self._session_factory.begin() as db:
             game = _locked_game(db, state.game_id)
-            if game.phase_id != f"day_{state.round_no}" or game.phase_state != "dawn_announced":
+            if game.phase_id != f"day_{state.round_no}":
                 raise V2RepositoryError("dawn response is not ready")
-            next_window_seq = (
-                int(
-                    db.scalar(
-                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
-                            V2ActionWindow.game_id == state.game_id
-                        )
+            if game.phase_state == "dawn_reactions_ready":
+                window = db.scalar(
+                    select(V2ActionWindow).where(
+                        V2ActionWindow.game_id == state.game_id,
+                        V2ActionWindow.window_type == "dawn_reaction",
+                        V2ActionWindow.state == "open",
                     )
-                    or 0
                 )
-                + 1
-            )
-            window = V2ActionWindow(
-                window_id=f"v2_window_{uuid4().hex[:16]}",
-                game_id=state.game_id,
-                run_id=state.run_id,
-                window_seq=next_window_seq,
-                window_type="dawn_reaction",
-                state="open",
-                ability_snapshot_hash=ability_snapshot_hash(state.snapshot),
-                plan=[
-                    {
-                        "ability_instance_id": hunter["ability_instance_id"],
-                        "ability_id": hunter["ability_id"],
-                        "order": hunter["order"],
-                        "trigger": hunter["trigger"],
-                    }
-                ],
-                result={},
-            )
-            db.add(window)
-            window_id = window.window_id
-            game.phase_state = "dawn_reactions_ready"
-            _append_event(
-                db,
-                game=game,
-                event_type="action_window_opened",
-                payload={
-                    "window_id": window_id,
-                    "window_seq": next_window_seq,
-                    "window_type": "dawn_reaction",
-                },
-            )
+                if window is None:
+                    raise V2RepositoryError("dawn reaction window is missing")
+                window_id = window.window_id
+                next_window_seq = window.window_seq
+            elif game.phase_state == "dawn_announced":
+                next_window_seq = (
+                    int(
+                        db.scalar(
+                            select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
+                                V2ActionWindow.game_id == state.game_id
+                            )
+                        )
+                        or 0
+                    )
+                    + 1
+                )
+                window = V2ActionWindow(
+                    window_id=f"v2_window_{uuid4().hex[:16]}",
+                    game_id=state.game_id,
+                    run_id=state.run_id,
+                    window_seq=next_window_seq,
+                    window_type="dawn_reaction",
+                    state="open",
+                    ability_snapshot_hash=ability_snapshot_hash(state.snapshot),
+                    plan=[
+                        {
+                            "ability_instance_id": hunter["ability_instance_id"],
+                            "ability_id": hunter["ability_id"],
+                            "order": hunter["order"],
+                            "trigger": hunter["trigger"],
+                        }
+                    ],
+                    result={},
+                )
+                db.add(window)
+                window_id = window.window_id
+                game.phase_state = "dawn_reactions_ready"
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="action_window_opened",
+                    payload={
+                        "window_id": window_id,
+                        "window_seq": next_window_seq,
+                        "window_type": "dawn_reaction",
+                    },
+                )
+            else:
+                raise V2RepositoryError("dawn response is not ready")
         return V2NightRuntimeState(
             game_id=state.game_id,
             run_id=state.run_id,
@@ -814,6 +976,40 @@ class V2NightRepository:
                 {"fact_type": row.fact_type, "payload": dict(row.payload or {})} for row in rows
             ]
 
+    def record_player_knowledge(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        fact_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            fact_id = f"v2_fact_{uuid4().hex[:16]}"
+            db.add(
+                V2KnowledgeFact(
+                    knowledge_fact_id=fact_id,
+                    game_id=game_id,
+                    source_activation_id=None,
+                    owner_scope="player",
+                    owner_id=player_id,
+                    fact_type=fact_type,
+                    payload=dict(payload),
+                )
+            )
+            _append_event(
+                db,
+                game=game,
+                event_type="private_knowledge_recorded",
+                payload={
+                    "knowledge_fact_id": fact_id,
+                    "owner_scope": "player",
+                    "owner_id": player_id,
+                    "fact_type": fact_type,
+                },
+            )
+
     def public_history(self, game_id: str) -> list[dict[str, Any]]:
         public_types = {
             "day_speech_committed",
@@ -986,16 +1182,47 @@ def _winner(db: Session, game: V2GameRecord) -> str | None:
         )
     )
     alive_roles = [role_key for role_key, alive in rows if alive]
-    wolves = sum(role == "werewolf" for role in alive_roles)
-    others = len(alive_roles) - wolves
-    if wolves == 0:
-        return "villagers"
+    return winner_from_alive_roles(
+        alive_roles,
+        win_condition=str(game.ability_snapshot.get("win_condition") or "wolves_gte_others"),
+    )
+
+
+def _pending_terminal_is_inevitable(db: Session, game: V2GameRecord) -> bool:
+    rows = list(
+        db.execute(
+            select(
+                V2RoleAssignment.player_id,
+                V2RoleAssignment.role_key,
+                V2PlayerState.alive,
+                V2PlayerState.state,
+            )
+            .join(
+                V2PlayerState,
+                (V2PlayerState.game_id == V2RoleAssignment.game_id)
+                & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+            )
+            .where(V2RoleAssignment.game_id == game.game_id)
+        )
+    )
+    roles = {player_id: role_key for player_id, role_key, _alive, _state in rows}
+    alive = {player_id for player_id, _role, is_alive, _state in rows if is_alive}
+    pending_hunters: list[str] = []
+    for player_id, role_key, is_alive, raw_state in rows:
+        pending = (raw_state or {}).get("pending_dawn_death")
+        if not is_alive or not isinstance(pending, dict):
+            continue
+        alive.discard(player_id)
+        if role_key == "hunter" and pending.get("cause") != "witch_poison":
+            pending_hunters.append(player_id)
     win_condition = str(game.ability_snapshot.get("win_condition") or "wolves_gte_others")
-    if win_condition == "slaughter_side":
-        villagers = sum(role == "villager" for role in alive_roles)
-        gods = sum(role not in {"werewolf", "villager"} for role in alive_roles)
-        return "werewolves" if villagers == 0 or gods == 0 else None
-    return "werewolves" if wolves >= others else None
+
+    return all_hunter_settlement_branches_terminal(
+        living_player_ids=frozenset(alive),
+        pending_hunter_ids=tuple(pending_hunters),
+        role_by_player_id=roles,
+        win_condition=win_condition,
+    )
 
 
 def _effect_outcome(

@@ -73,7 +73,7 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
     assert compiled.revision_id is None
     assert compiled.revision_no is None
     assert compiled.content_hash == (
-        "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131"
+        "104d9818faac73536d50d57ca93eb623ca2dc044a4e334c6b72fcdbb0c2f5cef"
     )
 
 

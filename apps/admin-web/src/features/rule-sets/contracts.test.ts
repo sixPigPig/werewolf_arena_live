@@ -12,7 +12,7 @@ const config = {
   name: "标准局", description: "", complexity: "中等", estimated_duration: "45 分钟",
   rule_tags: ["标准"], role_counts: { werewolf: 3, villager: 3, seer: 1, guard: 1, witch: 1, hunter: 0, idiot: 0 },
   win_condition: "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: 1.5,
-  speech_policy: "sequential", werewolf_self_explosion_enabled: true, sheriff_badge_bomb_policy: "none",
+  speech_policy: "sequential", werewolf_self_explosion_enabled: true, first_night_last_words_enabled: false, sheriff_badge_bomb_policy: "none",
 };
 const revision = {
   id: "revision-1", rule_set_id: "standard_rule", revision_no: 1, state: "draft", schema_version: 1,

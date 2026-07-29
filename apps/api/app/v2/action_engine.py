@@ -155,6 +155,7 @@ class V2SpeechSpec:
     context: dict[str, Any] | None = None
     allowed_target_ids: tuple[str, ...] | None = None
     model_players: tuple[V2ModelPlayerReference, ...] = ()
+    best_effort: bool = False
 
 
 @dataclass(frozen=True)
@@ -312,6 +313,7 @@ class V2ActionEngine:
             expected_phase_id=spec.phase_id,
             expected_phase_state=spec.required_phase_state,
             activation_id=spec.activation_id,
+            best_effort=spec.best_effort,
         )
         if claim is None:
             return None
@@ -326,26 +328,27 @@ class V2ActionEngine:
         model_request_completed = False
         try:
             check_cancellation()
-            await broadcaster.broadcast_json(
-                director_scene_changed(
-                    game_id=claim.game_id,
-                    run_id=claim.run_id,
-                    scene=project_director_scene(
-                        phase_id=spec.phase_id,
-                        phase_state=spec.required_phase_state,
-                        action_context=context,
+            if not spec.best_effort:
+                await broadcaster.broadcast_json(
+                    director_scene_changed(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        scene=project_director_scene(
+                            phase_id=spec.phase_id,
+                            phase_state=spec.required_phase_state,
+                            action_context=context,
+                        ),
                     ),
-                ),
-                audience="director",
-            )
-            await broadcaster.broadcast_json(
-                live_state(
-                    game_id=claim.game_id,
-                    run_id=claim.run_id,
-                    state="generating",
-                ),
-                audience=spec.audience,
-            )
+                    audience="director",
+                )
+                await broadcaster.broadcast_json(
+                    live_state(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        state="generating",
+                    ),
+                    audience=spec.audience,
+                )
             model_decision: V2ModelDecision | None = None
             if judge_configuration is not None:
                 rendered = render_judge_speech(
@@ -438,6 +441,7 @@ class V2ActionEngine:
                     target=model_target,
                     check_cancellation=check_cancellation,
                 )
+                raw_model_speech = model_decision.speech
                 original_target = model_decision.target_player_id
                 resolved_target = (
                     resolve_model_target(
@@ -451,12 +455,16 @@ class V2ActionEngine:
                     model_decision,
                     target_player_id=resolved_target,
                     speech=(
-                        sanitize_model_speech(
-                            model_decision.speech,
-                            players=spec.model_players,
+                        None
+                        if spec.decision_contract.speech_mode == "forbidden"
+                        else (
+                            sanitize_model_speech(
+                                raw_model_speech,
+                                players=spec.model_players,
+                            )
+                            if raw_model_speech is not None
+                            else None
                         )
-                        if model_decision.speech is not None
-                        else None
                     ),
                 )
                 passive_observations = observe_model_speech(
@@ -518,6 +526,19 @@ class V2ActionEngine:
                         "completed_ms": model_decision.completed_ms,
                     },
                 )
+                if (
+                    spec.decision_contract.speech_mode == "forbidden"
+                    and raw_model_speech is not None
+                ):
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_decision_speech_normalized",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "reason": "speech_forbidden",
+                        },
+                    )
                 model_request_completed = True
                 normalized_target = resolved_target
                 normalization_reason: str | None = None
@@ -578,15 +599,17 @@ class V2ActionEngine:
                     claim=claim,
                     next_live_state=spec.success_live_state,
                     next_phase_state=spec.success_phase_state,
+                    best_effort=spec.best_effort,
                 )
-                await broadcaster.broadcast_json(
-                    live_state(
-                        game_id=claim.game_id,
-                        run_id=claim.run_id,
-                        state=spec.success_live_state,
-                    ),
-                    audience=spec.audience,
-                )
+                if not spec.best_effort:
+                    await broadcaster.broadcast_json(
+                        live_state(
+                            game_id=claim.game_id,
+                            run_id=claim.run_id,
+                            state=spec.success_live_state,
+                        ),
+                        audience=spec.audience,
+                    )
                 return V2ActionResult(decision=model_decision)
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
@@ -605,14 +628,15 @@ class V2ActionEngine:
             await broadcaster.set_current(identity, 0, audience=spec.audience)
             await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
             await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
-            await broadcaster.broadcast_json(
-                live_state(
-                    game_id=claim.game_id,
-                    run_id=claim.run_id,
-                    state="broadcasting",
-                ),
-                audience=spec.audience,
-            )
+            if not spec.best_effort:
+                await broadcaster.broadcast_json(
+                    live_state(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        state="broadcasting",
+                    ),
+                    audience=spec.audience,
+                )
             tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
             self._repository.append_event(
                 game_id=claim.game_id,
@@ -692,15 +716,17 @@ class V2ActionEngine:
                 game_id=claim.game_id,
                 tts_attempt_id=tts_attempt_id,
                 sample_count=sample_cursor,
+                best_effort=spec.best_effort,
             )
-            await broadcaster.broadcast_json(
-                live_state(
-                    game_id=claim.game_id,
-                    run_id=claim.run_id,
-                    state="finalizing",
-                ),
-                audience=spec.audience,
-            )
+            if not spec.best_effort:
+                await broadcaster.broadcast_json(
+                    live_state(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        state="finalizing",
+                    ),
+                    audience=spec.audience,
+                )
             recorded = recorder.finalize()
             recorder = None
             if recorded.sample_count != sample_cursor:
@@ -724,6 +750,7 @@ class V2ActionEngine:
                 final_sample_cursor=sample_cursor,
                 next_live_state=spec.success_live_state,
                 next_phase_state=spec.success_phase_state,
+                best_effort=spec.best_effort,
             )
             await broadcaster.broadcast_json(
                 presentation_closed(
@@ -738,7 +765,7 @@ class V2ActionEngine:
                 sample_cursor,
                 audience=spec.audience,
             )
-            if spec.success_live_state == "awaiting_observation":
+            if spec.success_live_state == "awaiting_observation" and not spec.best_effort:
                 await broadcaster.broadcast_json(
                     live_state(
                         game_id=claim.game_id,
@@ -792,10 +819,11 @@ class V2ActionEngine:
                     failure_kind=failure_kind,
                     failure_code=failure_code,
                     identity=identity,
+                    best_effort=spec.best_effort,
                 )
             except Exception:
                 logger.exception("Live V2 could not persist action failure")
-            if identity is None:
+            if identity is None and not spec.best_effort:
                 await broadcaster.broadcast_json(
                     live_state(
                         game_id=claim.game_id,
@@ -805,7 +833,7 @@ class V2ActionEngine:
                     ),
                     audience="all",
                 )
-            else:
+            elif identity is not None:
                 await broadcaster.broadcast_json(
                     presentation_failed(
                         identity,
