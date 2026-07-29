@@ -255,6 +255,7 @@ class V2ModelClient:
                 async with httpx.AsyncClient(
                     timeout=timeout,
                     transport=self._transport,
+                    trust_env=False,
                 ) as client:
                     async with client.stream(
                         "POST",

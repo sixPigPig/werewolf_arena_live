@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Iterable, Literal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -24,10 +24,12 @@ from app.werewolf.providers import (
     OpenAICompatibleProvider,
     default_model_name,
     environment_model_names,
+    open_url_direct,
 )
 
 ModelProviderName = Literal["agent_plan", "deepseek"]
 ThinkingMode = Literal["default", "enabled", "disabled"]
+UNSUPPORTED_CATALOG_MODELS = frozenset({("agent_plan", "auto")})
 
 ARK_DOCS_URL = "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01"
 DEEPSEEK_MODELS_URL = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
@@ -172,7 +174,7 @@ class DeepSeekCatalogClient:
             },
         )
         try:
-            with urllib.request.urlopen(
+            with open_url_direct(
                 request,
                 timeout=settings.model_catalog_deepseek_timeout_seconds,
             ) as response:
@@ -365,6 +367,7 @@ def validate_parameter_values(
 
 
 def bootstrap_environment_catalog(db: Session) -> None:
+    _delete_unsupported_catalog_models(db)
     now = datetime.now(tz=UTC)
     default_model = default_model_name()
     providers = (
@@ -378,6 +381,8 @@ def bootstrap_environment_catalog(db: Session) -> None:
     )
     for provider_name, config in providers:
         for model_id in environment_model_names(config):
+            if _is_unsupported_catalog_model(provider_name, model_id):
+                continue
             record = db.get(ModelConfigurationRecord, (provider_name, model_id))
             bootstrap_supports_thinking = _bootstrap_supports_thinking(
                 provider_name,
@@ -433,8 +438,15 @@ def _sync_discovered_models(
             ARK_AGENT_PLAN_CONFIG if provider == "agent_plan" else DEEPSEEK_CONFIG
         )
     )
+    configured_ids = {
+        model_id
+        for model_id in configured_ids
+        if not _is_unsupported_catalog_model(provider, model_id)
+    }
     discovered_ids: set[str] = set()
     for model in models:
+        if _is_unsupported_catalog_model(provider, model.model_id):
+            continue
         discovered_ids.add(model.model_id)
         record = db.get(ModelConfigurationRecord, (provider, model.model_id))
         if record is None:
@@ -478,6 +490,20 @@ def _sync_discovered_models(
         record.is_default = False
         record.last_synced_at = now
         record.updated_at = now
+
+
+def _delete_unsupported_catalog_models(db: Session) -> None:
+    for provider, model_id in UNSUPPORTED_CATALOG_MODELS:
+        db.execute(
+            delete(ModelConfigurationRecord).where(
+                ModelConfigurationRecord.provider == provider,
+                ModelConfigurationRecord.model_id == model_id,
+            )
+        )
+
+
+def _is_unsupported_catalog_model(provider: str, model_id: str) -> bool:
+    return (provider, model_id.strip().lower()) in UNSUPPORTED_CATALOG_MODELS
 
 
 def _snapshot_from_database(

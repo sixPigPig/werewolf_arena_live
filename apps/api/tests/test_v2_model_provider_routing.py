@@ -40,6 +40,50 @@ def _action_context() -> dict[str, Any]:
     }
 
 
+def test_model_client_disables_environment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_client_options: list[dict[str, Any]] = []
+    real_async_client = httpx.AsyncClient
+
+    def direct_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        captured_client_options.append(kwargs)
+        return real_async_client(*args, **kwargs)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "direct-request-id"},
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"speech\\":\\"直连响应\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.v2.model_client.httpx.AsyncClient",
+        direct_async_client,
+    )
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_direct_transport",
+            target=target,
+        )
+    )
+
+    assert decision.speech == "直连响应"
+    assert captured_client_options[0]["trust_env"] is False
+
+
 def test_agent_plan_target_uses_ark_responses_endpoint_and_credentials() -> None:
     requests: list[httpx.Request] = []
 

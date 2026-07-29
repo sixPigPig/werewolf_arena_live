@@ -829,7 +829,7 @@ def _urlopen_transport(
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     timeout = call_options.request_timeout_seconds if call_options else 120
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with open_url_direct(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -854,7 +854,7 @@ def _urlopen_stream_transport(
             attempt_options.first_token_timeout_seconds
             or attempt_options.request_timeout_seconds,
         )
-    with urllib.request.urlopen(request, timeout=socket_timeout) as response:
+    with open_url_direct(request, timeout=socket_timeout) as response:
         for line in response:
             now = time.monotonic()
             total_timeout = (
@@ -886,6 +886,15 @@ def _urlopen_stream_transport(
                     "streaming response produced no content for "
                     f"{STREAM_NO_CONTENT_TIMEOUT_SECONDS} seconds"
                 )
+
+
+def open_url_direct(
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+) -> Any:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
 
 
 def _load_dotenv(path: Path, *, prefixes: tuple[str, ...] | None = None) -> dict[str, str]:

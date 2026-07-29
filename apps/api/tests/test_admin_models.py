@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
-from app.model_catalog.service import DiscoveredModel
+from app.model_catalog.service import DeepSeekCatalogClient, DiscoveredModel
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -49,6 +49,15 @@ class FakeDeepSeekCatalogClient:
 class FakeAgentPlanCatalogClient:
     def list_models(self) -> list[DiscoveredModel]:
         return [
+            DiscoveredModel(
+                provider="agent_plan",
+                model_id="auto",
+                source_model_id="auto",
+                display_name="Auto",
+                description="Unsupported automatic model",
+                supports_thinking=False,
+                source_details={"selected": False, "plan": "agent-plan"},
+            ),
             DiscoveredModel(
                 provider="agent_plan",
                 model_id="agent-fast",
@@ -232,6 +241,74 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     assert not agent_pro["enabled"]
     assert agent_pro["parameters"]["thinking"] == "enabled"
     assert agent_pro["parameters"]["max_tokens"] == 16_384
+
+
+def test_model_catalog_deletes_and_ignores_unsupported_auto(
+    model_admin_client,
+) -> None:
+    client, session_factory = model_admin_client
+    with session_factory() as db:
+        db.add(
+            ModelConfigurationRecord(
+                provider="agent_plan",
+                model_id="auto",
+                source_model_id="auto",
+                display_name="Auto",
+                available=True,
+                enabled=False,
+                is_default=False,
+                supports_thinking=False,
+                parameter_values={"thinking": "default", "max_tokens": 512},
+                source_details={"selected": False, "plan": "agent-plan"},
+            )
+        )
+        db.commit()
+
+    csrf_token = _login(client)
+    listed = client.get("/api/v1/admin/models")
+    assert listed.status_code == 200, listed.text
+    assert all(item["model_id"] != "auto" for item in listed.json()["models"])
+
+    synced = client.post(
+        "/api/v1/admin/models/agent-plan/sync",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert synced.status_code == 200, synced.text
+    assert all(item["model_id"] != "auto" for item in synced.json()["models"])
+
+    with session_factory() as db:
+        assert db.get(ModelConfigurationRecord, ("agent_plan", "auto")) is None
+
+
+def test_deepseek_catalog_uses_direct_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            del exc_type, exc, traceback
+
+        def read(self) -> bytes:
+            return b'{"data":[{"id":"deepseek-v4-flash","owned_by":"deepseek"}]}'
+
+    def fake_open_url_direct(request, *, timeout: float) -> FakeResponse:
+        requests.append({"request": request, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "app.model_catalog.service.open_url_direct",
+        fake_open_url_direct,
+    )
+
+    models = DeepSeekCatalogClient().list_models()
+
+    assert [model.model_id for model in models] == ["deepseek-v4-flash"]
+    assert requests[0]["timeout"] == settings.model_catalog_deepseek_timeout_seconds
 
 
 def test_glm_5_2_accepts_documented_reasoning_and_output_limit(

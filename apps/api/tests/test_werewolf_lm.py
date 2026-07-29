@@ -2,6 +2,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -23,6 +24,7 @@ from app.werewolf.providers import (
     QwenProvider,
     create_model_provider,
     default_model_name,
+    open_url_direct,
 )
 from app.werewolf.streaming import (
     VisibleJsonFieldExtractor,
@@ -1921,7 +1923,7 @@ def test_urlopen_stream_transport_yields_sse_deltas(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("app.werewolf.providers.open_url_direct", fake_urlopen)
     provider = DeepSeekProvider()
 
     chunks = list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
@@ -1952,7 +1954,7 @@ def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
         return FakeResponse()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("app.werewolf.providers.open_url_direct", fake_urlopen)
     monkeypatch.setattr(
         "app.werewolf.providers.time.monotonic",
         lambda: next(monotonic_values),
@@ -1962,6 +1964,38 @@ def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
     with pytest.raises(RuntimeError, match="no content"):
         list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
     assert len(requests) == 1
+
+
+def test_open_url_direct_uses_an_empty_proxy_handler(monkeypatch) -> None:
+    opened: list[dict[str, object]] = []
+    response = object()
+
+    class FakeOpener:
+        def open(
+            self,
+            request: urllib.request.Request,
+            *,
+            timeout: float,
+        ) -> object:
+            opened.append({"request": request, "timeout": timeout})
+            return response
+
+    handlers: list[object] = []
+
+    def fake_build_opener(*values: object) -> FakeOpener:
+        handlers.extend(values)
+        return FakeOpener()
+
+    monkeypatch.setattr(urllib.request, "build_opener", fake_build_opener)
+    request = urllib.request.Request("https://model.example.test/responses")
+
+    result = open_url_direct(request, timeout=8)
+
+    assert result is response
+    assert opened == [{"request": request, "timeout": 8}]
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], urllib.request.ProxyHandler)
+    assert handlers[0].proxies == {}
 
 
 def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:
