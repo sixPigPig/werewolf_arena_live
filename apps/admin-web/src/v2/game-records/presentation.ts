@@ -131,6 +131,8 @@ const dayRoundEventTypes = new Set([
 const actionLabels: Record<string, string> = {
   judge_opening_speech: "开场播报",
   judge_nightfall_announcement: "夜幕播报",
+  judge_hunter_shot_announcement: "猎人开枪播报",
+  judge_werewolf_self_explosion: "狼人自爆播报",
   werewolf_attack_wake: "狼人睁眼",
   werewolf_attack_sleep: "狼人闭眼",
   judge_dawn_announcement: "天亮播报",
@@ -149,16 +151,34 @@ const actionLabels: Record<string, string> = {
   seer_investigate_result: "预言家查验结果",
   seer_investigate_sleep: "预言家闭眼",
   witch_wake: "女巫睁眼",
+  witch_attack_observation: "女巫查看袭击目标",
   witch_sleep: "女巫闭眼",
+  first_night_last_words: "首夜遗言",
   sheriff_run: "上警决定",
   sheriff_campaign_speech: "竞选发言",
   sheriff_withdraw: "退水决定",
   sheriff_vote: "警长投票",
+  sheriff_pk_speech: "警长平票发言",
+  sheriff_runoff_vote: "警长加赛投票",
+  sheriff_speech_order: "警长选择发言顺序",
   day_speech: "白天发言",
   day_debate_speech: "白天发言",
   exile_vote: "放逐投票",
+  exile_pk_speech: "放逐平票发言",
+  exile_runoff_vote: "放逐加赛投票",
   exile_last_words: "遗言",
+  hunter_death_shot: "猎人开枪决定",
+  sheriff_badge_resolution: "警徽去向决定",
   werewolf_self_explosion: "狼人自爆决定",
+};
+
+const abilityLabels: Record<string, string> = {
+  "werewolf.attack": "狼人袭击",
+  "guard.protect": "守卫守护",
+  "seer.investigate": "预言家查验",
+  "witch.heal": "女巫使用解药",
+  "witch.poison": "女巫使用毒药",
+  "hunter.death_shot": "猎人开枪",
 };
 
 const eventLabels: Record<string, string> = {
@@ -465,9 +485,13 @@ export function phaseLabel(phaseId: string): string {
 export function actionLabel(actionType: string): string {
   if (actionLabels[actionType]) return actionLabels[actionType];
   if (actionType.startsWith("ability_") && actionType.endsWith("_decision")) {
-    return `${humanize(actionType.slice(8, -9))} 决策`;
+    return `${abilityLabel(actionType.slice(8, -9))}决策`;
   }
   return humanize(actionType);
+}
+
+export function abilityLabel(abilityId: string): string {
+  return abilityLabels[abilityId] ?? humanize(abilityId);
 }
 
 export function formatDuration(milliseconds: number | null): string {

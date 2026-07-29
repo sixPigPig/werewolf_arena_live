@@ -44,9 +44,60 @@ const identities: V2PlayerIdentity[] = [
 ];
 
 describe("V2 game record presentation", () => {
-  it("distinguishes the sheriff signup decision from the campaign speech", () => {
-    expect(actionLabel("sheriff_run")).toBe("上警决定");
-    expect(actionLabel("sheriff_campaign_speech")).toBe("竞选发言");
+  it("localizes every action emitted by the V2 engines", () => {
+    const labels = {
+      judge_opening_speech: "开场播报",
+      judge_nightfall_announcement: "夜幕播报",
+      judge_hunter_shot_announcement: "猎人开枪播报",
+      judge_werewolf_self_explosion: "狼人自爆播报",
+      werewolf_attack_wake: "狼人睁眼",
+      werewolf_attack_sleep: "狼人闭眼",
+      judge_dawn_announcement: "天亮播报",
+      judge_public_discussion_opening: "白天讨论开场",
+      judge_sheriff_election_opening: "警长竞选开场",
+      judge_sheriff_elected: "警长产生播报",
+      judge_sheriff_badge_result: "警徽去向播报",
+      judge_sheriff_badge_destroyed: "警徽流失播报",
+      judge_exile_result: "放逐结果播报",
+      judge_no_exile: "无人放逐播报",
+      judge_day_summary: "日间总结",
+      judge_game_completed: "对局结束播报",
+      guard_protect_wake: "守卫睁眼",
+      guard_protect_sleep: "守卫闭眼",
+      seer_investigate_wake: "预言家睁眼",
+      seer_investigate_result: "预言家查验结果",
+      seer_investigate_sleep: "预言家闭眼",
+      witch_wake: "女巫睁眼",
+      witch_attack_observation: "女巫查看袭击目标",
+      witch_sleep: "女巫闭眼",
+      first_night_last_words: "首夜遗言",
+      sheriff_run: "上警决定",
+      sheriff_campaign_speech: "竞选发言",
+      sheriff_withdraw: "退水决定",
+      sheriff_vote: "警长投票",
+      sheriff_pk_speech: "警长平票发言",
+      sheriff_runoff_vote: "警长加赛投票",
+      sheriff_speech_order: "警长选择发言顺序",
+      day_speech: "白天发言",
+      day_debate_speech: "白天发言",
+      exile_vote: "放逐投票",
+      exile_pk_speech: "放逐平票发言",
+      exile_runoff_vote: "放逐加赛投票",
+      exile_last_words: "遗言",
+      hunter_death_shot: "猎人开枪决定",
+      sheriff_badge_resolution: "警徽去向决定",
+      werewolf_self_explosion: "狼人自爆决定",
+      "ability_werewolf.attack_decision": "狼人袭击决策",
+      "ability_guard.protect_decision": "守卫守护决策",
+      "ability_seer.investigate_decision": "预言家查验决策",
+      "ability_witch.heal_decision": "女巫使用解药决策",
+      "ability_witch.poison_decision": "女巫使用毒药决策",
+      "ability_hunter.death_shot_decision": "猎人开枪决策",
+    };
+
+    for (const [actionType, expected] of Object.entries(labels)) {
+      expect(actionLabel(actionType)).toBe(expected);
+    }
   });
 
   it("uses the persisted round number for numbered night labels", () => {

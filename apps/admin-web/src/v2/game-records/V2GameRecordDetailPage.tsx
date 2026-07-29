@@ -47,6 +47,7 @@ import {
   liveRefreshInterval,
 } from "@/v2/game-records/live-refresh";
 import {
+  abilityLabel,
   buildV2RoundSummaries,
   buildV2Timeline,
   formatClock,
@@ -2127,18 +2128,6 @@ function windowStateLabel(state: string | null): string {
   if (state === "open") return "进行中";
   if (state === "closed") return "已结算";
   return state ?? "未知状态";
-}
-
-function abilityLabel(value: string): string {
-  const labels: Record<string, string> = {
-    "werewolf.attack": "狼人袭击",
-    "guard.protect": "守卫守护",
-    "seer.investigate": "预言家查验",
-    "witch.heal": "女巫解药",
-    "witch.poison": "女巫毒药",
-    "hunter.death_shot": "猎人开枪",
-  };
-  return labels[value] ?? value;
 }
 
 function activationResultLabel(activation: Record<string, unknown>): string {
