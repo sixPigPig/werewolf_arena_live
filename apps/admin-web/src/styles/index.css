@@ -6559,8 +6559,14 @@ a {
 
 .v2-inspector-panel {
   display: grid;
+  min-width: 0;
   gap: 16px;
   padding: 0 0 24px;
+}
+
+.v2-inspector-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .v2-inspector-panel section > p {
@@ -6663,7 +6669,13 @@ a {
   overflow-wrap: anywhere;
 }
 
+.v2-readable-field > * {
+  min-width: 0;
+}
+
 .v2-readable-field.is-wide {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
   padding-top: 8px;
   border-top: 1px solid #f2f4f7;
 }
@@ -6883,6 +6895,11 @@ a {
   .v2-readable-groups,
   .v2-readable-fields {
     grid-template-columns: 1fr;
+  }
+
+  .v2-readable-field {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .models-heading,

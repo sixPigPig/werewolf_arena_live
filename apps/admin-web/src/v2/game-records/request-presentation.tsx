@@ -1,5 +1,7 @@
+import { CheckOutlined, CopyOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
+import Button from "antd/es/button";
 import Collapse from "antd/es/collapse";
 import Descriptions from "antd/es/descriptions";
 import Empty from "antd/es/empty";
@@ -262,6 +264,12 @@ export function ReadableModelInput({
   );
   return (
     <div className="v2-inspector-panel">
+      <div className="v2-inspector-actions">
+        <JsonCopyButton
+          label="复制完整输入 JSON"
+          value={request.request_payload}
+        />
+      </div>
       {request.input_source === "reconstructed" ? (
         <Alert
           description="该历史请求早于完整输入持久化；这里根据当时保存的动作上下文和当前模板重建，不能视为逐字原始请求。"
@@ -406,6 +414,15 @@ export function ReadableModelOutput({
 
   return (
     <div className="v2-inspector-panel">
+      <div className="v2-inspector-actions">
+        <JsonCopyButton
+          label="复制完整输出 JSON"
+          value={{
+            raw_response: request.raw_response,
+            parsed_output: request.parsed_output,
+          }}
+        />
+      </div>
       {request.output_source === "legacy_inferred" ? (
         <Alert
           description="该历史请求没有保存供应商原始响应；下方结果来自已提交的展示文本。"
@@ -470,6 +487,41 @@ function numericField(
   return typeof candidate === "number" && Number.isFinite(candidate)
     ? candidate
     : null;
+}
+
+function JsonCopyButton({
+  label,
+  value,
+}: {
+  label: string;
+  value: unknown;
+}) {
+  const [copyState, setCopyState] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
+  return (
+    <Button
+      aria-label={label}
+      danger={copyState === "failed"}
+      icon={copyState === "copied" ? <CheckOutlined /> : <CopyOutlined />}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(prettyJson(value));
+          setCopyState("copied");
+        } catch {
+          setCopyState("failed");
+        }
+      }}
+      size="small"
+      type="default"
+    >
+      {copyState === "copied"
+        ? "已复制"
+        : copyState === "failed"
+          ? "复制失败，请重试"
+          : label}
+    </Button>
+  );
 }
 
 export function ReadableRawEvents({

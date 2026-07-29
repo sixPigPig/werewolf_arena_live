@@ -821,6 +821,15 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    const inputCopyButton = within(inputPanel).getByRole("button", {
+      name: "复制完整输入 JSON",
+    });
+    expect(inputCopyButton).toBeVisible();
+    await user.click(inputCopyButton);
+    expect(inputCopyButton).toHaveTextContent("已复制");
+    expect(await navigator.clipboard.readText()).toBe(
+      JSON.stringify(detail.model_requests[0].request_payload, null, 2),
+    );
     expect(
       within(inputPanel).getByText("你是狼人杀法官，只输出一句开场词。"),
     ).toBeVisible();
@@ -848,6 +857,22 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    const outputCopyButton = within(outputPanel).getByRole("button", {
+      name: "复制完整输出 JSON",
+    });
+    expect(outputCopyButton).toBeVisible();
+    await user.click(outputCopyButton);
+    expect(outputCopyButton).toHaveTextContent("已复制");
+    expect(await navigator.clipboard.readText()).toBe(
+      JSON.stringify(
+        {
+          raw_response: detail.model_requests[0].raw_response,
+          parsed_output: detail.model_requests[0].parsed_output,
+        },
+        null,
+        2,
+      ),
+    );
     expect(
       within(outputPanel).getByText("旁路观察（未影响对局，1 项）"),
     ).toBeVisible();
