@@ -44,6 +44,7 @@ export type V2PhaseGroup = {
 
 export type V2RoundSummary = {
   roundNo: number;
+  reachedDay: boolean;
   status: "running" | "succeeded" | "failed" | "canceled";
   startedAt: string;
   endedAt: string | null;
@@ -69,6 +70,7 @@ export type V2RoundHighlight = {
 
 type V2RoundAccumulator = {
   roundNo: number;
+  reachedDay: boolean;
   startedAt: string;
   lastEventAt: string;
   firstRecordSeq: number;
@@ -115,6 +117,15 @@ const milestoneEventTypes = new Set([
   "sheriff_vote_resolved",
   "exile_resolved",
   "game_completed",
+]);
+
+const dayRoundEventTypes = new Set([
+  "sheriff_election_started",
+  "sheriff_elected",
+  "sheriff_badge_destroyed",
+  "sheriff_vote_resolved",
+  "player_exiled",
+  "exile_resolved",
 ]);
 
 const actionLabels: Record<string, string> = {
@@ -195,6 +206,7 @@ export function buildV2RoundSummaries(
     }
     const created = {
       roundNo,
+      reachedDay: false,
       startedAt: event.created_at,
       lastEventAt: event.created_at,
       firstRecordSeq: event.record_seq,
@@ -229,6 +241,13 @@ export function buildV2RoundSummaries(
     if (roundNo === null) continue;
     currentRound = roundNo;
     const round = touchRound(roundNo, event);
+    if (
+      stringValue(event.payload.phase_id)?.startsWith("day_") ||
+      stringValue(actionContext.phase_id)?.startsWith("day_") ||
+      dayRoundEventTypes.has(event.event_type)
+    ) {
+      round.reachedDay = true;
+    }
 
     if (event.event_type === "action_window_opened" && windowId) {
       roundByWindowId.set(windowId, roundNo);
@@ -261,6 +280,7 @@ export function buildV2RoundSummaries(
           : "running";
     return {
       roundNo: round.roundNo,
+      reachedDay: round.reachedDay,
       status,
       startedAt: round.startedAt,
       endedAt:
@@ -422,7 +442,10 @@ export function groupV2Phases(
       phaseId,
       label: phaseLabel(phaseId),
       items: phaseItems,
-      modelRequestCount: phaseItems.filter((item) => item.modelRequest).length,
+      modelRequestCount: phaseItems.reduce(
+        (count, item) => count + item.modelRequests.length,
+        0,
+      ),
       failureCount: phaseItems.filter((item) => item.status === "failed").length,
       isCurrent: phaseId === currentPhaseId,
     };
@@ -431,11 +454,11 @@ export function groupV2Phases(
 
 export function phaseLabel(phaseId: string): string {
   if (phaseId === "opening") return "开场";
-  if (phaseId === "first_night") return "第一夜";
+  if (phaseId === "first_night") return "第 1 夜";
   const day = /^day_(\d+)$/.exec(phaseId);
   if (day) return `第 ${day[1]} 天`;
   const night = /^night_(\d+)$/.exec(phaseId);
-  if (night) return `第 ${Number(night[1]) + 1} 夜`;
+  if (night) return `第 ${night[1]} 夜`;
   return humanize(phaseId);
 }
 

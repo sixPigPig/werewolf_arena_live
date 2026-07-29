@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   EyeOutlined,
   LoadingOutlined,
+  MinusCircleFilled,
   SearchOutlined,
   SoundOutlined,
   SyncOutlined,
@@ -664,6 +665,7 @@ function V2GameRecordWorkspace({
 
       <section className="v2-record-workspace">
         <PhaseRail
+          gameStatus={game.status}
           onSelect={(phaseId) =>
             setPhaseFilter((current) =>
               current === phaseId ? "all" : phaseId,
@@ -792,7 +794,9 @@ function RoundSummaryPanel({
               <header>
                 <div>
                   <Typography.Text type="secondary">
-                    NIGHT {summary.roundNo} → DAY {summary.roundNo}
+                    {summary.reachedDay
+                      ? `NIGHT ${summary.roundNo} → DAY ${summary.roundNo}`
+                      : `NIGHT ${summary.roundNo}`}
                   </Typography.Text>
                   <Typography.Title level={5}>
                     第 {summary.roundNo} 轮
@@ -894,6 +898,11 @@ function OmniscientLivePanel({
     currentAction?.actorLabel ??
     "等待下一位行动者";
   const active = isLiveV2StatusActive(game.status);
+  const latestNightLabel = nightWindowLabel(
+    latestWindow,
+    game.action_windows,
+    game.events,
+  );
 
   return (
     <section aria-label="实时全知态势" className="v2-omniscient-panel">
@@ -944,7 +953,7 @@ function OmniscientLivePanel({
         <LiveOverviewCard
           detail={nightResolutionSummary(latestWindow, identityById)}
           label="最近夜间结算"
-          value={nightWindowLabel(latestWindow)}
+          value={latestNightLabel}
         />
       </div>
 
@@ -1015,7 +1024,7 @@ function OmniscientLivePanel({
             <Typography.Title level={5}>最近私密行动</Typography.Title>
             <Typography.Text type="secondary">
               {latestWindow
-                ? `${nightWindowLabel(latestWindow)} · ${windowStateLabel(
+                ? `${latestNightLabel} · ${windowStateLabel(
                     recordText(latestWindow.state),
                   )}`
                 : "尚无夜间行动窗口"}
@@ -1121,10 +1130,12 @@ function SummaryMetric({ label, value }: { label: string; value: string }) {
 }
 
 function PhaseRail({
+  gameStatus,
   phases,
   selectedPhaseId,
   onSelect,
 }: {
+  gameStatus: string;
   phases: ReturnType<typeof groupV2Phases>;
   selectedPhaseId: string;
   onSelect: (phaseId: string) => void;
@@ -1133,38 +1144,41 @@ function PhaseRail({
     <aside className="v2-phase-rail">
       <Typography.Title level={5}>阶段进度</Typography.Title>
       <nav aria-label="对局阶段">
-        {phases.map((phase) => (
-          <button
-            aria-current={
-              selectedPhaseId === phase.phaseId ? "location" : undefined
-            }
-            className={
-              selectedPhaseId === phase.phaseId
-                ? "v2-phase-button is-selected"
-                : "v2-phase-button"
-            }
-            key={phase.phaseId}
-            onClick={() => onSelect(phase.phaseId)}
-            type="button"
-          >
-            <span>
-              <span
-                className={`v2-phase-status is-${phaseStatus(
-                  phase.failureCount,
-                  phase.isCurrent,
-                )}`}
-              >
-                <StatusIcon
-                  status={phaseStatus(phase.failureCount, phase.isCurrent)}
-                />
+        {phases.map((phase) => {
+          const progressStatus = phaseStatus(
+            phase.failureCount,
+            phase.isCurrent,
+            gameStatus,
+          );
+          return (
+            <button
+              aria-current={
+                selectedPhaseId === phase.phaseId ? "location" : undefined
+              }
+              aria-label={`${phase.label}，${statusLabel(progressStatus)}，${phase.items.length} 步，${phase.modelRequestCount} 次模型请求`}
+              className={
+                selectedPhaseId === phase.phaseId
+                  ? "v2-phase-button is-selected"
+                  : "v2-phase-button"
+              }
+              key={phase.phaseId}
+              onClick={() => onSelect(phase.phaseId)}
+              type="button"
+            >
+              <span>
+                <span
+                  className={`v2-phase-status is-${progressStatus}`}
+                >
+                  <StatusIcon status={progressStatus} />
+                </span>
+                <strong>{phase.label}</strong>
               </span>
-              <strong>{phase.label}</strong>
-            </span>
-            <small>
-              {phase.items.length} 步 · {phase.modelRequestCount} 次模型
-            </small>
-          </button>
-        ))}
+              <small>
+                {phase.items.length} 步 · {phase.modelRequestCount} 次模型请求
+              </small>
+            </button>
+          );
+        })}
       </nav>
     </aside>
   );
@@ -1942,11 +1956,14 @@ function RecordSection({
 function StatusIcon({
   status,
 }: {
-  status: "running" | "succeeded" | "failed";
+  status: "running" | "succeeded" | "failed" | "canceled";
 }) {
-  if (status === "failed") return <CloseCircleFilled />;
-  if (status === "running") return <LoadingOutlined spin />;
-  return <CheckCircleFilled />;
+  if (status === "failed") return <CloseCircleFilled aria-hidden="true" />;
+  if (status === "canceled") return <MinusCircleFilled aria-hidden="true" />;
+  if (status === "running") {
+    return <LoadingOutlined aria-hidden="true" spin />;
+  }
+  return <CheckCircleFilled aria-hidden="true" />;
 }
 
 function audienceLabel(audience: string) {
@@ -1992,9 +2009,13 @@ function statusColor(status: string) {
 function phaseStatus(
   failureCount: number,
   isCurrent: boolean,
-): "running" | "succeeded" | "failed" {
+  gameStatus: string,
+): "running" | "succeeded" | "failed" | "canceled" {
   if (failureCount > 0) return "failed";
-  return isCurrent ? "running" : "succeeded";
+  if (!isCurrent) return "succeeded";
+  if (gameStatus === "failed") return "failed";
+  if (gameStatus === "canceled") return "canceled";
+  return isLiveV2StatusActive(gameStatus) ? "running" : "succeeded";
 }
 
 function sceneLabel(phaseId: string, actionType: string | null): string {
@@ -2038,10 +2059,31 @@ function phaseStateLabel(state: string): string {
 
 function nightWindowLabel(
   window: Record<string, unknown> | null,
+  windows: Array<Record<string, unknown>>,
+  events: V2GameRecordEvent[],
 ): string {
   if (!window) return "尚未开始";
-  const sequence = recordNumber(window.window_seq);
-  return sequence === null ? "夜间行动窗口" : `第 ${sequence} 个夜间窗口`;
+  const windowId = recordText(window.window_id);
+  const opened = events.find(
+    (event) =>
+      event.event_type === "action_window_opened" &&
+      recordText(event.payload.window_id) === windowId,
+  );
+  const persistedRoundNo = recordNumber(opened?.payload.round_no);
+  if (persistedRoundNo !== null && persistedRoundNo >= 1) {
+    return `第 ${persistedRoundNo} 夜`;
+  }
+  const orderedNightWindows = [...windows]
+    .filter((item) => recordText(item.window_type) === "night")
+    .sort(
+      (left, right) =>
+        (recordNumber(left.window_seq) ?? 0) -
+        (recordNumber(right.window_seq) ?? 0),
+    );
+  const inferredIndex = orderedNightWindows.findIndex(
+    (item) => recordText(item.window_id) === windowId,
+  );
+  return inferredIndex >= 0 ? `第 ${inferredIndex + 1} 夜` : "夜间行动窗口";
 }
 
 function nightResolutionSummary(
@@ -2179,6 +2221,7 @@ function deathCauseLabel(value: string | null): string {
     exile: "投票放逐",
     hunter_shot: "猎人带走",
     self_explosion: "狼人自爆",
+    werewolf_self_explosion: "狼人自爆",
   };
   return value ? (labels[value] ?? value) : "—";
 }

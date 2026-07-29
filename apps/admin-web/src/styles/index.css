@@ -6414,6 +6414,10 @@ a {
   color: #d92d20;
 }
 
+.v2-phase-status.is-canceled {
+  color: #f79009;
+}
+
 .v2-action-timeline {
   padding: 18px 14px 28px;
   overflow: hidden;

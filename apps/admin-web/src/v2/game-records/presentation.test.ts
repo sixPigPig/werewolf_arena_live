@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   actionLabel,
   buildV2RoundSummaries,
+  phaseLabel,
 } from "@/v2/game-records/presentation";
 import type {
   V2GameRecordEvent,
@@ -46,6 +47,14 @@ describe("V2 game record presentation", () => {
   it("distinguishes the sheriff signup decision from the campaign speech", () => {
     expect(actionLabel("sheriff_run")).toBe("上警决定");
     expect(actionLabel("sheriff_campaign_speech")).toBe("竞选发言");
+  });
+
+  it("uses the persisted round number for numbered night labels", () => {
+    expect(phaseLabel("first_night")).toBe("第 1 夜");
+    expect(phaseLabel("day_1")).toBe("第 1 天");
+    expect(phaseLabel("night_2")).toBe("第 2 夜");
+    expect(phaseLabel("day_2")).toBe("第 2 天");
+    expect(phaseLabel("night_3")).toBe("第 3 夜");
   });
 
   it("builds deterministic round digests from persisted settlement events", () => {
@@ -108,6 +117,7 @@ describe("V2 game record presentation", () => {
     expect(summaries).toHaveLength(2);
     expect(summaries[0]).toMatchObject({
       roundNo: 1,
+      reachedDay: true,
       status: "succeeded",
       firstRecordSeq: 1,
       lastRecordSeq: 5,
@@ -120,6 +130,7 @@ describe("V2 game record presentation", () => {
     ]);
     expect(summaries[1]).toMatchObject({
       roundNo: 2,
+      reachedDay: false,
       status: "succeeded",
       firstRecordSeq: 6,
       lastRecordSeq: 10,

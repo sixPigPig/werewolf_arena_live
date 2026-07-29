@@ -517,6 +517,114 @@ const roundSummaryDetail = {
   ],
 };
 
+const phaseIntegrityDetail = {
+  ...detail,
+  title: "阶段完整性验收",
+  status: "awaiting_observation",
+  last_record_seq: 11,
+  phase_id: "day_2",
+  phase_state: "game_completed",
+  player_identities: detail.player_identities.map((identity) =>
+    identity.player_id === "profile-2"
+      ? { ...identity, death_cause: "werewolf_self_explosion" }
+      : identity,
+  ),
+  events: [
+    event(1, "game_phase_changed", {
+      previous_phase_id: "opening",
+      phase_id: "first_night",
+      phase_state: "nightfall_ready",
+    }),
+    event(2, "action_window_opened", {
+      window_id: "v2_window_night_1",
+      window_type: "night",
+      round_no: 1,
+    }),
+    event(3, "action_window_closed", {
+      window_id: "v2_window_night_1",
+      result: { peaceful: true, deaths: [] },
+    }),
+    event(4, "game_phase_changed", {
+      previous_phase_id: "first_night",
+      phase_id: "day_1",
+      phase_state: "dawn_reactions_ready",
+    }),
+    event(5, "action_window_opened", {
+      window_id: "v2_window_dawn_reaction",
+      window_type: "dawn_reaction",
+    }),
+    event(6, "action_window_closed", {
+      window_id: "v2_window_dawn_reaction",
+      result: { completed: true },
+    }),
+    event(7, "game_phase_changed", {
+      previous_phase_id: "day_1",
+      phase_id: "night_2",
+      phase_state: "nightfall_ready",
+    }),
+    event(8, "action_window_opened", {
+      window_id: "v2_window_night_2",
+      window_type: "night",
+      round_no: 2,
+    }),
+    event(9, "action_window_closed", {
+      window_id: "v2_window_night_2",
+      result: {
+        peaceful: false,
+        deaths: [
+          { player_id: "profile-2", cause: "werewolf_self_explosion" },
+        ],
+      },
+    }),
+    event(10, "game_phase_changed", {
+      previous_phase_id: "night_2",
+      phase_id: "day_2",
+      phase_state: "game_completed",
+    }),
+    event(11, "game_completed", {
+      round_no: 2,
+      winner: "villagers",
+      reason: "deterministic_win_condition",
+    }),
+  ],
+  model_requests: [],
+  presentations: [],
+  action_windows: [
+    {
+      window_id: "v2_window_night_1",
+      run_id: runId,
+      window_seq: 1,
+      window_type: "night",
+      state: "closed",
+      plan: [],
+      result: { peaceful: true, deaths: [] },
+    },
+    {
+      window_id: "v2_window_dawn_reaction",
+      run_id: runId,
+      window_seq: 2,
+      window_type: "dawn_reaction",
+      state: "closed",
+      plan: [],
+      result: { completed: true },
+    },
+    {
+      window_id: "v2_window_night_2",
+      run_id: runId,
+      window_seq: 3,
+      window_type: "night",
+      state: "closed",
+      plan: [],
+      result: {
+        peaceful: false,
+        deaths: [
+          { player_id: "profile-2", cause: "werewolf_self_explosion" },
+        ],
+      },
+    },
+  ],
+};
+
 function event(
   recordSeq: number,
   eventType: string,
@@ -855,6 +963,10 @@ describe("V2 game record detail workspace", () => {
       await screen.findByRole("heading", { name: "模型重试验收" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/重试 1 次/)).toBeVisible();
+    const phaseRail = screen.getByRole("navigation", { name: "对局阶段" });
+    expect(
+      within(phaseRail).getByRole("button", { name: /2 次模型请求/ }),
+    ).toBeVisible();
 
     await user.click(
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
@@ -919,6 +1031,27 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
     expect(within(summary).getByText("对局结束：好人阵营获胜")).toBeVisible();
     expect(within(summary).getByText("事实 #1–#6")).toBeVisible();
+  });
+
+  it("keeps phase, night-window and terminal labels aligned to persisted rounds", async () => {
+    stubRecordFetch(phaseIntegrityDetail);
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "阶段完整性验收" }),
+    ).toBeVisible();
+    expect(screen.getAllByText("第 1 夜").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("第 2 夜").length).toBeGreaterThan(1);
+    expect(screen.queryByText("第 3 个夜间窗口")).not.toBeInTheDocument();
+    expect(screen.getAllByText("狼人自爆").length).toBeGreaterThan(0);
+
+    const currentPhase = screen.getByRole("button", { name: /第 2 天/ });
+    expect(
+      currentPhase.querySelector(".v2-phase-status.is-succeeded"),
+    ).not.toBeNull();
+    expect(
+      currentPhase.querySelector(".v2-phase-status.is-running"),
+    ).toBeNull();
   });
 
   it("refreshes active games every two seconds and stops polling terminal games", () => {
