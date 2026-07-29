@@ -205,7 +205,7 @@ describe("rule editor", () => {
     const user = userEvent.setup();
     renderRoute("/content/rules/new");
     expect(await screen.findByRole("heading", { name: "新建游戏规则" })).toBeInTheDocument();
-    for (const name of ["规则 ID", "显示顺序", "规则名称", "规则说明", "复杂度", "预计时长", "规则标签", "胜利条件", "启用警长", "警长票权", "发言规则", "允许狼人自爆", "警徽规则"]) expect(screen.getByLabelText(name)).toBeInTheDocument();
+    for (const name of ["规则 ID", "显示顺序", "规则名称", "规则说明", "复杂度", "预计时长", "规则标签", "胜利条件", "启用警长", "警长票权", "发言规则", "狼人刀口规则", "允许狼人主动空刀", "允许狼人选择狼队目标（含自刀）", "允许狼人自爆", "警徽规则"]) expect(screen.getByLabelText(name)).toBeInTheDocument();
     const roleInputs = screen.getAllByTestId("role-count");
     expect(roleInputs.map((node) => node.getAttribute("aria-label"))).toEqual(ruleSetOptions.roles.map((role) => `${role.label}数量`));
     await user.clear(screen.getByLabelText("村民数量")); await user.type(screen.getByLabelText("村民数量"), "5");
@@ -290,7 +290,7 @@ describe("rule editor", () => {
     await user.click(screen.getByLabelText("允许首夜遗言"));
     await user.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(createBody).toBeDefined());
-    expect(createBody).toEqual({ id: "new_clean", display_order: 4, config: { name: "清理后的规则", description: "说明", complexity: "简单", estimated_duration: "30 分钟", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 1, villager: 5, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 }, win_condition: "wolves_gte_others", sheriff_enabled: false, sheriff_vote_weight: 1.5, speech_policy: "sequential", werewolf_self_explosion_enabled: true, first_night_last_words_enabled: true, sheriff_badge_bomb_policy: "double" } });
+    expect(createBody).toEqual({ id: "new_clean", display_order: 4, config: { name: "清理后的规则", description: "说明", complexity: "简单", estimated_duration: "30 分钟", rule_tags: ["标签一", "标签二"], role_counts: { werewolf: 1, villager: 5, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 }, win_condition: "wolves_gte_others", sheriff_enabled: false, sheriff_vote_weight: 1.5, speech_policy: "sequential", werewolf_self_explosion_enabled: true, first_night_last_words_enabled: true, sheriff_badge_bomb_policy: "double", werewolf_attack_policy: { resolution: "plurality_rotating_tiebreak", allow_no_attack: false, allow_wolf_target: false } } });
   });
 
   it.each([
@@ -533,7 +533,7 @@ describe("rule editor", () => {
     ["name", "text", "规则名称", "变更名称"], ["description", "text", "规则说明", "变更说明"], ["complexity", "text", "复杂度", "困难"], ["duration", "text", "预计时长", "60 分钟"],
     ["tags", "text", "规则标签", "新标签"], ["order", "text", "显示顺序", "9"],
     ["werewolf count", "text", "狼人数量", "2"], ["villager count", "text", "村民数量", "4"], ["seer count", "text", "预言家数量", "0"], ["guard count", "text", "守卫数量", "1"], ["witch count", "text", "女巫数量", "0"], ["hunter count", "text", "猎人数量", "0"], ["idiot count", "text", "白痴数量", "1"],
-    ["win condition", "select", "胜利条件", "屠边"], ["sheriff enabled", "check", "启用警长", ""], ["sheriff weight", "select", "警长票权", "2"], ["speech", "select", "发言规则", "顺序发言"], ["self explosion", "check", "允许狼人自爆", ""], ["badge policy", "select", "警徽规则", "不撕警徽"],
+    ["win condition", "select", "胜利条件", "屠边"], ["sheriff enabled", "check", "启用警长", ""], ["sheriff weight", "select", "警长票权", "2"], ["speech", "select", "发言规则", "顺序发言"], ["attack resolution", "select", "狼人刀口规则", "多数票，平票确定性随机"], ["allow no attack", "check", "允许狼人主动空刀", ""], ["allow wolf target", "check", "允许狼人选择狼队目标（含自刀）", ""], ["self explosion", "check", "允许狼人自爆", ""], ["badge policy", "select", "警徽规则", "不撕警徽"],
   ])("makes validation stale after editing %s and requires save plus revalidation", async (_name, kind, label, value) => {
     const user = userEvent.setup(); renderRoute("/content/rules/preview_draft");
     await user.click(await screen.findByRole("button", { name: "校验规则" })); expect(await screen.findByRole("button", { name: "发布规则" })).toBeEnabled();

@@ -625,6 +625,50 @@ def test_canonical_config_has_only_normalized_management_fields() -> None:
     )
 
 
+def test_werewolf_attack_policy_is_frozen_but_legacy_config_hash_shape_is_preserved() -> None:
+    legacy = normalize_rule_set_config(valid_config())
+    explicit = normalize_rule_set_config(
+        valid_config(
+            werewolf_attack_policy={
+                "resolution": "plurality_rotating_tiebreak",
+                "allow_no_attack": True,
+                "allow_wolf_target": True,
+            }
+        )
+    )
+
+    assert legacy.werewolf_attack_resolution is None
+    assert "werewolf_attack_policy" not in canonical_rule_set_config(legacy)
+    legacy_compiled = compile_rule_set_config(
+        "legacy_rule",
+        legacy,
+        revision_id="legacy-revision",
+        revision_no=1,
+    )
+    assert "werewolf_attack_policy" not in legacy_compiled.snapshot
+    assert legacy_compiled.rule_set.werewolf_attack_resolution == "unanimous_no_attack"
+
+    assert canonical_rule_set_config(explicit)["werewolf_attack_policy"] == {
+        "resolution": "plurality_rotating_tiebreak",
+        "allow_no_attack": True,
+        "allow_wolf_target": True,
+    }
+    explicit_compiled = compile_rule_set_config(
+        "explicit_rule",
+        explicit,
+        revision_id="explicit-revision",
+        revision_no=1,
+    )
+    assert explicit_compiled.snapshot["werewolf_attack_policy"] == {
+        "resolution": "plurality_rotating_tiebreak",
+        "allow_no_attack": True,
+        "allow_wolf_target": True,
+    }
+    assert "平票时由本夜轮值狼人归票" in explicit_compiled.snapshot["rule_text"]
+    assert "主动选择空刀" in explicit_compiled.snapshot["rule_text"]
+    assert "存活狼人选为夜间袭击目标" in explicit_compiled.snapshot["rule_text"]
+
+
 def test_content_hash_excludes_stable_id_and_revision_metadata() -> None:
     config = normalize_rule_set_config(valid_config())
     first = compile_rule_set_config(

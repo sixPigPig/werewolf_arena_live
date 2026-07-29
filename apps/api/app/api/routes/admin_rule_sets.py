@@ -123,6 +123,20 @@ _BADGE_POLICIES = (
     {"value": "none", "label": "不撕警徽"},
     {"value": "double", "label": "双爆吞警徽"},
 )
+_WEREWOLF_ATTACK_RESOLUTIONS = (
+    {
+        "value": "plurality_rotating_tiebreak",
+        "label": "多数票，平票轮值狼裁决（推荐）",
+    },
+    {
+        "value": "plurality_seeded_random",
+        "label": "多数票，平票确定性随机",
+    },
+    {
+        "value": "unanimous_no_attack",
+        "label": "必须全票一致，否则空刀",
+    },
+)
 _STATUSES = (
     {"value": "draft", "label": "草稿"},
     {"value": "published", "label": "已发布"},
@@ -159,6 +173,7 @@ def get_rule_set_options(
         sheriff_vote_weights=[1.0, 1.5, 2.0],
         speech_policies=list(_SPEECH_POLICIES),
         sheriff_badge_bomb_policies=list(_BADGE_POLICIES),
+        werewolf_attack_resolutions=list(_WEREWOLF_ATTACK_RESOLUTIONS),
         statuses=list(_STATUSES),
         sorts=list(_SORTS),
         constraints={

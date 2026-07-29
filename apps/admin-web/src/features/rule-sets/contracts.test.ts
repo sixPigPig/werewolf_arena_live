@@ -13,6 +13,7 @@ const config = {
   rule_tags: ["标准"], role_counts: { werewolf: 3, villager: 3, seer: 1, guard: 1, witch: 1, hunter: 0, idiot: 0 },
   win_condition: "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: 1.5,
   speech_policy: "sequential", werewolf_self_explosion_enabled: true, first_night_last_words_enabled: false, sheriff_badge_bomb_policy: "none",
+  werewolf_attack_policy: { resolution: "plurality_rotating_tiebreak", allow_no_attack: false, allow_wolf_target: false },
 };
 const revision = {
   id: "revision-1", rule_set_id: "standard_rule", revision_no: 1, state: "draft", schema_version: 1,
@@ -37,6 +38,7 @@ const options = {
   win_conditions: [{ value: "wolves_gte_others", label: "屠边" }], sheriff_vote_weights: [1, 1.5],
   speech_policies: [{ value: "sequential", label: "顺序" }],
   sheriff_badge_bomb_policies: [{ value: "none", label: "无" }], statuses: [{ value: "draft", label: "草稿" }],
+  werewolf_attack_resolutions: [{ value: "plurality_rotating_tiebreak", label: "多数票" }],
   sorts: [
     { value: "display_order", label: "顺序升序" },
     { value: "-display_order", label: "顺序降序" },
@@ -65,6 +67,7 @@ describe("rule-set response contracts", () => {
     { payload: { ...ruleSet, lock_version: 0 }, label: "lock_version" },
     { payload: { items: [], pagination: { page: 0, page_size: 20, total: 0, pages: 0 } }, label: "pagination" },
     { payload: { ...ruleSet, draft_revision: { ...revision, config: { ...config, role_counts: { ...config.role_counts, werewolf: -1 } } } }, label: "role_counts" },
+    { payload: { ...ruleSet, draft_revision: { ...revision, config: { ...config, werewolf_attack_policy: { ...config.werewolf_attack_policy, resolution: "majority" } } } }, label: "werewolf_attack_policy" },
   ])("rejects malformed payload $label", ({ payload }) => {
     const parse = typeof payload === "object" && payload !== null && "items" in payload
       ? parseAdminRuleSetList
@@ -102,6 +105,7 @@ describe("rule-set response contracts", () => {
     ["win condition", { ...options, win_conditions: [{ value: "unknown", label: "未知" }] }],
     ["speech policy", { ...options, speech_policies: [{ value: "unknown", label: "未知" }] }],
     ["badge policy", { ...options, sheriff_badge_bomb_policies: [{ value: "unknown", label: "未知" }] }],
+    ["werewolf attack resolution", { ...options, werewolf_attack_resolutions: [{ value: "unknown", label: "未知" }] }],
     ["status", { ...options, statuses: [{ value: "deleted", label: "已删除" }] }],
     ["sort", { ...options, sorts: [{ value: "-unknown", label: "未知" }] }],
   ])("rejects an unknown option %s", (_name, payload) => {
@@ -116,6 +120,7 @@ describe("rule-set response contracts", () => {
     "sheriff_vote_weights",
     "speech_policies",
     "sheriff_badge_bomb_policies",
+    "werewolf_attack_resolutions",
     "statuses",
     "sorts",
   ] as const)("rejects an empty required options array: %s", (key) => {

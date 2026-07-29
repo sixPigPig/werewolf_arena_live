@@ -11,9 +11,10 @@ describe("rule-set form model", () => {
       sheriff_vote_weights: [1.5, 2],
       speech_policies: [{ value: "sheriff_directed", label: "警长指定" }],
       sheriff_badge_bomb_policies: [{ value: "double", label: "双爆" }],
+      werewolf_attack_resolutions: [{ value: "plurality_seeded_random", label: "随机破平" }],
     };
     const input = defaultRuleSetInput(nonstandardOptions);
-    expect(input).toMatchObject({ id: "", display_order: 0, config: { win_condition: "slaughter_side", sheriff_vote_weight: 1.5, speech_policy: "sheriff_directed", sheriff_badge_bomb_policy: "double" } });
+    expect(input).toMatchObject({ id: "", display_order: 0, config: { win_condition: "slaughter_side", sheriff_vote_weight: 1.5, speech_policy: "sheriff_directed", sheriff_badge_bomb_policy: "double", werewolf_attack_policy: { resolution: "plurality_seeded_random", allow_no_attack: false, allow_wolf_target: false } } });
     expect(input.config.role_counts).toEqual({ werewolf: 1, villager: 0, seer: 0, guard: 0, witch: 0, hunter: 0, idiot: 0 });
   });
 

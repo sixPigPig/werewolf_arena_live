@@ -45,6 +45,16 @@ class AdminRuleRoleCounts(AdminRuleSetRequest):
     idiot: int = Field(ge=0)
 
 
+class AdminWerewolfAttackPolicy(AdminRuleSetRequest):
+    resolution: Literal[
+        "plurality_rotating_tiebreak",
+        "plurality_seeded_random",
+        "unanimous_no_attack",
+    ] = "plurality_rotating_tiebreak"
+    allow_no_attack: bool = False
+    allow_wolf_target: bool = False
+
+
 class AdminRuleSetConfig(AdminRuleSetRequest):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=1000)
@@ -59,6 +69,9 @@ class AdminRuleSetConfig(AdminRuleSetRequest):
     werewolf_self_explosion_enabled: bool
     first_night_last_words_enabled: bool
     sheriff_badge_bomb_policy: Literal["none", "double"]
+    werewolf_attack_policy: AdminWerewolfAttackPolicy = Field(
+        default_factory=AdminWerewolfAttackPolicy
+    )
 
 
 class AdminRuleSetCreate(AdminRuleSetRequest):
@@ -282,6 +295,7 @@ class AdminRuleSetOptionsResponse(BaseModel):
     sheriff_vote_weights: list[float]
     speech_policies: list[AdminRuleChoice]
     sheriff_badge_bomb_policies: list[AdminRuleChoice]
+    werewolf_attack_resolutions: list[AdminRuleChoice]
     statuses: list[AdminRuleChoice]
     sorts: list[AdminRuleChoice]
     constraints: AdminRuleSetConstraints

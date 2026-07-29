@@ -46,6 +46,27 @@ WIN_CONDITION_WOLVES_GTE_OTHERS = "wolves_gte_others"
 WIN_CONDITION_SLAUGHTER_SIDE = "slaughter_side"
 REVEAL_POLICY_HIDDEN = "hidden"
 
+WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK = (
+    "plurality_rotating_tiebreak"
+)
+WEREWOLF_ATTACK_RESOLUTION_PLURALITY_SEEDED_RANDOM = (
+    "plurality_seeded_random"
+)
+WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK = "unanimous_no_attack"
+DEFAULT_WEREWOLF_ATTACK_RESOLUTION = (
+    WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK
+)
+LEGACY_WEREWOLF_ATTACK_RESOLUTION = (
+    WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK
+)
+WEREWOLF_ATTACK_RESOLUTIONS = frozenset(
+    {
+        WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK,
+        WEREWOLF_ATTACK_RESOLUTION_PLURALITY_SEEDED_RANDOM,
+        WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK,
+    }
+)
+
 ROLE_CATEGORY_WEREWOLF = "werewolf"
 ROLE_CATEGORY_GOD = "god"
 ROLE_CATEGORY_CIVILIAN = "civilian"
@@ -112,6 +133,10 @@ class RuleSet:
     exile_last_words_enabled: bool = False
     first_night_last_words_enabled: bool = False
     sheriff_badge_bomb_policy: str = "none"
+    werewolf_attack_resolution: str = LEGACY_WEREWOLF_ATTACK_RESOLUTION
+    werewolf_allow_no_attack: bool = False
+    werewolf_allow_wolf_target: bool = False
+    werewolf_attack_policy_explicit: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,6 +295,7 @@ RULE_CLAUSES: tuple[RuleClause, ...] = (
         neutral_text_zh="狼人夜间只能袭击非狼人玩家，不能选择自己或狼人队友。",
         engine_constraint_ids=("engine.night.werewolf_attack.candidates_non_wolves",),
         actions=(ACTION_REMOVE,),
+        required_flags=("werewolf_non_wolf_targets",),
         prompt_slots=("public_fixed_rules",),
     ),
     RuleClause(
@@ -483,7 +509,12 @@ def rule_clauses_for_rule_set(
                     "exile_last_words_enabled",
                 )
                 if getattr(rule_set, field) is True
-            },
+            }
+            | (
+                {"werewolf_non_wolf_targets"}
+                if not rule_set.werewolf_allow_wolf_target
+                else set()
+            ),
             role=role,
             action=action,
             phase=phase,
@@ -536,6 +567,12 @@ def prompt_rule_clauses_from_snapshot(
         )
         if snapshot.get(field) is True
     }
+    attack_policy = snapshot.get("werewolf_attack_policy")
+    if not (
+        isinstance(attack_policy, Mapping)
+        and attack_policy.get("allow_wolf_target") is True
+    ):
+        enabled_flags.add("werewolf_non_wolf_targets")
     frozen_clauses = _prompt_safe_clauses_from_frozen_contract(snapshot)
     clauses = frozen_clauses if frozen_clauses is not None else RULE_CLAUSES
     return tuple(
@@ -946,11 +983,16 @@ def rule_set_summary(rule_set: RuleSet) -> dict[str, Any]:
         "speech_policy": rule_set.speech_policy,
         "speech_rounds": rule_set.speech_rounds,
         "rule_tags": list(rule_set.rule_tags),
+        "werewolf_attack_policy": {
+            "resolution": rule_set.werewolf_attack_resolution,
+            "allow_no_attack": rule_set.werewolf_allow_no_attack,
+            "allow_wolf_target": rule_set.werewolf_allow_wolf_target,
+        },
     }
 
 
 def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
-    return {
+    snapshot = {
         "id": rule_set.id,
         "version": rule_set.version,
         "name": rule_set.name,
@@ -982,6 +1024,13 @@ def rule_set_snapshot(rule_set: RuleSet) -> dict[str, Any]:
         "speech_rounds": rule_set.speech_rounds,
         "rule_tags": list(rule_set.rule_tags),
     }
+    if rule_set.werewolf_attack_policy_explicit:
+        snapshot["werewolf_attack_policy"] = {
+            "resolution": rule_set.werewolf_attack_resolution,
+            "allow_no_attack": rule_set.werewolf_allow_no_attack,
+            "allow_wolf_target": rule_set.werewolf_allow_wolf_target,
+        }
+    return snapshot
 
 
 def role_summary(rule_set: RuleSet) -> str:
@@ -1008,6 +1057,27 @@ def render_rule_text(rule_set: RuleSet) -> str:
         for action in rule_set.night_actions
         if action in night_action_text
     )
+    if ACTION_REMOVE in rule_set.night_actions:
+        resolution_text = {
+            WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK: (
+                "狼队共享完整夜间讨论后进行终局票；唯一最高票成为刀口，"
+                "平票时由本夜轮值狼人归票。"
+            ),
+            WEREWOLF_ATTACK_RESOLUTION_PLURALITY_SEEDED_RANDOM: (
+                "狼队共享完整夜间讨论后进行终局票；唯一最高票成为刀口，"
+                "平票时从并列目标中按本局种子裁决。"
+            ),
+            WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK: (
+                "狼队共享完整夜间讨论后进行终局票；只有全体存活狼人选择"
+                "同一目标才会袭击，否则空刀。"
+            ),
+        }.get(rule_set.werewolf_attack_resolution)
+        if resolution_text:
+            lines.append(resolution_text)
+        if rule_set.werewolf_allow_no_attack:
+            lines.append("狼人可以在终局票中主动选择空刀。")
+        if rule_set.werewolf_allow_wolf_target:
+            lines.append("狼人可以把一名存活狼人选为夜间袭击目标。")
     if any(role.role == "白痴" for role in rule_set.roles):
         lines.append("白痴首次被放逐时翻牌免死，之后失去投票权但仍可发言。")
     if rule_set.sheriff_enabled:

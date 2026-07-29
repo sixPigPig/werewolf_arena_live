@@ -9,6 +9,11 @@ if TYPE_CHECKING:
 
 
 RuleRoleId = Literal["werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot"]
+WerewolfAttackResolution = Literal[
+    "plurality_rotating_tiebreak",
+    "plurality_seeded_random",
+    "unanimous_no_attack",
+]
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,9 @@ class RuleSetConfig:
     werewolf_self_explosion_enabled: bool
     first_night_last_words_enabled: bool
     sheriff_badge_bomb_policy: Literal["none", "double"]
+    werewolf_attack_resolution: WerewolfAttackResolution | None = None
+    werewolf_allow_no_attack: bool = False
+    werewolf_allow_wolf_target: bool = False
 
     @property
     def player_count(self) -> int:

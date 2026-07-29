@@ -46,6 +46,7 @@ export const ruleSetOptions: RuleSetOptions = {
   win_conditions: [{ value: "wolves_gte_others", label: "狼人数量不少于好人" }, { value: "slaughter_side", label: "屠边" }],
   sheriff_vote_weights: [1, 1.5, 2], speech_policies: [{ value: "sequential", label: "顺序发言" }, { value: "sheriff_directed", label: "警长指定" }],
   sheriff_badge_bomb_policies: [{ value: "none", label: "不撕警徽" }, { value: "double", label: "双爆吞警徽" }],
+  werewolf_attack_resolutions: [{ value: "plurality_rotating_tiebreak", label: "多数票，平票轮值狼裁决（推荐）" }, { value: "plurality_seeded_random", label: "多数票，平票确定性随机" }, { value: "unanimous_no_attack", label: "必须全票一致，否则空刀" }],
   statuses: [{ value: "draft", label: "草稿" }, { value: "published", label: "已发布" }, { value: "archived", label: "已归档" }],
   sorts: ["display_order", "-display_order", "updated_at", "-updated_at", "name", "-name", "created_at", "-created_at"].map((value) => ({ value: value as RuleSetOptions["sorts"][number]["value"], label: value })) as RuleSetOptions["sorts"],
   constraints: { player_count_min: 6, player_count_max: 12, tags_max_items: 8, tag_max_length: 20, id_pattern: "^[a-z][a-z0-9_]{2,79}$", reason_min_length: 3, reason_max_length: 500 },
@@ -56,6 +57,7 @@ export const standardConfig: RuleSetConfig = {
   role_counts: { werewolf: 3, villager: 3, seer: 1, guard: 0, witch: 1, hunter: 1, idiot: 0 },
   win_condition: "wolves_gte_others", sheriff_enabled: true, sheriff_vote_weight: 1.5, speech_policy: "sheriff_directed",
   werewolf_self_explosion_enabled: true, first_night_last_words_enabled: true, sheriff_badge_bomb_policy: "double",
+  werewolf_attack_policy: { resolution: "plurality_rotating_tiebreak", allow_no_attack: false, allow_wolf_target: false },
 };
 
 export function fixtureRevision(ruleSetId: string, no: number, state: RuleSetRevision["state"], config: RuleSetConfig = standardConfig): RuleSetRevision {

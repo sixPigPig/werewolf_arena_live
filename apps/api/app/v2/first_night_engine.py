@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+import hashlib
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -52,6 +54,13 @@ class _WorkingNight:
     protected_target: str | None = None
     healed_target: str | None = None
     poisoned_target: str | None = None
+
+
+@dataclass(frozen=True)
+class _WerewolfAttackResolution:
+    target_player_id: str | None
+    reason: str
+    tiebreaker_player_id: str | None = None
 
 
 GroupHandler = Callable[[V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]]
@@ -307,11 +316,21 @@ class V2NightEngine:
         working: _WorkingNight,
     ) -> None:
         ability_id = "werewolf.attack"
-        wolves = [
-            player for player in state.players if player.alive and player.role_key == "werewolf"
-        ]
+        policy = _werewolf_attack_policy(state)
+        allow_no_attack = policy["allow_no_attack"] is True
+        allow_wolf_target = policy["allow_wolf_target"] is True
+        wolves = sorted(
+            (
+                player
+                for player in state.players
+                if player.alive and player.role_key == "werewolf"
+            ),
+            key=lambda player: player.seat,
+        )
         candidates = [
-            player for player in state.players if player.alive and player.role_key != "werewolf"
+            player
+            for player in state.players
+            if player.alive and (allow_wolf_target or player.role_key != "werewolf")
         ]
         if not wolves or not candidates:
             self._repository.skip_activation(
@@ -327,17 +346,14 @@ class V2NightEngine:
             objective=(
                 "唤醒本局唯一狼人并请其选择袭击目标"
                 if len(wolves) == 1
-                else "唤醒狼人团队并请他们依次实时商议袭击目标"
+                else "唤醒狼人团队；先分别提出建议，再共享完整私聊并进行最终投票"
             ),
-            context={"ability_id": ability_id},
+            context={"ability_id": ability_id, "werewolf_attack_policy": policy},
         )
-        prior_proposals: list[dict[str, Any]] = []
         occurrence = 0
-        consensus_target: str | None = None
-        final_activation: V2ActivationRef | None = None
-        final_decision: V2ModelDecision | None = None
-        for round_no in (1, 2):
-            round_items: list[tuple[V2ActivationRef, V2ModelDecision]] = []
+        transcript: list[dict[str, Any]] = []
+
+        if len(wolves) > 1:
             for wolf in wolves:
                 occurrence += 1
                 activation = self._repository.open_activation(
@@ -353,87 +369,177 @@ class V2NightEngine:
                     player=wolf,
                     candidates=candidates,
                     objective=(
-                        "独自选择一名非狼人存活玩家作为本轮袭击目标"
-                        if len(wolves) == 1
-                        else (
-                            "选择本轮狼人团队建议袭击的一名非狼人存活玩家；"
-                            "你可以参考本轮此前狼人的建议"
-                        )
+                        "在尚未看到其他狼人意见的情况下，提出你的袭击建议并说明理由；"
+                        "这段完整私聊会在终投前同步给所有存活狼人"
                     ),
-                    knowledge=(
-                        {
-                            "living_werewolf_teammates": [],
-                            "coordination": "solo",
-                            "round_no": round_no,
-                        }
-                        if len(wolves) == 1
-                        else {
-                            "werewolf_teammates": [
-                                item.player_id
-                                for item in wolves
-                                if item.player_id != wolf.player_id
-                            ],
-                            "prior_team_proposals": prior_proposals,
-                            "round_no": round_no,
-                            "consensus_rule": (
-                                "全员同一目标才生效；最多两轮；"
-                                "第二轮仍不一致则空刀"
-                            ),
-                        }
-                    ),
-                    optional=False,
+                    knowledge={
+                        "werewolf_teammates": [
+                            item.player_id
+                            for item in wolves
+                            if item.player_id != wolf.player_id
+                        ],
+                        "coordination": "independent_discussion",
+                        "decision_stage": "discussion",
+                        "werewolf_attack_policy": policy,
+                    },
+                    optional=allow_no_attack,
                 )
-                round_items.append((activation, decision))
-                prior_proposals.append(
-                    {
-                        "round_no": round_no,
-                        "player_id": wolf.player_id,
-                        "target_player_id": decision.target_player_id,
-                    }
+                item = {
+                    "player_id": wolf.player_id,
+                    "target_player_id": decision.target_player_id,
+                    "speech": decision.speech,
+                }
+                transcript.append(item)
+                self._repository.complete_activation(
+                    state=state,
+                    activation=activation,
+                    decision={"decision_stage": "discussion", **item},
+                    result={"adopted": False, "decision_stage": "discussion"},
                 )
                 await broadcaster.broadcast_json(
                     ability_progress(
                         game_id=state.game_id,
                         run_id=state.run_id,
                         ability_id=ability_id,
-                        status="decision_committed",
+                        status="discussion_committed",
                         actor_player_id=wolf.player_id,
                         target_player_id=decision.target_player_id,
-                        round_no=round_no,
+                        round_no=1,
                     ),
                     audience="god_view",
                 )
-            proposed = {item.target_player_id for _activation, item in round_items}
-            if len(proposed) == 1:
-                consensus_target = next(iter(proposed))
-            for index, (activation, decision) in enumerate(round_items):
-                is_final = consensus_target is not None and index == len(round_items) - 1
-                self._repository.complete_activation(
-                    state=state,
-                    activation=activation,
-                    decision={
-                        "round_no": round_no,
-                        "target_player_id": decision.target_player_id,
-                        "speech": decision.speech,
+
+        final_items: list[
+            tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision]
+        ] = []
+        for wolf in wolves:
+            occurrence += 1
+            activation = self._repository.open_activation(
+                state=state,
+                ability_id=ability_id,
+                actor_player_id=wolf.player_id,
+                occurrence=occurrence,
+            )
+            decision = await self._player_decision(
+                state=state,
+                broadcaster=broadcaster,
+                activation=activation,
+                player=wolf,
+                candidates=candidates,
+                objective=(
+                    "直接作出本夜袭击的最终选择"
+                    if len(wolves) == 1
+                    else "阅读全部狼人私聊后，独立提交最终一票并简要说明取舍"
+                ),
+                knowledge=(
+                    {
+                        "living_werewolf_teammates": [],
+                        "coordination": "solo",
+                        "decision_stage": "final_vote",
+                        "werewolf_attack_policy": policy,
+                    }
+                    if len(wolves) == 1
+                    else {
+                        "werewolf_teammates": [
+                            item.player_id
+                            for item in wolves
+                            if item.player_id != wolf.player_id
+                        ],
+                        "coordination": "shared_transcript_final_vote",
+                        "decision_stage": "final_vote",
+                        "werewolf_discussion": [dict(item) for item in transcript],
+                        "werewolf_attack_policy": policy,
+                    }
+                ),
+                optional=allow_no_attack,
+            )
+            final_items.append((wolf, activation, decision))
+
+        resolution = _resolve_werewolf_attack(
+            state=state,
+            wolves=wolves,
+            votes=[
+                (wolf.player_id, decision.target_player_id)
+                for wolf, _activation, decision in final_items
+            ],
+            policy=policy,
+        )
+        resolution_activation = final_items[-1][1]
+        resolution_knowledge = tuple(
+            (
+                "player",
+                wolf.player_id,
+                {
+                    "fact_type": "werewolf_attack_resolved",
+                    "payload": {
+                        "night_no": state.round_no,
+                        "final_target_player_id": resolution.target_player_id,
+                        "resolution_reason": resolution.reason,
+                        "tiebreaker_player_id": resolution.tiebreaker_player_id,
                     },
-                    result={"consensus_reached": consensus_target is not None},
-                    effect_type="attack" if is_final else None,
-                    target_player_id=consensus_target if is_final else None,
-                )
-                if is_final:
-                    final_activation = activation
-                    final_decision = decision
-            if consensus_target is not None:
-                break
-        working.attack_target = consensus_target
+                },
+            )
+            for wolf in wolves
+        )
+        for wolf, activation, decision in final_items:
+            is_resolution_activation = activation == resolution_activation
+            self._repository.complete_activation(
+                state=state,
+                activation=activation,
+                decision={
+                    "decision_stage": "final_vote",
+                    "target_player_id": decision.target_player_id,
+                    "speech": decision.speech,
+                },
+                result={
+                    "adopted": decision.target_player_id == resolution.target_player_id,
+                    "decision_stage": "final_vote",
+                    "final_target_player_id": resolution.target_player_id,
+                    "resolution_reason": resolution.reason,
+                    "tiebreaker_player_id": resolution.tiebreaker_player_id,
+                },
+                effect_type=(
+                    "attack"
+                    if is_resolution_activation
+                    and resolution.target_player_id is not None
+                    else None
+                ),
+                target_player_id=(
+                    resolution.target_player_id if is_resolution_activation else None
+                ),
+                knowledge=(
+                    resolution_knowledge if is_resolution_activation else ()
+                ),
+            )
+            await broadcaster.broadcast_json(
+                ability_progress(
+                    game_id=state.game_id,
+                    run_id=state.run_id,
+                    ability_id=ability_id,
+                    status="final_vote_committed",
+                    actor_player_id=wolf.player_id,
+                    target_player_id=decision.target_player_id,
+                    round_no=2 if len(wolves) > 1 else 1,
+                ),
+                audience="god_view",
+            )
+
+        working.attack_target = resolution.target_player_id
         await broadcaster.broadcast_json(
             ability_progress(
                 game_id=state.game_id,
                 run_id=state.run_id,
                 ability_id=ability_id,
-                status="completed" if consensus_target else "no_consensus_no_attack",
-                actor_player_id=(final_activation.actor_player_id if final_activation else None),
-                target_player_id=(final_decision.target_player_id if final_decision else None),
+                status=(
+                    "completed"
+                    if resolution.target_player_id is not None
+                    else "no_attack"
+                ),
+                actor_player_id=(
+                    resolution.tiebreaker_player_id
+                    or resolution_activation.actor_player_id
+                ),
+                target_player_id=resolution.target_player_id,
             ),
             audience="god_view",
         )
@@ -442,7 +548,10 @@ class V2NightEngine:
             broadcaster=broadcaster,
             action_type="werewolf_attack_sleep",
             objective="宣布狼人行动结束并请狼人闭眼，不公开目标",
-            context={"ability_id": ability_id},
+            context={
+                "ability_id": ability_id,
+                "resolution_reason": resolution.reason,
+            },
         )
 
     async def _run_guard(
@@ -1136,6 +1245,131 @@ class V2NightEngine:
             ),
             audience="god_view",
         )
+
+
+def _werewolf_attack_policy(state: V2NightRuntimeState) -> dict[str, Any]:
+    policies = state.snapshot.get("policies")
+    raw = policies.get("werewolf_attack") if isinstance(policies, dict) else None
+    if raw is None:
+        return {
+            "resolution": "unanimous_no_attack",
+            "allow_no_attack": False,
+            "allow_wolf_target": False,
+        }
+    if not isinstance(raw, dict) or set(raw) != {
+        "resolution",
+        "allow_no_attack",
+        "allow_wolf_target",
+    }:
+        raise V2NightError("werewolf_attack_policy_invalid")
+    resolution = raw.get("resolution")
+    if resolution not in {
+        "plurality_rotating_tiebreak",
+        "plurality_seeded_random",
+        "unanimous_no_attack",
+    } or not isinstance(raw.get("allow_no_attack"), bool) or not isinstance(
+        raw.get("allow_wolf_target"), bool
+    ):
+        raise V2NightError("werewolf_attack_policy_invalid")
+    return dict(raw)
+
+
+def _resolve_werewolf_attack(
+    *,
+    state: V2NightRuntimeState,
+    wolves: list[V2NightPlayer],
+    votes: list[tuple[str, str | None]],
+    policy: dict[str, Any],
+) -> _WerewolfAttackResolution:
+    if not votes or len(votes) != len(wolves):
+        raise V2NightError("werewolf_final_votes_incomplete")
+    resolution = policy["resolution"]
+    targets = [target_player_id for _player_id, target_player_id in votes]
+    if resolution == "unanimous_no_attack":
+        if len(set(targets)) != 1:
+            return _WerewolfAttackResolution(
+                target_player_id=None,
+                reason="no_consensus_no_attack",
+            )
+        target = targets[0]
+        return _WerewolfAttackResolution(
+            target_player_id=target,
+            reason="voluntary_no_attack" if target is None else "unanimous",
+        )
+
+    counts = Counter(targets)
+    highest = max(counts.values())
+    tied_targets = [
+        target_player_id
+        for target_player_id, count in counts.items()
+        if count == highest
+    ]
+    if len(tied_targets) == 1:
+        target = tied_targets[0]
+        return _WerewolfAttackResolution(
+            target_player_id=target,
+            reason="voluntary_no_attack" if target is None else "unique_highest",
+        )
+
+    if resolution == "plurality_rotating_tiebreak":
+        tiebreaker = _rotating_werewolf_tiebreaker(state, wolves)
+        vote_by_player = dict(votes)
+        target = vote_by_player.get(tiebreaker.player_id)
+        reason = "rotating_tiebreak"
+        if target not in tied_targets:
+            target = _seeded_tie_choice(state, tied_targets)
+            reason = "seeded_fallback"
+        return _WerewolfAttackResolution(
+            target_player_id=target,
+            reason=f"{reason}_no_attack" if target is None else reason,
+            tiebreaker_player_id=tiebreaker.player_id,
+        )
+
+    if resolution == "plurality_seeded_random":
+        target = _seeded_tie_choice(state, tied_targets)
+        return _WerewolfAttackResolution(
+            target_player_id=target,
+            reason="seeded_tiebreak_no_attack" if target is None else "seeded_tiebreak",
+        )
+    raise V2NightError("werewolf_attack_resolution_unsupported")
+
+
+def _rotating_werewolf_tiebreaker(
+    state: V2NightRuntimeState,
+    living_wolves: list[V2NightPlayer],
+) -> V2NightPlayer:
+    living_by_id = {wolf.player_id: wolf for wolf in living_wolves}
+    state_players = getattr(state, "players", ())
+    original_ids = [
+        player.player_id
+        for player in sorted(state_players, key=lambda player: player.seat)
+        if player.role_key == "werewolf"
+    ]
+    if not original_ids:
+        original_ids = [wolf.player_id for wolf in living_wolves]
+    start = (state.round_no - 1) % len(original_ids)
+    for offset in range(len(original_ids)):
+        player_id = original_ids[(start + offset) % len(original_ids)]
+        if player_id in living_by_id:
+            return living_by_id[player_id]
+    raise V2NightError("werewolf_tiebreaker_unavailable")
+
+
+def _seeded_tie_choice(
+    state: V2NightRuntimeState,
+    targets: list[str | None],
+) -> str | None:
+    ordered = sorted(targets, key=lambda item: (item is not None, item or ""))
+    seed = "|".join(
+        (
+            state.game_id,
+            str(state.round_no),
+            "werewolf_attack",
+            ",".join(item or "<no_attack>" for item in ordered),
+        )
+    )
+    digest = hashlib.sha256(seed.encode()).digest()
+    return ordered[int.from_bytes(digest[:8], "big") % len(ordered)]
 
 
 def _activation_groups(snapshot: dict[str, Any]) -> tuple[str, ...]:

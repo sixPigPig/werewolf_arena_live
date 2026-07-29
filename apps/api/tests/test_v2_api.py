@@ -1713,6 +1713,39 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
         if context["self"].get("identity")
     )
+    wolf_final_vote_contexts = [
+        context
+        for context in player_contexts
+        if context["task"].get("ability_id") == "werewolf.attack"
+        and any(
+            fact.get("fact_type") == "coordination"
+            and fact.get("payload") == "shared_transcript_final_vote"
+            for fact in context["self"]["private_judge_facts"]
+        )
+    ]
+    assert wolf_final_vote_contexts
+    final_transcripts_by_night: dict[int, set[str]] = {}
+    for context in wolf_final_vote_contexts:
+        discussion = next(
+            fact["payload"]
+            for fact in context["self"]["private_judge_facts"]
+            if fact.get("fact_type") == "werewolf_discussion"
+        )
+        assert len(discussion) == 2
+        assert all(
+            item["player_id"].startswith("seat_")
+            and item["target_player_id"].startswith("seat_")
+            and item["speech"]
+            for item in discussion
+        )
+        final_transcripts_by_night.setdefault(
+            context["task"]["night_no"],
+            set(),
+        ).add(json.dumps(discussion, ensure_ascii=False, sort_keys=True))
+    assert all(
+        len(transcripts) == 1
+        for transcripts in final_transcripts_by_night.values()
+    )
     seer_contexts = [
         context
         for context in player_contexts

@@ -425,6 +425,11 @@ def test_content_editor_creates_revision_one_draft_with_one_bounded_audit(
     assert payload["draft_revision"]["revision_no"] == 1
     assert payload["draft_revision"]["state"] == "draft"
     assert payload["draft_revision"]["config"]["name"] == "Created Rule"
+    assert payload["draft_revision"]["config"]["werewolf_attack_policy"] == {
+        "resolution": "plurality_rotating_tiebreak",
+        "allow_no_attack": False,
+        "allow_wolf_target": False,
+    }
     assert payload["published_revision"] is None
 
     with context.session_factory() as db:
@@ -2425,6 +2430,13 @@ def test_rule_set_options_are_complete_and_bounded(
     assert {item["value"] for item in payload["sheriff_badge_bomb_policies"]} == {
         "none",
         "double",
+    }
+    assert {
+        item["value"] for item in payload["werewolf_attack_resolutions"]
+    } == {
+        "plurality_rotating_tiebreak",
+        "plurality_seeded_random",
+        "unanimous_no_attack",
     }
     assert payload["constraints"] == {
         "player_count_min": 6,

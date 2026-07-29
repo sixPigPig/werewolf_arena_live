@@ -604,16 +604,15 @@ def test_public_rule_contract_exposes_single_wolf_and_disabled_sheriff() -> None
         "each_actor_must_choose_target": True,
         "can_target_self": False,
         "can_target_werewolf_teammates": False,
-        "team_resolution": {
-            "rounds": 2,
-            "agreement": "unanimous",
-            "unresolved": "no_attack",
-        },
-        "single_werewolf_resolution": (
-            "本局只有1名狼人时，该狼人每夜必须选择一名存活的非狼人玩家，"
-            "不会因团队意见不一致而空刀。"
-        ),
-    }
+            "team_resolution": {
+                "resolution": "unanimous_no_attack",
+                "allow_no_attack": False,
+                "allow_wolf_target": False,
+            },
+            "single_werewolf_resolution": (
+                "本局只有1名狼人时，由该狼人直接作出最终选择，不会发生团队平票。"
+            ),
+        }
     assert contract["night_action_rules"]["guard_protect"] == {
         "enabled": True,
         "target_scope": "一名存活玩家，可以选择自己",

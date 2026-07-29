@@ -1,11 +1,11 @@
 import type { AdminRuleSetDetail, RuleRoleId, RuleSetConfig, RuleSetOptions } from "./types";
 
 export type RuleSetFormInput = { id: string; display_order: number; config: RuleSetConfig };
-export type RuleSetFormErrors = Partial<Record<"id" | "display_order" | "name" | "description" | "complexity" | "estimated_duration" | "rule_tags" | "role_counts" | "win_condition" | "sheriff_vote_weight" | "speech_policy" | "sheriff_badge_bomb_policy" | "form", string>>;
+export type RuleSetFormErrors = Partial<Record<"id" | "display_order" | "name" | "description" | "complexity" | "estimated_duration" | "rule_tags" | "role_counts" | "win_condition" | "sheriff_vote_weight" | "speech_policy" | "sheriff_badge_bomb_policy" | "werewolf_attack_policy" | "form", string>>;
 
 export function defaultRuleSetInput(options: RuleSetOptions): RuleSetFormInput {
   const roleCounts = Object.fromEntries(options.roles.map((role) => [role.id, role.min_count])) as Record<RuleRoleId, number>;
-  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0].value, sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0], speech_policy: options.speech_policies[0].value, werewolf_self_explosion_enabled: true, first_night_last_words_enabled: false, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0].value } };
+  return { id: "", display_order: 0, config: { name: "", description: "", complexity: "", estimated_duration: "", rule_tags: [], role_counts: roleCounts, win_condition: options.win_conditions[0].value, sheriff_enabled: true, sheriff_vote_weight: options.sheriff_vote_weights[0], speech_policy: options.speech_policies[0].value, werewolf_self_explosion_enabled: true, first_night_last_words_enabled: false, sheriff_badge_bomb_policy: options.sheriff_badge_bomb_policies[0].value, werewolf_attack_policy: { resolution: options.werewolf_attack_resolutions[0].value, allow_no_attack: false, allow_wolf_target: false } } };
 }
 
 export function inputFromRuleSet(detail: AdminRuleSetDetail, options: RuleSetOptions): RuleSetFormInput {
@@ -38,6 +38,7 @@ export function validateRuleSetInput(input: RuleSetFormInput, options: RuleSetOp
   if (clean.config.sheriff_enabled && !options.sheriff_vote_weights.includes(clean.config.sheriff_vote_weight)) errors.sheriff_vote_weight = "请选择有效的警长票权";
   if (!options.speech_policies.some(({ value }) => value === clean.config.speech_policy)) errors.speech_policy = "请选择有效的发言规则";
   if (!options.sheriff_badge_bomb_policies.some(({ value }) => value === clean.config.sheriff_badge_bomb_policy)) errors.sheriff_badge_bomb_policy = "请选择有效的警徽规则";
+  if (!options.werewolf_attack_resolutions.some(({ value }) => value === clean.config.werewolf_attack_policy.resolution)) errors.werewolf_attack_policy = "请选择有效的狼人刀口规则";
   const count = playerCount(clean); if (count < options.constraints.player_count_min || count > options.constraints.player_count_max) errors.form = `总人数必须为 ${options.constraints.player_count_min}–${options.constraints.player_count_max} 人`;
   return errors;
 }
@@ -57,9 +58,9 @@ export function formErrorsFromApi(value: unknown): RuleSetFormErrors {
   return errors;
 }
 
-function fieldErrorCopy(field: Exclude<keyof RuleSetFormErrors, "form">): string { return ({ id: "规则 ID 不符合要求", display_order: "显示顺序不符合要求", name: "规则名称不符合要求", description: "规则说明不符合要求", complexity: "复杂度不符合要求", estimated_duration: "预计时长不符合要求", rule_tags: "规则标签不符合要求", role_counts: "角色数量不符合要求", win_condition: "胜利条件不符合要求", sheriff_vote_weight: "警长票权不符合要求", speech_policy: "发言规则不符合要求", sheriff_badge_bomb_policy: "警徽规则不符合要求" })[field]; }
+function fieldErrorCopy(field: Exclude<keyof RuleSetFormErrors, "form">): string { return ({ id: "规则 ID 不符合要求", display_order: "显示顺序不符合要求", name: "规则名称不符合要求", description: "规则说明不符合要求", complexity: "复杂度不符合要求", estimated_duration: "预计时长不符合要求", rule_tags: "规则标签不符合要求", role_counts: "角色数量不符合要求", win_condition: "胜利条件不符合要求", sheriff_vote_weight: "警长票权不符合要求", speech_policy: "发言规则不符合要求", sheriff_badge_bomb_policy: "警徽规则不符合要求", werewolf_attack_policy: "狼人刀口规则不符合要求" })[field]; }
 
-function fieldFromPath(path: string): Exclude<keyof RuleSetFormErrors, "form"> | null { const leaf = path.split(/[.[\]]/).filter(Boolean).at(-1) ?? ""; if (leaf in ({ id: 1, display_order: 1, name: 1, description: 1, complexity: 1, estimated_duration: 1, rule_tags: 1, role_counts: 1, win_condition: 1, sheriff_vote_weight: 1, speech_policy: 1, sheriff_badge_bomb_policy: 1 })) return leaf as Exclude<keyof RuleSetFormErrors, "form">; if (path.includes("role_counts")) return "role_counts"; return null; }
+function fieldFromPath(path: string): Exclude<keyof RuleSetFormErrors, "form"> | null { const leaf = path.split(/[.[\]]/).filter(Boolean).at(-1) ?? ""; if (leaf in ({ id: 1, display_order: 1, name: 1, description: 1, complexity: 1, estimated_duration: 1, rule_tags: 1, role_counts: 1, win_condition: 1, sheriff_vote_weight: 1, speech_policy: 1, sheriff_badge_bomb_policy: 1, werewolf_attack_policy: 1 })) return leaf as Exclude<keyof RuleSetFormErrors, "form">; if (path.includes("role_counts")) return "role_counts"; if (path.includes("werewolf_attack_policy")) return "werewolf_attack_policy"; return null; }
 function lengthError(errors: RuleSetFormErrors, key: "name" | "description" | "complexity" | "estimated_duration", value: string, min: number, max: number) { if (value.length < min || value.length > max) errors[key] = `${min ? `必填且` : ""}最多 ${max} 个字符`; }
 function finite(value: number) { return Number.isFinite(value) ? value : 0; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }

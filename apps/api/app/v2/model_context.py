@@ -672,6 +672,24 @@ def _role_capabilities(
     rule: dict[str, Any],
 ) -> dict[str, Any]:
     werewolf_count = _werewolf_count_from_rule(rule)
+    policies = rule.get("ability_policies")
+    attack_policy = (
+        policies.get("werewolf_attack") if isinstance(policies, dict) else None
+    )
+    allow_wolf_target = (
+        isinstance(attack_policy, dict)
+        and attack_policy.get("allow_wolf_target") is True
+    )
+    allow_no_attack = (
+        isinstance(attack_policy, dict)
+        and attack_policy.get("allow_no_attack") is True
+    )
+    target_description = (
+        "一名存活玩家（可以选择狼人或自己）"
+        if allow_wolf_target
+        else "一名存活的非狼人玩家"
+    )
+    optional_description = "，也可以主动空刀" if allow_no_attack else ""
     capabilities: dict[str, list[dict[str, Any]]] = {
         "villager": [],
         "werewolf": [
@@ -679,12 +697,14 @@ def _role_capabilities(
                 "ability_id": "werewolf.attack",
                 "timing": "night",
                 "description": (
-                    "你是本局唯一狼人，独自选择一名存活的非狼人玩家作为袭击目标。"
+                    f"你是本局唯一狼人，独自选择{target_description}作为袭击目标"
+                    f"{optional_description}。"
                     if werewolf_count == 1
                     else (
-                        "与存活狼人队友共同选择一名存活的非狼人玩家作为袭击目标。"
+                        f"与存活狼人队友共同选择{target_description}作为袭击目标"
+                        f"{optional_description}。"
                         if werewolf_count > 1
-                        else "选择一名存活的非狼人玩家作为袭击目标。"
+                        else f"选择{target_description}作为袭击目标{optional_description}。"
                     )
                 ),
             }
@@ -914,18 +934,30 @@ def _night_action_rules(
     ability_policies: Any,
 ) -> dict[str, Any]:
     policies = ability_policies if isinstance(ability_policies, dict) else {}
+    attack_policy = policies.get("werewolf_attack")
+    if not isinstance(attack_policy, dict):
+        attack_policy = {
+            "resolution": "unanimous_no_attack",
+            "allow_no_attack": False,
+            "allow_wolf_target": False,
+        }
+    allow_no_attack = attack_policy.get("allow_no_attack") is True
+    allow_wolf_target = attack_policy.get("allow_wolf_target") is True
     result: dict[str, Any] = {
         "werewolf_attack": {
             "enabled": werewolf_count > 0,
             "actor_scope": "所有存活狼人",
-            "target_scope": "一名存活的非狼人玩家",
-            "each_actor_must_choose_target": True,
-            "can_target_self": False,
-            "can_target_werewolf_teammates": False,
-            "team_resolution": dict(policies.get("werewolf_consensus") or {}),
+            "target_scope": (
+                "一名存活玩家，可以选择狼人或自己"
+                if allow_wolf_target
+                else "一名存活的非狼人玩家"
+            ),
+            "each_actor_must_choose_target": not allow_no_attack,
+            "can_target_self": allow_wolf_target,
+            "can_target_werewolf_teammates": allow_wolf_target,
+            "team_resolution": dict(attack_policy),
             "single_werewolf_resolution": (
-                "本局只有1名狼人时，该狼人每夜必须选择一名存活的非狼人玩家，"
-                "不会因团队意见不一致而空刀。"
+                "本局只有1名狼人时，由该狼人直接作出最终选择，不会发生团队平票。"
                 if werewolf_count == 1
                 else None
             ),

@@ -39,6 +39,7 @@ from app.werewolf.rules import (
     ACTION_WITCH_SAVE,
     MODEL_GROUP_VILLAGER,
     MODEL_GROUP_WEREWOLF,
+    LEGACY_WEREWOLF_ATTACK_RESOLUTION,
     REVEAL_POLICY_HIDDEN,
     ROLE_CATEGORY_CIVILIAN,
     ROLE_CATEGORY_GOD,
@@ -92,9 +93,12 @@ _RUNTIME_FIELDS = (
     "speech_policy",
     "speech_rounds",
     "rule_tags",
+    "werewolf_attack_policy",
 )
 _RUNTIME_FIELD_SET = frozenset(_RUNTIME_FIELDS)
-_LEGACY_OPTIONAL_RUNTIME_FIELDS = frozenset({"exile_last_words_enabled"})
+_LEGACY_OPTIONAL_RUNTIME_FIELDS = frozenset(
+    {"exile_last_words_enabled", "werewolf_attack_policy"}
+)
 _REVISION_FIELDS = frozenset({"revision_id", "revision_no", "schema_version", "content_hash"})
 _FROZEN_CONTRACT_FIELDS = frozenset({"rule_text", "rule_contract"})
 _ROLE_FIELDS = frozenset({"role", "count", "team", "model_group", "category"})
@@ -125,7 +129,7 @@ _ROLE_IDS_BY_DEFINITION = {definition: role_id for role_id, definition in _ROLE_
 
 def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
     config = _normalize_config_boundary(config)
-    return {
+    payload: dict[str, object] = {
         "name": config.name,
         "description": config.description,
         "complexity": config.complexity,
@@ -140,6 +144,13 @@ def canonical_rule_set_config(config: RuleSetConfig) -> dict[str, object]:
         "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
     }
+    if config.werewolf_attack_resolution is not None:
+        payload["werewolf_attack_policy"] = {
+            "resolution": config.werewolf_attack_resolution,
+            "allow_no_attack": config.werewolf_allow_no_attack,
+            "allow_wolf_target": config.werewolf_allow_wolf_target,
+        }
+    return payload
 
 
 def rule_set_content_hash(config: RuleSetConfig) -> str:
@@ -325,6 +336,15 @@ def _compile_rule_set(
         exile_last_words_enabled=True,
         first_night_last_words_enabled=config.first_night_last_words_enabled,
         sheriff_badge_bomb_policy=config.sheriff_badge_bomb_policy,
+        werewolf_attack_resolution=(
+            config.werewolf_attack_resolution
+            or LEGACY_WEREWOLF_ATTACK_RESOLUTION
+        ),
+        werewolf_allow_no_attack=config.werewolf_allow_no_attack,
+        werewolf_allow_wolf_target=config.werewolf_allow_wolf_target,
+        werewolf_attack_policy_explicit=(
+            config.werewolf_attack_resolution is not None
+        ),
     )
     content_hash = rule_set_content_hash(config)
     snapshot = freeze_rule_set_snapshot(rule_set)
@@ -370,6 +390,11 @@ def _resolve_snapshot(
                 "first_night_last_words_enabled"
             ],
             "sheriff_badge_bomb_policy": snapshot["sheriff_badge_bomb_policy"],
+            **(
+                {"werewolf_attack_policy": snapshot["werewolf_attack_policy"]}
+                if "werewolf_attack_policy" in snapshot
+                else {}
+            ),
         }
     )
     _raise_for_invalid_config(config)
@@ -521,6 +546,28 @@ def _validate_runtime_types(snapshot: Mapping[str, object]) -> None:
     _validate_string_list(snapshot["rule_tags"], "rule_tags")
     if not isinstance(snapshot["roles"], list):
         raise ValueError("snapshot field roles must be a list")
+    if "werewolf_attack_policy" in snapshot:
+        policy = snapshot["werewolf_attack_policy"]
+        if not isinstance(policy, Mapping):
+            raise ValueError("snapshot field werewolf_attack_policy must be a mapping")
+        expected_policy_fields = {
+            "resolution",
+            "allow_no_attack",
+            "allow_wolf_target",
+        }
+        if set(policy) != expected_policy_fields:
+            raise ValueError(
+                "snapshot field werewolf_attack_policy has invalid fields"
+            )
+        if not isinstance(policy["resolution"], str):
+            raise ValueError(
+                "snapshot field werewolf_attack_policy.resolution must be text"
+            )
+        for field in ("allow_no_attack", "allow_wolf_target"):
+            if not isinstance(policy[field], bool):
+                raise ValueError(
+                    f"snapshot field werewolf_attack_policy.{field} must be a boolean"
+                )
 
 
 def _validate_string_list(value: object, field: str) -> None:
@@ -609,6 +656,17 @@ def _normalize_config_boundary(config: RuleSetConfig) -> RuleSetConfig:
                     config.first_night_last_words_enabled
                 ),
                 "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
+                **(
+                    {
+                        "werewolf_attack_policy": {
+                            "resolution": config.werewolf_attack_resolution,
+                            "allow_no_attack": config.werewolf_allow_no_attack,
+                            "allow_wolf_target": config.werewolf_allow_wolf_target,
+                        }
+                    }
+                    if config.werewolf_attack_resolution is not None
+                    else {}
+                ),
             }
         )
     except ValueError:
@@ -694,6 +752,14 @@ def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]
         )
     if failure is not None:
         raise failure
+    policy = {
+        "resolution": (
+            config.werewolf_attack_resolution
+            or LEGACY_WEREWOLF_ATTACK_RESOLUTION
+        ),
+        "allow_no_attack": config.werewolf_allow_no_attack,
+        "allow_wolf_target": config.werewolf_allow_wolf_target,
+    }
     return {
         "name": config.name,
         "description": config.description,
@@ -708,6 +774,7 @@ def _admin_revision_config(revision: RuleSetRevisionRecord) -> dict[str, object]
         "werewolf_self_explosion_enabled": config.werewolf_self_explosion_enabled,
         "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
+        "werewolf_attack_policy": policy,
     }
 
 

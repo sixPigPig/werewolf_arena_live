@@ -52,10 +52,10 @@ def test_rules_compile_different_ability_plans_without_role_flow_branches() -> N
         "witch.poison",
         "hunter.death_shot",
     ]
-    assert classic["policies"]["werewolf_consensus"] == {
-        "rounds": 2,
-        "agreement": "unanimous",
-        "unresolved": "no_attack",
+    assert classic["policies"]["werewolf_attack"] == {
+        "resolution": "unanimous_no_attack",
+        "allow_no_attack": False,
+        "allow_wolf_target": False,
     }
     assert classic["policies"]["guard"] == {
         "first_night_self_protect": True,
@@ -87,6 +87,24 @@ def test_missing_night_actions_are_derived_only_from_frozen_roles() -> None:
         "villager",
         "seer",
         "guard",
+    }
+
+
+def test_frozen_werewolf_attack_policy_is_compiled_into_ability_snapshot() -> None:
+    snapshot = _compile(
+        roles=[("werewolf", "werewolves", 2), ("villager", "villagers", 6)],
+        night_actions=["remove"],
+        werewolf_attack_policy={
+            "resolution": "plurality_seeded_random",
+            "allow_no_attack": True,
+            "allow_wolf_target": True,
+        },
+    )
+
+    assert snapshot["policies"]["werewolf_attack"] == {
+        "resolution": "plurality_seeded_random",
+        "allow_no_attack": True,
+        "allow_wolf_target": True,
     }
 
 
@@ -146,6 +164,7 @@ def _compile(
     roles: list[tuple[str, str, int]],
     night_actions: list[str] | None,
     sheriff_enabled: bool = False,
+    werewolf_attack_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     assignments = []
     seat = 1
@@ -171,6 +190,8 @@ def _compile(
     }
     if night_actions is not None:
         rule_set["night_actions"] = night_actions
+    if werewolf_attack_policy is not None:
+        rule_set["werewolf_attack_policy"] = werewolf_attack_policy
     return compile_ability_runtime_snapshot(
         game_id="v2_game_0123456789abcdef",
         rule_snapshot={"rule_set": rule_set},

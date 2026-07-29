@@ -777,7 +777,7 @@ def _normalize_management_config(config: RuleSetConfig) -> RuleSetConfig:
 
 
 def _detached_config(config: RuleSetConfig) -> dict[str, object]:
-    return {
+    detached: dict[str, object] = {
         "name": config.name,
         "description": config.description,
         "complexity": config.complexity,
@@ -792,6 +792,13 @@ def _detached_config(config: RuleSetConfig) -> dict[str, object]:
         "first_night_last_words_enabled": config.first_night_last_words_enabled,
         "sheriff_badge_bomb_policy": config.sheriff_badge_bomb_policy,
     }
+    if config.werewolf_attack_resolution is not None:
+        detached["werewolf_attack_policy"] = {
+            "resolution": config.werewolf_attack_resolution,
+            "allow_no_attack": config.werewolf_allow_no_attack,
+            "allow_wolf_target": config.werewolf_allow_wolf_target,
+        }
+    return detached
 
 
 def _new_draft_revision(

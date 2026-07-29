@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from pydantic import ValidationError
 
@@ -52,6 +54,17 @@ def test_missing_applicable_p0_clause_blocks_contract_publish(
     assert {issue.code for issue in report.issues} >= {
         "rule_contract_p0_clause_missing",
         "rule_contract_engine_constraint_uncovered",
+    }
+
+
+def test_non_wolf_target_clause_is_not_injected_when_wolf_targets_are_allowed() -> None:
+    rule_set = replace(CLASSIC_8, werewolf_allow_wolf_target=True)
+
+    report = contracts.build_admin_rule_contract(rule_set)
+
+    assert report.payload["publish_ready"] is True
+    assert "night.werewolf_attack.non_wolf_targets.v1" not in {
+        clause["clause_id"] for clause in report.payload["clauses"]
     }
 
 

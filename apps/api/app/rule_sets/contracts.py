@@ -43,7 +43,10 @@ _P0_REQUIREMENTS = (
     _P0Requirement(
         clause_id="night.werewolf_attack.non_wolf_targets.v1",
         engine_constraint_ids=("engine.night.werewolf_attack.candidates_non_wolves",),
-        applies=lambda rule_set: ACTION_REMOVE in rule_set.night_actions,
+        applies=lambda rule_set: (
+            ACTION_REMOVE in rule_set.night_actions
+            and not rule_set.werewolf_allow_wolf_target
+        ),
     ),
     _P0Requirement(
         clause_id="night.dawn.hidden_causes.v1",

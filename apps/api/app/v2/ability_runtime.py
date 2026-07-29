@@ -6,6 +6,11 @@ import hashlib
 import json
 from typing import Any, Literal
 
+from app.werewolf.rules import (
+    LEGACY_WEREWOLF_ATTACK_RESOLUTION,
+    WEREWOLF_ATTACK_RESOLUTIONS,
+)
+
 
 class V2AbilityConfigurationError(RuntimeError):
     pass
@@ -79,8 +84,8 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         trigger="window_opened",
         order=10,
         dependencies=(),
-        decision_contract_id="werewolf_consensus_target.v1",
-        target_policy_id="alive_non_werewolf.v1",
+        decision_contract_id="werewolf_discussion_final_vote.v2",
+        target_policy_id="frozen_werewolf_attack_policy.v1",
         effect_type="attack",
         presentation_policy_id="private_team_turn.v1",
     ),
@@ -226,6 +231,7 @@ def compile_ability_runtime_snapshot(
     expected_actions = set(_derived_night_actions(role_counts))
     if set(night_actions) != expected_actions:
         raise V2AbilityConfigurationError("night actions do not match assigned roles")
+    werewolf_attack_policy = _werewolf_attack_policy(rule_set)
 
     instances: list[dict[str, Any]] = []
     for action_name in night_actions:
@@ -270,11 +276,7 @@ def compile_ability_runtime_snapshot(
             "sheriff_badge_bomb_policy": str(rule_set.get("sheriff_badge_bomb_policy") or "none"),
         },
         "policies": {
-            "werewolf_consensus": {
-                "rounds": 2,
-                "agreement": "unanimous",
-                "unresolved": "no_attack",
-            },
+            "werewolf_attack": werewolf_attack_policy,
             "guard": {
                 "first_night_self_protect": True,
                 "consecutive_same_target": False,
@@ -337,6 +339,37 @@ def resolve_first_night(
         peaceful=not deaths,
         attack_prevented_by=prevented_by,
     )
+
+
+def _werewolf_attack_policy(rule_set: dict[str, Any]) -> dict[str, Any]:
+    raw = rule_set.get("werewolf_attack_policy")
+    if raw is None:
+        return {
+            "resolution": LEGACY_WEREWOLF_ATTACK_RESOLUTION,
+            "allow_no_attack": False,
+            "allow_wolf_target": False,
+        }
+    if not isinstance(raw, dict) or set(raw) != {
+        "resolution",
+        "allow_no_attack",
+        "allow_wolf_target",
+    }:
+        raise V2AbilityConfigurationError("werewolf attack policy is invalid")
+    resolution = raw.get("resolution")
+    allow_no_attack = raw.get("allow_no_attack")
+    allow_wolf_target = raw.get("allow_wolf_target")
+    if (
+        not isinstance(resolution, str)
+        or resolution not in WEREWOLF_ATTACK_RESOLUTIONS
+        or not isinstance(allow_no_attack, bool)
+        or not isinstance(allow_wolf_target, bool)
+    ):
+        raise V2AbilityConfigurationError("werewolf attack policy is invalid")
+    return {
+        "resolution": resolution,
+        "allow_no_attack": allow_no_attack,
+        "allow_wolf_target": allow_wolf_target,
+    }
 
 
 def _derived_night_actions(role_counts: dict[str, int]) -> tuple[str, ...]:

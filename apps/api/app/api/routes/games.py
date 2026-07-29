@@ -157,22 +157,22 @@ PLAYER_PROFILE_DATABASE_UNAVAILABLE = "Player profile database unavailable"
 _STATIC_RULE_REVISIONS = {
     "classic_8": (
         "e9fa678e-9b18-5079-91d2-f74835364fb6",
-        "00095728147a022c48eab88faf21a14567ad0afa13ab9418306e84ff85b10131",
+        "104d9818faac73536d50d57ca93eb623ca2dc044a4e334c6b72fcdbb0c2f5cef",
         True,
     ),
     "starter_6": (
         "b607e17e-b86f-5eb0-9dc2-b8df09aa71ab",
-        "f2c52827ff3eea2725fbf2f1a01436f69c7e6465a64dec9a92bd7a07a9368f4c",
+        "d0e67f0238dbb448afa86fd1b5b02ba303861572962b3054d8a3ea0ad913700f",
         False,
     ),
     "social_8": (
         "2b4a993f-e4e6-5312-b11d-92874851a70a",
-        "21e1bd2bb495e4479a346724c85a9722477f840afc2c99c389558a52427a0fbc",
+        "25c6780c9e94df7729becf64a01a65e879236ae43c7efb0de03ac87312d1a21b",
         False,
     ),
     "classic_12_seer_witch_hunter_idiot": (
         "0489f6ac-16fd-5323-96ce-ee256c98cf32",
-        "bcae38e48a7791fa0f7ae236c90f1852056938ea60f5447532e5d879260d6da2",
+        "b81db40986fb3be46e377d68dc3870a0137fe78779c5f0997a5eeeb42a5e396a",
         False,
     ),
 }

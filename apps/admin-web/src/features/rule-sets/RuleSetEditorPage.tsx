@@ -46,6 +46,7 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
 
   function markChanged() { setValidation(null); }
   function changeConfig<K extends keyof RuleSetFormInput["config"]>(key: K, value: RuleSetFormInput["config"][K]) { setDraft((current) => ({ ...current, config: { ...current.config, [key]: value } })); setErrors((current) => ({ ...current, [key]: undefined, form: undefined })); markChanged(); }
+  function changeWerewolfAttackPolicy<K extends keyof RuleSetFormInput["config"]["werewolf_attack_policy"]>(key: K, value: RuleSetFormInput["config"]["werewolf_attack_policy"][K]) { setDraft((current) => ({ ...current, config: { ...current.config, werewolf_attack_policy: { ...current.config.werewolf_attack_policy, [key]: value } } })); setErrors((current) => ({ ...current, werewolf_attack_policy: undefined, form: undefined })); markChanged(); }
   async function save(event: FormEvent) {
     event.preventDefault(); const nextErrors = validateRuleSetInput(draft, options); setErrors(nextErrors); if (Object.keys(nextErrors).length) return;
     setPending("save"); setConflict(false);
@@ -120,6 +121,10 @@ function Editor({ options, initialDetail, isNew }: { options: RuleSetOptions; in
       <Check label="启用警长" checked={draft.config.sheriff_enabled} onChange={(v) => changeConfig("sheriff_enabled", v)} />
       <Field label="警长票权" error={errors.sheriff_vote_weight}><Select aria-label="警长票权" disabled={!draft.config.sheriff_enabled} onChange={(value) => changeConfig("sheriff_vote_weight", value)} options={options.sheriff_vote_weights.map((value) => ({ label: String(value), value }))} value={draft.config.sheriff_enabled ? draft.config.sheriff_vote_weight : options.sheriff_vote_weights[0]} /></Field>
       <Choice label="发言规则" value={draft.config.speech_policy} choices={options.speech_policies} onChange={(v) => changeConfig("speech_policy", v as typeof draft.config.speech_policy)} error={errors.speech_policy} />
+      <Choice label="狼人刀口规则" value={draft.config.werewolf_attack_policy.resolution} choices={options.werewolf_attack_resolutions} onChange={(v) => changeWerewolfAttackPolicy("resolution", v as typeof draft.config.werewolf_attack_policy.resolution)} error={errors.werewolf_attack_policy} />
+      <p>狼人先分别提出建议，随后所有存活狼人收到同一份完整私聊记录并终投。</p>
+      <Check label="允许狼人主动空刀" checked={draft.config.werewolf_attack_policy.allow_no_attack} onChange={(v) => changeWerewolfAttackPolicy("allow_no_attack", v)} />
+      <Check label="允许狼人选择狼队目标（含自刀）" checked={draft.config.werewolf_attack_policy.allow_wolf_target} onChange={(v) => changeWerewolfAttackPolicy("allow_wolf_target", v)} />
       <Check label="允许狼人自爆" checked={draft.config.werewolf_self_explosion_enabled} onChange={(v) => changeConfig("werewolf_self_explosion_enabled", v)} />
       <Check label="允许首夜遗言" checked={draft.config.first_night_last_words_enabled} onChange={(v) => changeConfig("first_night_last_words_enabled", v)} />
       <Field label="警徽规则" error={errors.sheriff_badge_bomb_policy}><Select aria-label="警徽规则" disabled={!draft.config.sheriff_enabled} onChange={(value) => changeConfig("sheriff_badge_bomb_policy", value as typeof draft.config.sheriff_badge_bomb_policy)} options={options.sheriff_badge_bomb_policies.map((item) => ({ label: item.label, value: item.value }))} value={draft.config.sheriff_enabled ? draft.config.sheriff_badge_bomb_policy : options.sheriff_badge_bomb_policies[0]?.value} /></Field>

@@ -44,6 +44,22 @@ def test_normalization_derives_player_count_and_deduplicates_tags() -> None:
     assert config.player_count == 8
 
 
+def test_normalization_accepts_exact_werewolf_attack_policy() -> None:
+    config = normalize_rule_set_config(
+        valid_config(
+            werewolf_attack_policy={
+                "resolution": "plurality_seeded_random",
+                "allow_no_attack": True,
+                "allow_wolf_target": False,
+            }
+        )
+    )
+
+    assert config.werewolf_attack_resolution == "plurality_seeded_random"
+    assert config.werewolf_allow_no_attack is True
+    assert config.werewolf_allow_wolf_target is False
+
+
 @pytest.mark.parametrize(
     ("changes", "code", "path"),
     [
@@ -119,6 +135,26 @@ def test_validation_returns_stable_codes_and_paths(
         (
             {"sheriff_badge_bomb_policy": "single"},
             "sheriff_badge_bomb_policy has an unsupported value",
+        ),
+        (
+            {
+                "werewolf_attack_policy": {
+                    "resolution": "majority",
+                    "allow_no_attack": False,
+                    "allow_wolf_target": False,
+                }
+            },
+            "werewolf_attack_policy.resolution has an unsupported value",
+        ),
+        (
+            {
+                "werewolf_attack_policy": {
+                    "resolution": "plurality_rotating_tiebreak",
+                    "allow_no_attack": 0,
+                    "allow_wolf_target": False,
+                }
+            },
+            "werewolf_attack_policy.allow_no_attack must be a boolean",
         ),
     ],
 )

@@ -10,10 +10,12 @@ from app.rule_sets.types import (
     RuleSetConfig,
     RuleSetValidationResult,
     RuleValidationIssue,
+    WerewolfAttackResolution,
 )
 from app.werewolf.rules import (
     SPEECH_POLICY_SEQUENTIAL,
     SPEECH_POLICY_SHERIFF_DIRECTED,
+    WEREWOLF_ATTACK_RESOLUTIONS,
     WIN_CONDITION_SLAUGHTER_SIDE,
     WIN_CONDITION_WOLVES_GTE_OTHERS,
 )
@@ -46,7 +48,11 @@ CONFIG_FIELDS = frozenset(
         "werewolf_self_explosion_enabled",
         "first_night_last_words_enabled",
         "sheriff_badge_bomb_policy",
+        "werewolf_attack_policy",
     }
+)
+WEREWOLF_ATTACK_POLICY_FIELDS = frozenset(
+    {"resolution", "allow_no_attack", "allow_wolf_target"}
 )
 
 
@@ -77,6 +83,12 @@ def normalize_rule_set_config(value: Mapping[str, object]) -> RuleSetConfig:
         raise ValueError("sheriff_vote_weight must be finite") from error
     if not math.isfinite(normalized_weight):
         raise ValueError("sheriff_vote_weight must be finite")
+
+    (
+        werewolf_attack_resolution,
+        werewolf_allow_no_attack,
+        werewolf_allow_wolf_target,
+    ) = _werewolf_attack_policy(value.get("werewolf_attack_policy"))
 
     return RuleSetConfig(
         name=_text(value.get("name"), 1, 120, "name"),
@@ -119,6 +131,9 @@ def normalize_rule_set_config(value: Mapping[str, object]) -> RuleSetConfig:
                 "sheriff_badge_bomb_policy",
             ),
         ),
+        werewolf_attack_resolution=werewolf_attack_resolution,
+        werewolf_allow_no_attack=werewolf_allow_no_attack,
+        werewolf_allow_wolf_target=werewolf_allow_wolf_target,
     )
 
 
@@ -292,6 +307,40 @@ def _bool(value: object, field: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{field} must be a boolean")
     return value
+
+
+def _werewolf_attack_policy(
+    value: object,
+) -> tuple[WerewolfAttackResolution | None, bool, bool]:
+    if value is None:
+        return None, False, False
+    if not isinstance(value, Mapping):
+        raise ValueError("werewolf_attack_policy must be a mapping")
+    fields = set(value)
+    if fields != WEREWOLF_ATTACK_POLICY_FIELDS:
+        raise ValueError(
+            "werewolf_attack_policy must contain exactly resolution, "
+            "allow_no_attack, and allow_wolf_target"
+        )
+    resolution = cast(
+        WerewolfAttackResolution,
+        _literal(
+            value.get("resolution"),
+            set(WEREWOLF_ATTACK_RESOLUTIONS),
+            "werewolf_attack_policy.resolution",
+        ),
+    )
+    return (
+        resolution,
+        _bool(
+            value.get("allow_no_attack"),
+            "werewolf_attack_policy.allow_no_attack",
+        ),
+        _bool(
+            value.get("allow_wolf_target"),
+            "werewolf_attack_policy.allow_wolf_target",
+        ),
+    )
 
 
 def _issue(code: str, path: str, message: str) -> RuleValidationIssue:
