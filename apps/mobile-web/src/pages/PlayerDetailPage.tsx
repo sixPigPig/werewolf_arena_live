@@ -150,18 +150,11 @@ function PlayerDossier({ favoriteStateAvailable, profile }: PlayerDossierProps) 
 
       <section className="mobile-archive-card">
         <div className="mobile-archive-card-heading">
-          <span>发言样本</span>
-          <strong>{profile.speaking_style || "未设置"}</strong>
+          <span>发言风格</span>
         </div>
-        {profile.catchphrases.length > 0 ? (
-          <ul className="mobile-player-quote-list">
-            {profile.catchphrases.map((phrase) => (
-              <li key={phrase}>{phrase}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mobile-archive-muted">暂无口头禅</p>
-        )}
+        <p className="mobile-archive-body-copy">
+          {profile.speaking_style || "暂无发言风格"}
+        </p>
       </section>
     </>
   );

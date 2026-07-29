@@ -12,7 +12,6 @@ export type PlayerCreationPresetDraft = Required<
     | "short_description"
     | "background_story"
     | "speaking_style"
-    | "catchphrases"
     | "strategy_profile"
     | "risk_tolerance"
     | "bluffing_tendency"
@@ -62,7 +61,6 @@ export const PLAYER_CREATION_PRESETS: PlayerCreationPreset[] = [
       short_description: "沉稳控场，喜欢先盘逻辑再给站边。",
       background_story: "长期观察圆桌局的复盘型玩家，习惯从细节里找出阵营压力点。",
       speaking_style: "短句推进，先列证据，再给结论。",
-      catchphrases: ["我先盘票型", "这里不急着站死"],
       strategy_profile: "logic_leader",
       risk_tolerance: 2,
       bluffing_tendency: 2,
@@ -86,7 +84,6 @@ export const PLAYER_CREATION_PRESETS: PlayerCreationPreset[] = [
       short_description: "用连续提问制造压力，快速逼出视角漏洞。",
       background_story: "擅长在混乱发言中抓住迟疑和改口，是局内最先点燃冲突的人。",
       speaking_style: "语速快，问题密集，喜欢直接要求对方给出明确站边。",
-      catchphrases: ["这个回答太慢了", "别绕，给结论"],
       strategy_profile: "pressure_attacker",
       risk_tolerance: 4,
       bluffing_tendency: 3,
@@ -110,7 +107,6 @@ export const PLAYER_CREATION_PRESETS: PlayerCreationPreset[] = [
       short_description: "低调观察局势，擅长在关键轮次暗中改变方向。",
       background_story: "习惯坐在话题边缘，等多数观点成形后再悄悄补上一刀。",
       speaking_style: "语气克制，不急着带队，常用疑问句制造弹性空间。",
-      catchphrases: ["我先不打死", "这个视角可以再放一轮"],
       strategy_profile: "shadow_wolf",
       risk_tolerance: 3,
       bluffing_tendency: 5,
@@ -134,7 +130,6 @@ export const PLAYER_CREATION_PRESETS: PlayerCreationPreset[] = [
       short_description: "擅长从情绪变化和互保关系里找阵营线索。",
       background_story: "对发言气质很敏锐，常从谁在回避谁、谁在替谁补话里推断阵营。",
       speaking_style: "自然、有互动感，会把玩家之间的关系线说清楚。",
-      catchphrases: ["这两个人不像同边", "我更看这个姿态"],
       strategy_profile: "social_reader",
       risk_tolerance: 3,
       bluffing_tendency: 3,
@@ -160,7 +155,6 @@ export const AI_PLAYER_CREATION_PRESET: PlayerCreationPreset = {
     short_description: "",
     background_story: "",
     speaking_style: "",
-    catchphrases: [],
     strategy_profile: "balanced",
     risk_tolerance: 3,
     bluffing_tendency: 3,
@@ -186,7 +180,6 @@ export function applyPlayerCreationPreset(
     short_description: preset.draft.short_description,
     background_story: preset.draft.background_story,
     speaking_style: preset.draft.speaking_style,
-    catchphrases: [...preset.draft.catchphrases],
     strategy_profile: preset.draft.strategy_profile,
     risk_tolerance: preset.draft.risk_tolerance,
     bluffing_tendency: preset.draft.bluffing_tendency,
@@ -221,7 +214,6 @@ export function playerCreationPresetDraftFromDraft(
     short_description: draft.short_description?.trim() ?? "",
     background_story: draft.background_story?.trim() ?? "",
     speaking_style: draft.speaking_style?.trim() ?? "",
-    catchphrases: [...(draft.catchphrases ?? [])],
     strategy_profile: draft.strategy_profile || "balanced",
     risk_tolerance: normalizeTendency(draft.risk_tolerance),
     bluffing_tendency: normalizeTendency(draft.bluffing_tendency),

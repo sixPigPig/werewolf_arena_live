@@ -17,7 +17,6 @@ from app.models.live import LiveEventRecord, LiveRunRecord
 from app.werewolf.debate_realism import (
     REPETITION_REWRITE_THRESHOLD,
     assign_speech_mission,
-    catchphrases_from_personality,
     normalize_dialogue_text,
     repeated_phrase_candidates,
 )
@@ -149,7 +148,7 @@ def build_speech_repetition_audit(
     )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(UTC).isoformat(),
         "run_id": run_id,
         "session_id": session_id,
@@ -165,7 +164,6 @@ def build_speech_repetition_audit(
             "configured_model_count": len(model_names - {""}),
             "configured_personality_id_count": len(personality_ids - {""}),
             "configured_strategy_profile_count": len(strategy_profiles - {""}),
-            "catchphrase_using_turn_count": sum(bool(turn["used_catchphrases"]) for turn in spoken),
             "quality_checked_count": sum(turn["quality_checked"] for turn in turns),
             "quality_retry_count": sum(
                 int(turn["quality_attempt_count"] or 0) > 1 for turn in turns
@@ -299,12 +297,6 @@ def _public_speech_turns(
             {str(code) for code in initial_codes if str(code).strip()}
         )
         metrics = _speech_text_metrics(text)
-        personality = str(profile.get("personality") or "")
-        catchphrases = catchphrases_from_personality(personality)
-        normalized_text = normalize_dialogue_text(text)
-        used_catchphrases = [
-            phrase for phrase in catchphrases if normalize_dialogue_text(phrase) in normalized_text
-        ]
         turns.append(
             {
                 "turn_id": action_id or f"r{round_number}:{action}:{actor}:{len(turns) + 1}",
@@ -334,7 +326,6 @@ def _public_speech_turns(
                 "defer_marker_count": metrics["defer_marker_count"],
                 "reply_marker_count": metrics["reply_marker_count"],
                 "hedge_marker_count": metrics["hedge_marker_count"],
-                "used_catchphrases": used_catchphrases,
                 "mission_kind": str(mission.get("kind") or "") or None,
                 "mission_reason_code": str(mission.get("reason_code") or "") or None,
                 "mission_completed": (bool(report.get("mission_completed")) if report else None),
@@ -522,9 +513,6 @@ def _actor_summaries(
                 "question_count": sum(int(turn.get("question_count") or 0) for turn in spoken),
                 "defer_marker_count": sum(
                     int(turn.get("defer_marker_count") or 0) for turn in spoken
-                ),
-                "used_catchphrase_count": sum(
-                    len(turn.get("used_catchphrases") or []) for turn in spoken
                 ),
             }
         )

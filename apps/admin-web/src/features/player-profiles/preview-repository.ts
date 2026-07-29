@@ -84,8 +84,6 @@ const PREVIEW_OPTIONS: PlayerProfileOptions = {
   constraints: {
     tags_max_items: 8,
     tag_max_length: 20,
-    catchphrases_max_items: 6,
-    catchphrase_max_length: 40,
     example_messages_max_items: 5,
     example_message_max_length: 240,
   },
@@ -182,7 +180,6 @@ export async function generatePreviewPlayerProfileAiDraft(): Promise<AdminPlayer
     short_description: "擅长从票型变化中寻找矛盾的复盘型玩家。",
     background_story: "长期记录圆桌对局，习惯用时间线还原每一次立场变化。",
     speaking_style: "先复述事实，再指出矛盾，最后明确给出归票建议。",
-    catchphrases: ["先把时间线对齐", "这一票要解释"],
     strategy_profile: "logic_leader",
     risk_tolerance: 2,
     bluffing_tendency: 2,
@@ -473,7 +470,6 @@ function fixtureProfile(
     background_story: "长期观察圆桌局的复盘型玩家。",
     speaking_style: "先列证据，再给结论。",
     gender: "female",
-    catchphrases: ["我先盘票型"],
     strategy_profile: "logic_leader",
     risk_tolerance: 2,
     bluffing_tendency: 2,
@@ -499,7 +495,6 @@ function fixtureProfile(
 function cloneProfile(profile: AdminPlayerProfile): AdminPlayerProfile {
   return {
     ...profile,
-    catchphrases: [...profile.catchphrases],
     example_messages: [...profile.example_messages],
     tags: [...profile.tags],
   };

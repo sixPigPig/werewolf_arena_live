@@ -13,8 +13,6 @@ _QUALITY_CODES = frozenset(
         "repeated_debate_phrase",
         "low_proposition_novelty",
         "group_agreement_without_evidence",
-        "catchphrase_dominates_speech",
-        "catchphrase_overuse",
         "mission_not_completed",
         "unknown",
     }

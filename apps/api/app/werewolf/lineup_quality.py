@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
@@ -14,9 +13,6 @@ from app.werewolf.player_configs import PlayerConfig
 LineupQualityMode = Literal["observe", "repair", "enforce"]
 LineupRepairScope = Literal["empty_only", "unlocked_all"]
 LineupViolationSeverity = Literal["warning", "error"]
-
-_CATCHPHRASE_LINE = re.compile(r"^常用表达:\s*(.+)$", re.MULTILINE)
-_CATCHPHRASE_SPLIT = re.compile(r"[；;、,，\n]+")
 
 _PERSONALITY_STYLE_BUCKETS = {
     "balanced": "balanced",
@@ -43,7 +39,6 @@ class LineupQualityPolicyV1:
     schema_version: int = 1
     mode: LineupQualityMode = "repair"
     max_same_personality: int = 3
-    max_same_catchphrase: int = 2
     max_same_avatar: int = 3
     max_same_strategy_profile: int = 3
     min_style_buckets: int = 4
@@ -139,13 +134,6 @@ def evaluate_lineup_quality(
         values=(_strategy_key(config) for config in ordered),
         code="strategy_profile_overrepresented",
         limit=active_policy.max_same_strategy_profile,
-    )
-    _append_multi_value_violations(
-        violations,
-        ordered,
-        values=(_catchphrases(config) for config in ordered),
-        code="catchphrase_overrepresented",
-        limit=active_policy.max_same_catchphrase,
     )
     _append_overrepresentation_violations(
         violations,
@@ -262,10 +250,6 @@ def legacy_lineup_warnings(report: LineupQualityReportV1) -> list[dict[str, str]
             "homogeneous_personality_lineup",
             "personality_id",
         ),
-        "catchphrase_overrepresented": (
-            "shared_catchphrase_lineup",
-            "catchphrase",
-        ),
         "tag_overrepresented": ("shared_tag_lineup", "tag"),
     }
     for violation in report.violations:
@@ -352,18 +336,14 @@ def _append_multi_value_violations(
 def _candidate_penalty(
     configs: Sequence[PlayerConfig],
     policy: LineupQualityPolicyV1,
-) -> tuple[int, int, int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     personality = Counter(_normalize_key(config.personality_id) for config in configs)
     strategy = Counter(_strategy_key(config) for config in configs)
     avatars = Counter(value for config in configs if (value := _avatar_key(config)))
-    catchphrases = Counter(
-        phrase for config in configs for phrase in set(_catchphrases(config))
-    )
     styles = {_style_bucket(config) for config in configs}
     styles.discard("")
     overage = (
         sum(max(0, count - policy.max_same_personality) for count in personality.values()),
-        sum(max(0, count - policy.max_same_catchphrase) for count in catchphrases.values()),
         sum(max(0, count - policy.max_same_avatar) for count in avatars.values()),
         sum(max(0, count - policy.max_same_strategy_profile) for count in strategy.values()),
     )
@@ -386,23 +366,6 @@ def _config_for_seat(
         name=existing.name or candidate.name,
         model_provider=existing.model_provider or candidate.model_provider,
         model=existing.model or candidate.model,
-    )
-
-
-def _catchphrases(config: PlayerConfig) -> tuple[str, ...]:
-    if config.catchphrases:
-        return tuple(
-            normalized
-            for phrase in config.catchphrases
-            if (normalized := _normalize_catchphrase(phrase))
-        )
-    match = _CATCHPHRASE_LINE.search(config.personality or "")
-    if match is None:
-        return ()
-    return tuple(
-        normalized
-        for phrase in _CATCHPHRASE_SPLIT.split(match.group(1))
-        if (normalized := _normalize_catchphrase(phrase))
     )
 
 
@@ -433,12 +396,3 @@ def _stable_candidate_rank(seed: int | None, seat: int, profile_id: str) -> str:
 
 def _normalize_key(value: object) -> str:
     return " ".join(unicodedata.normalize("NFKC", str(value)).strip().split())
-
-
-def _normalize_catchphrase(value: object) -> str:
-    normalized = unicodedata.normalize("NFKC", str(value))
-    without_punctuation = "".join(
-        " " if unicodedata.category(character).startswith("P") else character
-        for character in normalized
-    )
-    return " ".join(without_punctuation.strip().split())

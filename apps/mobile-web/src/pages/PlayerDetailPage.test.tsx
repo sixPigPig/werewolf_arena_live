@@ -40,7 +40,6 @@ function buildProfile(
     short_description: overrides.short_description ?? "冷静复盘型玩家",
     background_story: overrides.background_story ?? "来自古堡议事厅的旁观者。",
     speaking_style: overrides.speaking_style ?? "短句推进",
-    catchphrases: overrides.catchphrases ?? ["先听后置位", "票型会说话"],
     strategy_profile: overrides.strategy_profile ?? "balanced",
     risk_tolerance: overrides.risk_tolerance ?? 3,
     bluffing_tendency: overrides.bluffing_tendency ?? 2,
@@ -106,7 +105,7 @@ describe("PlayerDetailPage", () => {
     expect(screen.getByText("deepseek-v4-flash")).toBeVisible();
     expect(screen.getByText("稳健发言，优先找逻辑漏洞。")).toBeVisible();
     expect(screen.getAllByText("控场").length).toBeGreaterThan(0);
-    expect(screen.getByText("票型会说话")).toBeVisible();
+    expect(screen.getByText("短句推进")).toBeVisible();
     expect(screen.getByRole("img", { name: "月下猎人 头像" })).toHaveAttribute(
       "src",
       "/api/v1/player-profiles/avatar-assets/system-gothic-female-1",

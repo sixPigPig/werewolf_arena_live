@@ -208,9 +208,6 @@ function PlayerProfileEditor({
   const initialInput = inputFromProfile(initialProfile, defaults);
   const [profile, setProfile] = useState(initialProfile);
   const [draft, setDraft] = useState(initialInput);
-  const [catchphraseInput, setCatchphraseInput] = useState(() =>
-    formatCommaList(initialInput.catchphrases),
-  );
   const [tagInput, setTagInput] = useState(() =>
     formatCommaList(initialInput.tags),
   );
@@ -412,7 +409,6 @@ function PlayerProfileEditor({
     try {
       const generated = await repository.generateAiDraft();
       setDraft((current) => ({ ...current, ...generated }));
-      setCatchphraseInput(formatCommaList(generated.catchphrases));
       setTagInput(formatCommaList(generated.tags));
       setExampleInput(formatMultilineList(generated.example_messages));
       setFormErrors({});
@@ -462,7 +458,6 @@ function PlayerProfileEditor({
       const nextInput = inputFromProfile(updated);
       setProfile(updated);
       setDraft(nextInput);
-      setCatchphraseInput(formatCommaList(nextInput.catchphrases));
       setTagInput(formatCommaList(nextInput.tags));
       setExampleInput(formatMultilineList(nextInput.example_messages));
       baseline.current = JSON.stringify(nextInput);
@@ -780,17 +775,6 @@ function PlayerProfileEditor({
                     onChange={(event) => updateDraft("speaking_style", event.target.value)}
                     rows={5}
                     value={draft.speaking_style}
-                  />
-                </Field>
-                <Field label="常用表达" error={formErrors.catchphrases} help="使用逗号分隔">
-                  <Input
-                    aria-invalid={Boolean(formErrors.catchphrases)}
-                    name="catchphrases"
-                    onChange={(event) => {
-                      setCatchphraseInput(event.target.value);
-                      updateDraft("catchphrases", parseCommaList(event.target.value));
-                    }}
-                    value={catchphraseInput}
                   />
                 </Field>
                 <Field label="标签" error={formErrors.tags} help="使用逗号分隔">

@@ -47,7 +47,6 @@ export const mobileProfiles: PublicPlayerProfile[] = profileNames.map(
     short_description: "先盘逻辑再给站边",
     background_story: "",
     speaking_style: "",
-    catchphrases: [],
     strategy_profile: index % 2 === 0 ? "analysis" : "balanced",
     risk_tolerance: 3,
     bluffing_tendency: 3,

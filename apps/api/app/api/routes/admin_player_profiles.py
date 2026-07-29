@@ -462,8 +462,6 @@ def get_profile_options(
         constraints={
             "tags_max_items": 8,
             "tag_max_length": 20,
-            "catchphrases_max_items": 6,
-            "catchphrase_max_length": 40,
             "example_messages_max_items": 5,
             "example_message_max_length": 240,
         },

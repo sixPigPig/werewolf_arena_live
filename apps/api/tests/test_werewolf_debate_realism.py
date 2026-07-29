@@ -3,7 +3,6 @@ import pytest
 from app.werewolf.debate_realism import (
     SpeechMissionV1,
     assign_speech_mission,
-    catchphrases_from_personality,
     contradictory_role_targets,
     debate_guidance_for_turn,
     dialogue_quality_warnings,
@@ -21,8 +20,7 @@ from app.werewolf.player_configs import PlayerConfig
 
 ANALYTICAL_PERSONALITY = (
     "重视票型、发言顺序和行为一致性。\n"
-    "角色简介: 沉稳控场，喜欢先盘逻辑再给站边。\n"
-    "常用表达: 我先盘票型；这里不急着站死"
+    "角色简介: 沉稳控场，喜欢先盘逻辑再给站边。"
 )
 
 
@@ -102,53 +100,23 @@ def test_repeated_phrase_candidates_detects_round_level_repetition() -> None:
     assert len(phrases) <= 8
 
 
-def test_catchphrases_from_personality_reads_profile_line() -> None:
-    assert catchphrases_from_personality(ANALYTICAL_PERSONALITY) == [
-        "我先盘票型",
-        "这里不急着站死",
-    ]
-
-
-def test_dialogue_quality_warnings_detects_repetition_and_catchphrase_overuse() -> None:
+def test_dialogue_quality_warnings_detects_repetition_and_low_novelty() -> None:
     warnings = dialogue_quality_warnings(
         text="我先盘票型。第一轮全票挂警徽定狼，这里不急着站死，先听后置位补充。",
         prior_texts=[
             "我先盘票型。第一轮全票挂警徽定狼，说明大家都觉得他发言差。",
             "第一轮全票挂警徽定狼，但我不急着站边。",
         ],
-        personality=ANALYTICAL_PERSONALITY,
     )
 
-    assert "catchphrase_overuse" in warnings
     assert "repeated_debate_phrase" in warnings
     assert "low_novelty_debate" in warnings
-
-
-def test_dialogue_quality_allows_first_catchphrase_use() -> None:
-    warnings = dialogue_quality_warnings(
-        text="我先盘票型。今晚5号玩家倒牌，先看票型。",
-        prior_texts=[],
-        personality=ANALYTICAL_PERSONALITY,
-    )
-
-    assert "catchphrase_overuse" not in warnings
-
-
-def test_dialogue_quality_flags_repeated_catchphrase_use() -> None:
-    warnings = dialogue_quality_warnings(
-        text="我先盘票型。第二轮继续看投票。",
-        prior_texts=["我先盘票型。第一轮先听发言。"],
-        personality=ANALYTICAL_PERSONALITY,
-    )
-
-    assert "catchphrase_overuse" in warnings
 
 
 def test_repeated_phrase_ignores_player_reference_only() -> None:
     warnings = dialogue_quality_warnings(
         text="我怀疑5号玩家，因为他的投票位置靠后。",
         prior_texts=["5号玩家需要解释自己的投票。"],
-        personality="",
     )
 
     assert "repeated_debate_phrase" not in warnings
@@ -158,7 +126,6 @@ def test_repeated_phrase_ignores_predicate_plus_player_reference() -> None:
     warnings = dialogue_quality_warnings(
         text="我怀疑5号玩家。",
         prior_texts=["我也怀疑5号玩家。"],
-        personality="",
     )
 
     assert "repeated_debate_phrase" not in warnings
@@ -168,7 +135,6 @@ def test_repeated_phrase_ignores_shared_role_vote_vocabulary() -> None:
     warnings = dialogue_quality_warnings(
         text="我认为预言家查验要先放一放，今天投票位置更能说明问题。",
         prior_texts=["预言家查验先听完，投票位置需要每个人解释清楚。"],
-        personality="",
     )
 
     assert "repeated_debate_phrase" not in warnings
@@ -178,7 +144,6 @@ def test_repeated_phrase_still_flags_actual_phrase_reuse() -> None:
     warnings = dialogue_quality_warnings(
         text="第一轮全票挂警徽定狼，我现在还是这个判断。",
         prior_texts=["第一轮全票挂警徽定狼，所以先把他放进狼坑。"],
-        personality="",
     )
 
     assert "repeated_debate_phrase" in warnings
@@ -189,7 +154,6 @@ def test_debate_guidance_for_turn_assigns_distinct_speaker_jobs() -> None:
         speaker="票台换票",
         active_players=["票台换票", "狼啸听风", "烛火潜行"],
         prior_messages=[],
-        personality=ANALYTICAL_PERSONALITY,
     )
     final = debate_guidance_for_turn(
         speaker="烛火潜行",
@@ -198,7 +162,6 @@ def test_debate_guidance_for_turn_assigns_distinct_speaker_jobs() -> None:
             "票台换票：我先盘票型。第一轮全票挂警徽定狼。",
             "狼啸听风：盘票型。票台换票行为矛盾。",
         ],
-        personality=ANALYTICAL_PERSONALITY,
     )
 
     assert any("第 1/3 位" in line for line in first)
@@ -213,7 +176,6 @@ def test_debate_guidance_for_turn_uses_known_speaker_position() -> None:
         speaker="烛火潜行",
         active_players=["票台换票", "狼啸听风", "烛火潜行"],
         prior_messages=[],
-        personality=ANALYTICAL_PERSONALITY,
     )
 
     assert any("第 3/3 位" in line for line in guidance)
@@ -432,10 +394,6 @@ def test_lineup_quality_warnings_detects_homogeneous_profiles() -> None:
             "detail": "4 players share personality_id analytical.",
         },
         {
-            "code": "shared_catchphrase_lineup",
-            "detail": "4 players share catchphrase 我先盘票型.",
-        },
-        {
             "code": "shared_tag_lineup",
             "detail": "4 players share tag 控场.",
         },
@@ -463,10 +421,6 @@ def test_lineup_quality_warnings_from_players_handles_normal_player_dict_tags() 
         {
             "code": "homogeneous_personality_lineup",
             "detail": "4 players share personality_id analytical.",
-        },
-        {
-            "code": "shared_catchphrase_lineup",
-            "detail": "4 players share catchphrase 我先盘票型.",
         },
         {
             "code": "shared_tag_lineup",
@@ -524,9 +478,5 @@ def test_lineup_quality_warnings_from_players_ignores_malformed_or_missing_tags(
         {
             "code": "homogeneous_personality_lineup",
             "detail": "4 players share personality_id analytical.",
-        },
-        {
-            "code": "shared_catchphrase_lineup",
-            "detail": "4 players share catchphrase 我先盘票型.",
         },
     ]

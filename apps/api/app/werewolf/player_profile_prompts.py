@@ -34,10 +34,6 @@ def compose_player_profile_prompt(profile: object, base_personality: str) -> str
     ):
         sections.append(f"{label}: {_profile_int(profile, field_name)}/5")
 
-    catchphrases = _profile_list(profile, "catchphrases")
-    if catchphrases:
-        sections.append(f"常用表达: {'；'.join(catchphrases)}")
-
     example_messages = _profile_list(profile, "example_messages")
     if example_messages:
         sections.append(f"示例发言: {'；'.join(example_messages)}")

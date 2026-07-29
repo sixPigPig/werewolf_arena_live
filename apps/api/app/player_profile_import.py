@@ -89,7 +89,6 @@ def _database_profile(
         short_description=profile.short_description,
         background_story=profile.background_story,
         speaking_style=profile.speaking_style,
-        catchphrases=profile.catchphrases,
         strategy_profile=profile.strategy_profile,
         risk_tolerance=profile.risk_tolerance,
         bluffing_tendency=profile.bluffing_tendency,

@@ -272,7 +272,6 @@ function lineupViolationLabel(code: string) {
     lineup_incomplete: "阵容未完整",
     personality_overrepresented: "同人格过多",
     strategy_profile_overrepresented: "同策略过多",
-    catchphrase_overrepresented: "同口头禅过多",
     avatar_overrepresented: "同头像过多",
     tag_overrepresented: "同标签较多",
     insufficient_style_buckets: "风格覆盖不足",

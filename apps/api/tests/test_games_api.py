@@ -318,11 +318,10 @@ def add_virtual_profiles(
                     personality_id=(
                         personalities[(index - 1) % len(personalities)] if diverse else "balanced"
                     ),
-                    personality_text=f"稳健推进。\n常用表达: 表达{index if diverse else 1}",
+                    personality_text="稳健推进。",
                     strategy_profile=(
                         strategies[(index - 1) % len(strategies)] if diverse else "balanced"
                     ),
-                    catchphrases=[f"表达{index if diverse else 1}"],
                     appearance_id=(
                         appearances[(index - 1) % len(appearances)] if diverse else "default"
                     ),
@@ -2472,7 +2471,6 @@ def test_create_game_run_resolves_profile_configs(
         "appearance_id": "crimson",
         "avatar_image_url": "/api/v1/player-profiles/avatar-assets/system-gothic-female-2",
         "avatar_asset_id": "system-gothic-female-2",
-        "catchphrases": [],
         "strategy_profile": "balanced",
         "tts_speaker": "zh_female_gaolengyujie_uranus_bigtts",
         "tts_dialect": "",
@@ -2537,7 +2535,6 @@ def test_game_run_player_config_composes_rich_profile_prompt(
             "personality_text": "先找矛盾，再给站边。",
             "short_description": "逻辑控场玩家",
             "speaking_style": "发言会分点列证据。",
-            "catchphrases": ["我先拆一下视角"],
             "strategy_profile": "logic_leader",
             "leadership_tendency": 5,
             "talkativeness": 4,
@@ -2572,7 +2569,7 @@ def test_game_run_player_config_composes_rich_profile_prompt(
     assert config["name"] == "控场样本"
     assert "先找矛盾，再给站边。" in config["personality"]
     assert "逻辑控场玩家" in config["personality"]
-    assert "我先拆一下视角" in config["personality"]
+    assert "常用表达:" not in config["personality"]
     assert "领导倾向: 5/5" in config["personality"]
     assert config in [item.to_dict() for item in captured[0]["player_configs"]]
 
@@ -2590,7 +2587,6 @@ def test_game_run_player_config_keeps_explicit_personality_text_override(
             "personality_id": "analytical",
             "personality_text": "先找矛盾，再给站边。",
             "short_description": "这段不应进入运行配置",
-            "catchphrases": ["这句也不应进入"],
             "leadership_tendency": 5,
         },
     ).json()
@@ -2712,7 +2708,6 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
                 "appearance_id": "moonlit",
                 "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
                 "avatar_asset_id": None,
-                "catchphrases": [],
                 "strategy_profile": "balanced",
                 "tags": ["控场"],
             }
@@ -2777,7 +2772,6 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
             "appearance_id": "moonlit",
             "avatar_image_url": "/api/v1/player-profiles/avatar/profile-alpha.png",
             "avatar_asset_id": None,
-            "catchphrases": [],
             "strategy_profile": "balanced",
             "tts_speaker": "",
             "tts_dialect": "",

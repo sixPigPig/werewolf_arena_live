@@ -3050,7 +3050,6 @@ class GameEngine:
                 action=ACTION_DEBATE,
                 text=message,
                 prior_texts=[entry.message for entry in round_state.debate],
-                personality=player.personality,
             )
 
             entry = DebateEntry(speaker=speaker, message=message)
@@ -7021,7 +7020,6 @@ class GameEngine:
             actor=request.player.name,
             endgame=len(active_players) <= 4,
             prior_texts=[entry.message for entry in request.round_state.debate],
-            personality=request.player.personality,
             eligibility=eligibility if isinstance(eligibility, dict) else None,
             role=request.player.role,
             hard_state=(
@@ -7047,7 +7045,6 @@ class GameEngine:
             "repeated_debate_phrase": "不要复述已有长句，加入一个新的公开事实、票型变化或具体反问。",
             "low_proposition_novelty": "给出一个此前没有出现过的明确判断，并说明可验证依据。",
             "group_agreement_without_evidence": "不要继续无依据附和；提出当前多数结论的反例或风险。",
-            "catchphrase_dominates_speech": "减少个人口头禅，用具体事实和结论替代。",
             "contradicts_public_vote_tally": "你写出的确定票数与引擎票型不一致，请按公开票型改写。",
             "invalid_public_speech": "必须返回非空的公开发言。",
             "last_words_too_long": "遗言不得超过 150 个汉字，请只保留最后判断和依据。",
@@ -7158,7 +7155,6 @@ class GameEngine:
             prior_texts=(
                 [str(item) for item in prior_texts] if isinstance(prior_texts, list) else []
             ),
-            personality=request.player.personality,
         )
 
     def _attach_speech_quality_metadata(
@@ -8803,7 +8799,6 @@ class GameEngine:
         action: str,
         text: str,
         prior_texts: list[str] | tuple[str, ...] = (),
-        personality: str = "",
     ) -> None:
         player = self.state.player_by_name().get(actor)
         active_players = (
@@ -8822,7 +8817,6 @@ class GameEngine:
             actor=actor,
             endgame=len(active_players) <= 4,
             prior_texts=prior_texts,
-            personality=personality,
             eligibility=eligibility,
             role=player.role if player is not None else "",
         )
@@ -9003,7 +8997,6 @@ class GameEngine:
             speaker=player.name,
             active_players=speech_order,
             prior_messages=[f"{entry.speaker}：{entry.message}" for entry in round_state.debate],
-            personality=player.personality,
         )
 
     def _add_public_fact(

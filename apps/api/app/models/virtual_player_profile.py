@@ -148,11 +148,6 @@ class VirtualPlayerProfile(Base):
     voice_config_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="1"
     )
-    catchphrases: Mapped[list[str]] = mapped_column(
-        MutableList.as_mutable(JSON),
-        nullable=False,
-        default=list,
-    )
     strategy_profile: Mapped[str] = mapped_column(String(40), nullable=False, default="balanced")
     risk_tolerance: Mapped[int] = mapped_column(nullable=False, default=3)
     bluffing_tendency: Mapped[int] = mapped_column(nullable=False, default=3)

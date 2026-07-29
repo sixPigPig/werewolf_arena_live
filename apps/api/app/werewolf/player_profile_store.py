@@ -22,7 +22,6 @@ class StoredPlayerProfile:
     short_description: str
     background_story: str
     speaking_style: str
-    catchphrases: list[str]
     strategy_profile: str
     risk_tolerance: int
     bluffing_tendency: int
@@ -97,7 +96,6 @@ def _profile_from_payload(payload: dict[str, Any]) -> StoredPlayerProfile | None
         short_description=str(payload.get("short_description") or ""),
         background_story=str(payload.get("background_story") or ""),
         speaking_style=str(payload.get("speaking_style") or ""),
-        catchphrases=_strings_from_payload(payload.get("catchphrases")),
         strategy_profile=_optional_string(payload.get("strategy_profile")) or "balanced",
         risk_tolerance=_int_from_payload(payload.get("risk_tolerance"), default=3),
         bluffing_tendency=_int_from_payload(payload.get("bluffing_tendency"), default=3),

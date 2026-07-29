@@ -98,7 +98,6 @@ class PlayerProfileBase(BaseModel):
     short_description: str = Field(default="", max_length=160)
     background_story: str = Field(default="", max_length=1200)
     speaking_style: str = Field(default="", max_length=800)
-    catchphrases: list[str] = Field(default_factory=list)
     strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
     risk_tolerance: int = Field(default=3, ge=1, le=5)
     bluffing_tendency: int = Field(default=3, ge=1, le=5)
@@ -137,13 +136,6 @@ class PlayerProfileBase(BaseModel):
             raise ValueError(f"Unknown strategy_profile: {value}")
         return value
 
-    @field_validator("catchphrases", mode="before")
-    @classmethod
-    def normalize_catchphrases(cls, value: object) -> object:
-        if isinstance(value, list):
-            return _normalize_limited_strings(value, max_items=6, max_length=40)
-        return value
-
     @field_validator("example_messages", mode="before")
     @classmethod
     def normalize_example_messages(cls, value: object) -> object:
@@ -176,7 +168,6 @@ class UpdatePlayerProfileRequest(BaseModel):
     short_description: str | None = Field(default=None, max_length=160)
     background_story: str | None = Field(default=None, max_length=1200)
     speaking_style: str | None = Field(default=None, max_length=800)
-    catchphrases: list[str] | None = None
     strategy_profile: str | None = Field(default=None, min_length=1, max_length=40)
     risk_tolerance: int | None = Field(default=None, ge=1, le=5)
     bluffing_tendency: int | None = Field(default=None, ge=1, le=5)
@@ -205,7 +196,6 @@ class UpdatePlayerProfileRequest(BaseModel):
                 "short_description",
                 "background_story",
                 "speaking_style",
-                "catchphrases",
                 "strategy_profile",
                 "risk_tolerance",
                 "bluffing_tendency",
@@ -250,13 +240,6 @@ class UpdatePlayerProfileRequest(BaseModel):
             raise ValueError(f"Unknown strategy_profile: {value}")
         return value
 
-    @field_validator("catchphrases", mode="before")
-    @classmethod
-    def normalize_catchphrases(cls, value: object) -> object:
-        if isinstance(value, list):
-            return _normalize_limited_strings(value, max_items=6, max_length=40)
-        return value
-
     @field_validator("example_messages", mode="before")
     @classmethod
     def normalize_example_messages(cls, value: object) -> object:
@@ -288,7 +271,6 @@ class PlayerProfileResponse(BaseModel):
     short_description: str
     background_story: str
     speaking_style: str
-    catchphrases: list[str]
     strategy_profile: str
     risk_tolerance: int
     bluffing_tendency: int
@@ -342,7 +324,6 @@ class PlayerProfileAiDraftResponse(BaseModel):
     short_description: str = Field(default="", max_length=160)
     background_story: str = Field(default="", max_length=1200)
     speaking_style: str = Field(default="", max_length=800)
-    catchphrases: list[str] = Field(default_factory=list)
     strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
     risk_tolerance: int = Field(default=3, ge=1, le=5)
     bluffing_tendency: int = Field(default=3, ge=1, le=5)
@@ -395,13 +376,6 @@ class PlayerProfileAiDraftResponse(BaseModel):
         except (TypeError, ValueError):
             return 3
         return min(5, max(1, parsed))
-
-    @field_validator("catchphrases", mode="before")
-    @classmethod
-    def normalize_generated_catchphrases(cls, value: object) -> object:
-        if isinstance(value, list):
-            return _normalize_limited_strings(value, max_items=6, max_length=40)
-        return []
 
     @field_validator("example_messages", mode="before")
     @classmethod
@@ -684,9 +658,9 @@ def _build_ai_player_draft_prompt(request: PlayerProfileAiDraftRequest) -> str:
         "pressure_attacker、cautious_observer 之一。"
         "risk_tolerance、bluffing_tendency、trust_tendency、leadership_tendency、"
         "talkativeness 都是 1 到 5 的整数。"
-        "catchphrases 最多 3 条，tags 最多 4 个，example_messages 最多 2 条。"
+        "tags 最多 4 个，example_messages 最多 2 条。"
         "只输出 JSON，包含 display_name、personality_id、personality_text、"
-        "short_description、background_story、speaking_style、catchphrases、"
+        "short_description、background_story、speaking_style、"
         "strategy_profile、risk_tolerance、bluffing_tendency、trust_tendency、"
         "leadership_tendency、talkativeness、example_messages、tags。"
     )

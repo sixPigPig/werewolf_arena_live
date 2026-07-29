@@ -47,7 +47,6 @@ export function parseAdminPlayerProfileAiDraft(
     short_description: stringValue(record.short_description),
     background_story: stringValue(record.background_story),
     speaking_style: stringValue(record.speaking_style),
-    catchphrases: stringArray(record.catchphrases, "catchphrases"),
     strategy_profile: requiredString(
       record.strategy_profile,
       "strategy_profile",
@@ -93,7 +92,6 @@ export function parseAdminPlayerProfile(value: unknown): AdminPlayerProfile {
     background_story: stringValue(record.background_story),
     speaking_style: stringValue(record.speaking_style),
     gender: enumString(record.gender, PLAYER_GENDERS, "gender"),
-    catchphrases: stringArray(record.catchphrases, "catchphrases"),
     strategy_profile: requiredString(record.strategy_profile, "strategy_profile"),
     risk_tolerance: tendency(record.risk_tolerance, "risk_tolerance"),
     bluffing_tendency: tendency(record.bluffing_tendency, "bluffing_tendency"),
@@ -322,14 +320,6 @@ function parseConstraints(record: Record<string, unknown>): PlayerProfileConstra
   return {
     tags_max_items: positiveInteger(record.tags_max_items, "tags_max_items"),
     tag_max_length: positiveInteger(record.tag_max_length, "tag_max_length"),
-    catchphrases_max_items: positiveInteger(
-      record.catchphrases_max_items,
-      "catchphrases_max_items",
-    ),
-    catchphrase_max_length: positiveInteger(
-      record.catchphrase_max_length,
-      "catchphrase_max_length",
-    ),
     example_messages_max_items: positiveInteger(
       record.example_messages_max_items,
       "example_messages_max_items",

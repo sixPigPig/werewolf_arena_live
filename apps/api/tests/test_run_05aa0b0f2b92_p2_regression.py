@@ -27,7 +27,6 @@ def _config(
     profile_id: str,
     personality_id: str,
     strategy_profile: str,
-    catchphrase: str,
     avatar_asset_id: str,
 ) -> PlayerConfig:
     return PlayerConfig(
@@ -40,7 +39,6 @@ def _config(
         appearance_id="default",
         tags=(),
         avatar_asset_id=avatar_asset_id,
-        catchphrases=(catchphrase,),
         strategy_profile=strategy_profile,
     )
 
@@ -59,7 +57,6 @@ def test_run_05aa0b0f2b92_p2_lineup_is_detected_and_repaired() -> None:
             profile_id=f"source-{seat}",
             personality_id=source["personality_id"],
             strategy_profile=source["strategy_profile"],
-            catchphrase=source["catchphrase"],
             avatar_asset_id=source["avatar_asset_id"],
         )
         for seat in range(1, player_count + 1)
@@ -72,7 +69,6 @@ def test_run_05aa0b0f2b92_p2_lineup_is_detected_and_repaired() -> None:
             profile_id=item["profile_id"],
             personality_id=item["personality_id"],
             strategy_profile=item["strategy_profile"],
-            catchphrase=f"表达-{item['profile_id']}",
             avatar_asset_id=f"avatar-{item['profile_id']}",
         )
         for item in fixture["repair_candidates"]
@@ -141,7 +137,6 @@ def test_run_05aa0b0f2b92_p2_checkpoint_admin_and_privacy_gate() -> None:
             profile_id=item["profile_id"],
             personality_id=item["personality_id"],
             strategy_profile=item["strategy_profile"],
-            catchphrase=f"表达-{item['profile_id']}",
             avatar_asset_id=f"avatar-{item['profile_id']}",
         )
         for item in fixture["repair_candidates"]

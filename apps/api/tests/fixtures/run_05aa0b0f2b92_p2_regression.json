@@ -1,5 +1,5 @@
 {
-  "fixture_version": 3,
+  "fixture_version": 4,
   "source_run_id": "run_05aa0b0f2b92",
   "source_session_id": "game_0c46d70d",
   "rule_set_id": "classic_12_seer_witch_hunter_idiot",
@@ -8,12 +8,10 @@
     "player_count": 12,
     "personality_id": "analytical",
     "strategy_profile": "logic_leader",
-    "catchphrase": "我先盘票型",
     "avatar_asset_id": "shared-avatar",
     "expected_violation_codes": [
       "personality_overrepresented",
       "strategy_profile_overrepresented",
-      "catchphrase_overrepresented",
       "avatar_overrepresented",
       "insufficient_style_buckets"
     ]

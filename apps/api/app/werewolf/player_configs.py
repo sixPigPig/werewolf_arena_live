@@ -20,7 +20,6 @@ class PlayerConfig:
     tags: tuple[str, ...]
     avatar_image_url: str = ""
     avatar_asset_id: str | None = None
-    catchphrases: tuple[str, ...] = ()
     strategy_profile: str = "balanced"
     tts_speaker: str = ""
     tts_dialect: str = ""
@@ -44,7 +43,6 @@ class PlayerConfig:
             "appearance_id": self.appearance_id,
             "avatar_image_url": self.avatar_image_url,
             "avatar_asset_id": self.avatar_asset_id,
-            "catchphrases": list(self.catchphrases),
             "strategy_profile": self.strategy_profile,
             "tts_speaker": self.tts_speaker,
             "tts_dialect": self.tts_dialect,
@@ -128,11 +126,6 @@ def player_config_from_profile(
             _override_string(overrides, "avatar_asset_id")
             or _profile_string(profile, "avatar_asset_id")
         ),
-        catchphrases=_tags_from_value(
-            overrides["catchphrases"]
-            if "catchphrases" in overrides
-            else getattr(profile, "catchphrases", ())
-        ),
         strategy_profile=(
             _override_string(overrides, "strategy_profile")
             or _profile_string(profile, "strategy_profile")
@@ -196,7 +189,6 @@ def player_config_from_dict(data: dict[str, Any]) -> PlayerConfig:
         appearance_id=clean_optional_string(data.get("appearance_id")) or "default",
         avatar_image_url=clean_optional_string(data.get("avatar_image_url")) or "",
         avatar_asset_id=clean_optional_string(data.get("avatar_asset_id")),
-        catchphrases=_tags_from_value(data.get("catchphrases")),
         strategy_profile=clean_optional_string(data.get("strategy_profile")) or "balanced",
         tts_speaker=clean_optional_string(data.get("tts_speaker")) or "",
         tts_dialect=clean_optional_string(data.get("tts_dialect")) or "",

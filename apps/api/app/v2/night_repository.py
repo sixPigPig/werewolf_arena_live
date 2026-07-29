@@ -1155,7 +1155,6 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
                     for key in (
                         "name",
                         "personality",
-                        "catchphrases",
                         "strategy_profile",
                         "base_delivery_mood",
                         "base_delivery_intensity",

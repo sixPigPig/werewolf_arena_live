@@ -110,7 +110,6 @@ class AdminPlayerProfileContent(AdminRequestModel):
     )
     base_delivery_instruction: str | None = Field(default=None, max_length=240)
     voice_enabled: bool = True
-    catchphrases: list[str] = Field(default_factory=list)
     strategy_profile: str = Field(default="balanced", min_length=1, max_length=40)
     risk_tolerance: int = Field(default=3, ge=1, le=5)
     bluffing_tendency: int = Field(default=3, ge=1, le=5)
@@ -159,18 +158,6 @@ class AdminPlayerProfileContent(AdminRequestModel):
     def validate_strategy(cls, value: str) -> str:
         if not is_valid_strategy(value):
             raise ValueError(f"Unknown strategy_profile: {value}")
-        return value
-
-    @field_validator("catchphrases", mode="before")
-    @classmethod
-    def validate_catchphrases(cls, value: object) -> object:
-        if isinstance(value, list):
-            return normalize_limited_strings(
-                value,
-                max_items=6,
-                max_length=40,
-                label="Catchphrases",
-            )
         return value
 
     @field_validator("example_messages", mode="before")
@@ -235,7 +222,6 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
     )
     base_delivery_instruction: str | None = Field(default=None, max_length=240)
     voice_enabled: bool | None = None
-    catchphrases: list[str] | None = None
     strategy_profile: str | None = Field(default=None, min_length=1, max_length=40)
     risk_tolerance: int | None = Field(default=None, ge=1, le=5)
     bluffing_tendency: int | None = Field(default=None, ge=1, le=5)
@@ -315,18 +301,6 @@ class AdminPlayerProfileUpdate(AdminRequestModel):
     def validate_strategy(cls, value: str | None) -> str | None:
         if value is not None and not is_valid_strategy(value):
             raise ValueError(f"Unknown strategy_profile: {value}")
-        return value
-
-    @field_validator("catchphrases", mode="before")
-    @classmethod
-    def validate_catchphrases(cls, value: object) -> object:
-        if isinstance(value, list):
-            return normalize_limited_strings(
-                value,
-                max_items=6,
-                max_length=40,
-                label="Catchphrases",
-            )
         return value
 
     @field_validator("example_messages", mode="before")
@@ -453,7 +427,6 @@ class AdminPlayerProfileResponse(BaseModel):
     base_delivery_instruction: str | None
     voice_enabled: bool
     voice_config_version: int = Field(ge=1)
-    catchphrases: list[str]
     strategy_profile: str
     risk_tolerance: int
     bluffing_tendency: int
@@ -503,8 +476,6 @@ class PlayerAppearanceOption(PlayerProfileOption):
 class PlayerProfileConstraints(BaseModel):
     tags_max_items: int
     tag_max_length: int
-    catchphrases_max_items: int
-    catchphrase_max_length: int
     example_messages_max_items: int
     example_message_max_length: int
 
@@ -545,7 +516,6 @@ class AdminPlayerProfileAiDraftResponse(BaseModel):
     short_description: str = Field(default="", max_length=160)
     background_story: str = Field(default="", max_length=1200)
     speaking_style: str = Field(default="", max_length=800)
-    catchphrases: list[str]
     strategy_profile: str = Field(default="balanced", max_length=40)
     risk_tolerance: int = Field(ge=1, le=5)
     bluffing_tendency: int = Field(ge=1, le=5)

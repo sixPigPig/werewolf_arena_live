@@ -17,7 +17,6 @@ class PublicPlayerProfileResponse(BaseModel):
     short_description: str
     background_story: str
     speaking_style: str
-    catchphrases: list[str]
     strategy_profile: str
     risk_tolerance: int
     bluffing_tendency: int

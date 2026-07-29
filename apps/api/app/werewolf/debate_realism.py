@@ -10,8 +10,6 @@ from app.werewolf.player_configs import PlayerConfig, player_config_from_dict
 from app.werewolf.lineup_quality import evaluate_lineup_quality, legacy_lineup_warnings
 
 PUNCTUATION_RE = re.compile(r"[\s，。！？、；：,.!?;:\"'《》（）()【】\[\]{}<>-]+")
-CATCHPHRASE_LINE_RE = re.compile(r"^常用表达:\s*(.+)$", re.MULTILINE)
-CATCHPHRASE_SPLIT_RE = re.compile(r"[；;、,，\n]+")
 PLAYER_REFERENCE_RE = re.compile(
     r"^(?:玩家)?(?:\d{1,2}|[一二三四五六七八九十]{1,3})号(?:位)?(?:玩家)?$"
 )
@@ -325,7 +323,6 @@ def evaluate_speech_quality(
     text: str,
     mission: SpeechMissionV1,
     prior_texts: list[str] | tuple[str, ...] = (),
-    personality: str = "",
     actor: str = "speaker",
 ) -> SpeechQualityReportV1:
     prior = [str(item) for item in prior_texts if str(item).strip()]
@@ -350,7 +347,6 @@ def evaluate_speech_quality(
     legacy_warnings = dialogue_quality_warnings(
         text=text,
         prior_texts=prior,
-        personality=personality,
     )
     whole_text_span = ((0, len(text)),) if text else ()
 
@@ -386,20 +382,6 @@ def evaluate_speech_quality(
                 code="group_agreement_without_evidence",
                 severity="warning",
                 score=1.0,
-                evidence_spans=whole_text_span,
-            )
-        )
-    catchphrase_coverage = _catchphrase_coverage(text, personality)
-    if "catchphrase_overuse" in legacy_warnings:
-        issues.append(
-            SpeechQualityIssueV1(
-                code=(
-                    "catchphrase_dominates_speech"
-                    if catchphrase_coverage >= 0.35
-                    else "catchphrase_overuse"
-                ),
-                severity="rewrite" if catchphrase_coverage >= 0.35 else "warning",
-                score=catchphrase_coverage,
                 evidence_spans=whole_text_span,
             )
         )
@@ -523,21 +505,6 @@ def _prefix_with_character_budget(text: str, max_chars: int) -> str:
     return "".join(accepted)
 
 
-def catchphrases_from_personality(personality: str) -> list[str]:
-    match = CATCHPHRASE_LINE_RE.search(personality or "")
-    if not match:
-        return []
-    phrases: list[str] = []
-    seen: set[str] = set()
-    for item in CATCHPHRASE_SPLIT_RE.split(match.group(1)):
-        phrase = item.strip()
-        if not phrase or phrase in seen:
-            continue
-        phrases.append(phrase)
-        seen.add(phrase)
-    return phrases
-
-
 def repeated_phrase_candidates(
     texts: list[str],
     *,
@@ -577,26 +544,9 @@ def dialogue_quality_warnings(
     *,
     text: str,
     prior_texts: list[str] | tuple[str, ...] = (),
-    personality: str = "",
 ) -> list[str]:
     warnings: list[str] = []
     normalized = normalize_dialogue_text(text)
-    normalized_catchphrases: list[str] = []
-    for phrase in catchphrases_from_personality(personality):
-        normalized_phrase = normalize_dialogue_text(phrase)
-        if normalized_phrase:
-            normalized_catchphrases.append(normalized_phrase)
-    normalized_prior = [
-        normalize_dialogue_text(str(item)) for item in prior_texts if str(item).strip()
-    ]
-    for phrase in normalized_catchphrases:
-        current_count = normalized.count(phrase)
-        if current_count == 0:
-            continue
-        prior_count = sum(prior_text.count(phrase) for prior_text in normalized_prior)
-        if prior_count > 0 or current_count + prior_count > 1:
-            warnings.append("catchphrase_overuse")
-            break
 
     prior = [str(item) for item in prior_texts if str(item).strip()]
     if prior:
@@ -615,7 +565,6 @@ def debate_guidance_for_turn(
     speaker: str,
     active_players: list[str],
     prior_messages: list[str],
-    personality: str,
 ) -> list[str]:
     total = max(1, len(active_players))
     if speaker in active_players:
@@ -633,10 +582,8 @@ def debate_guidance_for_turn(
         lines.append("你是中置位：选择一个前置位观点进行赞同或反驳，并给出新的理由。")
 
     forbidden = repeated_phrase_candidates(prior_messages, min_chars=4, min_count=2, limit=5)
-    catchphrases = catchphrases_from_personality(personality)
-    avoid = list(dict.fromkeys([*forbidden, *catchphrases]))[:6]
-    if avoid:
-        lines.append(f"避免复用这些已出现或个人口癖表达：{'、'.join(avoid)}。")
+    if forbidden:
+        lines.append(f"避免复用这些已出现的表达：{'、'.join(forbidden)}。")
     lines.append("发言必须新增一个未被前置位完整说过的事实、反问或投票解释。")
     return lines
 
@@ -754,18 +701,6 @@ def _max_fourgram_jaccard(text: str, prior_texts: list[str]) -> float:
 def _mission_completed(text: str, kind: SpeechMissionKind) -> bool:
     normalized = normalize_dialogue_text(text)
     return any(marker in normalized for marker in _MISSION_COMPLETION_MARKERS[kind])
-
-
-def _catchphrase_coverage(text: str, personality: str) -> float:
-    normalized = normalize_dialogue_text(text)
-    if not normalized:
-        return 0.0
-    covered = 0
-    for phrase in catchphrases_from_personality(personality):
-        normalized_phrase = normalize_dialogue_text(phrase)
-        if normalized_phrase:
-            covered += normalized.count(normalized_phrase) * len(normalized_phrase)
-    return min(1.0, covered / len(normalized))
 
 
 def _deduplicate_quality_issues(

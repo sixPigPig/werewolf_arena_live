@@ -3316,23 +3316,6 @@ textarea {
   font-size: 11px;
 }
 
-.mobile-player-quote-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.mobile-player-quote-list li {
-  border-left: 2px solid rgb(218 171 86 / 58%);
-  padding: 8px 10px;
-  background: rgb(4 6 10 / 46%);
-  color: rgb(244 232 210 / 86%);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .mobile-live-page {
   position: relative;
   height: 100svh;

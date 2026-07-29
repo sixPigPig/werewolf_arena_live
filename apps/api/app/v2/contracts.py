@@ -102,7 +102,6 @@ class V2LobbyPlayerSnapshot(BaseModel):
     appearance_id: str | None = Field(default=None, max_length=80)
     avatar_image_url: str | None = Field(default=None, max_length=2000)
     avatar_asset_id: str | None = Field(default=None, max_length=120)
-    catchphrases: list[str] | None = Field(default=None, max_length=20)
     strategy_profile: str | None = Field(default=None, max_length=80)
     tts_speaker: str | None = Field(default=None, max_length=160)
     tts_dialect: str | None = Field(default=None, max_length=80)

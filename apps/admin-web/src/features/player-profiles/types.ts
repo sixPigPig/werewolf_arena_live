@@ -17,7 +17,6 @@ export type AdminPlayerProfile = {
   background_story: string;
   speaking_style: string;
   gender: PlayerGender;
-  catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
   bluffing_tendency: number;
@@ -87,7 +86,6 @@ export type PlayerProfileEditableFields = {
   background_story: string;
   speaking_style: string;
   gender: PlayerGender;
-  catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
   bluffing_tendency: number;
@@ -181,8 +179,6 @@ export type PlayerProfileAppearanceOption = PlayerProfileOption & {
 export type PlayerProfileConstraints = {
   tags_max_items: number;
   tag_max_length: number;
-  catchphrases_max_items: number;
-  catchphrase_max_length: number;
   example_messages_max_items: number;
   example_message_max_length: number;
 };
@@ -219,7 +215,6 @@ export const DEFAULT_PLAYER_PROFILE_INPUT: PlayerProfileEditableFields = {
   background_story: "",
   speaking_style: "",
   gender: "female",
-  catchphrases: [],
   strategy_profile: "balanced",
   risk_tolerance: 3,
   bluffing_tendency: 3,

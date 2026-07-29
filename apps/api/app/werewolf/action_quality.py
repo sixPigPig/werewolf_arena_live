@@ -75,7 +75,6 @@ def action_quality_warnings(
     actor: str | None = None,
     endgame: bool = False,
     prior_texts: list[str] | tuple[str, ...] = (),
-    personality: str = "",
     eligibility: dict[str, object] | None = None,
     role: str = "",
     hard_state: dict[str, object] | None = None,
@@ -176,7 +175,6 @@ def action_quality_warnings(
         for warning in dialogue_quality_warnings(
             text=text,
             prior_texts=prior_texts,
-            personality=personality,
         ):
             if warning not in warnings:
                 warnings.append(warning)

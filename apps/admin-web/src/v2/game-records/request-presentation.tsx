@@ -57,7 +57,6 @@ const fieldLabels: Record<string, string> = {
   captured_at: "采集时间",
   candidate_player_ids: "候选玩家",
   candidates: "候选玩家",
-  catchphrases: "常用表达",
   consensus_rule: "共识规则",
   context: "补充上下文",
   confirmation_status: "确认状态",

@@ -84,7 +84,6 @@ export type V2LobbyPlayerSnapshot = {
   appearance_id?: string;
   avatar_image_url?: string;
   avatar_asset_id?: string | null;
-  catchphrases?: string[];
   strategy_profile?: string;
   tts_speaker?: string;
   tts_dialect?: string;

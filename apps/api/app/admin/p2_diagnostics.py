@@ -27,7 +27,6 @@ _LINEUP_VIOLATION_CODES = {
     "lineup_incomplete",
     "personality_overrepresented",
     "strategy_profile_overrepresented",
-    "catchphrase_overrepresented",
     "avatar_overrepresented",
     "tag_overrepresented",
     "insufficient_style_buckets",

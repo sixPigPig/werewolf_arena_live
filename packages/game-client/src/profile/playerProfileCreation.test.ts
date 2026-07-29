@@ -28,7 +28,6 @@ function profile(
     short_description: "",
     background_story: "",
     speaking_style: "",
-    catchphrases: [],
     strategy_profile: "balanced",
     risk_tolerance: 3,
     bluffing_tendency: 3,

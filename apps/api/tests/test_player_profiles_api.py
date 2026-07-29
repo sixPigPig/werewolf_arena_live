@@ -157,7 +157,6 @@ def test_generate_ai_player_template_normalizes_generated_fields() -> None:
             "short_description": "冷静复盘，擅长拆票型。",
             "background_story": "长期在高阶圆桌局做复盘记录。",
             "speaking_style": "先列证据，再给结论。",
-            "catchphrases": ["我先盘票型", "这里别急着出"],
             "strategy_profile": "logic_leader",
             "risk_tolerance": 2,
             "bluffing_tendency": 2,
@@ -186,7 +185,7 @@ def test_generate_ai_player_template_normalizes_generated_fields() -> None:
     assert payload["personality_id"] == "analytical"
     assert payload["strategy_profile"] == "logic_leader"
     assert payload["leadership_tendency"] == 5
-    assert payload["catchphrases"] == ["我先盘票型", "这里别急着出"]
+    assert "catchphrases" not in payload
     assert payload["tags"] == ["复盘", "控场"]
 
 
@@ -309,7 +308,7 @@ def test_create_profile_returns_rich_character_defaults() -> None:
     assert payload["short_description"] == ""
     assert payload["background_story"] == ""
     assert payload["speaking_style"] == ""
-    assert payload["catchphrases"] == []
+    assert "catchphrases" not in payload
     assert payload["strategy_profile"] == "balanced"
     assert payload["risk_tolerance"] == 3
     assert payload["bluffing_tendency"] == 3
@@ -897,7 +896,6 @@ def test_patch_display_name_only_preserves_unresolved_avatar_url() -> None:
             short_description="",
             background_story="",
             speaking_style="",
-            catchphrases=[],
             strategy_profile="balanced",
             risk_tolerance=3,
             bluffing_tendency=3,
@@ -958,7 +956,6 @@ def test_patch_display_name_only_does_not_rewrite_database_avatar_fields() -> No
             short_description="",
             background_story="",
             speaking_style="",
-            catchphrases=[],
             strategy_profile="balanced",
             risk_tolerance=3,
             bluffing_tendency=3,
@@ -1021,7 +1018,6 @@ def test_get_and_list_profiles_map_avatar_asset_id_to_asset_url() -> None:
             short_description="",
             background_story="",
             speaking_style="",
-            catchphrases=[],
             strategy_profile="balanced",
             risk_tolerance=3,
             bluffing_tendency=3,
@@ -1265,7 +1261,6 @@ def test_create_profile_persists_rich_character_settings() -> None:
             "short_description": "沉稳控场，喜欢先盘逻辑再给站边。",
             "background_story": "长期观察圆桌局的复盘型玩家。",
             "speaking_style": "短句推进，先列证据，再给结论。",
-            "catchphrases": ["我先盘票型", "这里不急着站死"],
             "strategy_profile": "logic_leader",
             "risk_tolerance": 2,
             "bluffing_tendency": 2,
@@ -1279,37 +1274,32 @@ def test_create_profile_persists_rich_character_settings() -> None:
     assert response.status_code == 201
     payload = response.json()
     assert payload["short_description"] == "沉稳控场，喜欢先盘逻辑再给站边。"
-    assert payload["catchphrases"] == ["我先盘票型", "这里不急着站死"]
+    assert "catchphrases" not in payload
     assert payload["strategy_profile"] == "logic_leader"
     assert payload["risk_tolerance"] == 2
     assert payload["leadership_tendency"] == 5
     assert payload["example_messages"] == ["我认为 3 号这一轮的视角不完整，先听后置位补充。"]
 
 
-def test_create_profile_normalizes_rich_character_lists() -> None:
+def test_create_profile_normalizes_example_messages() -> None:
     response = client.post(
         "/api/v1/player-profiles",
         json={
             "display_name": "去重玩家",
             "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
-            "catchphrases": [" 我先盘票型 ", "", "我先盘票型", " 这里不急 "],
             "example_messages": [" 先听后置位补充。 ", "", "先听后置位补充。", " 票型先记下来。 "],
         },
     )
 
     assert response.status_code == 201
     payload = response.json()
-    assert payload["catchphrases"] == ["我先盘票型", "这里不急"]
     assert payload["example_messages"] == ["先听后置位补充。", "票型先记下来。"]
 
 
 @pytest.mark.parametrize(
     "payload",
-    [
-        {"catchphrases": [{"x": 1}]},
-        {"example_messages": [123]},
-    ],
+    [{"example_messages": [123]}],
 )
 def test_create_profile_rejects_non_string_rich_character_list_items(payload: dict) -> None:
     response = client.post(
@@ -1386,29 +1376,14 @@ def test_update_profile_rejects_too_long_speaking_style() -> None:
     assert response.status_code == 422
 
 
-def test_create_profile_rejects_more_than_6_catchphrases() -> None:
+def test_create_profile_rejects_removed_catchphrases_field() -> None:
     response = client.post(
         "/api/v1/player-profiles",
         json={
-            "display_name": "口头禅太多",
+            "display_name": "旧字段玩家",
             "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
-            "catchphrases": [f"口头禅{index}" for index in range(7)],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_profile_rejects_catchphrase_longer_than_40_characters() -> None:
-    long_catchphrase = "啊" * 41
-    response = client.post(
-        "/api/v1/player-profiles",
-        json={
-            "display_name": "长口头禅玩家",
-            "model_provider": TEST_MODEL_PROVIDER,
-            "model": "deepseek-v4-flash",
-            "catchphrases": [long_catchphrase],
+            "catchphrases": ["旧字段不再接受"],
         },
     )
 
@@ -1436,12 +1411,11 @@ def test_create_profile_rejects_invalid_example_messages(example_messages: list[
     assert response.status_code == 422
 
 
-def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
-    long_catchphrase = "啊" * 41
+def test_update_profile_rejects_removed_catchphrases_field() -> None:
     created = client.post(
         "/api/v1/player-profiles",
         json={
-            "display_name": "长口头禅更新玩家",
+            "display_name": "旧字段更新玩家",
             "model_provider": TEST_MODEL_PROVIDER,
             "model": "deepseek-v4-flash",
         },
@@ -1449,7 +1423,7 @@ def test_update_profile_rejects_catchphrase_longer_than_40_characters() -> None:
 
     response = client.patch(
         f"/api/v1/player-profiles/{created['id']}",
-        json={"catchphrases": [long_catchphrase]},
+        json={"catchphrases": ["旧字段不再接受"]},
     )
 
     assert response.status_code == 422
@@ -1471,7 +1445,6 @@ def test_patch_profile_persists_rich_character_settings() -> None:
             "short_description": "更新后的控场简介",
             "background_story": "复盘多年圆桌局后形成的打法。",
             "speaking_style": "先拆视角，再压缩狼坑。",
-            "catchphrases": ["先盘票型", "后置位补充"],
             "strategy_profile": "pressure_attacker",
             "risk_tolerance": 4,
             "bluffing_tendency": 2,
@@ -1487,7 +1460,7 @@ def test_patch_profile_persists_rich_character_settings() -> None:
     assert patched["short_description"] == "更新后的控场简介"
     assert patched["background_story"] == "复盘多年圆桌局后形成的打法。"
     assert patched["speaking_style"] == "先拆视角，再压缩狼坑。"
-    assert patched["catchphrases"] == ["先盘票型", "后置位补充"]
+    assert "catchphrases" not in patched
     assert patched["strategy_profile"] == "pressure_attacker"
     assert patched["risk_tolerance"] == 4
     assert patched["bluffing_tendency"] == 2
@@ -1501,7 +1474,6 @@ def test_patch_profile_persists_rich_character_settings() -> None:
 
     assert stored is not None
     assert stored.short_description == "更新后的控场简介"
-    assert stored.catchphrases == ["先盘票型", "后置位补充"]
     assert stored.strategy_profile == "pressure_attacker"
     assert stored.risk_tolerance == 4
     assert stored.example_messages == ["这一轮我会先压 7 号解释票型。"]

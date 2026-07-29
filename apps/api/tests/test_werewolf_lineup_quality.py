@@ -14,7 +14,6 @@ def _config(
     profile_id: str | None = None,
     personality: str = "balanced",
     strategy: str = "balanced",
-    catchphrase: str | None = None,
     appearance: str = "default",
     avatar_asset_id: str | None = None,
 ) -> PlayerConfig:
@@ -28,7 +27,6 @@ def _config(
         appearance_id=appearance,
         tags=(),
         avatar_asset_id=avatar_asset_id,
-        catchphrases=(catchphrase,) if catchphrase else (),
         strategy_profile=strategy,
     )
 
@@ -39,7 +37,6 @@ def test_lineup_quality_report_detects_all_blocking_dimensions() -> None:
             seat,
             personality="analytical",
             strategy="logic_leader",
-            catchphrase="我先盘票型",
             avatar_asset_id="shared-avatar",
         )
         for seat in range(1, 13)
@@ -52,7 +49,6 @@ def test_lineup_quality_report_detects_all_blocking_dimensions() -> None:
     assert {violation.code for violation in report.violations} >= {
         "personality_overrepresented",
         "strategy_profile_overrepresented",
-        "catchphrase_overrepresented",
         "avatar_overrepresented",
         "insufficient_style_buckets",
     }
@@ -69,7 +65,6 @@ def test_lineup_quality_report_accepts_diverse_six_player_lineup() -> None:
             seat,
             personality=personalities[seat - 1],
             strategy=strategies[seat - 1],
-            catchphrase=f"表达{seat}",
             avatar_asset_id=f"avatar-{seat}",
         )
         for seat in range(1, 7)
@@ -96,13 +91,12 @@ def test_lineup_quality_policy_scales_style_thresholds(
     )
 
 
-def test_lineup_quality_normalizes_catchphrases_and_uses_appearance_fallback() -> None:
+def test_lineup_quality_uses_appearance_fallback() -> None:
     configs = [
         _config(
             seat,
             personality=("balanced", "aggressive", "cautious")[seat % 3],
             strategy=("balanced", "pressure_attacker", "cautious_observer")[seat % 3],
-            catchphrase=("我先盘票型" if seat % 2 else " 我先盘票型！ "),
             appearance="system-gothic-male-1",
         )
         for seat in range(1, 7)
@@ -114,16 +108,14 @@ def test_lineup_quality_normalizes_catchphrases_and_uses_appearance_fallback() -
     assert violations["avatar_overrepresented"].key == (
         "appearance:system-gothic-male-1"
     )
-    assert violations["catchphrase_overrepresented"].count == 6
 
 
-def test_lineup_quality_ignores_empty_catchphrases_and_default_avatars() -> None:
+def test_lineup_quality_ignores_default_avatars() -> None:
     configs = [
         _config(
             seat,
             personality=("balanced", "aggressive", "cautious")[seat % 3],
             strategy=("balanced", "pressure_attacker", "cautious_observer")[seat % 3],
-            catchphrase=None,
             appearance="default",
         )
         for seat in range(1, 7)
@@ -132,7 +124,6 @@ def test_lineup_quality_ignores_empty_catchphrases_and_default_avatars() -> None
     report = evaluate_lineup_quality(configs, player_count=6)
     codes = {violation.code for violation in report.violations}
 
-    assert "catchphrase_overrepresented" not in codes
     assert "avatar_overrepresented" not in codes
 
 
@@ -142,7 +133,6 @@ def test_unknown_profile_ids_do_not_invent_new_style_buckets() -> None:
             seat,
             personality=f"custom-personality-{seat}",
             strategy=f"custom-strategy-{seat}",
-            catchphrase=f"表达{seat}",
             avatar_asset_id=f"avatar-{seat}",
         )
         for seat in range(1, 7)
@@ -180,7 +170,6 @@ def test_lineup_planner_is_deterministic_and_preserves_locked_seats() -> None:
             profile_id=f"profile-{index}",
             personality=personality,
             strategy=strategy,
-            catchphrase=f"表达{index}",
             avatar_asset_id=f"avatar-{index}",
         )
         for index, (personality, strategy) in enumerate(
@@ -202,7 +191,6 @@ def test_lineup_planner_is_deterministic_and_preserves_locked_seats() -> None:
         profile_id="profile-2",
         personality="aggressive",
         strategy="pressure_attacker",
-        catchphrase="表达2",
         avatar_asset_id="avatar-2",
     )
 

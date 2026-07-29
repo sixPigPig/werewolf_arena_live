@@ -9,7 +9,6 @@ export const PROFILE_PROMPT_SECTION_LABELS = {
   background_story: "背景设定",
   speaking_style: "发言风格",
   strategy_profile: "狼人杀策略",
-  catchphrases: "常用表达",
   example_messages: "示例发言",
 } as const;
 
@@ -69,11 +68,6 @@ export function composeProfilePromptPreview(
     sections.push(`${label}: ${normalizeTendency(profile[fieldName])}/5`);
   });
 
-  appendListSection(
-    sections,
-    PROFILE_PROMPT_SECTION_LABELS.catchphrases,
-    profile.catchphrases,
-  );
   appendListSection(
     sections,
     PROFILE_PROMPT_SECTION_LABELS.example_messages,

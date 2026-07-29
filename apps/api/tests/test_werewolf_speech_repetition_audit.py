@@ -118,6 +118,7 @@ def test_audit_separates_no_speech_from_repetition_and_detects_paradox() -> None
         live_no_speech_events=live_events,
     )
 
+    assert report["schema_version"] == 2
     summary = report["summary"]
     assert summary["public_speech_request_count"] == 4
     assert summary["spoken_count"] == 2

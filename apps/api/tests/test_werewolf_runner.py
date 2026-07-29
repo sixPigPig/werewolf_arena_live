@@ -2830,7 +2830,6 @@ def test_world_state_includes_debate_guidance_for_current_speaker() -> None:
     )
     active_players = [player.name for player in state.players]
     player = state.players[1]
-    player.personality = "常用表达: 我先盘票型；这里不急着站死"
     round_state = RoundState(number=1, players=active_players.copy())
     round_state.debate.append(
         DebateEntry(speaker=active_players[0], message="我先盘票型。第一轮先听发言。")
@@ -2840,7 +2839,6 @@ def test_world_state_includes_debate_guidance_for_current_speaker() -> None:
 
     assert "debate_guidance" in world_state
     assert any("第 2/6 位" in line for line in world_state["debate_guidance"])
-    assert any("避免复用" in line for line in world_state["debate_guidance"])
 
 
 def test_world_state_debate_guidance_uses_round_speech_order() -> None:
@@ -3005,7 +3003,6 @@ def test_debate_action_quality_warning_uses_prior_round_context() -> None:
         rng=random.Random(1),
     )
     player = state.players[1]
-    player.personality = "常用表达: 我先盘票型；这里不急着站死"
     round_state = RoundState(number=1, players=[player.name for player in state.players])
     round_state.debate.append(
         DebateEntry(
@@ -3021,13 +3018,11 @@ def test_debate_action_quality_warning_uses_prior_round_context() -> None:
         action=ACTION_DEBATE,
         text="我先盘票型。第一轮全票挂警徽定狼，这里不急着站死。",
         prior_texts=[entry.message for entry in round_state.debate],
-        personality=player.personality,
     )
 
     warning_event = next(
         event for event in sink.events if event["type"] == "action_quality_warning"
     )
-    assert "catchphrase_overuse" in warning_event["payload"]["warnings"]
     assert "repeated_debate_phrase" in warning_event["payload"]["warnings"]
 
 
@@ -3350,7 +3345,6 @@ def test_compose_player_profile_prompt_includes_rich_strategy_fields() -> None:
             trust_tendency=3,
             leadership_tendency=3,
             talkativeness=4,
-            catchphrases=[],
             example_messages=["我先把票型和发言顺序对一下。"],
         ),
         "先找矛盾，再给站边。",
@@ -3367,7 +3361,6 @@ def test_compose_player_profile_prompt_falls_back_for_unknown_strategy() -> None
     prompt = compose_player_profile_prompt(
         SimpleNamespace(
             strategy_profile="legacy_unknown_strategy",
-            catchphrases=[],
             example_messages=[],
         ),
         "稳健观察。",

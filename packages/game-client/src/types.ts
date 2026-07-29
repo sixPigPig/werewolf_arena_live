@@ -454,7 +454,6 @@ export type VirtualPlayerProfile = {
   short_description: string;
   background_story: string;
   speaking_style: string;
-  catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
   bluffing_tendency: number;
@@ -488,7 +487,6 @@ export type PublicPlayerProfile = {
   short_description: string;
   background_story: string;
   speaking_style: string;
-  catchphrases: string[];
   strategy_profile: string;
   risk_tolerance: number;
   bluffing_tendency: number;
@@ -556,7 +554,6 @@ export type PlayerProfileAiDraftResponse = {
   short_description?: string;
   background_story?: string;
   speaking_style?: string;
-  catchphrases?: string[];
   strategy_profile?: string;
   risk_tolerance?: number;
   bluffing_tendency?: number;
@@ -576,7 +573,6 @@ export type PlayerProfileRequest = {
   short_description?: string;
   background_story?: string;
   speaking_style?: string;
-  catchphrases?: string[];
   strategy_profile?: string;
   risk_tolerance?: number;
   bluffing_tendency?: number;
@@ -600,7 +596,6 @@ export const DEFAULT_PLAYER_PROFILE_DRAFT: PlayerProfileRequest = {
   short_description: "",
   background_story: "",
   speaking_style: "",
-  catchphrases: [],
   strategy_profile: "balanced",
   risk_tolerance: 3,
   bluffing_tendency: 3,
@@ -628,7 +623,6 @@ export type PlayerConfig = {
   appearance_id?: string;
   avatar_image_url?: string;
   avatar_asset_id?: string | null;
-  catchphrases?: string[];
   strategy_profile?: string;
   tags?: string[];
 };

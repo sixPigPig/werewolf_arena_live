@@ -130,7 +130,6 @@ const QUALITY_CODE_LABELS: Record<string, string> = {
   lineup_incomplete: "阵容不完整",
   personality_overrepresented: "同类性格过多",
   strategy_profile_overrepresented: "同类策略过多",
-  catchphrase_overrepresented: "相同口头禅过多",
   avatar_overrepresented: "相同形象过多",
   tag_overrepresented: "相同标签过多",
   insufficient_style_buckets: "玩家风格多样性不足",

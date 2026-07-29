@@ -435,13 +435,11 @@ def _compact_persona(value: Any) -> dict[str, Any]:
     personality = profile.get("personality")
     if isinstance(personality, str) and len(personality) > _PERSONA_TEXT_LIMIT:
         personality = personality[:_PERSONA_TEXT_LIMIT].rstrip() + "…"
-    catchphrases = profile.get("catchphrases")
     return {
         key: item
         for key, item in {
             "personality": personality,
             "strategy_profile": profile.get("strategy_profile"),
-            "catchphrases": (catchphrases[:3] if isinstance(catchphrases, list) else None),
             "delivery_mood": profile.get("base_delivery_mood"),
             "delivery_intensity": profile.get("base_delivery_intensity"),
             "delivery_pace": profile.get("base_delivery_pace"),

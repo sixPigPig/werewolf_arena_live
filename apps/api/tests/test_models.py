@@ -261,7 +261,6 @@ def test_virtual_player_profile_table_matches_expected_schema() -> None:
         "base_delivery_instruction",
         "voice_enabled",
         "voice_config_version",
-        "catchphrases",
         "strategy_profile",
         "risk_tolerance",
         "bluffing_tendency",
@@ -381,14 +380,12 @@ def test_virtual_player_profile_rich_list_appends_are_persisted() -> None:
             appearance_id="default",
             avatar_image_url="",
             avatar_image_mime="",
-            catchphrases=[],
             example_messages=[],
             tags=[],
         )
         session.add(profile)
         session.commit()
 
-        profile.catchphrases.append("我先盘票型")
         profile.example_messages.append("先听后置位补充。")
         session.commit()
         session.expunge_all()
@@ -396,7 +393,6 @@ def test_virtual_player_profile_rich_list_appends_are_persisted() -> None:
         saved_profile = session.get(VirtualPlayerProfile, "profile-1")
 
     assert saved_profile is not None
-    assert saved_profile.catchphrases == ["我先盘票型"]
     assert saved_profile.example_messages == ["先听后置位补充。"]
 
 
@@ -407,7 +403,6 @@ def test_virtual_player_profile_has_rich_character_columns() -> None:
         "short_description",
         "background_story",
         "speaking_style",
-        "catchphrases",
         "strategy_profile",
         "risk_tolerance",
         "bluffing_tendency",

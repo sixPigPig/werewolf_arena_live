@@ -28,7 +28,6 @@ function buildProfile(
     short_description: "先盘逻辑再站边",
     background_story: "",
     speaking_style: "",
-    catchphrases: [],
     strategy_profile: "analysis",
     risk_tolerance: 3,
     bluffing_tendency: 3,

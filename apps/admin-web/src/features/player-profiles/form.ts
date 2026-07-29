@@ -28,7 +28,6 @@ export function inputFromProfile(
     background_story: profile.background_story,
     speaking_style: profile.speaking_style,
     gender: profile.gender,
-    catchphrases: profile.catchphrases,
     strategy_profile: profile.strategy_profile,
     risk_tolerance: profile.risk_tolerance,
     bluffing_tendency: profile.bluffing_tendency,
@@ -57,7 +56,6 @@ export function cleanPlayerProfileInput(
     short_description: value.short_description.trim(),
     background_story: value.background_story.trim(),
     speaking_style: value.speaking_style.trim(),
-    catchphrases: cleanList(value.catchphrases),
     strategy_profile: value.strategy_profile.trim(),
     risk_tolerance: normalizeNumber(value.risk_tolerance),
     bluffing_tendency: normalizeNumber(value.bluffing_tendency),
@@ -95,13 +93,6 @@ export function validatePlayerProfileInput(
     value.tags,
     constraints.tags_max_items,
     constraints.tag_max_length,
-  );
-  checkList(
-    errors,
-    "catchphrases",
-    value.catchphrases,
-    constraints.catchphrases_max_items,
-    constraints.catchphrase_max_length,
   );
   checkList(
     errors,
@@ -183,7 +174,6 @@ export function formatMultilineList(value: string[]) {
 function cloneInput(value: PlayerProfileEditableFields) {
   return {
     ...value,
-    catchphrases: [...value.catchphrases],
     example_messages: [...value.example_messages],
     tags: [...value.tags],
   };
@@ -257,7 +247,7 @@ function checkLength(
 
 function checkList(
   errors: PlayerProfileFormErrors,
-  field: "catchphrases" | "example_messages" | "tags",
+  field: "example_messages" | "tags",
   value: string[],
   maximumItems: number,
   maximumLength: number,
