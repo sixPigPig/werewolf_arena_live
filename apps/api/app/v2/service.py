@@ -380,13 +380,12 @@ def list_games(
     return records, total
 
 
-def game_detail(
+def game_summary(
     db: Session,
     game_id: str,
 ) -> tuple[
     V2GameRecord,
     list[V2GameRun],
-    list[V2GameRecordEvent],
     list[V2LivePresentation],
     list[V2VoiceAsset],
     list[V2RoleAssignment],
@@ -404,13 +403,6 @@ def game_detail(
             select(V2GameRun)
             .where(V2GameRun.game_id == game_id)
             .order_by(V2GameRun.attempt_no.asc())
-        )
-    )
-    events = list(
-        db.scalars(
-            select(V2GameRecordEvent)
-            .where(V2GameRecordEvent.game_id == game_id)
-            .order_by(V2GameRecordEvent.record_seq.asc())
         )
     )
     presentations = list(
@@ -480,7 +472,6 @@ def game_detail(
     return (
         game,
         runs,
-        events,
         presentations,
         voices,
         role_assignments,
@@ -492,6 +483,66 @@ def game_detail(
         knowledge_facts,
         match_state,
     )
+
+
+def list_game_events(
+    db: Session,
+    game_id: str,
+    *,
+    after_record_seq: int,
+    page_size: int,
+) -> tuple[list[V2GameRecordEvent], bool]:
+    get_game(db, game_id)
+    rows = list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.record_seq > after_record_seq,
+            )
+            .order_by(V2GameRecordEvent.record_seq.asc())
+            .limit(page_size + 1)
+        )
+    )
+    return rows[:page_size], len(rows) > page_size
+
+
+def all_game_events(db: Session, game_id: str) -> list[V2GameRecordEvent]:
+    get_game(db, game_id)
+    return list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(V2GameRecordEvent.game_id == game_id)
+            .order_by(V2GameRecordEvent.record_seq.asc())
+        )
+    )
+
+
+def list_game_presentations(
+    db: Session,
+    game_id: str,
+) -> list[V2LivePresentation]:
+    get_game(db, game_id)
+    return list(
+        db.scalars(
+            select(V2LivePresentation)
+            .where(V2LivePresentation.game_id == game_id)
+            .order_by(V2LivePresentation.presentation_seq.asc())
+        )
+    )
+
+
+def get_game_event(
+    db: Session,
+    *,
+    game_id: str,
+    event_id: int,
+) -> V2GameRecordEvent:
+    get_game(db, game_id)
+    event = db.get(V2GameRecordEvent, (game_id, event_id))
+    if event is None:
+        raise V2RecordNotFound(f"{game_id}:{event_id}")
+    return event
 
 
 def voice_asset_path(*, root: Path, asset: V2VoiceAsset) -> Path:

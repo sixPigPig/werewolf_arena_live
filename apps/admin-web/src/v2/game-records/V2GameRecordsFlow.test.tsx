@@ -65,6 +65,38 @@ describe("Admin V2 game control", () => {
       if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
         return jsonResponse(detail(stopped));
       }
+      if (
+        url.includes(`/api/v1/admin/v2/games/${gameId}/events?`)
+      ) {
+        const afterRecordSeq = Number(
+          new URL(url, "http://admin.test").searchParams.get(
+            "after_record_seq",
+          ) ?? 0,
+        );
+        return jsonResponse({
+          after_record_seq: afterRecordSeq,
+          has_more: false,
+          items: [],
+          next_after_record_seq: stopped ? 4 : 2,
+        });
+      }
+      if (
+        url.includes(
+          `/api/v1/admin/v2/games/${gameId}/model-requests?`,
+        )
+      ) {
+        const afterRecordSeq = Number(
+          new URL(url, "http://admin.test").searchParams.get(
+            "after_record_seq",
+          ) ?? 0,
+        );
+        return jsonResponse({
+          after_record_seq: afterRecordSeq,
+          has_more: false,
+          items: [],
+          next_after_record_seq: stopped ? 4 : 2,
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -160,8 +192,6 @@ function detail(stopped: boolean) {
         stop_requested_at: stopped ? "2026-07-25T10:00:00Z" : null,
       },
     ],
-    events: [],
-    model_requests: [],
     presentations: [],
     voice_assets: [],
     player_states: [],

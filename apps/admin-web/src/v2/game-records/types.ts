@@ -51,6 +51,13 @@ export type V2GameRecordEvent = {
   created_at: string;
 };
 
+export type V2GameEventPage = {
+  items: V2GameRecordEvent[];
+  after_record_seq: number;
+  next_after_record_seq: number;
+  has_more: boolean;
+};
+
 export type V2GamePresentation = {
   presentation_seq: number;
   presentation_id: string;
@@ -92,11 +99,13 @@ export type V2VoiceAsset = {
   completed_at: string | null;
 };
 
-export type V2ModelRequest = {
+export type V2ModelRequestSummary = {
   attempt_id: string;
   attempt_no: number;
   max_attempts: number;
   retry_of_attempt_id: string | null;
+  record_seq: number;
+  last_record_seq: number;
   action_id: string;
   run_id: string;
   phase_id: string;
@@ -111,11 +120,8 @@ export type V2ModelRequest = {
   prompt_schema_version: number | null;
   prompt_projection: Record<string, unknown> | null;
   status: "running" | "succeeded" | "failed";
-  request_payload: Record<string, unknown> | null;
   input_source: "persisted" | "reconstructed" | "unavailable";
-  raw_response: string | null;
-  parsed_output: Record<string, unknown> | null;
-  passive_observations: Array<Record<string, unknown>>;
+  passive_observation_count: number;
   output_source: "persisted" | "legacy_inferred" | "unavailable";
   provider_request_id: string | null;
   first_token_ms: number | null;
@@ -134,6 +140,20 @@ export type V2ModelRequest = {
   completed_at: string | null;
 };
 
+export type V2ModelRequest = V2ModelRequestSummary & {
+  request_payload: Record<string, unknown> | null;
+  raw_response: string | null;
+  parsed_output: Record<string, unknown> | null;
+  passive_observations: Array<Record<string, unknown>>;
+};
+
+export type V2ModelRequestPage = {
+  items: V2ModelRequestSummary[];
+  after_record_seq: number;
+  next_after_record_seq: number;
+  has_more: boolean;
+};
+
 export type V2PlayerIdentity = {
   seat: number;
   player_id: string;
@@ -145,7 +165,7 @@ export type V2PlayerIdentity = {
   death_cause: string | null;
 };
 
-export type V2GameRecordDetail = V2GameRecordListItem & {
+export type V2GameRecordSummary = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
   judge_voice_snapshot: Record<string, unknown>;
@@ -153,8 +173,6 @@ export type V2GameRecordDetail = V2GameRecordListItem & {
   match_state: Record<string, unknown> | null;
   player_identities: V2PlayerIdentity[];
   runs: V2GameRun[];
-  events: V2GameRecordEvent[];
-  model_requests: V2ModelRequest[];
   presentations: V2GamePresentation[];
   voice_assets: V2VoiceAsset[];
   player_states: Array<Record<string, unknown>>;
@@ -163,4 +181,9 @@ export type V2GameRecordDetail = V2GameRecordListItem & {
   ability_activations: Array<Record<string, unknown>>;
   effect_intents: Array<Record<string, unknown>>;
   knowledge_facts: Array<Record<string, unknown>>;
+};
+
+export type V2GameRecordDetail = V2GameRecordSummary & {
+  events: V2GameRecordEvent[];
+  model_requests: V2ModelRequestSummary[];
 };

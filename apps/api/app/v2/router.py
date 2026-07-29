@@ -39,13 +39,16 @@ from app.model_catalog.defaults import (
 )
 from app.models.model_configuration import ModelConfigurationRecord
 from app.v2.contracts import (
+    AdminV2EventPageResponse,
     AdminV2EventResponse,
     AdminV2GameDetailResponse,
     AdminV2GameControlRequest,
     AdminV2GameControlResponse,
     AdminV2GameListItem,
     AdminV2GameListResponse,
+    AdminV2ModelRequestPageResponse,
     AdminV2ModelRequestResponse,
+    AdminV2ModelRequestSummaryResponse,
     AdminV2Pagination,
     AdminV2PresentationResponse,
     AdminV2RunResponse,
@@ -82,14 +85,18 @@ from app.v2.service import (
     V2GodViewUnavailable,
     V2RecordNotFound,
     V2VoiceAssetUnavailable,
+    all_game_events,
     authorize_god_view,
     create_waiting_game,
     current_presentation,
-    game_detail,
+    game_summary,
+    get_game_event,
     get_game,
     get_match_state,
     get_voice_asset,
     god_view_role_assignments,
+    list_game_events,
+    list_game_presentations,
     list_games,
     player_state_map,
     role_assignment_count,
@@ -470,7 +477,6 @@ def read_admin_v2_game(
         (
             game,
             runs,
-            events,
             presentations,
             voices,
             role_assignments,
@@ -481,7 +487,7 @@ def read_admin_v2_game(
             effect_intents,
             knowledge_facts,
             match_state,
-        ) = game_detail(db, game_id)
+        ) = game_summary(db, game_id)
     except V2RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
@@ -522,10 +528,6 @@ def read_admin_v2_game(
             else None
         ),
         runs=[AdminV2RunResponse.model_validate(run, from_attributes=True) for run in runs],
-        events=[
-            AdminV2EventResponse.model_validate(event, from_attributes=True) for event in events
-        ],
-        model_requests=_admin_model_requests(events, presentations),
         presentations=[
             AdminV2PresentationResponse.model_validate(item, from_attributes=True)
             for item in presentations
@@ -624,6 +626,171 @@ def read_admin_v2_game(
             for item in knowledge_facts
         ],
     )
+
+
+@admin_router.get(
+    "/games/{game_id}/events",
+    response_model=AdminV2EventPageResponse,
+)
+def list_admin_v2_game_events(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
+    ],
+    after_record_seq: Annotated[int, Query(ge=0)] = 0,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 250,
+) -> AdminV2EventPageResponse:
+    try:
+        events, has_more = list_game_events(
+            db,
+            game_id,
+            after_record_seq=after_record_seq,
+            page_size=page_size,
+        )
+    except V2RecordNotFound as exc:
+        raise AdminAPIProblem(
+            status_code=404,
+            code="admin_v2_game_not_found",
+            title="V2 game not found",
+            detail="The requested V2 game record does not exist.",
+        ) from exc
+    _set_admin_headers(request, response)
+    next_after_record_seq = events[-1].record_seq if events else after_record_seq
+    return AdminV2EventPageResponse(
+        items=[_admin_event_summary(event) for event in events],
+        after_record_seq=after_record_seq,
+        next_after_record_seq=next_after_record_seq,
+        has_more=has_more,
+    )
+
+
+@admin_router.get(
+    "/games/{game_id}/events/{event_id}",
+    response_model=AdminV2EventResponse,
+)
+def read_admin_v2_game_event(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    event_id: Annotated[int, PathParameter(ge=1)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
+    ],
+) -> AdminV2EventResponse:
+    try:
+        event = get_game_event(db, game_id=game_id, event_id=event_id)
+    except V2RecordNotFound as exc:
+        raise AdminAPIProblem(
+            status_code=404,
+            code="admin_v2_event_not_found",
+            title="V2 event not found",
+            detail="The requested V2 event does not exist.",
+        ) from exc
+    _set_admin_headers(request, response)
+    return AdminV2EventResponse.model_validate(event, from_attributes=True)
+
+
+@admin_router.get(
+    "/games/{game_id}/model-requests",
+    response_model=AdminV2ModelRequestPageResponse,
+)
+def list_admin_v2_model_requests(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
+    ],
+    after_record_seq: Annotated[int, Query(ge=0)] = 0,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 250,
+) -> AdminV2ModelRequestPageResponse:
+    try:
+        events = all_game_events(db, game_id)
+        presentations = list_game_presentations(db, game_id)
+    except V2RecordNotFound as exc:
+        raise AdminAPIProblem(
+            status_code=404,
+            code="admin_v2_game_not_found",
+            title="V2 game not found",
+            detail="The requested V2 game record does not exist.",
+        ) from exc
+    changed = sorted(
+        (
+            item
+            for item in _admin_model_requests(events, presentations)
+            if item.last_record_seq > after_record_seq
+        ),
+        key=lambda item: (item.last_record_seq, item.record_seq, item.attempt_id),
+    )
+    page = changed[:page_size]
+    if len(changed) > len(page) and page:
+        boundary_record_seq = page[-1].last_record_seq
+        page.extend(
+            item
+            for item in changed[len(page) :]
+            if item.last_record_seq == boundary_record_seq
+        )
+    has_more = len(changed) > len(page)
+    current_record_seq = events[-1].record_seq if events else after_record_seq
+    _set_admin_headers(request, response)
+    return AdminV2ModelRequestPageResponse(
+        items=[_admin_model_request_summary(item) for item in page],
+        after_record_seq=after_record_seq,
+        next_after_record_seq=(page[-1].last_record_seq if has_more else current_record_seq),
+        has_more=has_more,
+    )
+
+
+@admin_router.get(
+    "/games/{game_id}/model-requests/{attempt_id}",
+    response_model=AdminV2ModelRequestResponse,
+)
+def read_admin_v2_model_request(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    attempt_id: Annotated[str, PathParameter(min_length=1, max_length=80)],
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
+    ],
+) -> AdminV2ModelRequestResponse:
+    try:
+        events = all_game_events(db, game_id)
+        presentations = list_game_presentations(db, game_id)
+    except V2RecordNotFound as exc:
+        raise AdminAPIProblem(
+            status_code=404,
+            code="admin_v2_game_not_found",
+            title="V2 game not found",
+            detail="The requested V2 game record does not exist.",
+        ) from exc
+    result = next(
+        (
+            item
+            for item in _admin_model_requests(events, presentations)
+            if item.attempt_id == attempt_id
+        ),
+        None,
+    )
+    if result is None:
+        raise AdminAPIProblem(
+            status_code=404,
+            code="admin_v2_model_request_not_found",
+            title="V2 model request not found",
+            detail="The requested V2 model request does not exist.",
+        )
+    _set_admin_headers(request, response)
+    return result
 
 
 @admin_router.post(
@@ -774,6 +941,62 @@ def _admin_voice_asset(asset: object) -> AdminV2VoiceAssetResponse:
     )
 
 
+_ADMIN_ACTION_CONTEXT_KEYS = {
+    "schema_version",
+    "action_id",
+    "action_type",
+    "game_id",
+    "run_id",
+    "phase_id",
+    "actor",
+    "objective",
+    "ability_id",
+    "activation_id",
+    "audience",
+    "speech_source",
+    "round_no",
+    "window_id",
+}
+
+
+def _admin_event_summary(event: object) -> AdminV2EventResponse:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    projected = dict(payload)
+    if event.event_type == "action_opened":
+        context = payload.get("context")
+        projected["context"] = (
+            {key: value for key, value in context.items() if key in _ADMIN_ACTION_CONTEXT_KEYS}
+            if isinstance(context, dict)
+            else {}
+        )
+    elif event.event_type == "model_request_started":
+        projected.pop("request_payload", None)
+    elif event.event_type == "model_response_received":
+        projected.pop("raw_response", None)
+        projected.pop("parsed_output", None)
+        projected.pop("passive_observations", None)
+    elif event.event_type == "model_request_failed":
+        projected.pop("raw_response", None)
+    return AdminV2EventResponse.model_validate(
+        {**event.__dict__, "payload": projected},
+    )
+
+
+def _admin_model_request_summary(
+    item: AdminV2ModelRequestResponse,
+) -> AdminV2ModelRequestSummaryResponse:
+    return AdminV2ModelRequestSummaryResponse.model_validate(
+        item.model_dump(
+            exclude={
+                "request_payload",
+                "raw_response",
+                "parsed_output",
+                "passive_observations",
+            }
+        )
+    )
+
+
 def _admin_model_requests(
     events: list[object],
     presentations: list[object],
@@ -791,11 +1014,23 @@ def _admin_model_requests(
     action_successes: dict[str, object] = {}
     tts_starts: dict[str, object] = {}
     starts: list[object] = []
+    last_record_seq_by_attempt: dict[str, int] = {}
+    last_record_seq_by_action: dict[str, int] = {}
 
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
         action_id = payload.get("action_id")
         attempt_id = payload.get("attempt_id")
+        if isinstance(attempt_id, str):
+            last_record_seq_by_attempt[attempt_id] = max(
+                last_record_seq_by_attempt.get(attempt_id, 0),
+                event.record_seq,
+            )
+        if isinstance(action_id, str):
+            last_record_seq_by_action[action_id] = max(
+                last_record_seq_by_action.get(action_id, 0),
+                event.record_seq,
+            )
         if event.event_type == "action_opened" and isinstance(action_id, str):
             context = payload.get("context")
             if isinstance(context, dict):
@@ -904,6 +1139,11 @@ def _admin_model_requests(
         provider_request_id = response_payload.get("provider_request_id") or first_payload.get(
             "provider_request_id"
         )
+        passive_observations = (
+            response_payload.get("passive_observations")
+            if isinstance(response_payload.get("passive_observations"), list)
+            else []
+        )
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
@@ -913,6 +1153,12 @@ def _admin_model_requests(
                     payload.get("retry_of_attempt_id")
                     if isinstance(payload.get("retry_of_attempt_id"), str)
                     else None
+                ),
+                record_seq=start.record_seq,
+                last_record_seq=max(
+                    start.record_seq,
+                    last_record_seq_by_attempt.get(attempt_id, 0),
+                    last_record_seq_by_action.get(action_id, 0),
                 ),
                 action_id=action_id,
                 run_id=start.run_id,
@@ -951,11 +1197,8 @@ def _admin_model_requests(
                 input_source=input_source,
                 raw_response=raw_response,
                 parsed_output=parsed_output,
-                passive_observations=(
-                    response_payload.get("passive_observations")
-                    if isinstance(response_payload.get("passive_observations"), list)
-                    else []
-                ),
+                passive_observation_count=len(passive_observations),
+                passive_observations=passive_observations,
                 output_source=output_source,
                 provider_request_id=(
                     provider_request_id if isinstance(provider_request_id, str) else None

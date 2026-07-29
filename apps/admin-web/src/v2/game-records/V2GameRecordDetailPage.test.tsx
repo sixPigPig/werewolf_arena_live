@@ -15,6 +15,7 @@ import {
 
 import V2GameRecordDetailPage from "@/v2/game-records/V2GameRecordDetailPage";
 import { liveRefreshInterval } from "@/v2/game-records/live-refresh";
+import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
 
 vi.mock("@/features/auth/session-context", () => ({
   useAdminSession: () => ({ session: null }),
@@ -532,6 +533,105 @@ function event(
   };
 }
 
+type DetailFixture = Record<string, unknown> & {
+  events: Array<ReturnType<typeof event>>;
+  game_id: string;
+  last_record_seq: number;
+  model_requests: Array<Record<string, unknown> & { attempt_id: string }>;
+};
+
+function stubRecordFetch(record: DetailFixture) {
+  const basePath = `/api/v1/admin/v2/games/${record.game_id}`;
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input), "http://admin.test");
+    if (url.pathname === basePath) {
+      const summary = Object.fromEntries(
+        Object.entries(record).filter(
+          ([key]) => key !== "events" && key !== "model_requests",
+        ),
+      );
+      return jsonResponse(summary);
+    }
+    if (url.pathname === `${basePath}/events`) {
+      const afterRecordSeq = Number(
+        url.searchParams.get("after_record_seq") ?? 0,
+      );
+      return jsonResponse({
+        after_record_seq: afterRecordSeq,
+        has_more: false,
+        items: record.events.filter(
+          (item) => item.record_seq > afterRecordSeq,
+        ),
+        next_after_record_seq: record.last_record_seq,
+      });
+    }
+    if (url.pathname.startsWith(`${basePath}/events/`)) {
+      const eventId = Number(url.pathname.slice(`${basePath}/events/`.length));
+      const matched = record.events.find((item) => item.event_id === eventId);
+      if (matched) return jsonResponse(matched);
+    }
+    if (url.pathname === `${basePath}/model-requests`) {
+      const afterRecordSeq = Number(
+        url.searchParams.get("after_record_seq") ?? 0,
+      );
+      const items = record.model_requests.flatMap((request, index) => {
+        const recordSeq = Number(request.record_seq ?? index + 1);
+        if (recordSeq <= afterRecordSeq) return [];
+        const summary = Object.fromEntries(
+          Object.entries(request).filter(
+            ([key]) =>
+              ![
+                "request_payload",
+                "raw_response",
+                "parsed_output",
+                "passive_observations",
+              ].includes(key),
+          ),
+        );
+        return [
+          {
+            ...summary,
+            last_record_seq: Number(
+              request.last_record_seq ?? record.last_record_seq,
+            ),
+            passive_observation_count: Array.isArray(
+              request.passive_observations,
+            )
+              ? request.passive_observations.length
+              : 0,
+            record_seq: recordSeq,
+          },
+        ];
+      });
+      return jsonResponse({
+        after_record_seq: afterRecordSeq,
+        has_more: false,
+        items,
+        next_after_record_seq: record.last_record_seq,
+      });
+    }
+    if (url.pathname.startsWith(`${basePath}/model-requests/`)) {
+      const attemptId = decodeURIComponent(
+        url.pathname.slice(`${basePath}/model-requests/`.length),
+      );
+      const matched = record.model_requests.find(
+        (item) => item.attempt_id === attemptId,
+      );
+      if (matched) return jsonResponse(matched);
+    }
+    throw new Error(`Unexpected request: ${url.toString()}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function jsonResponse(value: unknown) {
+  return new Response(JSON.stringify(value), {
+    headers: { "Content-Type": "application/json" },
+    status: 200,
+  });
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -554,23 +654,12 @@ function renderPage() {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return { queryClient, router };
 }
 
 describe("V2 game record detail workspace", () => {
   beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
-          return new Response(JSON.stringify(detail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        throw new Error(`Unexpected request: ${url}`);
-      }),
-    );
+    stubRecordFetch(detail);
   });
 
   afterEach(() => {
@@ -581,6 +670,7 @@ describe("V2 game record detail workspace", () => {
   it("connects the readable flow to persisted model input, output and raw data", async () => {
     const user = userEvent.setup();
     renderPage();
+    const fetchMock = vi.mocked(fetch);
 
     expect(
       await screen.findByRole("heading", { name: "模型可观测性验收" }),
@@ -592,6 +682,11 @@ describe("V2 game record detail workspace", () => {
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/model-requests/v2_model_attempt_1"),
+      ),
+    ).toBe(false);
     const livePanel = screen.getByRole("region", { name: "实时全知态势" });
     expect(
       within(livePanel).getByRole("heading", { name: /实时全知态势/ }),
@@ -655,6 +750,29 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(outputPanel).getByText("夜幕将至，九位玩家请准备。"),
     ).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/model-requests/v2_model_attempt_1"),
+      ),
+    ).toBe(true);
+
+    await user.click(screen.getByRole("tab", { name: "原始事件 (6)" }));
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes(`/events/2`),
+      ),
+    ).toBe(false);
+    const rawEventLabel = screen.getByText("action_opened");
+    const rawEventButton = rawEventLabel.closest(".ant-collapse-header");
+    expect(rawEventButton).not.toBeNull();
+    await user.click(rawEventButton as HTMLElement);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes(`/events/2`),
+        ),
+      ).toBe(true),
+    );
 
     await user.click(screen.getByRole("button", { name: /Close|关闭/ }));
     await waitFor(() =>
@@ -670,20 +788,32 @@ describe("V2 game record detail workspace", () => {
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
   });
 
-  it("renders Chat Completions messages as readable model input", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
-          return new Response(JSON.stringify(deepSeekDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        throw new Error(`Unexpected request: ${url}`);
-      }),
+  it("clears detail and on-demand query cache after leaving the route", async () => {
+    const user = userEvent.setup();
+    const { queryClient } = renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "模型可观测性验收" }),
+    ).toBeVisible();
+    expect(
+      queryClient.getQueriesData({
+        queryKey: v2GameRecordKeys.detail(gameId),
+      }).length,
+    ).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(await screen.findByText("对局列表")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        queryClient.getQueriesData({
+          queryKey: v2GameRecordKeys.detail(gameId),
+        }),
+      ).toHaveLength(0),
     );
+  });
+
+  it("renders Chat Completions messages as readable model input", async () => {
+    stubRecordFetch(deepSeekDetail);
     const user = userEvent.setup();
     renderPage();
 
@@ -717,19 +847,7 @@ describe("V2 game record detail workspace", () => {
   });
 
   it("shows a recovered transport retry as one successful action", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
-          return new Response(JSON.stringify(retryDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        throw new Error(`Unexpected request: ${url}`);
-      }),
-    );
+    stubRecordFetch(retryDetail);
     const user = userEvent.setup();
     renderPage();
 
@@ -753,19 +871,7 @@ describe("V2 game record detail workspace", () => {
   });
 
   it("shows deterministic template variables, final text and frozen speaker", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
-          return new Response(JSON.stringify(templateDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        throw new Error(`Unexpected request: ${url}`);
-      }),
-    );
+    stubRecordFetch(templateDetail);
     const user = userEvent.setup();
     renderPage();
 
@@ -796,19 +902,7 @@ describe("V2 game record detail workspace", () => {
   });
 
   it("shows a compact digest for each persisted match round", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
-          return new Response(JSON.stringify(roundSummaryDetail), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        throw new Error(`Unexpected request: ${url}`);
-      }),
-    );
+    stubRecordFetch(roundSummaryDetail);
     renderPage();
 
     expect(

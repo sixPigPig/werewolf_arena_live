@@ -6420,7 +6420,7 @@ a {
 }
 
 .v2-action-timeline > header,
-.v2-action-phase > header {
+.v2-action-phase-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -6445,26 +6445,38 @@ a {
   font-size: 11px;
 }
 
-.v2-action-phase {
-  margin-top: 14px;
+.v2-action-virtual-viewport {
+  position: relative;
+  height: 680px;
+  overflow: auto;
+  border-bottom: 1px solid #eaecf0;
 }
 
-.v2-action-phase > header {
-  padding: 0 6px 8px;
+.v2-action-virtual-canvas {
+  position: relative;
+  min-width: 760px;
 }
 
-.v2-action-phase ol {
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid #f2f4f7;
-  list-style: none;
+.v2-action-virtual-row {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  overflow: hidden;
 }
 
-.v2-action-phase li {
+.v2-action-phase-header {
+  height: 42px;
+  padding: 14px 6px 8px;
   border-bottom: 1px solid #f2f4f7;
 }
 
-.v2-action-phase li.is-selected {
+.v2-action-item {
+  height: 100%;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.v2-action-item.is-selected {
   margin: 0 -1px;
   border: 1px solid #84adff;
   border-radius: 7px;

@@ -1263,9 +1263,36 @@ def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert body["model_requests"] == []
+    assert "events" not in body
+    assert "model_requests" not in body
+    model_requests = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=500"
+    )
+    assert model_requests.status_code == 200, model_requests.text
+    assert model_requests.json()["items"] == []
+    event_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/events?after_record_seq=0&page_size=500"
+    )
+    assert event_page.status_code == 200, event_page.text
+    first_event_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/events?after_record_seq=0&page_size=1"
+    )
+    assert first_event_page.status_code == 200, first_event_page.text
+    first_event_body = first_event_page.json()
+    assert first_event_body["has_more"] is True
+    assert first_event_body["next_after_record_seq"] == first_event_body["items"][0]["record_seq"]
+    second_event_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/events"
+        f"?after_record_seq={first_event_body['next_after_record_seq']}&page_size=1"
+    )
+    assert second_event_page.status_code == 200, second_event_page.text
+    assert (
+        second_event_page.json()["items"][0]["record_seq"]
+        > (first_event_body["next_after_record_seq"])
+    )
     template_events = [
-        item for item in body["events"] if item["event_type"] == "judge_speech_rendered"
+        item for item in event_page.json()["items"] if item["event_type"] == "judge_speech_rendered"
     ]
     assert [item["payload"]["template_id"] for item in template_events] == [
         "judge_opening_speech",
@@ -2606,14 +2633,57 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
     assert client.post("/api/v1/admin/dev-login").status_code == 200
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
+    request_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=500"
+    )
+    assert request_page.status_code == 200, request_page.text
+    boundary_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=1"
+    )
+    assert boundary_page.status_code == 200, boundary_page.text
+    assert {
+        item["attempt_id"]
+        for item in boundary_page.json()["items"]
+        if item["action_id"] == action_id
+    } == {
+        starts[0].payload["attempt_id"],
+        starts[1].payload["attempt_id"],
+    }
     requests = [
-        request for request in detail.json()["model_requests"] if request["action_id"] == action_id
+        request for request in request_page.json()["items"] if request["action_id"] == action_id
     ]
     assert [request["status"] for request in requests] == ["failed", "succeeded"]
+    assert all("request_payload" not in request for request in requests)
+    assert all("raw_response" not in request for request in requests)
     assert requests[0]["terminal"] is False
     assert requests[0]["retryable"] is True
     assert requests[0]["exception_type"] == "builtins.ConnectionResetError"
     assert requests[1]["retry_of_attempt_id"] == requests[0]["attempt_id"]
+    request_detail = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests/"
+        f"{requests[0]['attempt_id']}"
+    )
+    assert request_detail.status_code == 200, request_detail.text
+    assert request_detail.json()["request_payload"]
+
+    event_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/events?after_record_seq=0&page_size=500"
+    )
+    assert event_page.status_code == 200, event_page.text
+    started_event = next(
+        event
+        for event in event_page.json()["items"]
+        if event["event_type"] == "model_request_started"
+        and event["payload"].get("attempt_id") == requests[0]["attempt_id"]
+    )
+    assert "request_payload" not in started_event["payload"]
+    event_detail = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/events/{started_event['event_id']}"
+    )
+    assert event_detail.status_code == 200, event_detail.text
+    assert event_detail.json()["payload"]["request_payload"]
 
 
 def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
@@ -2762,14 +2832,28 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
     assert client.post("/api/v1/admin/dev-login").status_code == 200
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
+    request_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=500"
+    )
+    assert request_page.status_code == 200, request_page.text
     failed_request = next(
         request
-        for request in detail.json()["model_requests"]
+        for request in request_page.json()["items"]
         if request["status"] == "failed" and request["action_type"] == "sheriff_withdraw"
     )
     assert failed_request["failure_code"] == "model_decision_invalid_speech"
-    assert failed_request["raw_response"] == '{"withdraw":true}'
     assert failed_request["output_source"] == "persisted"
+    assert "request_payload" not in failed_request
+    assert "raw_response" not in failed_request
+    assert "parsed_output" not in failed_request
+    assert "passive_observations" not in failed_request
+    request_detail = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests/"
+        f"{failed_request['attempt_id']}"
+    )
+    assert request_detail.status_code == 200, request_detail.text
+    assert request_detail.json()["raw_response"] == '{"withdraw":true}'
 
 
 def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> None:

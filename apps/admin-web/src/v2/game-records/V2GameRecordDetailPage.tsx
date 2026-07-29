@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
 import AntApp from "antd/es/app";
 import Button from "antd/es/button";
+import Collapse from "antd/es/collapse";
 import Descriptions from "antd/es/descriptions";
 import Drawer from "antd/es/drawer";
 import Empty from "antd/es/empty";
@@ -24,7 +25,13 @@ import Switch from "antd/es/switch";
 import Tabs from "antd/es/tabs";
 import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
@@ -34,7 +41,6 @@ import {
   AdminPage,
 } from "@/components/admin/AdminPage";
 import { useAdminSession } from "@/features/auth/session-context";
-import { readV2GameRecord, stopV2Game } from "@/v2/game-records/api";
 import {
   isLiveV2StatusActive,
   liveRefreshInterval,
@@ -51,16 +57,25 @@ import {
 } from "@/v2/game-records/presentation";
 import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
 import {
-  ReadableModelInput,
-  ReadableModelOutput,
-  ReadableRawEvents,
-} from "@/v2/game-records/request-presentation";
+  listV2GameEvents,
+  listV2ModelRequests,
+  readV2GameRecordSummary,
+  readV2ModelRequest,
+  stopV2Game,
+} from "@/v2/game-records/api";
 import { adminOperationErrorDescription } from "@/lib/admin-notification";
 import type {
   V2GameRecordEvent,
   V2GameRecordDetail,
+  V2ModelRequest,
+  V2ModelRequestSummary,
   V2PlayerIdentity,
 } from "@/v2/game-records/types";
+import {
+  ReadableModelInput,
+  ReadableModelOutput,
+  ReadableRawEvents,
+} from "@/v2/game-records/request-presentation";
 
 type CategoryFilter = "all" | "model" | "template" | "milestone";
 type StatusFilter = "all" | "running" | "succeeded" | "failed";
@@ -69,38 +84,236 @@ const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API �
 export default function V2GameRecordDetailPage() {
   const navigate = useNavigate();
   const { gameId = "" } = useParams();
+  const queryClient = useQueryClient();
   const query = useQuery({
     enabled: Boolean(gameId),
-    queryFn: ({ signal }) => readV2GameRecord(gameId, signal),
+    queryFn: ({ signal }) => readV2GameRecordSummary(gameId, signal),
     queryKey: v2GameRecordKeys.detail(gameId),
     refetchInterval: (currentQuery) =>
       liveRefreshInterval(currentQuery.state.data?.status),
     refetchIntervalInBackground: false,
   });
+  const timeline = useIncrementalTimeline(
+    gameId,
+    query.data?.last_record_seq ?? 0,
+    query.data !== undefined,
+  );
+  const game = useMemo<V2GameRecordDetail | null>(
+    () =>
+      query.data
+        ? {
+            ...query.data,
+            events: timeline.events,
+            model_requests: timeline.modelRequests,
+          }
+        : null,
+    [query.data, timeline.events, timeline.modelRequests],
+  );
 
-  if (query.isPending) {
+  useEffect(
+    () => () => {
+      queryClient.removeQueries({
+        queryKey: v2GameRecordKeys.detail(gameId),
+      });
+    },
+    [gameId, queryClient],
+  );
+
+  if (query.isPending || timeline.isInitialLoading) {
     return <AdminLoading message="正在读取 V2 对局记录..." />;
   }
-  if (query.isError) {
+  if (query.isError || timeline.error) {
+    const error = query.error ?? timeline.error;
     return (
       <AdminError
         description={
-          isAdminApiError(query.error)
-            ? query.error.message
+          isAdminApiError(error)
+            ? error.message
             : "记录服务暂时不可用。"
         }
         title="无法读取 V2 对局"
       />
     );
   }
+  if (game === null) {
+    return <AdminLoading message="正在读取 V2 对局记录..." />;
+  }
 
   return (
     <V2GameRecordWorkspace
-      game={query.data}
-      isRefreshing={query.isFetching}
+      game={game}
+      isRefreshing={query.isFetching || timeline.isFetching}
       onBack={() => navigate("/v2/operations/games")}
       refreshedAt={query.dataUpdatedAt}
     />
+  );
+}
+
+function useIncrementalTimeline(
+  gameId: string,
+  targetRecordSeq: number,
+  enabled: boolean,
+) {
+  const [state, setState] = useState(() => emptyTimelineState(gameId));
+  const cursors = useRef({
+    event: 0,
+    gameId,
+    modelRequest: 0,
+  });
+  const current =
+    state.gameId === gameId ? state : emptyTimelineState(gameId);
+
+  useEffect(() => {
+    if (!gameId) return;
+    if (!enabled) return;
+    if (cursors.current.gameId !== gameId) {
+      cursors.current = { event: 0, gameId, modelRequest: 0 };
+    }
+    const controller = new AbortController();
+    let active = true;
+
+    async function loadEvents() {
+      let cursor = cursors.current.event;
+      while (active && cursor < targetRecordSeq) {
+        const page = await listV2GameEvents(
+          gameId,
+          cursor,
+          controller.signal,
+        );
+        if (!active || cursors.current.gameId !== gameId) return;
+        if (page.items.length) {
+          setState((existing) => {
+            const base =
+              existing.gameId === gameId
+                ? existing
+                : emptyTimelineState(gameId);
+            return {
+              ...base,
+              events: mergeEvents(base.events, page.items),
+            };
+          });
+        }
+        if (page.next_after_record_seq <= cursor) break;
+        cursor = page.next_after_record_seq;
+        cursors.current.event = cursor;
+        if (!page.has_more && cursor >= targetRecordSeq) break;
+      }
+    }
+
+    async function loadModelRequests() {
+      let cursor = cursors.current.modelRequest;
+      while (active && cursor < targetRecordSeq) {
+        const page = await listV2ModelRequests(
+          gameId,
+          cursor,
+          controller.signal,
+        );
+        if (!active || cursors.current.gameId !== gameId) return;
+        if (page.items.length) {
+          setState((existing) => {
+            const base =
+              existing.gameId === gameId
+                ? existing
+                : emptyTimelineState(gameId);
+            return {
+              ...base,
+              modelRequests: mergeModelRequests(
+                base.modelRequests,
+                page.items,
+              ),
+            };
+          });
+        }
+        if (page.next_after_record_seq <= cursor) break;
+        cursor = page.next_after_record_seq;
+        cursors.current.modelRequest = cursor;
+        if (!page.has_more && cursor >= targetRecordSeq) break;
+      }
+    }
+
+    void Promise.all([loadEvents(), loadModelRequests()])
+      .then(() => {
+        if (!active || cursors.current.gameId !== gameId) return;
+        setState((existing) => {
+          const base =
+            existing.gameId === gameId
+              ? existing
+              : emptyTimelineState(gameId);
+          return {
+            ...base,
+            error: null,
+            hydrated: true,
+            syncedRecordSeq: Math.max(
+              base.syncedRecordSeq,
+              targetRecordSeq,
+            ),
+          };
+        });
+      })
+      .catch((caught: unknown) => {
+        if (
+          !active ||
+          (caught instanceof DOMException && caught.name === "AbortError")
+        ) {
+          return;
+        }
+        setState((existing) => {
+          const base =
+            existing.gameId === gameId
+              ? existing
+              : emptyTimelineState(gameId);
+          return { ...base, error: caught, hydrated: true };
+        });
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [enabled, gameId, targetRecordSeq]);
+
+  return {
+    error: current.error,
+    events: current.events,
+    isFetching:
+      enabled &&
+      current.error === null &&
+      current.syncedRecordSeq < targetRecordSeq,
+    isInitialLoading: Boolean(gameId) && (!enabled || !current.hydrated),
+    modelRequests: current.modelRequests,
+  };
+}
+
+function emptyTimelineState(gameId: string) {
+  return {
+    error: null as unknown,
+    events: [] as V2GameRecordEvent[],
+    gameId,
+    hydrated: false,
+    modelRequests: [] as V2ModelRequestSummary[],
+    syncedRecordSeq: 0,
+  };
+}
+
+function mergeEvents(
+  current: V2GameRecordEvent[],
+  incoming: V2GameRecordEvent[],
+) {
+  const merged = new Map(current.map((item) => [item.event_id, item]));
+  for (const item of incoming) merged.set(item.event_id, item);
+  return [...merged.values()].sort(
+    (left, right) => left.record_seq - right.record_seq,
+  );
+}
+
+function mergeModelRequests(
+  current: V2ModelRequestSummary[],
+  incoming: V2ModelRequestSummary[],
+) {
+  const merged = new Map(current.map((item) => [item.attempt_id, item]));
+  for (const item of incoming) merged.set(item.attempt_id, item);
+  return [...merged.values()].sort(
+    (left, right) => left.record_seq - right.record_seq,
   );
 }
 
@@ -415,6 +628,7 @@ function V2GameRecordWorkspace({
       </section>
 
       <RequestDetailsDrawer
+        gameId={game.game_id}
         item={selected}
         onClose={() => setRequestDrawerOpen(false)}
         open={requestDrawerOpen}
@@ -879,6 +1093,56 @@ function ActionTimeline({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const viewportHeight = 680;
+  const overscan = 360;
+  const layout = useMemo(() => {
+    const rows: Array<
+      | {
+          kind: "phase";
+          key: string;
+          label: string;
+          count: number;
+          height: number;
+        }
+      | {
+          kind: "action";
+          key: string;
+          item: V2TimelineItem;
+          height: number;
+        }
+    > = [];
+    for (const phase of phases) {
+      rows.push({
+        count: phase.items.length,
+        height: 42,
+        key: `phase:${phase.phaseId}`,
+        kind: "phase",
+        label: phase.label,
+      });
+      for (const item of phase.items) {
+        rows.push({
+          height: item.id === selectedId ? 250 : 48,
+          item,
+          key: `action:${item.id}`,
+          kind: "action",
+        });
+      }
+    }
+    let top = 0;
+    const positioned = rows.map((row) => {
+      const positionedRow = { ...row, top };
+      top += row.height;
+      return positionedRow;
+    });
+    return { rows: positioned, totalHeight: top };
+  }, [phases, selectedId]);
+  const visibleRows = layout.rows.filter(
+    (row) =>
+      row.top + row.height >= scrollTop - overscan &&
+      row.top <= scrollTop + viewportHeight + overscan,
+  );
+
   return (
     <main className="v2-action-timeline">
       <header>
@@ -897,50 +1161,73 @@ function ActionTimeline({
         <span>耗时</span>
       </div>
       {phases.length ? (
-        phases.map((phase) => (
-          <section className="v2-action-phase" key={phase.phaseId}>
-            <header>
-              <strong>{phase.label}</strong>
-              <Typography.Text type="secondary">
-                {phase.items.length} 步
-              </Typography.Text>
-            </header>
-            <ol>
-              {phase.items.map((item) => (
-                <li className={item.id === selectedId ? "is-selected" : ""} key={item.id}>
-                  <button
-                    aria-label={`查看 ${item.actorLabel} ${item.label}`}
-                    className="v2-action-row"
-                    onClick={() => onSelect(item.id)}
-                    type="button"
+        <div
+          className="v2-action-virtual-viewport"
+          onScroll={(event: UIEvent<HTMLDivElement>) =>
+            setScrollTop(event.currentTarget.scrollTop)
+          }
+        >
+          <div
+            className="v2-action-virtual-canvas"
+            style={{ height: layout.totalHeight }}
+          >
+            {visibleRows.map((row) => (
+              <div
+                className="v2-action-virtual-row"
+                key={row.key}
+                style={{ height: row.height, transform: `translateY(${row.top}px)` }}
+              >
+                {row.kind === "phase" ? (
+                  <header className="v2-action-phase-header">
+                    <strong>{row.label}</strong>
+                    <Typography.Text type="secondary">
+                      {row.count} 步
+                    </Typography.Text>
+                  </header>
+                ) : (
+                  <div
+                    className={
+                      row.item.id === selectedId
+                        ? "v2-action-item is-selected"
+                        : "v2-action-item"
+                    }
                   >
-                    <time>{formatClock(item.startedAt)}</time>
-                    <span>{item.actorLabel}</span>
-                    <strong>{item.label}</strong>
-                    <span>{audienceLabel(item.audience)}</span>
-                    <span className={`is-${item.status}`}>
-                      <StatusIcon status={item.status} />
-                      {statusLabel(item.status)}
-                    </span>
-                    <span>
-                      {item.templateRender
-                        ? "系统模板"
-                        : `${item.modelRequest?.model_id ?? "—"}${
-                            item.modelRequests.length > 1
-                              ? ` · 重试 ${item.modelRequests.length - 1} 次`
-                              : ""
-                          }`}
-                    </span>
-                    <span>{formatDuration(item.durationMs)}</span>
-                  </button>
-                  {item.id === selectedId ? (
-                    <LifecycleStrip item={item} />
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </section>
-        ))
+                    <button
+                      aria-label={`查看 ${row.item.actorLabel} ${row.item.label}`}
+                      className="v2-action-row"
+                      onClick={() => onSelect(row.item.id)}
+                      type="button"
+                    >
+                      <time>{formatClock(row.item.startedAt)}</time>
+                      <span>{row.item.actorLabel}</span>
+                      <strong>{row.item.label}</strong>
+                      <span>{audienceLabel(row.item.audience)}</span>
+                      <span className={`is-${row.item.status}`}>
+                        <StatusIcon status={row.item.status} />
+                        {statusLabel(row.item.status)}
+                      </span>
+                      <span>
+                        {row.item.templateRender
+                          ? "系统模板"
+                          : `${row.item.modelRequest?.model_id ?? "—"}${
+                              row.item.modelRequests.length > 1
+                                ? ` · 重试 ${
+                                    row.item.modelRequests.length - 1
+                                  } 次`
+                                : ""
+                            }`}
+                      </span>
+                      <span>{formatDuration(row.item.durationMs)}</span>
+                    </button>
+                    {row.item.id === selectedId ? (
+                      <LifecycleStrip item={row.item} />
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       ) : (
         <Empty
           description="没有符合筛选条件的流程步骤"
@@ -1032,16 +1319,19 @@ function LifecycleStrip({ item }: { item: V2TimelineItem }) {
 }
 
 function RequestDetailsDrawer({
+  gameId,
   item,
   open,
   onClose,
 }: {
+  gameId: string;
   item: V2TimelineItem | null;
   open: boolean;
   onClose: () => void;
 }) {
   return (
     <Drawer
+      destroyOnHidden
       onClose={onClose}
       open={open && item !== null}
       rootClassName="v2-request-drawer"
@@ -1068,50 +1358,122 @@ function RequestDetailsDrawer({
         )
       }
     >
-      {item ? (
-        <div className="v2-request-drawer-content">
-          <Tabs
-            items={[
-              {
-                children: <InspectorOverview item={item} />,
-                key: "overview",
-                label: "概览",
-              },
-              ...(item.templateRender
-                ? [
-                    {
-                      children: <ReadableTemplateRender event={item.templateRender} />,
-                      key: "template",
-                      label: "模板详情",
-                    },
-                  ]
-                : [
-                    {
-                      children: (
-                        <ReadableModelInput request={item.modelRequest} />
-                      ),
-                      key: "input",
-                      label: "模型输入",
-                    },
-                    {
-                      children: (
-                        <ReadableModelOutput request={item.modelRequest} />
-                      ),
-                      key: "output",
-                      label: "模型输出",
-                    },
-                  ]),
-              {
-                children: <ReadableRawEvents events={item.events} />,
-                key: "events",
-                label: `原始事件 (${item.events.length})`,
-              },
-            ]}
-            key={item.id}
-          />
-        </div>
+      {open && item ? (
+        <RequestDetailsContent gameId={gameId} item={item} />
       ) : null}
     </Drawer>
+  );
+}
+
+function RequestDetailsContent({
+  gameId,
+  item,
+}: {
+  gameId: string;
+  item: V2TimelineItem;
+}) {
+  const attemptId = item.modelRequest?.attempt_id ?? "";
+  const requestQuery = useQuery({
+    enabled: Boolean(attemptId),
+    gcTime: 0,
+    queryFn: ({ signal }) =>
+      readV2ModelRequest(gameId, attemptId, signal),
+    queryKey: v2GameRecordKeys.modelRequest(gameId, attemptId),
+  });
+  const fullRequest = requestQuery.data ?? null;
+  return (
+    <div className="v2-request-drawer-content">
+      <Tabs
+        items={[
+          {
+            children: <InspectorOverview item={item} />,
+            key: "overview",
+            label: "概览",
+          },
+          ...(item.templateRender
+            ? [
+                {
+                  children: (
+                    <ReadableTemplateRender event={item.templateRender} />
+                  ),
+                  key: "template",
+                  label: "模板详情",
+                },
+              ]
+            : [
+                {
+                  children: (
+                    <ModelRequestPayload
+                      error={requestQuery.error}
+                      isPending={
+                        Boolean(attemptId) && requestQuery.isPending
+                      }
+                      request={fullRequest}
+                      view="input"
+                    />
+                  ),
+                  key: "input",
+                  label: "模型输入",
+                },
+                {
+                  children: (
+                    <ModelRequestPayload
+                      error={requestQuery.error}
+                      isPending={
+                        Boolean(attemptId) && requestQuery.isPending
+                      }
+                      request={fullRequest}
+                      view="output"
+                    />
+                  ),
+                  key: "output",
+                  label: "模型输出",
+                },
+              ]),
+          {
+            children: (
+              <ReadableRawEvents events={item.events} gameId={gameId} />
+            ),
+            key: "events",
+            label: `原始事件 (${item.events.length})`,
+          },
+        ]}
+        key={item.id}
+      />
+    </div>
+  );
+}
+
+function ModelRequestPayload({
+  error,
+  isPending,
+  request,
+  view,
+}: {
+  error: Error | null;
+  isPending: boolean;
+  request: V2ModelRequest | null;
+  view: "input" | "output";
+}) {
+  if (isPending) {
+    return <AdminLoading message="正在按需读取模型请求正文..." />;
+  }
+  if (error) {
+    return (
+      <Alert
+        description={
+          isAdminApiError(error) ? error.message : "模型请求正文暂时不可用。"
+        }
+        message="无法读取模型请求正文"
+        showIcon
+        type="error"
+      />
+    );
+  }
+  return view === "input" ? (
+    <ReadableModelInput request={request} />
+  ) : (
+    <ReadableModelOutput request={request} />
   );
 }
 
@@ -1337,6 +1699,7 @@ function RawDataDrawer({
 }) {
   return (
     <Drawer
+      destroyOnHidden
       onClose={onClose}
       open={open}
       size="large"
@@ -1424,15 +1787,32 @@ function RecordSection({
   label: string;
   records: Array<Record<string, unknown>>;
 }) {
+  const [activeKeys, setActiveKeys] = useState<string[]>([]);
   return (
     <section className="v2-raw-record-section">
       <Typography.Title level={5}>
         {label} ({records.length})
       </Typography.Title>
       {records.length ? (
-        records.map((record, index) => (
-          <pre key={`${label}-${index}`}>{prettyJson(record)}</pre>
-        ))
+        <Collapse
+          activeKey={activeKeys}
+          items={records.map((record, index) => {
+            const key = String(index);
+            return {
+              children: activeKeys.includes(key) ? (
+                <pre>{prettyJson(record)}</pre>
+              ) : null,
+              key,
+              label: `${label} ${index + 1}`,
+            };
+          })}
+          onChange={(keys) =>
+            setActiveKeys(
+              (Array.isArray(keys) ? keys : [keys]).map(String),
+            )
+          }
+          size="small"
+        />
       ) : (
         <Typography.Text type="secondary">暂无记录</Typography.Text>
       )}

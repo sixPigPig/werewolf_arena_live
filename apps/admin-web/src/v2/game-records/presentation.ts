@@ -2,7 +2,7 @@ import type {
   V2GamePresentation,
   V2GameRecordDetail,
   V2GameRecordEvent,
-  V2ModelRequest,
+  V2ModelRequestSummary,
   V2PlayerIdentity,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
@@ -25,8 +25,8 @@ export type V2TimelineItem = {
   durationMs: number | null;
   firstRecordSeq: number;
   lastRecordSeq: number;
-  modelRequest: V2ModelRequest | null;
-  modelRequests: V2ModelRequest[];
+  modelRequest: V2ModelRequestSummary | null;
+  modelRequests: V2ModelRequestSummary[];
   templateRender: V2GameRecordEvent | null;
   presentation: V2GamePresentation | null;
   voiceAsset: V2VoiceAsset | null;
@@ -289,7 +289,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     }
   }
 
-  const requestsByAction = new Map<string, V2ModelRequest[]>();
+  const requestsByAction = new Map<string, V2ModelRequestSummary[]>();
   for (const request of game.model_requests) {
     const requests = requestsByAction.get(request.action_id) ?? [];
     requests.push(request);

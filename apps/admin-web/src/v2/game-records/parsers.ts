@@ -1,13 +1,16 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
   V2GameControlResult,
+  V2GameEventPage,
   V2GamePresentation,
-  V2GameRecordDetail,
   V2GameRecordEvent,
   V2GameRecordList,
   V2GameRecordListItem,
+  V2GameRecordSummary,
   V2GameRun,
   V2ModelRequest,
+  V2ModelRequestPage,
+  V2ModelRequestSummary,
   V2PlayerIdentity,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
@@ -40,7 +43,7 @@ export function parseV2GameRecordList(value: unknown): V2GameRecordList {
   };
 }
 
-export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
+export function parseV2GameRecordSummary(value: unknown): V2GameRecordSummary {
   const record = object(value);
   return {
     ...parseListItem(record),
@@ -51,8 +54,6 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     match_state: record.match_state === null ? null : object(record.match_state),
     player_identities: array(record.player_identities).map(parsePlayerIdentity),
     runs: array(record.runs).map(parseRun),
-    events: array(record.events).map(parseEvent),
-    model_requests: array(record.model_requests).map(parseModelRequest),
     presentations: array(record.presentations).map(parsePresentation),
     voice_assets: array(record.voice_assets).map(parseVoiceAsset),
     player_states: array(record.player_states).map(object),
@@ -61,6 +62,28 @@ export function parseV2GameRecordDetail(value: unknown): V2GameRecordDetail {
     ability_activations: array(record.ability_activations).map(object),
     effect_intents: array(record.effect_intents).map(object),
     knowledge_facts: array(record.knowledge_facts).map(object),
+  };
+}
+
+export function parseV2GameEventPage(value: unknown): V2GameEventPage {
+  const record = object(value);
+  return {
+    items: array(record.items).map(parseV2GameRecordEvent),
+    after_record_seq: integer(record.after_record_seq, 0),
+    next_after_record_seq: integer(record.next_after_record_seq, 0),
+    has_more: boolean(record.has_more),
+  };
+}
+
+export function parseV2ModelRequestPage(
+  value: unknown,
+): V2ModelRequestPage {
+  const record = object(value);
+  return {
+    items: array(record.items).map(parseV2ModelRequestSummary),
+    after_record_seq: integer(record.after_record_seq, 0),
+    next_after_record_seq: integer(record.next_after_record_seq, 0),
+    has_more: boolean(record.has_more),
   };
 }
 
@@ -108,7 +131,9 @@ function parseRun(value: unknown): V2GameRun {
   };
 }
 
-function parseEvent(value: unknown): V2GameRecordEvent {
+export function parseV2GameRecordEvent(
+  value: unknown,
+): V2GameRecordEvent {
   const record = object(value);
   return {
     event_id: integer(record.event_id, 1),
@@ -168,7 +193,9 @@ function parseVoiceAsset(value: unknown): V2VoiceAsset {
   };
 }
 
-function parseModelRequest(value: unknown): V2ModelRequest {
+export function parseV2ModelRequestSummary(
+  value: unknown,
+): V2ModelRequestSummary {
   const record = object(value);
   return {
     attempt_id: text(record.attempt_id),
@@ -180,6 +207,12 @@ function parseModelRequest(value: unknown): V2ModelRequest {
       record.retry_of_attempt_id === undefined
         ? null
         : nullableText(record.retry_of_attempt_id),
+    record_seq:
+      record.record_seq === undefined ? 1 : integer(record.record_seq, 1),
+    last_record_seq:
+      record.last_record_seq === undefined
+        ? integer(record.record_seq ?? 1, 1)
+        : integer(record.last_record_seq, 1),
     action_id: text(record.action_id),
     run_id: text(record.run_id),
     phase_id: text(record.phase_id),
@@ -204,19 +237,16 @@ function parseModelRequest(value: unknown): V2ModelRequest {
         ? null
         : object(record.prompt_projection),
     status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
-    request_payload:
-      record.request_payload === null ? null : object(record.request_payload),
     input_source: oneOf(
       record.input_source,
       ["persisted", "reconstructed", "unavailable"] as const,
     ),
-    raw_response: nullableText(record.raw_response),
-    parsed_output:
-      record.parsed_output === null ? null : object(record.parsed_output),
-    passive_observations:
-      record.passive_observations === undefined
-        ? []
-        : array(record.passive_observations).map(object),
+    passive_observation_count:
+      record.passive_observation_count === undefined
+        ? Array.isArray(record.passive_observations)
+          ? record.passive_observations.length
+          : 0
+        : integer(record.passive_observation_count, 0),
     output_source: oneOf(
       record.output_source,
       ["persisted", "legacy_inferred", "unavailable"] as const,
@@ -254,6 +284,22 @@ function parseModelRequest(value: unknown): V2ModelRequest {
         : nullableInteger(record.failure_elapsed_ms, 0),
     started_at: date(record.started_at),
     completed_at: nullableDate(record.completed_at),
+  };
+}
+
+export function parseV2ModelRequest(value: unknown): V2ModelRequest {
+  const record = object(value);
+  return {
+    ...parseV2ModelRequestSummary(record),
+    request_payload:
+      record.request_payload === null ? null : object(record.request_payload),
+    raw_response: nullableText(record.raw_response),
+    parsed_output:
+      record.parsed_output === null ? null : object(record.parsed_output),
+    passive_observations:
+      record.passive_observations === undefined
+        ? []
+        : array(record.passive_observations).map(object),
   };
 }
 

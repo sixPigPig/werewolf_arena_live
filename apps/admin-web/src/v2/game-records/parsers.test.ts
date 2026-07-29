@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseV2GameEventPage,
   parseV2GameControlResult,
-  parseV2GameRecordDetail,
   parseV2GameRecordList,
+  parseV2GameRecordSummary,
+  parseV2ModelRequest,
+  parseV2ModelRequestPage,
 } from "@/v2/game-records/parsers";
 
 const item = {
@@ -37,7 +40,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("keeps record_seq and presentation_seq as separate detail sequences", () => {
-    const result = parseV2GameRecordDetail({
+    const value = {
       ...item,
       rule_snapshot: {},
       players_snapshot: [],
@@ -176,19 +179,32 @@ describe("V2 game record parsers", () => {
       ability_activations: [],
       effect_intents: [],
       knowledge_facts: [],
+    };
+    const result = parseV2GameRecordSummary(value);
+    const eventPage = parseV2GameEventPage({
+      after_record_seq: 0,
+      has_more: false,
+      items: value.events,
+      next_after_record_seq: 2,
     });
+    const modelRequestPage = parseV2ModelRequestPage({
+      after_record_seq: 0,
+      has_more: false,
+      items: value.model_requests,
+      next_after_record_seq: 2,
+    });
+    const modelRequest = parseV2ModelRequest(value.model_requests[0]);
 
-    expect(result.events[0].record_seq).toBe(2);
+    expect(eventPage.items[0].record_seq).toBe(2);
     expect(result.player_identities[0]).toMatchObject({
       seat: 1,
       display_name: "阿青",
       role: "seer",
       alive: true,
     });
-    expect(result.model_requests[0]).toMatchObject({
+    expect(modelRequestPage.items[0]).toMatchObject({
       model_id: "doubao-seed-2-0-lite-260215",
       input_source: "persisted",
-      raw_response: "欢迎来到这场实时狼人杀对局。",
       first_token_ms: 12,
       prompt_schema_version: 2,
       prompt_projection: {
@@ -196,13 +212,15 @@ describe("V2 game record parsers", () => {
         recent_statement_count: 3,
         older_claim_count: 2,
       },
-      passive_observations: [
-        {
-          code: "wolf_cardinality_contradiction",
-          effect: "observed_only",
-        },
-      ],
+      passive_observation_count: 1,
     });
+    expect(modelRequest.raw_response).toBe("欢迎来到这场实时狼人杀对局。");
+    expect(modelRequest.passive_observations).toEqual([
+      {
+        code: "wolf_cardinality_contradiction",
+        effect: "observed_only",
+      },
+    ]);
     expect(result.presentations[0]).toMatchObject({
       presentation_seq: 1,
       source_event_id: 2,
@@ -246,7 +264,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("accepts a run that has been created but not formally started", () => {
-    const result = parseV2GameRecordDetail({
+    const result = parseV2GameRecordSummary({
       ...item,
       status: "waiting_to_start",
       rule_snapshot: {},

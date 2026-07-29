@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
 import Collapse from "antd/es/collapse";
 import Descriptions from "antd/es/descriptions";
@@ -6,16 +7,19 @@ import Flex from "antd/es/flex";
 import Space from "antd/es/space";
 import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
+import { isAdminApiError } from "@/api/problem-details";
+import { readV2GameEvent } from "@/v2/game-records/api";
 import {
   actionLabel,
   formatClock,
   phaseLabel,
   prettyJson,
 } from "@/v2/game-records/presentation";
+import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
 import type {
-  V2GameRecordDetail,
+  V2GameRecordEvent,
   V2ModelRequest,
 } from "@/v2/game-records/types";
 
@@ -471,14 +475,20 @@ function numericField(
 
 export function ReadableRawEvents({
   events,
+  gameId,
 }: {
-  events: V2GameRecordDetail["events"];
+  events: V2GameRecordEvent[];
+  gameId: string;
 }) {
+  const [activeKeys, setActiveKeys] = useState<string[]>([]);
   return (
     <Collapse
+      activeKey={activeKeys}
       className="v2-raw-events"
       items={events.map((event) => ({
-        children: <pre>{prettyJson(event.payload)}</pre>,
+        children: activeKeys.includes(String(event.event_id)) ? (
+          <RawEventPayload event={event} gameId={gameId} />
+        ) : null,
         key: String(event.event_id),
         label: (
           <Flex gap={8}>
@@ -490,9 +500,47 @@ export function ReadableRawEvents({
           </Flex>
         ),
       }))}
+      onChange={(keys) =>
+        setActiveKeys(
+          (Array.isArray(keys) ? keys : [keys]).map(String),
+        )
+      }
       size="small"
     />
   );
+}
+
+function RawEventPayload({
+  event,
+  gameId,
+}: {
+  event: V2GameRecordEvent;
+  gameId: string;
+}) {
+  const query = useQuery({
+    gcTime: 0,
+    queryFn: ({ signal }) =>
+      readV2GameEvent(gameId, event.event_id, signal),
+    queryKey: v2GameRecordKeys.event(gameId, event.event_id),
+  });
+  if (query.isPending) {
+    return <Typography.Text type="secondary">正在按需读取事件正文...</Typography.Text>;
+  }
+  if (query.isError) {
+    return (
+      <Alert
+        description={
+          isAdminApiError(query.error)
+            ? query.error.message
+            : "事件正文暂时不可用。"
+        }
+        message="无法读取事件正文"
+        showIcon
+        type="error"
+      />
+    );
+  }
+  return <pre>{prettyJson(query.data.payload)}</pre>;
 }
 
 function PromptMessageCard({ message }: { message: RequestMessage }) {

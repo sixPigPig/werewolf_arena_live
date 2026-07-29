@@ -447,6 +447,13 @@ class AdminV2EventResponse(BaseModel):
     created_at: datetime
 
 
+class AdminV2EventPageResponse(BaseModel):
+    items: list[AdminV2EventResponse]
+    after_record_seq: int
+    next_after_record_seq: int
+    has_more: bool
+
+
 class AdminV2PresentationResponse(BaseModel):
     presentation_seq: int
     presentation_id: str
@@ -488,11 +495,13 @@ class AdminV2VoiceAssetResponse(BaseModel):
     completed_at: datetime | None
 
 
-class AdminV2ModelRequestResponse(BaseModel):
+class AdminV2ModelRequestSummaryResponse(BaseModel):
     attempt_id: str
     attempt_no: int
     max_attempts: int
     retry_of_attempt_id: str | None
+    record_seq: int
+    last_record_seq: int
     action_id: str
     run_id: str
     phase_id: str
@@ -507,11 +516,8 @@ class AdminV2ModelRequestResponse(BaseModel):
     prompt_schema_version: int | None
     prompt_projection: dict[str, Any] | None
     status: Literal["running", "succeeded", "failed"]
-    request_payload: dict[str, Any] | None
     input_source: Literal["persisted", "reconstructed", "unavailable"]
-    raw_response: str | None
-    parsed_output: dict[str, Any] | None
-    passive_observations: list[dict[str, Any]]
+    passive_observation_count: int
     output_source: Literal["persisted", "legacy_inferred", "unavailable"]
     provider_request_id: str | None
     first_token_ms: int | None
@@ -530,6 +536,20 @@ class AdminV2ModelRequestResponse(BaseModel):
     completed_at: datetime | None
 
 
+class AdminV2ModelRequestResponse(AdminV2ModelRequestSummaryResponse):
+    request_payload: dict[str, Any] | None
+    raw_response: str | None
+    parsed_output: dict[str, Any] | None
+    passive_observations: list[dict[str, Any]]
+
+
+class AdminV2ModelRequestPageResponse(BaseModel):
+    items: list[AdminV2ModelRequestSummaryResponse]
+    after_record_seq: int
+    next_after_record_seq: int
+    has_more: bool
+
+
 class AdminV2GameDetailResponse(AdminV2GameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
@@ -538,8 +558,6 @@ class AdminV2GameDetailResponse(AdminV2GameListItem):
     match_state: dict[str, Any] | None
     player_identities: list[V2GodViewPlayerIdentityResponse]
     runs: list[AdminV2RunResponse]
-    events: list[AdminV2EventResponse]
-    model_requests: list[AdminV2ModelRequestResponse]
     presentations: list[AdminV2PresentationResponse]
     voice_assets: list[AdminV2VoiceAssetResponse]
     player_states: list[dict[str, Any]]
