@@ -330,6 +330,19 @@ class V2LiveRuntime:
             )
         return result.status
 
+    async def retry_paused_model_action(
+        self,
+        *,
+        game_id: str,
+        action_id: str,
+        control_request_id: str,
+    ) -> bool:
+        return await self._action_engine.retry_paused_model_action(
+            game_id=game_id,
+            action_id=action_id,
+            control_request_id=control_request_id,
+        )
+
     def snapshot(
         self,
         *,
@@ -447,7 +460,7 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             deepseek_api_key=config.live_v2_deepseek_api_key,
             deepseek_base_url=config.live_v2_deepseek_base_url,
             first_token_seconds=config.live_v2_model_first_token_seconds,
-            total_seconds=config.live_v2_model_total_seconds,
+            total_seconds=config.live_v2_model_attempt_total_seconds,
         ),
         tts_client=V2TtsClient(
             enabled=config.live_v2_tts_enabled,
@@ -467,7 +480,8 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
         ),
         model_retry_policy=V2ModelRetryPolicy(
             max_attempts=config.live_v2_model_max_attempts,
-            total_seconds=config.live_v2_model_total_seconds,
+            attempt_total_seconds=config.live_v2_model_attempt_total_seconds,
+            action_total_seconds=config.live_v2_model_action_total_seconds,
             base_delay_seconds=config.live_v2_model_retry_base_delay_seconds,
             jitter_seconds=config.live_v2_model_retry_jitter_seconds,
         ),
@@ -528,6 +542,7 @@ def _live_state(status: str) -> str:
         "broadcasting",
         "finalizing",
         "awaiting_observation",
+        "paused_model_error",
         "canceled",
         "failed",
     }:

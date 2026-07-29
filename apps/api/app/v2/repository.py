@@ -641,6 +641,66 @@ class V2ActionRepository:
                 },
             )
 
+    def pause_model_action(
+        self,
+        *,
+        claim: V2ActionClaim,
+        attempt_id: str,
+        failure_code: str,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, claim.game_id)
+            _raise_if_stop_requested(db, game)
+            run = _run(db, claim.run_id)
+            if game.status != "generating" or run.status != "generating":
+                raise V2RepositoryError(
+                    f"cannot pause model action from {game.status}/{run.status}"
+                )
+            game.status = "paused_model_error"
+            run.status = "paused_model_error"
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_paused",
+                payload={
+                    "action_id": claim.action_id,
+                    "attempt_id": attempt_id,
+                    "failure_code": failure_code,
+                    "reason_code": "model_attempts_exhausted",
+                },
+            )
+
+    def resume_model_action(
+        self,
+        *,
+        claim: V2ActionClaim,
+        control_request_id: str,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, claim.game_id)
+            _raise_if_stop_requested(db, game)
+            run = _run(db, claim.run_id)
+            if (
+                game.status != "paused_model_error"
+                or run.status != "paused_model_error"
+            ):
+                raise V2RepositoryError(
+                    f"cannot resume model action from {game.status}/{run.status}"
+                )
+            game.status = "generating"
+            run.status = "generating"
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_resumed",
+                payload={
+                    "action_id": claim.action_id,
+                    "control_request_id": control_request_id,
+                },
+            )
+
     def check_cancellation(self, game_id: str) -> None:
         with self._session_factory() as db:
             game = db.get(V2GameRecord, game_id)

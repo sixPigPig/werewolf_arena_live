@@ -97,6 +97,7 @@ class FakeV2ModelClient:
         self.transport_failure = threading.Event()
         self.attempt_ids: list[str] = []
         self.call_delay_seconds = 0.0
+        self.call_delays_seconds: list[float] = []
 
     def resolve_model_target(
         self,
@@ -143,8 +144,13 @@ class FakeV2ModelClient:
         self.attempt_ids.append(attempt_id)
         assert target.provider == "agent_plan"
         assert target.model_id in {"private-model-id", "test-model"}
-        if self.call_delay_seconds > 0:
-            await asyncio.sleep(self.call_delay_seconds)
+        call_delay_seconds = (
+            self.call_delays_seconds.pop(0)
+            if self.call_delays_seconds
+            else self.call_delay_seconds
+        )
+        if call_delay_seconds > 0:
+            await asyncio.sleep(call_delay_seconds)
         if self.retryable_transport_failures_remaining > 0:
             self.retryable_transport_failures_remaining -= 1
             self.transport_failure.set()
@@ -379,7 +385,8 @@ def v2_context(
         judge_configuration_provider=judge_configuration_provider,
         model_retry_policy=V2ModelRetryPolicy(
             max_attempts=2,
-            total_seconds=5,
+            attempt_total_seconds=5,
+            action_total_seconds=5,
             base_delay_seconds=0,
             jitter_seconds=0,
         ),
@@ -2604,7 +2611,7 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
         assert retry.payload["attempt_id"] == starts[0].payload["attempt_id"]
         assert retry.payload["next_attempt_id"] == starts[1].payload["attempt_id"]
         assert len(failures) == 1
-        assert failures[0].payload == {
+        expected_failure = {
             "action_id": action_id,
             "attempt_id": starts[0].payload["attempt_id"],
             "attempt_no": 1,
@@ -2619,6 +2626,14 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
             "first_token_seen": False,
             "elapsed_ms": 5,
         }
+        assert {
+            key: failures[0].payload[key] for key in expected_failure
+        } == expected_failure
+        assert failures[0].payload["attempt_budget_ms"] == 5000
+        assert failures[0].payload["action_budget_ms"] == 5000
+        assert failures[0].payload["action_elapsed_ms"] >= 0
+        assert failures[0].payload["action_remaining_ms"] > 0
+        assert failures[0].payload["response_headers_seen"] is False
         assert len(responses) == 1
         assert responses[0].payload["attempt_id"] == starts[1].payload["attempt_id"]
         assert any(
@@ -2691,7 +2706,8 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
     runtime = client.app.state.v2_live_runtime
     runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
         max_attempts=2,
-        total_seconds=5,
+        attempt_total_seconds=5,
+        action_total_seconds=5,
         base_delay_seconds=2,
         jitter_seconds=0,
     )
@@ -2741,12 +2757,13 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
         assert "action_failed" not in {event.event_type for event in events}
 
 
-def test_model_retries_share_one_total_deadline(v2_context) -> None:
+def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     runtime = client.app.state.v2_live_runtime
     runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
         max_attempts=2,
-        total_seconds=0.12,
+        attempt_total_seconds=0.1,
+        action_total_seconds=0.25,
         base_delay_seconds=0,
         jitter_seconds=0,
     )
@@ -2768,8 +2785,7 @@ def test_model_retries_share_one_total_deadline(v2_context) -> None:
             if value.get("live_state") in {"awaiting_observation", "failed"}:
                 terminal_state = value["live_state"]
 
-    assert terminal_state == "failed"
-    assert len(model_client.attempt_ids) == 2
+    assert terminal_state == "awaiting_observation"
     with session_factory() as db:
         failures = list(
             db.scalars(
@@ -2781,13 +2797,285 @@ def test_model_retries_share_one_total_deadline(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        assert len(failures) == 2
+        assert len(failures) == 1
+        action_id = failures[0].payload["action_id"]
+        starts = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_request_started",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert sum(
+            event.payload.get("action_id") == action_id for event in starts
+        ) == 2
         assert failures[0].payload["terminal"] is False
-        assert failures[1].payload["terminal"] is True
-        assert failures[1].payload["failure_code"] == "model_total_timeout"
-        assert failures[1].payload["failure_stage"] == "action_budget"
+        assert failures[0].payload["attempt_budget_ms"] == 100
+        assert failures[0].payload["action_budget_ms"] == 250
+        assert failures[0].payload["action_remaining_ms"] > 0
         game = db.get(V2GameRecord, identifiers["game_id"])
-        assert game is not None and game.status == "failed"
+        assert game is not None and game.status == "awaiting_observation"
+
+
+def test_attempt_budget_timeout_is_retryable_within_action_budget(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    runtime = client.app.state.v2_live_runtime
+    runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
+        max_attempts=2,
+        attempt_total_seconds=0.05,
+        action_total_seconds=0.2,
+        base_delay_seconds=0,
+        jitter_seconds=0,
+    )
+    model_client = client.app.state.v2_test_model_client
+    model_client.call_delays_seconds = [0.08, 0]
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    with session_factory() as db:
+        failure = db.scalar(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == identifiers["game_id"],
+                V2GameRecordEvent.event_type == "model_request_failed",
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+        assert failure is not None
+        assert failure.payload["failure_code"] == "model_total_timeout"
+        assert failure.payload["failure_stage"] == "attempt_budget"
+        assert failure.payload["retryable"] is True
+        assert failure.payload["terminal"] is False
+        action_id = failure.payload["action_id"]
+        attempts = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_request_started",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert sum(
+            event.payload.get("action_id") == action_id for event in attempts
+        ) == 2
+
+
+def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.retryable_transport_failures_remaining = 2
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-retry-paused-model-action",
+    )
+    reason = "模型链路恢复，继续同一冻结动作"
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") == "paused_model_error":
+                break
+
+        with session_factory() as db:
+            game = db.get(V2GameRecord, identifiers["game_id"])
+            run = db.get(V2GameRun, identifiers["run_id"])
+            assert game is not None and game.status == "paused_model_error"
+            assert run is not None and run.status == "paused_model_error"
+            paused_events = list(
+                db.scalars(
+                    select(V2GameRecordEvent)
+                    .where(
+                        V2GameRecordEvent.game_id == identifiers["game_id"],
+                        V2GameRecordEvent.event_type == "model_action_paused",
+                    )
+                    .order_by(V2GameRecordEvent.record_seq)
+                )
+            )
+            assert len(paused_events) == 1
+            action_id = paused_events[0].payload["action_id"]
+
+        retried = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/retry-model-action",
+            json={"reason": reason},
+            headers=headers,
+        )
+        assert retried.status_code == 202, retried.text
+        assert retried.json()["action"] == "retry_model_action"
+        assert retried.json()["action_id"] == action_id
+        assert retried.json()["replayed"] is False
+        assert retried.json()["run_status"] != "paused_model_error"
+
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") == "awaiting_observation":
+                break
+
+    replayed = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/retry-model-action",
+        json={"reason": reason},
+        headers=headers,
+    )
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json()["replayed"] is True
+    assert replayed.json()["action_id"] == action_id
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and game.status == "awaiting_observation"
+        assert run is not None and run.status == "awaiting_observation"
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        action_events = [
+            event
+            for event in events
+            if event.payload.get("action_id") == action_id
+        ]
+        assert [
+            event.event_type
+            for event in action_events
+            if event.event_type
+            in {
+                "model_action_paused",
+                "model_action_retry_requested",
+                "model_action_resumed",
+            }
+        ] == [
+            "model_action_paused",
+            "model_action_retry_requested",
+            "model_action_resumed",
+        ]
+        starts = [
+            event
+            for event in action_events
+            if event.event_type == "model_request_started"
+        ]
+        assert [event.payload["attempt_no"] for event in starts] == [1, 2, 3]
+        assert [event.payload["retry_cycle"] for event in starts] == [1, 1, 2]
+        assert starts[2].payload["retry_of_attempt_id"] == starts[1].payload["attempt_id"]
+        assert len({json.dumps(event.payload["request_payload"], sort_keys=True) for event in starts}) == 1
+        assert not any(
+            event.event_type in {
+                "action_failed",
+                "ability_runtime_failed",
+                "day_runtime_failed",
+            }
+            for event in action_events
+        )
+
+
+def test_admin_can_stop_a_game_paused_after_model_attempts_exhausted(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    client.app.state.v2_test_model_client.retryable_transport_failures_remaining = 2
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-stop-paused-model-action",
+    )
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "paused_model_error":
+                break
+
+        stopped = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+            json={"reason": "模型链路持续异常，停止当前暂停对局"},
+            headers=headers,
+        )
+        assert stopped.status_code == 202, stopped.text
+        assert stopped.json()["run_status"] == "canceled"
+
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "canceled":
+                break
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and game.status == "canceled"
+        assert run is not None and run.status == "canceled"
+        event_types = list(
+            db.scalars(
+                select(V2GameRecordEvent.event_type)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert "model_action_paused" in event_types
+        assert event_types[-2:] == ["game_stop_requested", "game_canceled"]
+        assert "model_action_resumed" not in event_types
+        assert "action_failed" not in event_types
+
+
+def test_admin_cannot_retry_model_action_when_game_is_not_paused(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json=_lobby_create_request()).json()
+
+    response = client.post(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/retry-model-action",
+        json={"reason": "当前对局并未因模型错误暂停"},
+        headers=_operator_control_headers(
+            client,
+            session_factory,
+            idempotency_key="v2-retry-action-not-paused",
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "admin_v2_model_action_not_paused"
+    with session_factory() as db:
+        assert (
+            db.scalar(select(func.count()).select_from(V2GameControlRequest))
+            == 0
+        )
 
 
 def test_withdraw_quality_failure_persists_exact_raw_model_response(

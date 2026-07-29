@@ -4,6 +4,7 @@ const ACTIVE_STATES = new Set([
   "generating",
   "broadcasting",
   "finalizing",
+  "paused_model_error",
 ]);
 
 export function isLiveV2StatusActive(status: string | undefined): boolean {

@@ -482,6 +482,13 @@ export function GodViewPage() {
         </section>
       ) : null}
 
+      {liveState === "paused_model_error" ? (
+        <section className="mobile-live-v2-error" role="status">
+          <strong>模型服务暂时异常</strong>
+          <p>当前动作和全知上下文已安全冻结；运营恢复后会从同一动作继续。</p>
+        </section>
+      ) : null}
+
       {liveError ? (
         <section className="mobile-live-v2-error" role="alert">
           <strong>上帝视角实时观赛失败</strong>
@@ -554,6 +561,7 @@ function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string
   }
   if (state === "finalizing") return "播报完成，正在校验并保存同源 V2 语音资产...";
   if (state === "awaiting_observation") return "完整对局已经结束";
+  if (state === "paused_model_error") return "模型服务暂时异常，当前动作已安全冻结";
   if (state === "canceled") return "本局已由管理员终止";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";

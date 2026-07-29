@@ -15,14 +15,16 @@ def _client(
     *,
     agent_plan_api_key: str = "ark-key",
     deepseek_api_key: str = "deepseek-key",
+    first_token_seconds: float = 2,
+    total_seconds: float = 5,
 ) -> V2ModelClient:
     return V2ModelClient(
         agent_plan_api_key=agent_plan_api_key,
         agent_plan_base_url="https://ark.example.test/api/plan/v3",
         deepseek_api_key=deepseek_api_key,
         deepseek_base_url="https://api.deepseek.example.test",
-        first_token_seconds=2,
-        total_seconds=5,
+        first_token_seconds=first_token_seconds,
+        total_seconds=total_seconds,
         transport=httpx.MockTransport(handler),
     )
 
@@ -292,7 +294,78 @@ def test_transport_reset_preserves_retry_diagnostics() -> None:
     assert caught.value.exception_type == "builtins.ConnectionResetError"
     assert caught.value.errno == 54
     assert caught.value.first_token_seen is False
+    assert caught.value.response_headers_seen is False
     assert caught.value.elapsed_ms is not None
+
+
+def test_first_token_timeout_includes_response_header_wait() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    client = _client(
+        handler,
+        first_token_seconds=0.01,
+        total_seconds=0.1,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_first_token_timeout") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_response_headers_timeout",
+                target=target,
+            )
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.failure_stage == "response_headers"
+    assert caught.value.response_headers_seen is False
+    assert caught.value.first_token_seen is False
+
+
+def test_total_timeout_after_first_token_is_retryable() -> None:
+    class DelayedSSEStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"id":"chatcmpl-timeout","choices":[{"delta":'
+                b'{"reasoning_content":"thinking"}}]}\n\n'
+            )
+            await asyncio.sleep(0.05)
+            yield b"data: [DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=DelayedSSEStream())
+
+    client = _client(
+        handler,
+        first_token_seconds=0.01,
+        total_seconds=0.02,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_total_timeout") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_stream_timeout",
+                target=target,
+            )
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.failure_stage == "stream"
+    assert caught.value.response_headers_seen is True
+    assert caught.value.first_token_seen is True
 
 
 @pytest.mark.parametrize(

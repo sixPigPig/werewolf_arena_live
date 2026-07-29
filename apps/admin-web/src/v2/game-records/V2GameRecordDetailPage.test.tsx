@@ -863,8 +863,8 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(dialog).getByText("2 次（重试 1 次后成功）"),
     ).toBeVisible();
-    expect(within(dialog).getByText("第 1 次 · 失败")).toBeVisible();
-    expect(within(dialog).getByText("第 2 次 · 成功")).toBeVisible();
+    expect(within(dialog).getByText(/第 1 次 .*失败/)).toBeVisible();
+    expect(within(dialog).getByText(/第 2 次 .*成功/)).toBeVisible();
     expect(
       within(dialog).getByText("model_transport_failed"),
     ).toBeVisible();

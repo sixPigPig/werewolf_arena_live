@@ -220,9 +220,14 @@ export function V2LiveTheater({
             <strong>{terminal.title}</strong>
             <p>{terminal.description}</p>
             {terminal.kind === "failed" ||
-            (terminal.kind === "interrupted" && liveState !== "canceled") ? (
+            (terminal.kind === "interrupted" && liveState !== "canceled") ||
+            (terminal.kind === "paused" &&
+              liveState === "paused_model_error" &&
+              connectionState === "idle") ? (
               <button className="mobile-v2-stage-button is-secondary" onClick={onEnter} type="button">
-                重新接入当前直播
+                {liveState === "paused_model_error"
+                  ? "接入并等待恢复"
+                  : "重新接入当前直播"}
               </button>
             ) : null}
           </div>
@@ -526,6 +531,7 @@ function stageTone(
   if (liveState === "awaiting_observation" || phase?.phase_state === "game_completed") {
     return "terminal";
   }
+  if (liveState === "paused_model_error") return "terminal";
   if (
     phase?.phase_state === "sheriff_election_open" ||
     phase?.phase_state === "public_discussion_open"
@@ -556,6 +562,7 @@ function connectionLabel(
 ): string {
   if (liveState === "canceled") return "运营已中断";
   if (liveState === "awaiting_observation") return "已停播";
+  if (liveState === "paused_model_error") return "等待运营恢复";
   if (liveState === "failed") return "演出异常";
   if (connectionState === "idle") return "未入场";
   if (connectionState === "connecting") return "连接中";
@@ -578,6 +585,13 @@ function terminalPresentation(
       kind: "interrupted",
       title: "本局已由管理员终止",
       description: "当前字幕与语音已经停止，不会追播或恢复已打断的内容。",
+    };
+  }
+  if (liveState === "paused_model_error") {
+    return {
+      kind: "paused",
+      title: "模型服务暂时异常",
+      description: "当前动作已安全冻结；运营恢复后会从同一动作继续，无需刷新页面。",
     };
   }
   if (error) {

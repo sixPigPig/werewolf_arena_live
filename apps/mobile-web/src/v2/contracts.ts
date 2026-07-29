@@ -5,6 +5,7 @@ export type V2LiveState =
   | "broadcasting"
   | "finalizing"
   | "awaiting_observation"
+  | "paused_model_error"
   | "canceled"
   | "failed";
 
@@ -1101,6 +1102,7 @@ function liveState(value: unknown): V2LiveState {
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "paused_model_error",
     "canceled",
     "failed",
   ]);

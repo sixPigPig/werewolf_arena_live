@@ -41,6 +41,15 @@ export type V2GameControlResult = {
   replayed: boolean;
 };
 
+export type V2ModelActionRetryResult = {
+  action: "retry_model_action";
+  game_id: string;
+  run_id: string;
+  run_status: string;
+  action_id: string;
+  replayed: boolean;
+};
+
 export type V2GameRecordEvent = {
   event_id: number;
   record_seq: number;
@@ -102,6 +111,8 @@ export type V2VoiceAsset = {
 export type V2ModelRequestSummary = {
   attempt_id: string;
   attempt_no: number;
+  cycle_attempt_no: number;
+  retry_cycle: number;
   max_attempts: number;
   retry_of_attempt_id: string | null;
   record_seq: number;
@@ -135,7 +146,12 @@ export type V2ModelRequestSummary = {
   errno: number | null;
   http_status: number | null;
   first_token_seen: boolean | null;
+  response_headers_seen: boolean | null;
   failure_elapsed_ms: number | null;
+  attempt_budget_ms: number | null;
+  action_budget_ms: number | null;
+  action_elapsed_ms: number | null;
+  action_remaining_ms: number | null;
   started_at: string;
   completed_at: string | null;
 };

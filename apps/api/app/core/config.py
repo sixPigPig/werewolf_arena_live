@@ -125,7 +125,16 @@ class Settings(BaseSettings):
         ),
     )
     live_v2_model_first_token_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
-    live_v2_model_total_seconds: float = Field(default=30.0, ge=0.1, le=180.0)
+    live_v2_model_attempt_total_seconds: float = Field(
+        default=30.0,
+        ge=0.1,
+        le=180.0,
+        validation_alias=AliasChoices(
+            "LIVE_V2_MODEL_ATTEMPT_TOTAL_SECONDS",
+            "LIVE_V2_MODEL_TOTAL_SECONDS",
+        ),
+    )
+    live_v2_model_action_total_seconds: float = Field(default=45.0, ge=0.1, le=300.0)
     live_v2_model_max_attempts: int = Field(default=2, ge=1, le=3)
     live_v2_model_retry_base_delay_seconds: float = Field(default=0.3, ge=0.0, le=5.0)
     live_v2_model_retry_jitter_seconds: float = Field(default=0.3, ge=0.0, le=5.0)
@@ -210,6 +219,14 @@ class Settings(BaseSettings):
     def enforce_admin_production_safety(self) -> "Settings":
         if self.rule_set_catalog_source == "static" and self.app_environment != "staging":
             raise ValueError("RULE_SET_CATALOG_SOURCE=static is allowed only in staging")
+        if (
+            self.live_v2_model_action_total_seconds
+            < self.live_v2_model_attempt_total_seconds
+        ):
+            raise ValueError(
+                "LIVE_V2_MODEL_ACTION_TOTAL_SECONDS must be at least "
+                "LIVE_V2_MODEL_ATTEMPT_TOTAL_SECONDS"
+            )
         if self.live_run_heartbeat_seconds >= self.live_run_lease_seconds:
             raise ValueError(
                 "LIVE_RUN_HEARTBEAT_SECONDS must be shorter than LIVE_RUN_LEASE_SECONDS"

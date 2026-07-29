@@ -133,6 +133,39 @@ describe("GodViewPage", () => {
     expect(webSocketMock).not.toHaveBeenCalled();
   });
 
+  it("accepts a model-paused identity snapshot and keeps re-entry available", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...identitySnapshot(),
+            live_state: "paused_model_error",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+    const webSocketMock = vi.fn();
+    vi.stubGlobal("WebSocket", webSocketMock);
+
+    renderPage(`#access_token=${accessToken}`);
+
+    expect(
+      await screen.findByText("模型服务暂时异常"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/运营恢复后会从同一动作继续/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "进入上帝视角实时观赛" }),
+    ).toBeInTheDocument();
+    expect(webSocketMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed before any request when the credential is absent", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

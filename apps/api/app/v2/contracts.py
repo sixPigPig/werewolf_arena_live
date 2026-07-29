@@ -13,6 +13,7 @@ V2LiveState = Literal[
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "paused_model_error",
     "canceled",
     "failed",
 ]
@@ -437,6 +438,15 @@ class AdminV2GameControlResponse(BaseModel):
     replayed: bool
 
 
+class AdminV2ModelActionRetryResponse(BaseModel):
+    action: Literal["retry_model_action"]
+    game_id: str
+    run_id: str
+    run_status: str
+    action_id: str
+    replayed: bool
+
+
 class AdminV2EventResponse(BaseModel):
     event_id: int
     record_seq: int
@@ -498,6 +508,8 @@ class AdminV2VoiceAssetResponse(BaseModel):
 class AdminV2ModelRequestSummaryResponse(BaseModel):
     attempt_id: str
     attempt_no: int
+    cycle_attempt_no: int
+    retry_cycle: int
     max_attempts: int
     retry_of_attempt_id: str | None
     record_seq: int
@@ -531,7 +543,12 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     errno: int | None
     http_status: int | None
     first_token_seen: bool | None
+    response_headers_seen: bool | None
     failure_elapsed_ms: int | None
+    attempt_budget_ms: int | None
+    action_budget_ms: int | None
+    action_elapsed_ms: int | None
+    action_remaining_ms: int | None
     started_at: datetime
     completed_at: datetime | None
 

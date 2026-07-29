@@ -614,6 +614,9 @@ function liveProcessLabel(
   if (liveState === "canceled") return "本局已由运营中断";
   if (liveState === "failed") return "实时演出已停止";
   if (liveState === "awaiting_observation") return "本局实时流程已经停播";
+  if (liveState === "paused_model_error") {
+    return "模型服务暂时异常，当前动作已安全冻结";
+  }
   if (connectionState === "idle") return "舞台已就位，等待观众入场";
   if (connectionState === "connecting") return "正在连接当前实时进度";
   if (liveState === "waiting_to_start") return "玩家与规则已冻结，等待开幕";

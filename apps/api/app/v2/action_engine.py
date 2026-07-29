@@ -41,6 +41,7 @@ from app.v2.protocol import (
     segment_committed,
 )
 from app.v2.repository import (
+    V2ActionClaim,
     V2ActionRepository,
     V2PresentationIdentity,
     V2RepositoryError,
@@ -167,17 +168,31 @@ class V2ActionResult:
 @dataclass(frozen=True)
 class V2ModelRetryPolicy:
     max_attempts: int = 2
-    total_seconds: float = 30.0
+    attempt_total_seconds: float = 30.0
+    action_total_seconds: float = 45.0
     base_delay_seconds: float = 0.3
     jitter_seconds: float = 0.3
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
-        if self.total_seconds <= 0:
-            raise ValueError("total_seconds must be positive")
+        if self.attempt_total_seconds <= 0:
+            raise ValueError("attempt_total_seconds must be positive")
+        if self.action_total_seconds < self.attempt_total_seconds:
+            raise ValueError(
+                "action_total_seconds must be at least attempt_total_seconds"
+            )
         if self.base_delay_seconds < 0 or self.jitter_seconds < 0:
             raise ValueError("retry delays must not be negative")
+
+
+@dataclass
+class _PausedModelActionWaiter:
+    action_id: str
+    requested: asyncio.Event
+    resumed: asyncio.Event
+    control_request_id: str | None = None
+    resume_succeeded: bool = False
 
 
 class V2ActionEngine:
@@ -199,9 +214,86 @@ class V2ActionEngine:
         self._sample_rate = sample_rate
         self._judge_configuration_provider = judge_configuration_provider
         self._model_retry_policy = model_retry_policy
+        self._paused_model_actions: dict[str, _PausedModelActionWaiter] = {}
+        self._paused_model_actions_lock = asyncio.Lock()
 
     def check_cancellation(self, game_id: str) -> None:
         self._repository.check_cancellation(game_id)
+
+    async def retry_paused_model_action(
+        self,
+        *,
+        game_id: str,
+        action_id: str,
+        control_request_id: str,
+    ) -> bool:
+        async with self._paused_model_actions_lock:
+            waiter = self._paused_model_actions.get(game_id)
+            if (
+                waiter is None
+                or waiter.action_id != action_id
+                or waiter.requested.is_set()
+            ):
+                return False
+            waiter.control_request_id = control_request_id
+            waiter.requested.set()
+        await waiter.resumed.wait()
+        return waiter.resume_succeeded
+
+    async def _pause_for_model_retry(
+        self,
+        *,
+        claim: V2ActionClaim,
+        attempt_id: str,
+        failure_code: str,
+        broadcaster: V2BroadcastPort,
+        audience: str,
+    ) -> None:
+        waiter = _PausedModelActionWaiter(
+            action_id=claim.action_id,
+            requested=asyncio.Event(),
+            resumed=asyncio.Event(),
+        )
+        async with self._paused_model_actions_lock:
+            if claim.game_id in self._paused_model_actions:
+                raise V2RepositoryError("model action is already paused")
+            self._paused_model_actions[claim.game_id] = waiter
+        try:
+            self._repository.pause_model_action(
+                claim=claim,
+                attempt_id=attempt_id,
+                failure_code=failure_code,
+            )
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=claim.game_id,
+                    run_id=claim.run_id,
+                    state="paused_model_error",
+                    reason=failure_code,
+                ),
+                audience="all",
+            )
+            await waiter.requested.wait()
+            if waiter.control_request_id is None:
+                raise V2RepositoryError("model retry has no control request")
+            self._repository.resume_model_action(
+                claim=claim,
+                control_request_id=waiter.control_request_id,
+            )
+            waiter.resume_succeeded = True
+            await broadcaster.broadcast_json(
+                live_state(
+                    game_id=claim.game_id,
+                    run_id=claim.run_id,
+                    state="generating",
+                ),
+                audience=audience,
+            )
+        finally:
+            waiter.resumed.set()
+            async with self._paused_model_actions_lock:
+                if self._paused_model_actions.get(claim.game_id) is waiter:
+                    self._paused_model_actions.pop(claim.game_id, None)
 
     async def run_opening_to_nightfall(
         self,
@@ -423,123 +515,223 @@ class V2ActionEngine:
                     request_payload.get("max_tokens"),
                 )
                 retry_policy = self._model_retry_policy
-                model_deadline = time.monotonic() + retry_policy.total_seconds
-                attempt_ids = [
-                    model_attempt_id,
-                    *[f"v2_model_{uuid4().hex[:16]}" for _ in range(retry_policy.max_attempts - 1)],
-                ]
-                for attempt_index, attempt_id in enumerate(attempt_ids):
-                    model_attempt_id = attempt_id
-                    model_attempt_no = attempt_index + 1
-                    model_failure_recorded = False
-                    attempt_started_at = time.monotonic()
-                    self._repository.append_event(
-                        game_id=claim.game_id,
-                        event_type="model_request_started",
-                        payload={
-                            "action_id": claim.action_id,
-                            "attempt_id": model_attempt_id,
-                            "attempt_no": model_attempt_no,
-                            "max_attempts": retry_policy.max_attempts,
-                            "retry_of_attempt_id": (
-                                attempt_ids[attempt_index - 1] if attempt_index > 0 else None
-                            ),
-                            "request_kind": "decision" if decision else "speech",
-                            "model_id": model_target.model_id,
-                            "model_provider": model_target.provider,
-                            "model_parameters": dict(model_target.parameters),
-                            "configured_max_tokens": (
-                                configured_max_tokens
-                                if isinstance(configured_max_tokens, int)
-                                and not isinstance(configured_max_tokens, bool)
-                                else None
-                            ),
-                            "effective_max_tokens": effective_max_tokens,
-                            "max_tokens_source": (
-                                "model_configuration"
-                                if isinstance(configured_max_tokens, int)
-                                and not isinstance(configured_max_tokens, bool)
-                                else "thinking_mode_default"
-                            ),
-                            "thinking": model_target.parameters.get(
-                                "thinking",
-                                "default",
-                            ),
-                            "thinking_source": thinking_source,
-                            "judge_configuration_version": None,
-                            "actor_kind": spec.actor_kind,
-                            "actor_id": spec.actor_id,
-                            "audience": spec.audience,
-                            "prompt_schema_version": model_context.get("prompt_schema_version"),
-                            "prompt_projection": prompt_projection,
-                            "request_payload": request_payload,
-                        },
+                retry_cycle = 1
+                previous_attempt_id: str | None = None
+                model_attempt_no = 0
+                while model_decision is None:
+                    model_started_at = time.monotonic()
+                    model_deadline = (
+                        model_started_at + retry_policy.action_total_seconds
                     )
-                    check_cancellation()
-                    remaining = model_deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise V2ModelError("model_total_timeout")
-                    try:
-                        try:
-                            async with asyncio.timeout(remaining):
-                                model_decision = await self._model_client.generate_action_decision(
-                                    action_context=model_context,
-                                    attempt_id=model_attempt_id,
-                                    target=model_target,
-                                    check_cancellation=check_cancellation,
-                                )
-                        except TimeoutError as exc:
-                            raise V2ModelError(
-                                "model_total_timeout",
-                                failure_stage="action_budget",
-                                elapsed_ms=round((time.monotonic() - attempt_started_at) * 1000),
-                            ) from exc
-                    except V2ModelError as exc:
-                        remaining = model_deadline - time.monotonic()
-                        delay_seconds = retry_policy.base_delay_seconds + random.uniform(
-                            0, retry_policy.jitter_seconds
-                        )
-                        retryable = (
-                            exc.retryable
-                            and model_attempt_no < retry_policy.max_attempts
-                            and remaining > delay_seconds
-                        )
+                    attempt_ids = [
+                        (
+                            model_attempt_id
+                            if model_attempt_no == 0
+                            else f"v2_model_{uuid4().hex[:16]}"
+                        ),
+                        *[
+                            f"v2_model_{uuid4().hex[:16]}"
+                            for _ in range(retry_policy.max_attempts - 1)
+                        ],
+                    ]
+                    resumed_after_pause = False
+                    for cycle_attempt_index, attempt_id in enumerate(attempt_ids):
+                        model_attempt_id = attempt_id
+                        model_attempt_no += 1
+                        cycle_attempt_no = cycle_attempt_index + 1
+                        model_failure_recorded = False
+                        attempt_started_at = time.monotonic()
                         self._repository.append_event(
                             game_id=claim.game_id,
-                            event_type="model_request_failed",
-                            payload=_model_failure_payload(
-                                action_id=claim.action_id,
-                                attempt_id=model_attempt_id,
-                                attempt_no=model_attempt_no,
-                                max_attempts=retry_policy.max_attempts,
-                                exc=exc,
-                                terminal=not retryable,
-                            ),
-                        )
-                        model_failure_recorded = True
-                        if not retryable:
-                            raise
-                        next_attempt_id = attempt_ids[attempt_index + 1]
-                        self._repository.append_event(
-                            game_id=claim.game_id,
-                            event_type="model_retry_scheduled",
+                            event_type="model_request_started",
                             payload={
                                 "action_id": claim.action_id,
                                 "attempt_id": model_attempt_id,
-                                "next_attempt_id": next_attempt_id,
                                 "attempt_no": model_attempt_no,
-                                "next_attempt_no": model_attempt_no + 1,
+                                "cycle_attempt_no": cycle_attempt_no,
+                                "retry_cycle": retry_cycle,
                                 "max_attempts": retry_policy.max_attempts,
-                                "failure_code": exc.code,
-                                "delay_ms": round(delay_seconds * 1000),
+                                "attempt_budget_ms": round(
+                                    retry_policy.attempt_total_seconds * 1000
+                                ),
+                                "action_budget_ms": round(
+                                    retry_policy.action_total_seconds * 1000
+                                ),
+                                "action_remaining_ms": max(
+                                    0,
+                                    round(
+                                        (model_deadline - time.monotonic()) * 1000
+                                    ),
+                                ),
+                                "retry_of_attempt_id": previous_attempt_id,
+                                "request_kind": "decision" if decision else "speech",
+                                "model_id": model_target.model_id,
+                                "model_provider": model_target.provider,
+                                "model_parameters": dict(model_target.parameters),
+                                "configured_max_tokens": (
+                                    configured_max_tokens
+                                    if isinstance(configured_max_tokens, int)
+                                    and not isinstance(configured_max_tokens, bool)
+                                    else None
+                                ),
+                                "effective_max_tokens": effective_max_tokens,
+                                "max_tokens_source": (
+                                    "model_configuration"
+                                    if isinstance(configured_max_tokens, int)
+                                    and not isinstance(configured_max_tokens, bool)
+                                    else "thinking_mode_default"
+                                ),
+                                "thinking": model_target.parameters.get(
+                                    "thinking",
+                                    "default",
+                                ),
+                                "thinking_source": thinking_source,
+                                "judge_configuration_version": None,
+                                "actor_kind": spec.actor_kind,
+                                "actor_id": spec.actor_id,
+                                "audience": spec.audience,
+                                "prompt_schema_version": model_context.get(
+                                    "prompt_schema_version"
+                                ),
+                                "prompt_projection": prompt_projection,
+                                "request_payload": request_payload,
                             },
                         )
-                        await _sleep_with_cancellation(
-                            delay_seconds,
-                            check_cancellation=check_cancellation,
-                        )
+                        check_cancellation()
+                        remaining = model_deadline - time.monotonic()
+                        try:
+                            if remaining <= 0:
+                                raise V2ModelError(
+                                    "model_total_timeout",
+                                    failure_stage="action_budget",
+                                    elapsed_ms=0,
+                                )
+                            request_timeout = min(
+                                remaining,
+                                retry_policy.attempt_total_seconds,
+                            )
+                            timeout_stage = (
+                                "attempt_budget"
+                                if retry_policy.attempt_total_seconds <= remaining
+                                else "action_budget"
+                            )
+                            try:
+                                async with asyncio.timeout(request_timeout):
+                                    model_decision = (
+                                        await self._model_client.generate_action_decision(
+                                            action_context=model_context,
+                                            attempt_id=model_attempt_id,
+                                            target=model_target,
+                                            check_cancellation=check_cancellation,
+                                        )
+                                    )
+                            except TimeoutError as exc:
+                                raise V2ModelError(
+                                    "model_total_timeout",
+                                    retryable=timeout_stage == "attempt_budget",
+                                    failure_stage=timeout_stage,
+                                    elapsed_ms=round(
+                                        (time.monotonic() - attempt_started_at) * 1000
+                                    ),
+                                ) from exc
+                        except V2ModelError as exc:
+                            remaining = model_deadline - time.monotonic()
+                            delay_seconds = (
+                                retry_policy.base_delay_seconds
+                                + random.uniform(0, retry_policy.jitter_seconds)
+                            )
+                            retryable = (
+                                exc.retryable
+                                and cycle_attempt_no < retry_policy.max_attempts
+                                and remaining > delay_seconds
+                            )
+                            self._repository.append_event(
+                                game_id=claim.game_id,
+                                event_type="model_request_failed",
+                                payload=_model_failure_payload(
+                                    action_id=claim.action_id,
+                                    attempt_id=model_attempt_id,
+                                    attempt_no=model_attempt_no,
+                                    max_attempts=retry_policy.max_attempts,
+                                    retry_cycle=retry_cycle,
+                                    cycle_attempt_no=cycle_attempt_no,
+                                    exc=exc,
+                                    terminal=not retryable,
+                                    attempt_budget_ms=round(
+                                        retry_policy.attempt_total_seconds * 1000
+                                    ),
+                                    action_budget_ms=round(
+                                        retry_policy.action_total_seconds * 1000
+                                    ),
+                                    action_elapsed_ms=round(
+                                        (time.monotonic() - model_started_at) * 1000
+                                    ),
+                                    action_remaining_ms=max(
+                                        0,
+                                        round(
+                                            (model_deadline - time.monotonic()) * 1000
+                                        ),
+                                    ),
+                                ),
+                            )
+                            model_failure_recorded = True
+                            previous_attempt_id = model_attempt_id
+                            if retryable:
+                                next_attempt_id = attempt_ids[
+                                    cycle_attempt_index + 1
+                                ]
+                                self._repository.append_event(
+                                    game_id=claim.game_id,
+                                    event_type="model_retry_scheduled",
+                                    payload={
+                                        "action_id": claim.action_id,
+                                        "attempt_id": model_attempt_id,
+                                        "next_attempt_id": next_attempt_id,
+                                        "attempt_no": model_attempt_no,
+                                        "next_attempt_no": model_attempt_no + 1,
+                                        "cycle_attempt_no": cycle_attempt_no,
+                                        "retry_cycle": retry_cycle,
+                                        "max_attempts": retry_policy.max_attempts,
+                                        "failure_code": exc.code,
+                                        "delay_ms": round(delay_seconds * 1000),
+                                        "action_remaining_ms": max(
+                                            0,
+                                            round(
+                                                (
+                                                    model_deadline
+                                                    - time.monotonic()
+                                                )
+                                                * 1000
+                                            ),
+                                        ),
+                                    },
+                                )
+                                await _sleep_with_cancellation(
+                                    delay_seconds,
+                                    check_cancellation=check_cancellation,
+                                )
+                                continue
+                            if (
+                                not spec.best_effort
+                                and _can_pause_for_model_failure(exc)
+                            ):
+                                await self._pause_for_model_retry(
+                                    claim=claim,
+                                    attempt_id=model_attempt_id,
+                                    failure_code=exc.code,
+                                    broadcaster=broadcaster,
+                                    audience=spec.audience,
+                                )
+                                retry_cycle += 1
+                                resumed_after_pause = True
+                                break
+                            raise
+                        break
+                    if model_decision is not None:
+                        break
+                    if resumed_after_pause:
                         continue
-                    break
+                    raise V2ModelError("model_attempt_cycle_incomplete")
                 raw_model_speech = model_decision.speech
                 original_target = model_decision.target_player_id
                 resolved_target = (
@@ -1061,30 +1253,50 @@ def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> 
     return allowed_target_ids[int.from_bytes(digest[:8], "big") % len(allowed_target_ids)]
 
 
+def _can_pause_for_model_failure(exc: V2ModelError) -> bool:
+    return exc.retryable or exc.code in {
+        "model_first_token_timeout",
+        "model_total_timeout",
+    }
+
+
 def _model_failure_payload(
     *,
     action_id: str,
     attempt_id: str,
     attempt_no: int,
     max_attempts: int,
+    retry_cycle: int,
+    cycle_attempt_no: int,
     exc: V2ModelError,
     terminal: bool,
+    attempt_budget_ms: int,
+    action_budget_ms: int,
+    action_elapsed_ms: int,
+    action_remaining_ms: int,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "action_id": action_id,
         "attempt_id": attempt_id,
         "attempt_no": attempt_no,
+        "cycle_attempt_no": cycle_attempt_no,
+        "retry_cycle": retry_cycle,
         "max_attempts": max_attempts,
         "failure_kind": "model",
         "failure_code": exc.code,
         "retryable": exc.retryable,
         "terminal": terminal,
+        "attempt_budget_ms": attempt_budget_ms,
+        "action_budget_ms": action_budget_ms,
+        "action_elapsed_ms": action_elapsed_ms,
+        "action_remaining_ms": action_remaining_ms,
         "failure_stage": exc.failure_stage,
         "exception_type": exc.exception_type,
         "errno": exc.errno,
         "http_status": exc.http_status,
         "provider_request_id": exc.provider_request_id,
         "first_token_seen": exc.first_token_seen,
+        "response_headers_seen": exc.response_headers_seen,
         "elapsed_ms": exc.elapsed_ms,
     }
     return {key: value for key, value in payload.items() if value is not None}

@@ -49,6 +49,7 @@ from app.v2.contracts import (
     AdminV2ModelRequestPageResponse,
     AdminV2ModelRequestResponse,
     AdminV2ModelRequestSummaryResponse,
+    AdminV2ModelActionRetryResponse,
     AdminV2Pagination,
     AdminV2PresentationResponse,
     AdminV2RunResponse,
@@ -67,9 +68,11 @@ from app.v2.contracts import (
 from app.v2.control import (
     V2GameControlError,
     V2GameControlIdempotencyConflict,
+    V2GameModelActionNotPaused,
     V2GameControlNotActive,
     V2GameControlNotFound,
     V2GameStopAlreadyRequested,
+    request_v2_model_action_retry,
     request_v2_game_stop,
 )
 from app.v2.model_client import build_model_request_payload
@@ -794,6 +797,121 @@ def read_admin_v2_model_request(
 
 
 @admin_router.post(
+    "/games/{game_id}/retry-model-action",
+    response_model=AdminV2ModelActionRetryResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_admin_v2_model_action(
+    game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
+    request_body: AdminV2GameControlRequest,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=8, max_length=160),
+    ],
+) -> AdminV2ModelActionRetryResponse:
+    if AdminPermission.RUNS_CONTROL not in principal.permissions:
+        raise AdminAPIProblem(
+            status_code=403,
+            code="admin_permission_denied",
+            title="Permission denied",
+            detail="The 'runs.control' permission is required.",
+        )
+    try:
+        result = request_v2_model_action_retry(
+            db,
+            game_id=game_id,
+            actor_user_id=principal.user.id,
+            idempotency_key=idempotency_key,
+            reason=request_body.reason,
+        )
+        if not result.replayed:
+            record_audit_event(
+                db,
+                request=request,
+                actor_user_id=principal.user.id,
+                action="admin.v2_game.retry_model_action",
+                resource_type="v2_game",
+                resource_id=game_id,
+                result="success",
+                reason=request_body.reason,
+                before={
+                    "game_status": result.game.status,
+                    "run_status": result.run.status,
+                    "action_id": result.action_id,
+                },
+                after={
+                    "retry_requested": True,
+                    "reason_code": "operator_retry",
+                },
+            )
+        db.commit()
+    except V2GameControlError as exc:
+        db.rollback()
+        _audit_v2_control_rejection(
+            db,
+            request=request,
+            principal=principal,
+            game_id=game_id,
+            reason=request_body.reason,
+            code=exc.code,
+            audit_action="admin.v2_game.retry_model_action",
+        )
+        raise _v2_control_problem(exc) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise AdminAPIProblem(
+            status_code=409,
+            code="admin_idempotency_conflict",
+            title="Idempotency conflict",
+            detail="The idempotency key was accepted by another request.",
+        ) from exc
+
+    if result.replayed:
+        response.status_code = status.HTTP_200_OK
+    db.expire_all()
+    run = db.get(type(result.run), result.run.run_id)
+    if run is None:
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_v2_game_control_unavailable",
+            title="V2 game control unavailable",
+            detail="The retry request was persisted but its run could not be reloaded.",
+        )
+    if run.status == "paused_model_error":
+        runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+        resumed = await runtime.retry_paused_model_action(
+            game_id=game_id,
+            action_id=result.action_id,
+            control_request_id=result.control.id,
+        )
+        db.expire_all()
+        run = db.get(type(result.run), result.run.run_id)
+        if not resumed or run is None or run.status == "paused_model_error":
+            raise AdminAPIProblem(
+                status_code=503,
+                code="admin_v2_model_action_retry_unavailable",
+                title="V2 model action retry unavailable",
+                detail=(
+                    "The retry request was persisted, but the local paused action "
+                    "could not be resumed."
+                ),
+            )
+    _set_admin_headers(request, response)
+    return AdminV2ModelActionRetryResponse(
+        action="retry_model_action",
+        game_id=game_id,
+        run_id=run.run_id,
+        run_status=run.status,
+        action_id=result.action_id,
+        replayed=result.replayed,
+    )
+
+
+@admin_router.post(
     "/games/{game_id}/stop",
     response_model=AdminV2GameControlResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -1148,6 +1266,12 @@ def _admin_model_requests(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
                 attempt_no=_first_int(payload.get("attempt_no")) or 1,
+                cycle_attempt_no=(
+                    _first_int(payload.get("cycle_attempt_no"))
+                    or _first_int(payload.get("attempt_no"))
+                    or 1
+                ),
+                retry_cycle=_first_int(payload.get("retry_cycle")) or 1,
                 max_attempts=_first_int(payload.get("max_attempts")) or 1,
                 retry_of_attempt_id=(
                     payload.get("retry_of_attempt_id")
@@ -1248,7 +1372,30 @@ def _admin_model_requests(
                     if isinstance(failure_payload.get("first_token_seen"), bool)
                     else None
                 ),
+                response_headers_seen=(
+                    failure_payload.get("response_headers_seen")
+                    if isinstance(
+                        failure_payload.get("response_headers_seen"),
+                        bool,
+                    )
+                    else None
+                ),
                 failure_elapsed_ms=_first_int(failure_payload.get("elapsed_ms")),
+                attempt_budget_ms=_first_int(
+                    failure_payload.get("attempt_budget_ms"),
+                    payload.get("attempt_budget_ms"),
+                ),
+                action_budget_ms=_first_int(
+                    failure_payload.get("action_budget_ms"),
+                    payload.get("action_budget_ms"),
+                ),
+                action_elapsed_ms=_first_int(
+                    failure_payload.get("action_elapsed_ms"),
+                ),
+                action_remaining_ms=_first_int(
+                    failure_payload.get("action_remaining_ms"),
+                    payload.get("action_remaining_ms"),
+                ),
                 started_at=start.created_at,
                 completed_at=completed_at,
             )
@@ -1281,12 +1428,13 @@ def _audit_v2_control_rejection(
     game_id: str,
     reason: str,
     code: str,
+    audit_action: str = "admin.v2_game.stop",
 ) -> None:
     record_audit_event(
         db,
         request=request,
         actor_user_id=principal.user.id,
-        action="admin.v2_game.stop",
+        action=audit_action,
         resource_type="v2_game",
         resource_id=game_id,
         result="rejected",
@@ -1313,6 +1461,8 @@ def _v2_control_problem(exc: V2GameControlError) -> AdminAPIProblem:
         )
     if isinstance(exc, V2GameStopAlreadyRequested):
         detail = "A stop request is already pending for this V2 game."
+    elif isinstance(exc, V2GameModelActionNotPaused):
+        detail = "Only a V2 game paused on a recoverable model error can be retried."
     elif isinstance(exc, V2GameControlNotActive):
         detail = "Only an active V2 game can be stopped."
     else:
@@ -1361,6 +1511,7 @@ def _live_state(
     "broadcasting",
     "finalizing",
     "awaiting_observation",
+    "paused_model_error",
     "canceled",
     "failed",
 ]:
@@ -1371,6 +1522,7 @@ def _live_state(
         "broadcasting",
         "finalizing",
         "awaiting_observation",
+        "paused_model_error",
         "canceled",
     }:
         return status

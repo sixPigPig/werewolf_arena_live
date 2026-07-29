@@ -61,6 +61,7 @@ import {
   listV2ModelRequests,
   readV2GameRecordSummary,
   readV2ModelRequest,
+  retryV2ModelAction,
   stopV2Game,
 } from "@/v2/game-records/api";
 import { adminOperationErrorDescription } from "@/lib/admin-notification";
@@ -80,6 +81,7 @@ import {
 type CategoryFilter = "all" | "model" | "template" | "milestone";
 type StatusFilter = "all" | "running" | "succeeded" | "failed";
 const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
+const DEFAULT_RETRY_REASON = "模型链路已恢复，继续执行同一冻结动作";
 
 export default function V2GameRecordDetailPage() {
   const navigate = useNavigate();
@@ -357,6 +359,8 @@ function V2GameRecordWorkspace({
   const [requestDrawerOpen, setRequestDrawerOpen] = useState(false);
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [stopReason, setStopReason] = useState(DEFAULT_STOP_REASON);
+  const [retryDialogOpen, setRetryDialogOpen] = useState(false);
+  const [retryReason, setRetryReason] = useState(DEFAULT_RETRY_REASON);
   const stopMutation = useMutation({
     mutationFn: () =>
       stopV2Game(
@@ -382,6 +386,33 @@ function V2GameRecordWorkspace({
         queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
       ]);
       notification.success({ title: "V2 对局打断请求已提交" });
+    },
+  });
+  const retryMutation = useMutation({
+    mutationFn: () =>
+      retryV2ModelAction(
+        game.game_id,
+        retryReason.trim(),
+        session?.csrf_token ?? "",
+      ),
+    onError: (error) => {
+      notification.error({
+        description: adminOperationErrorDescription(
+          error,
+          "暂时无法恢复该动作，请确认 API 运行进程仍持有暂停任务。",
+        ),
+        title: "重试 V2 模型动作失败",
+      });
+    },
+    onSuccess: async () => {
+      setRetryDialogOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: v2GameRecordKeys.detail(game.game_id),
+        }),
+        queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
+      ]);
+      notification.success({ title: "已恢复同一冻结动作" });
     },
   });
 
@@ -453,6 +484,11 @@ function V2GameRecordWorkspace({
     canControl &&
     isLiveV2StatusActive(game.status) &&
     run?.stop_requested_at === null;
+  const canRetry =
+    canControl &&
+    game.status === "paused_model_error" &&
+    run?.status === "paused_model_error" &&
+    run.stop_requested_at === null;
   const duration = run?.started_at
     ? Math.max(
         0,
@@ -503,6 +539,18 @@ function V2GameRecordWorkspace({
           />
         </section>
         <Space>
+          {canRetry ? (
+            <Button
+              type="primary"
+              onClick={() => {
+                retryMutation.reset();
+                setRetryReason(DEFAULT_RETRY_REASON);
+                setRetryDialogOpen(true);
+              }}
+            >
+              重试同一动作
+            </Button>
+          ) : null}
           {canStop ? (
             <Button
               danger
@@ -528,6 +576,14 @@ function V2GameRecordWorkspace({
           }
           description="模型与语音流不会继续推进；移动端会停止当前播放并进入安全终态。"
           showIcon
+          type="warning"
+        />
+      ) : null}
+      {game.status === "paused_model_error" ? (
+        <Alert
+          description="当前动作、候选目标和请求上下文保持不变。恢复链路后可由管理员重试同一动作，系统不会生成规则兜底结果。"
+          showIcon
+          title="模型请求重试已耗尽，对局已安全暂停"
           type="warning"
         />
       ) : null}
@@ -638,6 +694,38 @@ function V2GameRecordWorkspace({
         onClose={() => setRawDataOpen(false)}
         open={rawDataOpen}
       />
+      <Modal
+        cancelText="取消"
+        confirmLoading={retryMutation.isPending}
+        destroyOnHidden
+        okButtonProps={{
+          disabled: retryReason.trim().length < 3,
+        }}
+        okText="确认重试"
+        onCancel={() => {
+          if (!retryMutation.isPending) setRetryDialogOpen(false);
+        }}
+        onOk={() => retryMutation.mutate()}
+        open={retryDialogOpen}
+        title="重试同一冻结动作"
+      >
+        <Typography.Paragraph>
+          系统会继续当前 action，复用相同的冻结上下文和请求内容，并为新的模型尝试生成独立
+          attempt ID。
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">
+          对局 {game.game_id} · 运行 {game.current_run_id}
+        </Typography.Paragraph>
+        <Typography.Text strong>操作原因</Typography.Text>
+        <Input.TextArea
+          aria-label="重试原因"
+          disabled={retryMutation.isPending}
+          maxLength={500}
+          onChange={(event) => setRetryReason(event.target.value)}
+          rows={3}
+          value={retryReason}
+        />
+      </Modal>
       <Modal
         cancelText="取消"
         confirmLoading={stopMutation.isPending}
@@ -1549,6 +1637,36 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             children: formatDuration(request?.completed_ms ?? null),
           },
           {
+            key: "budget",
+            label: "请求 / 动作预算",
+            children: request
+              ? `${formatDuration(request.attempt_budget_ms)} / ${formatDuration(
+                  request.action_budget_ms,
+                )}`
+              : "—",
+          },
+          {
+            key: "failure-stage",
+            label: "失败阶段",
+            children: request?.failure_stage ?? "—",
+          },
+          {
+            key: "response-headers",
+            label: "已收到响应头",
+            children:
+              request?.response_headers_seen === null ||
+              request?.response_headers_seen === undefined
+                ? "—"
+                : request.response_headers_seen
+                  ? "是"
+                  : "否",
+          },
+          {
+            key: "action-remaining",
+            label: "失败时动作剩余预算",
+            children: formatDuration(request?.action_remaining_ms ?? null),
+          },
+          {
             key: "provider-request",
             label: "供应商请求 ID",
             span: 2,
@@ -1597,7 +1715,8 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
               <li key={attempt.attempt_id}>
                 <Space size={8} wrap>
                   <Tag color={statusColor(attempt.status)}>
-                    第 {attempt.attempt_no} 次 · {statusLabel(attempt.status)}
+                    第 {attempt.attempt_no} 次 · 周期 {attempt.retry_cycle} ·{" "}
+                    {statusLabel(attempt.status)}
                   </Tag>
                   <Typography.Text copyable>
                     {attempt.attempt_id}
@@ -1843,6 +1962,7 @@ function statusLabel(status: string) {
     generating: "生成中",
     broadcasting: "播报中",
     finalizing: "收尾中",
+    paused_model_error: "模型错误暂停",
     awaiting_observation: "等待观察",
     running: "进行中",
     succeeded: "成功",
@@ -1854,6 +1974,7 @@ function statusLabel(status: string) {
 
 function statusColor(status: string) {
   if (status === "failed") return "error";
+  if (status === "paused_model_error") return "warning";
   if (
     status === "generating" ||
     status === "broadcasting" ||

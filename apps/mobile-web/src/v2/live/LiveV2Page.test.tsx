@@ -132,6 +132,25 @@ describe("LiveV2Page", () => {
     expect(sourceStart).not.toHaveBeenCalled();
   });
 
+  it("lets a viewer connect and wait when the REST snapshot is model-paused", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(snapshot("paused_model_error", null)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("模型服务暂时异常")).toBeInTheDocument();
+    const enterButton = screen.getByRole("button", {
+      name: "接入并等待恢复",
+    });
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    fireEvent.click(enterButton);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  });
+
   it("shows the frozen public rule before starting any realtime action", async () => {
     renderPage();
 
@@ -562,6 +581,41 @@ describe("LiveV2Page", () => {
     expect(await screen.findByText("运营已中断本局")).toBeInTheDocument();
     expect(screen.getByText(/只会接收当前和未来内容/)).toBeInTheDocument();
     expect(screen.queryByText("回放")).not.toBeInTheDocument();
+  });
+
+  it("keeps the live connection open while a model action is safely paused", async () => {
+    renderPage();
+    await enterChallenge();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...state("paused_model_error"),
+        reason: "model_first_token_timeout",
+      });
+    });
+
+    expect(await screen.findByText("模型服务暂时异常")).toBeInTheDocument();
+    expect(
+      screen.getByText(/运营恢复后会从同一动作继续/),
+    ).toBeInTheDocument();
+    expect(socket.close).not.toHaveBeenCalled();
+
+    act(() => {
+      socket.emitJson(state("generating"));
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByText("模型服务暂时异常"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("stops the current presentation when the operator cancels the game", async () => {

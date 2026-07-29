@@ -73,6 +73,8 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_sample_rate == 24000
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
+    assert settings.live_v2_model_attempt_total_seconds == 30.0
+    assert settings.live_v2_model_action_total_seconds == 45.0
     assert settings.live_v2_model_max_attempts == 2
     assert settings.live_v2_model_retry_base_delay_seconds == 0.3
     assert settings.live_v2_model_retry_jitter_seconds == 0.3
@@ -88,6 +90,25 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_run_reaper_max_attempts == 3
     assert settings.live_run_reaper_heartbeat_seconds == 10.0
     assert settings.live_run_reaper_probe_max_age_seconds == 45.0
+
+
+def test_settings_accepts_legacy_v2_attempt_budget_env(monkeypatch) -> None:
+    monkeypatch.delenv("LIVE_V2_MODEL_ATTEMPT_TOTAL_SECONDS", raising=False)
+    monkeypatch.setenv("LIVE_V2_MODEL_TOTAL_SECONDS", "17")
+    monkeypatch.setenv("LIVE_V2_MODEL_ACTION_TOTAL_SECONDS", "20")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.live_v2_model_attempt_total_seconds == 17.0
+    assert settings.live_v2_model_action_total_seconds == 20.0
+
+
+def test_settings_rejects_v2_action_budget_shorter_than_attempt(monkeypatch) -> None:
+    monkeypatch.setenv("LIVE_V2_MODEL_ATTEMPT_TOTAL_SECONDS", "31")
+    monkeypatch.setenv("LIVE_V2_MODEL_ACTION_TOTAL_SECONDS", "30")
+
+    with pytest.raises(ValidationError, match="ACTION_TOTAL_SECONDS"):
+        Settings(_env_file=None)
 
 
 def test_settings_accepts_static_rule_catalog_only_for_staging(monkeypatch) -> None:

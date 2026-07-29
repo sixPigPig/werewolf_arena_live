@@ -9,6 +9,7 @@ import type {
   V2GameRecordSummary,
   V2GameRun,
   V2ModelRequest,
+  V2ModelActionRetryResult,
   V2ModelRequestPage,
   V2ModelRequestSummary,
   V2PlayerIdentity,
@@ -25,6 +26,20 @@ export function parseV2GameControlResult(
     run_id: text(record.run_id),
     run_status: text(record.run_status),
     stop_requested_at: date(record.stop_requested_at),
+    replayed: boolean(record.replayed),
+  };
+}
+
+export function parseV2ModelActionRetryResult(
+  value: unknown,
+): V2ModelActionRetryResult {
+  const record = object(value);
+  return {
+    action: oneOf(record.action, ["retry_model_action"] as const),
+    game_id: text(record.game_id),
+    run_id: text(record.run_id),
+    run_status: text(record.run_status),
+    action_id: text(record.action_id),
     replayed: boolean(record.replayed),
   };
 }
@@ -201,6 +216,14 @@ export function parseV2ModelRequestSummary(
     attempt_id: text(record.attempt_id),
     attempt_no:
       record.attempt_no === undefined ? 1 : integer(record.attempt_no, 1),
+    cycle_attempt_no:
+      record.cycle_attempt_no === undefined
+        ? integer(record.attempt_no ?? 1, 1)
+        : integer(record.cycle_attempt_no, 1),
+    retry_cycle:
+      record.retry_cycle === undefined
+        ? 1
+        : integer(record.retry_cycle, 1),
     max_attempts:
       record.max_attempts === undefined ? 1 : integer(record.max_attempts, 1),
     retry_of_attempt_id:
@@ -278,10 +301,30 @@ export function parseV2ModelRequestSummary(
       record.first_token_seen === undefined
         ? null
         : nullableBoolean(record.first_token_seen),
+    response_headers_seen:
+      record.response_headers_seen === undefined
+        ? null
+        : nullableBoolean(record.response_headers_seen),
     failure_elapsed_ms:
       record.failure_elapsed_ms === undefined
         ? null
         : nullableInteger(record.failure_elapsed_ms, 0),
+    attempt_budget_ms:
+      record.attempt_budget_ms === undefined
+        ? null
+        : nullableInteger(record.attempt_budget_ms, 0),
+    action_budget_ms:
+      record.action_budget_ms === undefined
+        ? null
+        : nullableInteger(record.action_budget_ms, 0),
+    action_elapsed_ms:
+      record.action_elapsed_ms === undefined
+        ? null
+        : nullableInteger(record.action_elapsed_ms, 0),
+    action_remaining_ms:
+      record.action_remaining_ms === undefined
+        ? null
+        : nullableInteger(record.action_remaining_ms, 0),
     started_at: date(record.started_at),
     completed_at: nullableDate(record.completed_at),
   };

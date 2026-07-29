@@ -5,6 +5,7 @@ import {
   parseV2GameRecordSummary,
   parseV2ModelRequest,
   parseV2ModelRequestPage,
+  parseV2ModelActionRetryResult,
   parseV2GameRecordList,
   parseV2GameControlResult,
 } from "@/v2/game-records/parsers";
@@ -15,6 +16,7 @@ import type {
   V2GameRecordList,
   V2GameRecordSummary,
   V2ModelRequest,
+  V2ModelActionRetryResult,
   V2ModelRequestPage,
 } from "@/v2/game-records/types";
 
@@ -106,4 +108,24 @@ export async function stopV2Game(
     },
   );
   return parseV2GameControlResult(value);
+}
+
+export async function retryV2ModelAction(
+  gameId: string,
+  reason: string,
+  csrfToken: string,
+): Promise<V2ModelActionRetryResult> {
+  const value = await adminApiFetch<unknown>(
+    `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/retry-model-action`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+        "X-CSRF-Token": csrfToken,
+      },
+      body: JSON.stringify({ reason }),
+    },
+  );
+  return parseV2ModelActionRetryResult(value);
 }

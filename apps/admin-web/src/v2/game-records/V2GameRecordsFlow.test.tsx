@@ -139,6 +139,124 @@ describe("Admin V2 game control", () => {
       ).toBe(true),
     );
   });
+
+  it("retries the same frozen action only while the game is paused", async () => {
+    let resumed = false;
+    const actionId = "v2_action_paused";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/me")) {
+        return jsonResponse({
+          user: {
+            id: "v2-operator",
+            email: "operator@example.test",
+            display_name: "值班运营",
+            role: "operator",
+          },
+          permissions: ["v2_games.read", "runs.control"],
+          csrf_token: "csrf-v2-control",
+          session_expires_at: "2999-01-01T00:00:00Z",
+        });
+      }
+      if (
+        url.endsWith(
+          `/api/v1/admin/v2/games/${gameId}/retry-model-action`,
+        ) &&
+        init?.method === "POST"
+      ) {
+        const headers = new Headers(init.headers);
+        expect(headers.get("X-CSRF-Token")).toBe("csrf-v2-control");
+        expect(headers.get("Idempotency-Key")).toBeTruthy();
+        expect(JSON.parse(String(init.body))).toEqual({
+          reason: "模型链路已恢复，继续执行同一冻结动作",
+        });
+        resumed = true;
+        return jsonResponse(
+          {
+            action: "retry_model_action",
+            game_id: gameId,
+            run_id: runId,
+            run_status: "generating",
+            action_id: actionId,
+            replayed: false,
+          },
+          202,
+        );
+      }
+      if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
+        return jsonResponse(pausedDetail(resumed));
+      }
+      if (url.includes(`/api/v1/admin/v2/games/${gameId}/events?`)) {
+        const afterRecordSeq = Number(
+          new URL(url, "http://admin.test").searchParams.get(
+            "after_record_seq",
+          ) ?? 0,
+        );
+        return jsonResponse({
+          after_record_seq: afterRecordSeq,
+          has_more: false,
+          items: [],
+          next_after_record_seq: resumed ? 7 : 6,
+        });
+      }
+      if (
+        url.includes(
+          `/api/v1/admin/v2/games/${gameId}/model-requests?`,
+        )
+      ) {
+        const afterRecordSeq = Number(
+          new URL(url, "http://admin.test").searchParams.get(
+            "after_record_seq",
+          ) ?? 0,
+        );
+        return jsonResponse({
+          after_record_seq: afterRecordSeq,
+          has_more: false,
+          items: [],
+          next_after_record_seq: resumed ? 7 : 6,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute();
+
+    expect(
+      await screen.findByText("模型请求重试已耗尽，对局已安全暂停"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "打断整局" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "重试同一动作" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(/复用相同的冻结上下文和请求内容/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("重试原因")).toHaveValue(
+      "模型链路已恢复，继续执行同一冻结动作",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "确认重试" }),
+    );
+
+    await expectAdminNotification("已恢复同一冻结动作");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "重试同一动作" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith(
+            `/api/v1/admin/v2/games/${gameId}/retry-model-action`,
+          ) && init?.method === "POST",
+      ),
+    ).toBe(true);
+  });
 });
 
 function renderRoute() {
@@ -200,6 +318,19 @@ function detail(stopped: boolean) {
     ability_activations: [],
     effect_intents: [],
     knowledge_facts: [],
+  };
+}
+
+function pausedDetail(resumed: boolean) {
+  const value = detail(false);
+  return {
+    ...value,
+    status: resumed ? "generating" : "paused_model_error",
+    last_record_seq: resumed ? 7 : 6,
+    runs: value.runs.map((run) => ({
+      ...run,
+      status: resumed ? "generating" : "paused_model_error",
+    })),
   };
 }
 

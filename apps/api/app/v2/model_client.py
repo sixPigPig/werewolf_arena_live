@@ -29,6 +29,7 @@ class V2ModelError(RuntimeError):
         http_status: int | None = None,
         provider_request_id: str | None = None,
         first_token_seen: bool = False,
+        response_headers_seen: bool = False,
         elapsed_ms: int | None = None,
     ) -> None:
         super().__init__(code)
@@ -40,6 +41,7 @@ class V2ModelError(RuntimeError):
         self.http_status = http_status
         self.provider_request_id = provider_request_id
         self.first_token_seen = first_token_seen
+        self.response_headers_seen = response_headers_seen
         self.elapsed_ms = elapsed_ms
 
 
@@ -224,6 +226,7 @@ class V2ModelClient:
         route = self._routes[target.provider]
         started = time.monotonic()
         first_token_at: float | None = None
+        response_headers_seen = False
         provider_request_id = attempt_id
         text = ""
         reasoning_seen = False
@@ -246,91 +249,121 @@ class V2ModelClient:
             )
         )
         timeout = httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0)
+        phase_timeout = asyncio.timeout_at(started + self._first_token_seconds)
         try:
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                transport=self._transport,
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    route.url,
-                    headers={
-                        "Authorization": f"Bearer {route.api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream",
-                    },
-                    json=payload,
-                ) as response:
-                    provider_request_id = (
-                        response.headers.get("x-request-id")
-                        or response.headers.get("x-tt-logid")
-                        or attempt_id
-                    )
-                    if response.status_code >= 400:
-                        await response.aread()
-                        raise V2ModelError(
-                            f"model_http_{response.status_code}",
-                            retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
-                            failure_stage="http_response",
-                            http_status=response.status_code,
-                            provider_request_id=provider_request_id,
-                            elapsed_ms=round((time.monotonic() - started) * 1000),
+            async with phase_timeout:
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    transport=self._transport,
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        route.url,
+                        headers={
+                            "Authorization": f"Bearer {route.api_key}",
+                            "Content-Type": "application/json",
+                            "Accept": "text/event-stream",
+                        },
+                        json=payload,
+                    ) as response:
+                        response_headers_seen = True
+                        provider_request_id = (
+                            response.headers.get("x-request-id")
+                            or response.headers.get("x-tt-logid")
+                            or attempt_id
                         )
-                    lines = response.aiter_lines().__aiter__()
-                    while True:
-                        _check(check_cancellation)
-                        elapsed = time.monotonic() - started
-                        deadline = (
-                            self._first_token_seconds
-                            if first_token_at is None
-                            else self._total_seconds
-                        )
-                        remaining = deadline - elapsed
-                        if remaining <= 0:
-                            code = (
-                                "model_first_token_timeout"
+                        if response.status_code >= 400:
+                            await response.aread()
+                            raise V2ModelError(
+                                f"model_http_{response.status_code}",
+                                retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
+                                failure_stage="http_response",
+                                http_status=response.status_code,
+                                provider_request_id=provider_request_id,
+                                response_headers_seen=True,
+                                elapsed_ms=round((time.monotonic() - started) * 1000),
+                            )
+                        lines = response.aiter_lines().__aiter__()
+                        while True:
+                            _check(check_cancellation)
+                            elapsed = time.monotonic() - started
+                            deadline = (
+                                self._first_token_seconds
                                 if first_token_at is None
-                                else "model_total_timeout"
+                                else self._total_seconds
                             )
-                            raise V2ModelError(code)
-                        try:
-                            line = await _next_with_cancellation(
-                                lines,
-                                timeout=remaining,
-                                check_cancellation=check_cancellation,
+                            remaining = deadline - elapsed
+                            if remaining <= 0:
+                                raise _model_timeout_error(
+                                    started=started,
+                                    first_token_at=first_token_at,
+                                    provider_request_id=provider_request_id,
+                                    response_headers_seen=response_headers_seen,
+                                )
+                            try:
+                                line = await _next_with_cancellation(
+                                    lines,
+                                    timeout=remaining,
+                                    check_cancellation=check_cancellation,
+                                )
+                            except StopAsyncIteration:
+                                break
+                            except TimeoutError as exc:
+                                raise _model_timeout_error(
+                                    started=started,
+                                    first_token_at=first_token_at,
+                                    provider_request_id=provider_request_id,
+                                    response_headers_seen=response_headers_seen,
+                                ) from exc
+                            event = _sse_data(line)
+                            if event is None:
+                                continue
+                            provider_event = _provider_event(
+                                event,
+                                protocol=route.protocol,
                             )
-                        except StopAsyncIteration:
-                            break
-                        except TimeoutError as exc:
-                            code = (
-                                "model_first_token_timeout"
-                                if first_token_at is None
-                                else "model_total_timeout"
-                            )
-                            raise V2ModelError(code) from exc
-                        event = _sse_data(line)
-                        if event is None:
-                            continue
-                        provider_event = _provider_event(
-                            event,
-                            protocol=route.protocol,
-                        )
-                        if provider_event.candidate_id:
-                            provider_request_id = provider_event.candidate_id
-                        if provider_event.failed:
-                            raise V2ModelError("model_provider_failed")
-                        if provider_event.finish_reason:
-                            finish_reason = provider_event.finish_reason
-                        if provider_event.reasoning_delta:
-                            reasoning_seen = True
-                            if first_token_at is None:
-                                first_token_at = time.monotonic()
-                        if provider_event.text_delta:
-                            if first_token_at is None:
-                                first_token_at = time.monotonic()
-                            text += provider_event.text_delta
+                            if provider_event.candidate_id:
+                                provider_request_id = provider_event.candidate_id
+                            if provider_event.failed:
+                                raise V2ModelError(
+                                    "model_provider_failed",
+                                    failure_stage=(
+                                        "first_token"
+                                        if first_token_at is None
+                                        else "stream"
+                                    ),
+                                    provider_request_id=provider_request_id,
+                                    first_token_seen=first_token_at is not None,
+                                    response_headers_seen=True,
+                                    elapsed_ms=round(
+                                        (time.monotonic() - started) * 1000
+                                    ),
+                                )
+                            if provider_event.finish_reason:
+                                finish_reason = provider_event.finish_reason
+                            if provider_event.reasoning_delta:
+                                reasoning_seen = True
+                                if first_token_at is None:
+                                    first_token_at = time.monotonic()
+                                    phase_timeout.reschedule(
+                                        started + self._total_seconds
+                                    )
+                            if provider_event.text_delta:
+                                if first_token_at is None:
+                                    first_token_at = time.monotonic()
+                                    phase_timeout.reschedule(
+                                        started + self._total_seconds
+                                    )
+                                text += provider_event.text_delta
         except V2ModelError:
             raise
+        except TimeoutError as exc:
+            raise _model_timeout_error(
+                started=started,
+                first_token_at=first_token_at,
+                provider_request_id=provider_request_id,
+                response_headers_seen=response_headers_seen,
+            ) from exc
         except (httpx.HTTPError, OSError) as exc:
             root = _root_exception(exc)
             root_errno = getattr(root, "errno", None)
@@ -349,6 +382,7 @@ class V2ModelClient:
                 ),
                 provider_request_id=provider_request_id,
                 first_token_seen=first_token_at is not None,
+                response_headers_seen=response_headers_seen,
                 elapsed_ms=round((time.monotonic() - started) * 1000),
             ) from exc
         if not text.strip():
@@ -367,6 +401,29 @@ class V2ModelClient:
             round((first_token_at - started) * 1000),
             round((completed - started) * 1000),
         )
+
+
+def _model_timeout_error(
+    *,
+    started: float,
+    first_token_at: float | None,
+    provider_request_id: str,
+    response_headers_seen: bool,
+) -> V2ModelError:
+    before_first_token = first_token_at is None
+    return V2ModelError(
+        "model_first_token_timeout" if before_first_token else "model_total_timeout",
+        retryable=True,
+        failure_stage=(
+            "response_headers"
+            if not response_headers_seen
+            else ("first_token" if before_first_token else "stream")
+        ),
+        provider_request_id=provider_request_id,
+        first_token_seen=not before_first_token,
+        response_headers_seen=response_headers_seen,
+        elapsed_ms=round((time.monotonic() - started) * 1000),
+    )
 
 
 def _root_exception(exc: BaseException) -> BaseException:
