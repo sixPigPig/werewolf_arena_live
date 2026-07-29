@@ -264,6 +264,69 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
         )
 
 
+def test_transport_reset_preserves_retry_diagnostics() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        except ConnectionResetError as exc:
+            raise httpx.ConnectError("proxy tunnel reset", request=request) from exc
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_transport_failed") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_reset",
+                target=target,
+            )
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.failure_stage == "connect"
+    assert caught.value.exception_type == "builtins.ConnectionResetError"
+    assert caught.value.errno == 54
+    assert caught.value.first_token_seen is False
+    assert caught.value.elapsed_ms is not None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "retryable"),
+    [(401, False), (502, True), (503, True), (504, True)],
+)
+def test_only_transient_http_statuses_are_retryable(
+    status_code: int,
+    retryable: bool,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, text="provider unavailable")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match=f"model_http_{status_code}") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id=f"v2_model_test_http_{status_code}",
+                target=target,
+            )
+        )
+
+    assert caught.value.retryable is retryable
+    assert caught.value.failure_stage == "http_response"
+    assert caught.value.http_status == status_code
+
+
 def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -27,10 +27,12 @@ from app.models.live import LiveRunRecord
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.user import User
 from app.v2.live_runtime import V2LiveRuntime, _GameChannel
+from app.v2.action_engine import V2ModelRetryPolicy
 from app.v2.day_engine import V2DayEngine, _leaders
 from app.v2.match_repository import V2MatchRepository
 from app.v2.model_client import (
     V2ModelDecision,
+    V2ModelError,
     V2ModelTarget,
     V2QualityError,
     build_model_request_payload,
@@ -81,6 +83,10 @@ class FakeV2ModelClient:
         self.unexpected_speech_target: str | None = None
         self.force_speech_action_types: set[str] = set()
         self.speech_by_action_type: dict[str, str] = {}
+        self.retryable_transport_failures_remaining = 0
+        self.transport_failure = threading.Event()
+        self.attempt_ids: list[str] = []
+        self.call_delay_seconds = 0.0
 
     def resolve_model_target(
         self,
@@ -124,8 +130,23 @@ class FakeV2ModelClient:
         self.contexts.append(action_context)
         self.decision_contexts.append(action_context)
         assert attempt_id.startswith("v2_model_")
+        self.attempt_ids.append(attempt_id)
         assert target.provider == "agent_plan"
         assert target.model_id in {"private-model-id", "test-model"}
+        if self.call_delay_seconds > 0:
+            await asyncio.sleep(self.call_delay_seconds)
+        if self.retryable_transport_failures_remaining > 0:
+            self.retryable_transport_failures_remaining -= 1
+            self.transport_failure.set()
+            raise V2ModelError(
+                "model_transport_failed",
+                retryable=True,
+                failure_stage="connect",
+                exception_type="builtins.ConnectionResetError",
+                errno=54,
+                first_token_seen=False,
+                elapsed_ms=5,
+            )
         action_type = action_context["task"]["action_type"]
         if action_type in self.quality_failure_action_types:
             boolean_field = action_context["output_contract"].get("field")
@@ -346,6 +367,12 @@ def v2_context(
         voice_root=voice_root,
         sample_rate=24000,
         judge_configuration_provider=judge_configuration_provider,
+        model_retry_policy=V2ModelRetryPolicy(
+            max_attempts=2,
+            total_seconds=5,
+            base_delay_seconds=0,
+            jitter_seconds=0,
+        ),
     )
     application.state.v2_test_model_client = model_client
     application.state.v2_test_tts_client = tts_client
@@ -2421,6 +2448,211 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
             event.event_type in {"night_runtime_failed", "day_runtime_failed"}
             for event in events
         )
+
+
+def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.retryable_transport_failures_remaining = 1
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    terminal_state = None
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while terminal_state is None:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") in {"awaiting_observation", "failed"}:
+                terminal_state = value["live_state"]
+
+    assert terminal_state == "awaiting_observation"
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        retry = next(
+            event for event in events if event.event_type == "model_retry_scheduled"
+        )
+        action_id = retry.payload["action_id"]
+        starts = [
+            event
+            for event in events
+            if event.event_type == "model_request_started"
+            and event.payload.get("action_id") == action_id
+        ]
+        failures = [
+            event
+            for event in events
+            if event.event_type == "model_request_failed"
+            and event.payload.get("action_id") == action_id
+        ]
+        responses = [
+            event
+            for event in events
+            if event.event_type == "model_response_received"
+            and event.payload.get("action_id") == action_id
+        ]
+        assert len(starts) == 2
+        assert starts[0].payload["attempt_no"] == 1
+        assert starts[1].payload["attempt_no"] == 2
+        assert starts[1].payload["retry_of_attempt_id"] == starts[0].payload["attempt_id"]
+        assert starts[0].payload["request_payload"] == starts[1].payload["request_payload"]
+        assert retry.payload["attempt_id"] == starts[0].payload["attempt_id"]
+        assert retry.payload["next_attempt_id"] == starts[1].payload["attempt_id"]
+        assert len(failures) == 1
+        assert failures[0].payload == {
+            "action_id": action_id,
+            "attempt_id": starts[0].payload["attempt_id"],
+            "attempt_no": 1,
+            "max_attempts": 2,
+            "failure_kind": "model",
+            "failure_code": "model_transport_failed",
+            "retryable": True,
+            "terminal": False,
+            "failure_stage": "connect",
+            "exception_type": "builtins.ConnectionResetError",
+            "errno": 54,
+            "first_token_seen": False,
+            "elapsed_ms": 5,
+        }
+        assert len(responses) == 1
+        assert responses[0].payload["attempt_id"] == starts[1].payload["attempt_id"]
+        assert any(
+            event.event_type == "action_succeeded"
+            and event.payload.get("action_id") == action_id
+            for event in events
+        )
+        assert not any(
+            event.event_type == "action_failed"
+            and event.payload.get("action_id") == action_id
+            for event in events
+        )
+
+    assert client.post("/api/v1/admin/dev-login").status_code == 200
+    detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
+    assert detail.status_code == 200, detail.text
+    requests = [
+        request
+        for request in detail.json()["model_requests"]
+        if request["action_id"] == action_id
+    ]
+    assert [request["status"] for request in requests] == ["failed", "succeeded"]
+    assert requests[0]["terminal"] is False
+    assert requests[0]["retryable"] is True
+    assert requests[0]["exception_type"] == "builtins.ConnectionResetError"
+    assert requests[1]["retry_of_attempt_id"] == requests[0]["attempt_id"]
+
+
+def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    runtime = client.app.state.v2_live_runtime
+    runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
+        max_attempts=2,
+        total_seconds=5,
+        base_delay_seconds=2,
+        jitter_seconds=0,
+    )
+    model_client = client.app.state.v2_test_model_client
+    model_client.retryable_transport_failures_remaining = 1
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-stop-model-retry-backoff",
+    )
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        assert model_client.transport_failure.wait(5)
+
+        stopped = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+            json={"reason": "模型代理链异常，人工停止重试"},
+            headers=headers,
+        )
+        assert stopped.status_code == 202, stopped.text
+        assert stopped.json()["run_status"] == "canceled"
+
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") == "canceled":
+                break
+
+    assert len(model_client.attempt_ids) == 1
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert sum(event.event_type == "model_request_started" for event in events) == 1
+        assert sum(event.event_type == "model_retry_scheduled" for event in events) == 1
+        assert "game_canceled" in {event.event_type for event in events}
+        assert "action_failed" not in {event.event_type for event in events}
+
+
+def test_model_retries_share_one_total_deadline(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    runtime = client.app.state.v2_live_runtime
+    runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
+        max_attempts=2,
+        total_seconds=0.12,
+        base_delay_seconds=0,
+        jitter_seconds=0,
+    )
+    model_client = client.app.state.v2_test_model_client
+    model_client.retryable_transport_failures_remaining = 1
+    model_client.call_delay_seconds = 0.08
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    terminal_state = None
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while terminal_state is None:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if value.get("live_state") in {"awaiting_observation", "failed"}:
+                terminal_state = value["live_state"]
+
+    assert terminal_state == "failed"
+    assert len(model_client.attempt_ids) == 2
+    with session_factory() as db:
+        failures = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_request_failed",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert len(failures) == 2
+        assert failures[0].payload["terminal"] is False
+        assert failures[1].payload["terminal"] is True
+        assert failures[1].payload["failure_code"] == "model_total_timeout"
+        assert failures[1].payload["failure_stage"] == "action_budget"
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None and game.status == "failed"
 
 
 def test_withdraw_quality_failure_persists_exact_raw_model_response(

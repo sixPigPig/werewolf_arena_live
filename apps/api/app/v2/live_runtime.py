@@ -19,7 +19,12 @@ from app.judge_configuration import (
     configuration_from_voice_snapshot,
     runtime_judge_configuration,
 )
-from app.v2.action_engine import V2ActionEngine, V2ModelPort, V2TtsPort
+from app.v2.action_engine import (
+    V2ActionEngine,
+    V2ModelPort,
+    V2ModelRetryPolicy,
+    V2TtsPort,
+)
 from app.v2.contracts import (
     V2ActorResponse,
     V2CurrentPresentationResponse,
@@ -242,6 +247,7 @@ class V2LiveRuntime:
         voice_root: Path,
         sample_rate: int,
         judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
+        model_retry_policy: V2ModelRetryPolicy = V2ModelRetryPolicy(),
     ) -> None:
         self._session_factory = session_factory
         self._repository = V2ActionRepository(session_factory)
@@ -254,6 +260,7 @@ class V2LiveRuntime:
             voice_root=voice_root,
             sample_rate=sample_rate,
             judge_configuration_provider=judge_configuration_provider,
+            model_retry_policy=model_retry_policy,
         )
         self._day_engine = V2DayEngine(
             repository=self._match_repository,
@@ -450,6 +457,12 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
         judge_configuration_provider=lambda game_id: _runtime_judge_configuration(
             config,
             game_id,
+        ),
+        model_retry_policy=V2ModelRetryPolicy(
+            max_attempts=config.live_v2_model_max_attempts,
+            total_seconds=config.live_v2_model_total_seconds,
+            base_delay_seconds=config.live_v2_model_retry_base_delay_seconds,
+            jitter_seconds=config.live_v2_model_retry_jitter_seconds,
         ),
     )
 

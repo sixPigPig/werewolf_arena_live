@@ -237,7 +237,7 @@ function V2GameRecordWorkspace({
       )
     : null;
   const failureCount = game.model_requests.filter(
-    (item) => item.status === "failed",
+    (item) => item.status === "failed" && item.terminal !== false,
   ).length;
 
   return (
@@ -837,7 +837,11 @@ function ActionTimeline({
                     <span>
                       {item.templateRender
                         ? "系统模板"
-                        : item.modelRequest?.model_id ?? "—"}
+                        : `${item.modelRequest?.model_id ?? "—"}${
+                            item.modelRequests.length > 1
+                              ? ` · 重试 ${item.modelRequests.length - 1} 次`
+                              : ""
+                          }`}
                     </span>
                     <span>{formatDuration(item.durationMs)}</span>
                   </button>
@@ -860,8 +864,12 @@ function ActionTimeline({
 }
 
 function LifecycleStrip({ item }: { item: V2TimelineItem }) {
-  const requestStarted = item.events.find(
+  const requestStarts = item.events.filter(
     (event) => event.event_type === "model_request_started",
+  );
+  const requestStarted = requestStarts[0];
+  const retryScheduled = item.events.find(
+    (event) => event.event_type === "model_retry_scheduled",
   );
   const response = item.events.find(
     (event) =>
@@ -889,7 +897,19 @@ function LifecycleStrip({ item }: { item: V2TimelineItem }) {
       ? {
           label: "模型请求",
           at: requestStarted.created_at,
-          detail: item.modelRequest?.attempt_id ?? "已发起",
+          detail:
+            requestStarts.length > 1
+              ? `共 ${requestStarts.length} 次尝试`
+              : item.modelRequest?.attempt_id ?? "已发起",
+        }
+      : null,
+    retryScheduled
+      ? {
+          label: "模型重试",
+          at: retryScheduled.created_at,
+          detail:
+            recordText(retryScheduled.payload.failure_code) ??
+            "瞬时传输异常",
         }
       : null,
     response
@@ -1052,6 +1072,18 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             children: statusLabel(request?.status ?? item.status),
           },
           {
+            key: "attempts",
+            label: "请求尝试",
+            children:
+              item.modelRequests.length > 1
+                ? `${item.modelRequests.length} 次（重试 ${
+                    item.modelRequests.length - 1
+                  } 次后${item.status === "succeeded" ? "成功" : "仍失败"}）`
+                : request
+                  ? "1 次"
+                  : "—",
+          },
+          {
             key: "privacy",
             label: "隐私级别",
             children: audienceLabel(item.audience),
@@ -1105,6 +1137,30 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
         <section>
           <Typography.Text strong>动作目标</Typography.Text>
           <Typography.Paragraph>{item.objective}</Typography.Paragraph>
+        </section>
+      ) : null}
+      {item.modelRequests.length > 1 ? (
+        <section aria-label="模型请求尝试">
+          <Typography.Text strong>模型请求尝试</Typography.Text>
+          <ol>
+            {item.modelRequests.map((attempt) => (
+              <li key={attempt.attempt_id}>
+                <Space size={8} wrap>
+                  <Tag color={statusColor(attempt.status)}>
+                    第 {attempt.attempt_no} 次 · {statusLabel(attempt.status)}
+                  </Tag>
+                  <Typography.Text copyable>
+                    {attempt.attempt_id}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    {attempt.failure_code ??
+                      attempt.provider_request_id ??
+                      formatDuration(attempt.completed_ms)}
+                  </Typography.Text>
+                </Space>
+              </li>
+            ))}
+          </ol>
         </section>
       ) : null}
       {item.presentation ? (

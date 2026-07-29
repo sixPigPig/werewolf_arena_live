@@ -490,6 +490,9 @@ class AdminV2VoiceAssetResponse(BaseModel):
 
 class AdminV2ModelRequestResponse(BaseModel):
     attempt_id: str
+    attempt_no: int
+    max_attempts: int
+    retry_of_attempt_id: str | None
     action_id: str
     run_id: str
     phase_id: str
@@ -515,6 +518,14 @@ class AdminV2ModelRequestResponse(BaseModel):
     completed_ms: int | None
     failure_kind: str | None
     failure_code: str | None
+    retryable: bool | None
+    terminal: bool | None
+    failure_stage: str | None
+    exception_type: str | None
+    errno: int | None
+    http_status: int | None
+    first_token_seen: bool | None
+    failure_elapsed_ms: int | None
     started_at: datetime
     completed_at: datetime | None
 

@@ -94,6 +94,9 @@ export type V2VoiceAsset = {
 
 export type V2ModelRequest = {
   attempt_id: string;
+  attempt_no: number;
+  max_attempts: number;
+  retry_of_attempt_id: string | null;
   action_id: string;
   run_id: string;
   phase_id: string;
@@ -119,6 +122,14 @@ export type V2ModelRequest = {
   completed_ms: number | null;
   failure_kind: string | null;
   failure_code: string | null;
+  retryable: boolean | null;
+  terminal: boolean | null;
+  failure_stage: string | null;
+  exception_type: string | null;
+  errno: number | null;
+  http_status: number | null;
+  first_token_seen: boolean | null;
+  failure_elapsed_ms: number | null;
   started_at: string;
   completed_at: string | null;
 };

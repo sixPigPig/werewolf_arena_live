@@ -172,6 +172,14 @@ function parseModelRequest(value: unknown): V2ModelRequest {
   const record = object(value);
   return {
     attempt_id: text(record.attempt_id),
+    attempt_no:
+      record.attempt_no === undefined ? 1 : integer(record.attempt_no, 1),
+    max_attempts:
+      record.max_attempts === undefined ? 1 : integer(record.max_attempts, 1),
+    retry_of_attempt_id:
+      record.retry_of_attempt_id === undefined
+        ? null
+        : nullableText(record.retry_of_attempt_id),
     action_id: text(record.action_id),
     run_id: text(record.run_id),
     phase_id: text(record.phase_id),
@@ -218,6 +226,32 @@ function parseModelRequest(value: unknown): V2ModelRequest {
     completed_ms: nullableInteger(record.completed_ms, 0),
     failure_kind: nullableText(record.failure_kind),
     failure_code: nullableText(record.failure_code),
+    retryable:
+      record.retryable === undefined ? null : nullableBoolean(record.retryable),
+    terminal:
+      record.terminal === undefined ? null : nullableBoolean(record.terminal),
+    failure_stage:
+      record.failure_stage === undefined
+        ? null
+        : nullableText(record.failure_stage),
+    exception_type:
+      record.exception_type === undefined
+        ? null
+        : nullableText(record.exception_type),
+    errno:
+      record.errno === undefined ? null : nullableInteger(record.errno, 0),
+    http_status:
+      record.http_status === undefined
+        ? null
+        : nullableInteger(record.http_status, 100),
+    first_token_seen:
+      record.first_token_seen === undefined
+        ? null
+        : nullableBoolean(record.first_token_seen),
+    failure_elapsed_ms:
+      record.failure_elapsed_ms === undefined
+        ? null
+        : nullableInteger(record.failure_elapsed_ms, 0),
     started_at: date(record.started_at),
     completed_at: nullableDate(record.completed_at),
   };
@@ -249,6 +283,10 @@ function nullableInteger(value: unknown, minimum: number): number | null {
 
 function nullableText(value: unknown): string | null {
   return value === null ? null : text(value);
+}
+
+function nullableBoolean(value: unknown): boolean | null {
+  return value === null ? null : boolean(value);
 }
 
 function boolean(value: unknown): boolean {

@@ -18,9 +18,29 @@ from app.model_catalog.defaults import (
 
 
 class V2ModelError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        failure_stage: str | None = None,
+        exception_type: str | None = None,
+        errno: int | None = None,
+        http_status: int | None = None,
+        provider_request_id: str | None = None,
+        first_token_seen: bool = False,
+        elapsed_ms: int | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.retryable = retryable
+        self.failure_stage = failure_stage
+        self.exception_type = exception_type
+        self.errno = errno
+        self.http_status = http_status
+        self.provider_request_id = provider_request_id
+        self.first_token_seen = first_token_seen
+        self.elapsed_ms = elapsed_ms
 
 
 class V2QualityError(RuntimeError):
@@ -64,6 +84,19 @@ class _ProviderEvent:
     reasoning_delta: str | None = None
     failed: bool = False
     finish_reason: str | None = None
+
+
+_RETRYABLE_HTTP_STATUSES = frozenset({502, 503, 504})
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ProxyError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+    OSError,
+)
 
 
 class V2ModelClient:
@@ -228,14 +261,21 @@ class V2ModelClient:
                     },
                     json=payload,
                 ) as response:
-                    if response.status_code >= 400:
-                        await response.aread()
-                        raise V2ModelError(f"model_http_{response.status_code}")
                     provider_request_id = (
                         response.headers.get("x-request-id")
                         or response.headers.get("x-tt-logid")
                         or attempt_id
                     )
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise V2ModelError(
+                            f"model_http_{response.status_code}",
+                            retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
+                            failure_stage="http_response",
+                            http_status=response.status_code,
+                            provider_request_id=provider_request_id,
+                            elapsed_ms=round((time.monotonic() - started) * 1000),
+                        )
                     lines = response.aiter_lines().__aiter__()
                     while True:
                         _check(check_cancellation)
@@ -292,7 +332,26 @@ class V2ModelClient:
         except V2ModelError:
             raise
         except (httpx.HTTPError, OSError) as exc:
-            raise V2ModelError("model_transport_failed") from exc
+            root = _root_exception(exc)
+            root_errno = getattr(root, "errno", None)
+            raise V2ModelError(
+                "model_transport_failed",
+                retryable=isinstance(exc, _RETRYABLE_TRANSPORT_ERRORS),
+                failure_stage=_transport_failure_stage(
+                    exc,
+                    first_token_seen=first_token_at is not None,
+                ),
+                exception_type=f"{type(root).__module__}.{type(root).__name__}",
+                errno=(
+                    root_errno
+                    if isinstance(root_errno, int)
+                    and not isinstance(root_errno, bool)
+                    else None
+                ),
+                provider_request_id=provider_request_id,
+                first_token_seen=first_token_at is not None,
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            ) from exc
         if not text.strip():
             if finish_reason in {"length", "max_output_tokens"}:
                 raise V2ModelError("model_output_budget_exhausted")
@@ -309,6 +368,42 @@ class V2ModelClient:
             round((first_token_at - started) * 1000),
             round((completed - started) * 1000),
         )
+
+
+def _root_exception(exc: BaseException) -> BaseException:
+    current = exc
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        nested = current.__cause__ or current.__context__
+        if nested is None:
+            break
+        current = nested
+    return current
+
+
+def _transport_failure_stage(
+    exc: BaseException,
+    *,
+    first_token_seen: bool,
+) -> str:
+    if first_token_seen:
+        return "stream"
+    if isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ProxyError,
+            httpx.PoolTimeout,
+        ),
+    ):
+        return "connect"
+    if isinstance(exc, httpx.WriteError):
+        return "write"
+    if isinstance(exc, (httpx.ReadError, httpx.RemoteProtocolError)):
+        return "read"
+    return "transport"
 
 
 def _provider_event(

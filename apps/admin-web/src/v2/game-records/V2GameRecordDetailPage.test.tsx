@@ -307,6 +307,112 @@ const deepSeekDetail = {
   ],
 };
 
+const retryDetail = {
+  ...detail,
+  title: "模型重试验收",
+  last_record_seq: 10,
+  events: [
+    event(1, "game_created", {}),
+    event(2, "action_opened", {
+      action_id: actionId,
+      context: {
+        phase_id: "opening",
+        action_type: "judge_opening_speech",
+        objective: "欢迎玩家并宣布对局开始",
+        actor: { kind: "judge", id: "judge" },
+      },
+    }),
+    event(3, "model_request_started", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_1",
+      attempt_no: 1,
+      max_attempts: 2,
+    }),
+    event(4, "model_request_failed", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_1",
+      attempt_no: 1,
+      max_attempts: 2,
+      failure_kind: "model",
+      failure_code: "model_transport_failed",
+      retryable: true,
+      terminal: false,
+      failure_stage: "connect",
+      exception_type: "builtins.ConnectionResetError",
+      errno: 54,
+      first_token_seen: false,
+      elapsed_ms: 5038,
+    }),
+    event(5, "model_retry_scheduled", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_1",
+      next_attempt_id: "v2_model_attempt_2",
+      failure_code: "model_transport_failed",
+      delay_ms: 300,
+    }),
+    event(6, "model_request_started", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_2",
+      attempt_no: 2,
+      max_attempts: 2,
+      retry_of_attempt_id: "v2_model_attempt_1",
+    }),
+    event(7, "model_first_token_received", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_2",
+      first_token_ms: 925,
+    }),
+    event(8, "model_response_received", {
+      action_id: actionId,
+      attempt_id: "v2_model_attempt_2",
+    }),
+    event(9, "speech_segment_committed", {
+      action_id: actionId,
+      presentation_seq: 1,
+    }),
+    event(10, "action_succeeded", { action_id: actionId }),
+  ],
+  model_requests: [
+    {
+      ...detail.model_requests[0],
+      attempt_id: "v2_model_attempt_1",
+      attempt_no: 1,
+      max_attempts: 2,
+      retry_of_attempt_id: null,
+      status: "failed",
+      raw_response: null,
+      parsed_output: null,
+      output_source: "unavailable",
+      provider_request_id: null,
+      first_token_ms: null,
+      completed_ms: null,
+      failure_kind: "model",
+      failure_code: "model_transport_failed",
+      retryable: true,
+      terminal: false,
+      failure_stage: "connect",
+      exception_type: "builtins.ConnectionResetError",
+      errno: 54,
+      http_status: null,
+      first_token_seen: false,
+      failure_elapsed_ms: 5038,
+      completed_at: "2026-07-23T08:00:04Z",
+    },
+    {
+      ...detail.model_requests[0],
+      attempt_id: "v2_model_attempt_2",
+      attempt_no: 2,
+      max_attempts: 2,
+      retry_of_attempt_id: "v2_model_attempt_1",
+      status: "succeeded",
+      first_token_ms: 925,
+      completed_ms: 3342,
+      started_at: "2026-07-23T08:00:06Z",
+      completed_at: "2026-07-23T08:00:08Z",
+    },
+  ],
+};
+
 const templateActionId = "v2_action_dawn";
 const templateDetail = {
   ...detail,
@@ -537,6 +643,42 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(inputPanel).queryByText(/"schema_version"/),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows a recovered transport retry as one successful action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
+          return new Response(JSON.stringify(retryDetail), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "模型重试验收" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/重试 1 次/)).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText("2 次（重试 1 次后成功）"),
+    ).toBeVisible();
+    expect(within(dialog).getByText("第 1 次 · 失败")).toBeVisible();
+    expect(within(dialog).getByText("第 2 次 · 成功")).toBeVisible();
+    expect(
+      within(dialog).getByText("model_transport_failed"),
+    ).toBeVisible();
   });
 
   it("shows deterministic template variables, final text and frozen speaker", async () => {

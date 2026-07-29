@@ -907,6 +907,13 @@ def _admin_model_requests(
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
+                attempt_no=_first_int(payload.get("attempt_no")) or 1,
+                max_attempts=_first_int(payload.get("max_attempts")) or 1,
+                retry_of_attempt_id=(
+                    payload.get("retry_of_attempt_id")
+                    if isinstance(payload.get("retry_of_attempt_id"), str)
+                    else None
+                ),
                 action_id=action_id,
                 run_id=start.run_id,
                 phase_id=str(context.get("phase_id") or "unknown"),
@@ -971,6 +978,34 @@ def _admin_model_requests(
                     if isinstance(failure_payload.get("failure_code"), str)
                     else None
                 ),
+                retryable=(
+                    failure_payload.get("retryable")
+                    if isinstance(failure_payload.get("retryable"), bool)
+                    else None
+                ),
+                terminal=(
+                    failure_payload.get("terminal")
+                    if isinstance(failure_payload.get("terminal"), bool)
+                    else None
+                ),
+                failure_stage=(
+                    failure_payload.get("failure_stage")
+                    if isinstance(failure_payload.get("failure_stage"), str)
+                    else None
+                ),
+                exception_type=(
+                    failure_payload.get("exception_type")
+                    if isinstance(failure_payload.get("exception_type"), str)
+                    else None
+                ),
+                errno=_first_int(failure_payload.get("errno")),
+                http_status=_first_int(failure_payload.get("http_status")),
+                first_token_seen=(
+                    failure_payload.get("first_token_seen")
+                    if isinstance(failure_payload.get("first_token_seen"), bool)
+                    else None
+                ),
+                failure_elapsed_ms=_first_int(failure_payload.get("elapsed_ms")),
                 started_at=start.created_at,
                 completed_at=completed_at,
             )
