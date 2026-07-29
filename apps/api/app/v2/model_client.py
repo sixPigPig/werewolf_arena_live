@@ -5,7 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import re
-import time
 from typing import Any
 import unicodedata
 
@@ -224,7 +223,8 @@ class V2ModelClient:
     ) -> tuple[str, str, int, int]:
         _check(check_cancellation)
         route = self._routes[target.provider]
-        started = time.monotonic()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         first_token_at: float | None = None
         response_headers_seen = False
         provider_request_id = attempt_id
@@ -282,12 +282,12 @@ class V2ModelClient:
                                 http_status=response.status_code,
                                 provider_request_id=provider_request_id,
                                 response_headers_seen=True,
-                                elapsed_ms=round((time.monotonic() - started) * 1000),
+                                elapsed_ms=round((loop.time() - started) * 1000),
                             )
                         lines = response.aiter_lines().__aiter__()
                         while True:
                             _check(check_cancellation)
-                            elapsed = time.monotonic() - started
+                            elapsed = loop.time() - started
                             deadline = (
                                 self._first_token_seconds
                                 if first_token_at is None
@@ -329,32 +329,24 @@ class V2ModelClient:
                                 raise V2ModelError(
                                     "model_provider_failed",
                                     failure_stage=(
-                                        "first_token"
-                                        if first_token_at is None
-                                        else "stream"
+                                        "first_token" if first_token_at is None else "stream"
                                     ),
                                     provider_request_id=provider_request_id,
                                     first_token_seen=first_token_at is not None,
                                     response_headers_seen=True,
-                                    elapsed_ms=round(
-                                        (time.monotonic() - started) * 1000
-                                    ),
+                                    elapsed_ms=round((loop.time() - started) * 1000),
                                 )
                             if provider_event.finish_reason:
                                 finish_reason = provider_event.finish_reason
                             if provider_event.reasoning_delta:
                                 reasoning_seen = True
                                 if first_token_at is None:
-                                    first_token_at = time.monotonic()
-                                    phase_timeout.reschedule(
-                                        started + self._total_seconds
-                                    )
+                                    first_token_at = loop.time()
+                                    phase_timeout.reschedule(started + self._total_seconds)
                             if provider_event.text_delta:
                                 if first_token_at is None:
-                                    first_token_at = time.monotonic()
-                                    phase_timeout.reschedule(
-                                        started + self._total_seconds
-                                    )
+                                    first_token_at = loop.time()
+                                    phase_timeout.reschedule(started + self._total_seconds)
                                 text += provider_event.text_delta
         except V2ModelError:
             raise
@@ -384,7 +376,7 @@ class V2ModelClient:
                 provider_request_id=provider_request_id,
                 first_token_seen=first_token_at is not None,
                 response_headers_seen=response_headers_seen,
-                elapsed_ms=round((time.monotonic() - started) * 1000),
+                elapsed_ms=round((loop.time() - started) * 1000),
             ) from exc
         if not text.strip():
             if finish_reason in {"length", "max_output_tokens"}:
@@ -395,7 +387,7 @@ class V2ModelClient:
                 raise V2ModelError("model_empty_stream")
         if first_token_at is None:
             raise V2ModelError("model_empty_stream")
-        completed = time.monotonic()
+        completed = loop.time()
         return (
             text.strip(),
             provider_request_id,
@@ -423,7 +415,7 @@ def _model_timeout_error(
         provider_request_id=provider_request_id,
         first_token_seen=not before_first_token,
         response_headers_seen=response_headers_seen,
-        elapsed_ms=round((time.monotonic() - started) * 1000),
+        elapsed_ms=round((asyncio.get_running_loop().time() - started) * 1000),
     )
 
 
@@ -546,10 +538,11 @@ async def _next_with_cancellation(
     check_cancellation: Callable[[], None] | None,
 ) -> str:
     task = asyncio.create_task(anext(lines))
-    started = time.monotonic()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
     try:
         while True:
-            remaining = timeout - (time.monotonic() - started)
+            remaining = timeout - (loop.time() - started)
             if remaining <= 0:
                 raise TimeoutError
             done, _pending = await asyncio.wait(
