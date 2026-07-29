@@ -164,18 +164,21 @@ def test_model_context_uses_only_seat_references_and_splits_public_facts() -> No
             "stage": "day_debate",
             "speaker_ref": "seat_2",
             "speech": "昨晚1号出局，我怀疑4号。",
+            "source_kind": "speaker_statement",
         }
     ]
+    assert projected["history"]["first_party_investigation_claims"] == []
     assert projected["history"]["older_claims"] == []
     assert "information_semantics" not in projected
     assert "player_claims" not in projected
     assert "current_information_summary" not in projected
     assert "role_information_boundaries" not in projected
     assert model_prompt_metadata(projected) == {
-        "prompt_schema_version": 2,
+        "prompt_schema_version": 3,
         "serialized_char_count": len(
             json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
         ),
+        "first_party_investigation_claim_count": 0,
         "recent_statement_count": 1,
         "older_claim_count": 0,
     }
@@ -261,6 +264,7 @@ def test_model_context_compacts_old_statements_with_source_coverage() -> None:
             "occurred_in": {"period": "day", "round_no": 1},
             "stage": "day_debate",
             "speaker_ref": "seat_1",
+            "source_kind": "speaker_statement",
             "mentioned_player_refs": ["seat_3"],
             "exact_claim_fragments": ["我怀疑3号是狼。"],
             "confirmation_status": "unverified",
@@ -270,6 +274,7 @@ def test_model_context_compacts_old_statements_with_source_coverage() -> None:
             "occurred_in": {"period": "day", "round_no": 2},
             "stage": "day_debate",
             "speaker_ref": "seat_1",
+            "source_kind": "speaker_statement",
             "mentioned_player_refs": ["seat_3"],
             "exact_claim_fragments": ["我现在保3号是好人。"],
             "confirmation_status": "unverified",
@@ -376,6 +381,7 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
             "stage": "day_debate_speech",
             "speaker_ref": "seat_1",
             "speech": "第一天我怀疑4号。",
+            "source_kind": "speaker_statement",
         },
         {
             "kind": "player_statement",
@@ -384,9 +390,114 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
             "stage": "sheriff_badge_resolution",
             "speaker_ref": "seat_1",
             "speech": "我昨夜验了2号，2号是金水。",
+            "source_kind": "speaker_statement",
         },
     ]
     assert projected["history"]["older_claims"] == []
+
+
+def test_model_context_preserves_first_party_claim_time_before_later_paraphrases() -> None:
+    players = tuple(
+        V2ModelPlayerReference(
+            f"system-player-{seat:02d}",
+            seat,
+            f"{seat}号玩家",
+        )
+        for seat in (6, 8, 9, 10, 11, 12)
+    )
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "actor": {"kind": "player", "id": "system-player-12"},
+            "public_history": [
+                {
+                    "source_event_id": 400,
+                    "record_seq": 400,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "sheriff_campaign_speech",
+                        "player_id": "system-player-06",
+                        "speech": "6号上警，我先听后置位怎么说。",
+                    },
+                },
+                {
+                    "source_event_id": 417,
+                    "record_seq": 417,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "sheriff_campaign_speech",
+                        "player_id": "system-player-08",
+                        "speech": (
+                            "8号上警竞选，底牌预言家，昨晚验6号，查杀。"
+                            "现在回头看6号刚才的发言，我认为他在带节奏。"
+                        ),
+                    },
+                },
+                {
+                    "source_event_id": 597,
+                    "record_seq": 597,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-09",
+                        "speech": "8号因为6号发言带节奏，所以昨晚验了6号。",
+                    },
+                },
+                {
+                    "source_event_id": 620,
+                    "record_seq": 620,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-10",
+                        "speech": "9号转述说8号验6号是因为6号发言像狼。",
+                    },
+                },
+                {
+                    "source_event_id": 637,
+                    "record_seq": 637,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-11",
+                        "speech": "8号警上已经说了，因为6号发言像带节奏才验6号。",
+                    },
+                },
+            ],
+        },
+        players=players,
+    )
+
+    assert projected["history"]["first_party_investigation_claims"] == [
+        {
+            "source_event_id": "417",
+            "source_kind": "speaker_first_party_claim",
+            "confirmation_status": "unverified",
+            "speaker_ref": "seat_8",
+            "uttered_in": {"period": "day", "round_no": 1},
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            "claim_type": "investigation_claim",
+            "claim_text": "8号上警竞选，底牌预言家，昨晚验6号，查杀。",
+            "uttered_record_seq": 417,
+            "target_ref": "seat_6",
+            "claimed_result": "werewolves",
+        }
+    ]
+    assert [
+        (item["speaker_ref"], item["uttered_record_seq"])
+        for item in projected["history"]["recent_statements"]
+    ] == [("seat_9", 597), ("seat_10", 620), ("seat_11", 637)]
+    assert projected["history"]["older_claims"][1]["source_event_id"] == "417"
+    assert projected["history"]["older_claims"][1]["uttered_record_seq"] == 417
+    assert projected["history"]["source_rules"]["repetition_does_not_confirm"] is True
+    assert "后发生的发言不能成为先发生行动的原因" in (
+        projected["history"]["source_rules"]["causality_rule"]
+    )
 
 
 def test_model_target_and_speech_are_mapped_back_to_internal_identity() -> None:
@@ -556,11 +667,16 @@ def test_private_authoritative_facts_flattens_known_investigations() -> None:
 def test_player_prompt_explains_information_sources_without_forcing_strategy() -> None:
     payload = build_model_request_payload(
         {
-            "prompt_schema_version": 2,
+            "prompt_schema_version": 3,
             "hard_rules": {"werewolf_count": 1},
             "self": {"private_judge_facts": []},
             "public_state": {},
-            "history": {"recent_statements": [], "older_claims": []},
+            "history": {
+                "source_rules": {},
+                "first_party_investigation_claims": [],
+                "recent_statements": [],
+                "older_claims": [],
+            },
             "output_contract": {
                 "kind": "speech",
                 "speech": {"mode": "required"},
@@ -575,6 +691,7 @@ def test_player_prompt_explains_information_sources_without_forcing_strategy() -
     assert "self 中的法官私密信息" in system_text
     assert "public_state 是权威事实" in system_text
     assert "history 只是玩家公开说法" in system_text
+    assert "history.source_rules 规定发言来源和时间因果边界" in system_text
     assert "你可以自主判断、伪装身份和制定策略" in system_text
     assert "不得使用未提供的私密信息" in system_text
     assert "role_information_boundaries" not in system_text

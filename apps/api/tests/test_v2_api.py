@@ -1608,7 +1608,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 2
+        context["prompt_schema_version"] == 3
         and "private_judge_facts" in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
@@ -1859,7 +1859,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 2
+            event.payload["prompt_schema_version"] == 3
             and event.payload["prompt_projection"]["serialized_char_count"]
             < 15_000
             for event in model_request_events
@@ -1943,6 +1943,28 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
 
     assert "ability.progress_changed" not in public_types
     assert "god_view.night_resolved" not in public_types
+    campaign_contexts = [
+        context
+        for context in model_client.decision_contexts
+        if context["task"]["action_type"] == "sheriff_campaign_speech"
+    ]
+    assert campaign_contexts
+    assert all(
+        "警徽流安排" not in context["task"]["objective"]
+        and "只有当你选择公开跳预言家时" in context["task"]["objective"]
+        for context in campaign_contexts
+    )
+    debate_contexts = [
+        context
+        for context in model_client.decision_contexts
+        if context["task"]["action_type"] == "day_debate_speech"
+    ]
+    assert debate_contexts
+    assert all(
+        "不得用后发生的发言解释先发生的夜间选择" in context["task"]["objective"]
+        and "其他玩家的转述只视为未验证观点" in context["task"]["objective"]
+        for context in debate_contexts
+    )
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None

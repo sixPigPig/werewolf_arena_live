@@ -701,8 +701,9 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                     "text": (
                         "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
                         "和 public_state 是权威事实；history 只是玩家公开说法，可能真实、"
-                        "撒谎或判断错误。你可以自主判断、伪装身份和制定策略，但不得使用"
-                        "未提供的私密信息，也不要把玩家说法当成法官确认。"
+                        "撒谎或判断错误；history.source_rules 规定发言来源和时间因果边界，"
+                        "必须遵守。你可以自主判断、伪装身份和制定策略，但不得使用未提供"
+                        "的私密信息，也不要把玩家说法当成法官确认。"
                         f"{output_instruction}"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
                     ),

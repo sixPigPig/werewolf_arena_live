@@ -355,7 +355,10 @@ class V2DayEngine:
                 player=candidate,
                 broadcaster=broadcaster,
                 action_type="sheriff_campaign_speech",
-                objective="发表警长竞选发言，说明竞选理由、判断和警徽流安排",
+                objective=(
+                    "发表警长竞选发言，说明竞选理由、当前判断，以及当选后的发言方向、"
+                    "归票和警徽移交原则；只有当你选择公开跳预言家时，才说明后续查验计划"
+                ),
                 candidates=[],
                 optional=True,
                 output_kind="public_speech",
@@ -512,7 +515,12 @@ class V2DayEngine:
                     player=player,
                     broadcaster=broadcaster,
                     action_type="day_debate_speech",
-                    objective="结合公开发言、票型和你掌握的合法私密信息发表本轮白天分析",
+                    objective=(
+                        "结合公开发言、票型和你掌握的合法私密信息，按实际发生顺序发表本轮"
+                        "白天分析；严格区分行动发生时已经存在的信息与后续形成的事后评价，"
+                        "不得用后发生的发言解释先发生的夜间选择；引用他人理由时以当事人"
+                        "原话为准，其他玩家的转述只视为未验证观点"
+                    ),
                     candidates=[],
                     optional=True,
                     output_kind="public_speech",
