@@ -40,11 +40,13 @@ import {
   liveRefreshInterval,
 } from "@/v2/game-records/live-refresh";
 import {
+  buildV2RoundSummaries,
   buildV2Timeline,
   formatClock,
   formatDuration,
   groupV2Phases,
   prettyJson,
+  type V2RoundSummary,
   type V2TimelineItem,
 } from "@/v2/game-records/presentation";
 import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
@@ -117,6 +119,15 @@ function V2GameRecordWorkspace({
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
   const timeline = useMemo(() => buildV2Timeline(game), [game]);
+  const roundSummaries = useMemo(
+    () =>
+      buildV2RoundSummaries(
+        game.events,
+        game.player_identities,
+        game.status,
+      ),
+    [game.events, game.player_identities, game.status],
+  );
   const phases = useMemo(
     () => groupV2Phases(timeline, game.phase_id),
     [game.phase_id, timeline],
@@ -308,6 +319,8 @@ function V2GameRecordWorkspace({
         />
       ) : null}
 
+      <RoundSummaryPanel summaries={roundSummaries} />
+
       <OmniscientLivePanel
         game={game}
         isRefreshing={isRefreshing}
@@ -445,6 +458,81 @@ function V2GameRecordWorkspace({
         />
       </Modal>
     </AdminPage>
+  );
+}
+
+function RoundSummaryPanel({
+  summaries,
+}: {
+  summaries: V2RoundSummary[];
+}) {
+  return (
+    <section aria-label="对局轮次摘要" className="v2-round-summary-panel">
+      <header>
+        <div>
+          <Typography.Text className="ant-admin-page-kicker">
+            ROUND DIGEST
+          </Typography.Text>
+          <Typography.Title level={4}>对局轮次摘要</Typography.Title>
+          <Typography.Paragraph>
+            由事实序列确定性聚合，快速查看每轮夜间、放逐与特殊结算。
+          </Typography.Paragraph>
+        </div>
+        <Tag color="blue">{summaries.length} 轮</Tag>
+      </header>
+      {summaries.length ? (
+        <div className="v2-round-summary-grid">
+          {summaries.map((summary) => (
+            <article
+              className={`v2-round-summary-card is-${summary.status}`}
+              key={summary.roundNo}
+            >
+              <header>
+                <div>
+                  <Typography.Text type="secondary">
+                    NIGHT {summary.roundNo} → DAY {summary.roundNo}
+                  </Typography.Text>
+                  <Typography.Title level={5}>
+                    第 {summary.roundNo} 轮
+                  </Typography.Title>
+                </div>
+                <Tag color={statusColor(summary.status)}>
+                  {statusLabel(summary.status)}
+                </Tag>
+              </header>
+              {summary.highlights.length ? (
+                <ol>
+                  {summary.highlights.map((highlight) => (
+                    <li className={`is-${highlight.tone}`} key={highlight.id}>
+                      <span aria-hidden="true" />
+                      <Typography.Text>{highlight.label}</Typography.Text>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <Typography.Text className="v2-round-summary-empty" type="secondary">
+                  本轮正在进行，关键结算尚未产生。
+                </Typography.Text>
+              )}
+              <footer>
+                <Typography.Text type="secondary">
+                  {formatClock(summary.startedAt)} →{" "}
+                  {summary.endedAt ? formatClock(summary.endedAt) : "进行中"}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  事实 #{summary.firstRecordSeq}–#{summary.lastRecordSeq}
+                </Typography.Text>
+              </footer>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <Empty
+          description="首夜开始后将生成第一轮摘要"
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+        />
+      )}
+    </section>
   );
 }
 

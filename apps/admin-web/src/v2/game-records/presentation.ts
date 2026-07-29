@@ -3,6 +3,7 @@ import type {
   V2GameRecordDetail,
   V2GameRecordEvent,
   V2ModelRequest,
+  V2PlayerIdentity,
   V2VoiceAsset,
 } from "@/v2/game-records/types";
 
@@ -39,6 +40,40 @@ export type V2PhaseGroup = {
   modelRequestCount: number;
   failureCount: number;
   isCurrent: boolean;
+};
+
+export type V2RoundSummary = {
+  roundNo: number;
+  status: "running" | "succeeded" | "failed" | "canceled";
+  startedAt: string;
+  endedAt: string | null;
+  firstRecordSeq: number;
+  lastRecordSeq: number;
+  highlights: V2RoundHighlight[];
+};
+
+export type V2RoundHighlight = {
+  id: string;
+  kind:
+    | "night"
+    | "sheriff"
+    | "vote"
+    | "exile"
+    | "ability"
+    | "result"
+    | "failure";
+  label: string;
+  recordSeq: number;
+  tone: "neutral" | "success" | "warning" | "danger";
+};
+
+type V2RoundAccumulator = {
+  roundNo: number;
+  startedAt: string;
+  lastEventAt: string;
+  firstRecordSeq: number;
+  lastRecordSeq: number;
+  highlights: V2RoundHighlight[];
 };
 
 const lifecycleEventTypes = new Set([
@@ -132,6 +167,112 @@ const eventLabels: Record<string, string> = {
   exile_resolved: "放逐结算",
   game_completed: "对局结束",
 };
+
+export function buildV2RoundSummaries(
+  events: V2GameRecordEvent[],
+  identities: V2PlayerIdentity[],
+  gameStatus: string,
+): V2RoundSummary[] {
+  const orderedEvents = [...events].sort(
+    (left, right) => left.record_seq - right.record_seq,
+  );
+  const identityById = new Map(
+    identities.map((identity) => [identity.player_id, identity]),
+  );
+  const rounds = new Map<number, V2RoundAccumulator>();
+  const roundByWindowId = new Map<string, number>();
+  let currentRound: number | null = null;
+
+  const touchRound = (
+    roundNo: number,
+    event: V2GameRecordEvent,
+  ): V2RoundAccumulator => {
+    const existing = rounds.get(roundNo);
+    if (existing) {
+      existing.lastEventAt = event.created_at;
+      existing.lastRecordSeq = event.record_seq;
+      return existing;
+    }
+    const created = {
+      roundNo,
+      startedAt: event.created_at,
+      lastEventAt: event.created_at,
+      firstRecordSeq: event.record_seq,
+      lastRecordSeq: event.record_seq,
+      highlights: [],
+    };
+    rounds.set(roundNo, created);
+    return created;
+  };
+
+  for (const event of orderedEvents) {
+    const payloadRound = positiveInteger(event.payload.round_no);
+    const transitionRound =
+      event.event_type === "game_phase_changed"
+        ? roundFromPhase(stringValue(event.payload.phase_id))
+        : null;
+    const actionContext =
+      event.event_type === "action_opened"
+        ? objectValue(event.payload.context)
+        : {};
+    const actionRound = roundFromPhase(stringValue(actionContext.phase_id));
+    const windowId = stringValue(event.payload.window_id);
+    const windowRound =
+      windowId === null ? null : (roundByWindowId.get(windowId) ?? null);
+    const roundNo: number | null =
+      payloadRound ??
+      transitionRound ??
+      actionRound ??
+      windowRound ??
+      currentRound;
+
+    if (roundNo === null) continue;
+    currentRound = roundNo;
+    const round = touchRound(roundNo, event);
+
+    if (event.event_type === "action_window_opened" && windowId) {
+      roundByWindowId.set(windowId, roundNo);
+    }
+
+    for (const highlight of roundHighlights(
+      event,
+      round,
+      identityById,
+    )) {
+      round.highlights.push(highlight);
+    }
+  }
+
+  const orderedRounds = [...rounds.values()].sort(
+    (left, right) => left.roundNo - right.roundNo,
+  );
+  return orderedRounds.map((round, index) => {
+    const nextRound = orderedRounds[index + 1];
+    const hasGameResult = round.highlights.some(
+      (highlight) => highlight.id === `game_completed-${highlight.recordSeq}`,
+    );
+    const isLastRound = index === orderedRounds.length - 1;
+    const status = !isLastRound || hasGameResult
+      ? "succeeded"
+      : gameStatus === "failed"
+        ? "failed"
+        : gameStatus === "canceled"
+          ? "canceled"
+          : "running";
+    return {
+      roundNo: round.roundNo,
+      status,
+      startedAt: round.startedAt,
+      endedAt:
+        status === "running"
+          ? null
+          : (nextRound?.startedAt ?? round.lastEventAt),
+      firstRecordSeq: round.firstRecordSeq,
+      lastRecordSeq: round.lastRecordSeq,
+      highlights: round.highlights,
+    };
+  });
+}
 
 export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
   const eventsByAction = new Map<string, V2GameRecordEvent[]>();
@@ -362,6 +503,300 @@ function milestoneSummary(event: V2GameRecordEvent): string | null {
   return null;
 }
 
+function roundHighlights(
+  event: V2GameRecordEvent,
+  round: V2RoundAccumulator,
+  identities: Map<string, V2PlayerIdentity>,
+): V2RoundHighlight[] {
+  const payload = event.payload;
+  const highlight = (
+    kind: V2RoundHighlight["kind"],
+    label: string,
+    tone: V2RoundHighlight["tone"] = "neutral",
+  ): V2RoundHighlight => ({
+    id: `${event.event_type}-${event.record_seq}-${round.highlights.length}`,
+    kind,
+    label,
+    recordSeq: event.record_seq,
+    tone,
+  });
+
+  if (event.event_type === "action_window_closed") {
+    const result = objectValue(payload.result);
+    const deaths = Array.isArray(result.deaths)
+      ? result.deaths.map(objectValue)
+      : [];
+    const deathHighlights = deaths.flatMap((death) => {
+      const playerId = stringValue(death.player_id);
+      if (!playerId) return [];
+      return [
+        highlight(
+          "night",
+          `夜间出局：${summaryPlayerLabel(playerId, identities)}（${summaryDeathCauseLabel(
+            stringValue(death.cause),
+          )}）`,
+          "danger",
+        ),
+      ];
+    });
+    if (deathHighlights.length) return deathHighlights;
+    if (result.peaceful === true) {
+      const preventedBy = stringValue(result.attack_prevented_by);
+      return [
+        highlight(
+          "night",
+          preventedBy
+            ? `平安夜 · 袭击被${summaryPreventionLabel(preventedBy)}阻止`
+            : "平安夜",
+          "success",
+        ),
+      ];
+    }
+    return [];
+  }
+
+  if (event.event_type === "dawn_public_result") {
+    const hasNightResult = round.highlights.some(
+      (item) => item.kind === "night",
+    );
+    if (hasNightResult) return [];
+    const deadPlayerIds = Array.isArray(payload.dead_player_ids)
+      ? payload.dead_player_ids.filter(
+          (value): value is string => typeof value === "string" && Boolean(value),
+        )
+      : [];
+    if (!deadPlayerIds.length) {
+      return [highlight("night", "平安夜", "success")];
+    }
+    return deadPlayerIds.map((playerId) =>
+      highlight(
+        "night",
+        `夜间出局：${summaryPlayerLabel(playerId, identities)}`,
+        "danger",
+      ),
+    );
+  }
+
+  if (event.event_type === "sheriff_elected") {
+    return playerHighlight(
+      event,
+      "sheriff",
+      "警长产生",
+      stringValue(payload.player_id),
+      identities,
+      "success",
+    );
+  }
+  if (event.event_type === "sheriff_badge_transferred") {
+    const fromPlayer = summaryPlayerLabel(
+      stringValue(payload.from_player_id),
+      identities,
+    );
+    const toPlayer = summaryPlayerLabel(
+      stringValue(payload.player_id),
+      identities,
+    );
+    return [
+      highlight(
+        "sheriff",
+        `警徽移交：${fromPlayer} → ${toPlayer}`,
+        "warning",
+      ),
+    ];
+  }
+  if (event.event_type === "sheriff_badge_destroyed") {
+    return [highlight("sheriff", "警徽被销毁", "warning")];
+  }
+
+  if (event.event_type === "day_vote_resolved") {
+    const leaders = Array.isArray(payload.leaders)
+      ? payload.leaders.filter(
+          (value): value is string => typeof value === "string" && Boolean(value),
+        )
+      : [];
+    if (leaders.length === 1) return [];
+    const voteLabel =
+      stringValue(payload.action_type) === "sheriff_vote"
+        ? "警长投票"
+        : "放逐投票";
+    return [
+      highlight(
+        "vote",
+        leaders.length
+          ? `${voteLabel}平票：${leaders
+              .map((playerId) => summaryPlayerLabel(playerId, identities))
+              .join("、")}`
+          : `${voteLabel}无人领先`,
+        "warning",
+      ),
+    ];
+  }
+
+  if (event.event_type === "player_exiled") {
+    return playerHighlight(
+      event,
+      "exile",
+      "投票放逐",
+      stringValue(payload.player_id),
+      identities,
+      "danger",
+    );
+  }
+  if (event.event_type === "idiot_revealed") {
+    return playerHighlight(
+      event,
+      "ability",
+      "白痴翻牌免于放逐",
+      stringValue(payload.player_id),
+      identities,
+      "warning",
+    );
+  }
+  if (event.event_type === "werewolf_self_exploded") {
+    return playerHighlight(
+      event,
+      "ability",
+      "狼人自爆",
+      stringValue(payload.player_id),
+      identities,
+      "danger",
+    );
+  }
+  if (event.event_type === "hunter_response_resolved") {
+    const hunter = summaryPlayerLabel(
+      stringValue(payload.hunter_player_id),
+      identities,
+    );
+    const targetPlayerId = stringValue(payload.target_player_id);
+    return [
+      highlight(
+        "ability",
+        targetPlayerId
+          ? `猎人开枪：${hunter} → ${summaryPlayerLabel(
+              targetPlayerId,
+              identities,
+            )}`
+          : `猎人未开枪：${hunter}`,
+        targetPlayerId ? "danger" : "neutral",
+      ),
+    ];
+  }
+
+  if (event.event_type === "game_completed") {
+    return [
+      {
+        ...highlight(
+          "result",
+          `对局结束：${summaryWinnerLabel(stringValue(payload.winner))}获胜`,
+          "success",
+        ),
+        id: `game_completed-${event.record_seq}`,
+      },
+    ];
+  }
+  if (
+    event.event_type === "match_runtime_failed" ||
+    event.event_type === "ability_runtime_failed"
+  ) {
+    return [
+      highlight(
+        "failure",
+        `运行异常：${
+          stringValue(payload.failure_code) ??
+          stringValue(payload.reason) ??
+          event.event_type
+        }`,
+        "danger",
+      ),
+    ];
+  }
+  if (event.event_type === "game_canceled") {
+    return [highlight("failure", "管理员已中止本局", "warning")];
+  }
+  return [];
+}
+
+function playerHighlight(
+  event: V2GameRecordEvent,
+  kind: V2RoundHighlight["kind"],
+  label: string,
+  playerId: string | null,
+  identities: Map<string, V2PlayerIdentity>,
+  tone: V2RoundHighlight["tone"],
+): V2RoundHighlight[] {
+  if (!playerId) return [];
+  return [
+    {
+      id: `${event.event_type}-${event.record_seq}`,
+      kind,
+      label: `${label}：${summaryPlayerLabel(playerId, identities)}`,
+      recordSeq: event.record_seq,
+      tone,
+    },
+  ];
+}
+
+function summaryPlayerLabel(
+  playerId: string | null,
+  identities: Map<string, V2PlayerIdentity>,
+): string {
+  if (!playerId) return "无人";
+  const identity = identities.get(playerId);
+  if (!identity) return playerId;
+  return `${identity.seat}号 ${identity.display_name}（${summaryRoleLabel(
+    identity.role,
+  )}）`;
+}
+
+function summaryRoleLabel(value: string): string {
+  const labels: Record<string, string> = {
+    werewolf: "狼人",
+    villager: "村民",
+    seer: "预言家",
+    guard: "守卫",
+    witch: "女巫",
+    hunter: "猎人",
+    idiot: "白痴",
+  };
+  return labels[value] ?? value;
+}
+
+function summaryDeathCauseLabel(value: string | null): string {
+  const labels: Record<string, string> = {
+    werewolf_attack: "狼人袭击",
+    witch_poison: "女巫毒杀",
+    poison: "女巫毒杀",
+    hunter_shot: "猎人带走",
+  };
+  return value ? (labels[value] ?? value) : "夜间结算";
+}
+
+function summaryPreventionLabel(value: string): string {
+  const labels: Record<string, string> = {
+    guard: "守卫",
+    protect: "守卫",
+    heal: "女巫解药",
+    guard_and_heal: "同守同救",
+  };
+  return labels[value] ?? value;
+}
+
+function summaryWinnerLabel(value: string | null): string {
+  const labels: Record<string, string> = {
+    werewolf: "狼人阵营",
+    werewolves: "狼人阵营",
+    village: "好人阵营",
+    villagers: "好人阵营",
+  };
+  return value ? (labels[value] ?? value) : "未知阵营";
+}
+
+function roundFromPhase(phaseId: string | null): number | null {
+  if (phaseId === "first_night") return 1;
+  const match = /^(?:day|night)_(\d+)$/.exec(phaseId ?? "");
+  return match ? positiveInteger(Number(match[1])) : null;
+}
+
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -374,6 +809,14 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1
+    ? value
+    : null;
 }
 
 function elapsedMs(start: string, end: string): number {

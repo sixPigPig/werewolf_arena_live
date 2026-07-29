@@ -457,6 +457,62 @@ const templateDetail = {
   ],
 };
 
+const roundSummaryDetail = {
+  ...detail,
+  title: "轮次摘要验收",
+  status: "awaiting_observation",
+  last_record_seq: 6,
+  phase_id: "day_1",
+  phase_state: "game_completed",
+  events: [
+    event(1, "game_phase_changed", {
+      previous_phase_id: "opening",
+      phase_id: "first_night",
+      phase_state: "nightfall_ready",
+    }),
+    event(2, "action_window_opened", {
+      window_id: "v2_window_round_1",
+      window_type: "night",
+      round_no: 1,
+    }),
+    event(3, "action_window_closed", {
+      window_id: "v2_window_round_1",
+      result: { peaceful: true, deaths: [] },
+    }),
+    event(4, "game_phase_changed", {
+      previous_phase_id: "first_night",
+      phase_id: "day_1",
+      phase_state: "public_day_ready",
+    }),
+    event(5, "player_exiled", {
+      round_no: 1,
+      player_id: "profile-2",
+    }),
+    event(6, "game_completed", {
+      round_no: 1,
+      winner: "villagers",
+      reason: "deterministic_win_condition",
+    }),
+  ],
+  model_requests: [],
+  presentations: [],
+  action_windows: [
+    {
+      window_id: "v2_window_round_1",
+      run_id: runId,
+      window_seq: 1,
+      window_type: "night",
+      state: "closed",
+      plan: [],
+      result: {
+        peaceful: true,
+        deaths: [],
+        attack_prevented_by: "guard",
+      },
+    },
+  ],
+};
+
 function event(
   recordSeq: number,
   eventType: string,
@@ -729,6 +785,38 @@ describe("V2 game record detail workspace", () => {
       within(panel).getByText("天亮了，昨夜出局的玩家是：白石。"),
     ).toBeVisible();
     expect(within(panel).getByText(/public_deaths/)).toBeVisible();
+  });
+
+  it("shows a compact digest for each persisted match round", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.endsWith(`/api/v1/admin/v2/games/${gameId}`)) {
+          return new Response(JSON.stringify(roundSummaryDetail), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "轮次摘要验收" }),
+    ).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: "对局轮次摘要" });
+    expect(
+      within(summary).getByRole("heading", { name: "对局轮次摘要" }),
+    ).toBeVisible();
+    expect(within(summary).getByRole("heading", { name: "第 1 轮" })).toBeVisible();
+    expect(within(summary).getByText("平安夜")).toBeVisible();
+    expect(
+      within(summary).getByText("投票放逐：2号 白石（狼人）"),
+    ).toBeVisible();
+    expect(within(summary).getByText("对局结束：好人阵营获胜")).toBeVisible();
+    expect(within(summary).getByText("事实 #1–#6")).toBeVisible();
   });
 
   it("refreshes active games every two seconds and stops polling terminal games", () => {
