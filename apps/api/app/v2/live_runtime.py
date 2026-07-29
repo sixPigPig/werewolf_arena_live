@@ -40,6 +40,9 @@ from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.first_night_engine import V2NightEngine
 from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
+from app.v2.model_context_contract import (
+    supports_current_model_context_contract,
+)
 from app.v2.night_repository import V2NightRepository
 from app.v2.match_repository import V2MatchRepository
 from app.v2.models import V2GameRecord
@@ -421,6 +424,10 @@ class V2LiveRuntime:
             channel = self._channels.get(game_id)
             if channel is None:
                 self.snapshot(game_id=game_id, audience="player_public")
+                with self._session_factory() as db:
+                    game = get_game(db, game_id)
+                    if not supports_current_model_context_contract(game.rule_snapshot):
+                        raise V2ClientProtocolError("unsupported_model_context_contract")
                 channel = _GameChannel(
                     game_id=game_id,
                     snapshot_factory=self.snapshot,

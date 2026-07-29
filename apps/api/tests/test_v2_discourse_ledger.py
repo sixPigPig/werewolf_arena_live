@@ -42,23 +42,16 @@ def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
             _statement(
                 423,
                 speaker_ref="seat_10",
-                speech=(
-                    "9号问你的问题，你确实没有给明确方向，"
-                    "只说优先验警上最拧巴的牌。"
-                ),
+                speech=("9号问你的问题，你确实没有给明确方向，只说优先验警上最拧巴的牌。"),
             ),
         ],
         current_round_no=1,
         actor_ref="seat_9",
     )
 
-    assert [
-        item["record_seq"] for item in ledger["current_round_statements"]
-    ] == [389, 406, 423]
+    assert [item["record_seq"] for item in ledger["statements"]] == [389, 406, 423]
     future_plans = [
-        claim
-        for claim in ledger["claims"]
-        if claim["claim_type"] == "future_investigation_plan"
+        claim for claim in ledger["claims"] if claim["claim_type"] == "future_investigation_plan"
     ]
     assert [(claim["speaker_ref"], claim["uttered_record_seq"]) for claim in future_plans] == [
         ("seat_8", 389)
@@ -70,6 +63,8 @@ def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
         {
             "question_id": "question_406_1",
             "source_event_id": "406",
+            "source_sentence_id": "sentence_406_1",
+            "sentence_index": 1,
             "asked_turn_index": 2,
             "asked_by": "seat_9",
             "addressed_to": "seat_8",
@@ -84,9 +79,7 @@ def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
     ]
     assert ledger["relations"] == []
     paraphrase = next(
-        claim
-        for claim in ledger["claims"]
-        if claim["claim_type"] == "secondary_paraphrase"
+        claim for claim in ledger["claims"] if claim["claim_type"] == "secondary_paraphrase"
     )
     assert paraphrase["source_event_id"] == "423"
     assert paraphrase["source_kind"] == "secondary_unverified_paraphrase"
@@ -162,10 +155,7 @@ def test_ledger_orders_source_events_before_building_temporal_relations() -> Non
         actor_ref="seat_9",
     )
 
-    assert [
-        statement["record_seq"]
-        for statement in ledger["current_round_statements"]
-    ] == [389, 406]
+    assert [statement["record_seq"] for statement in ledger["statements"]] == [389, 406]
     assert ledger["questions"][0]["status"] == "open"
     assert ledger["relations"] == []
 
@@ -199,7 +189,7 @@ def test_ledger_rejects_older_record_seq_when_some_events_lack_sequence() -> Non
     assert ledger["relations"] == []
 
 
-def test_ledger_does_not_carry_questions_or_relations_into_later_round() -> None:
+def test_ledger_keeps_prior_questions_without_cross_round_answers() -> None:
     ledger = build_public_discourse_ledger(
         [
             _statement(
@@ -219,7 +209,9 @@ def test_ledger_does_not_carry_questions_or_relations_into_later_round() -> None
         actor_ref="seat_8",
     )
 
-    assert ledger["questions"] == []
+    assert len(ledger["questions"]) == 1
+    assert ledger["questions"][0]["status"] == "open"
+    assert ledger["questions"][0]["asked_in"]["round_no"] == 1
     assert ledger["relations"] == []
 
 
@@ -235,8 +227,7 @@ def test_ledger_preserves_first_party_investigation_before_later_motive_claims()
                 417,
                 speaker_ref="seat_8",
                 speech=(
-                    "8号底牌预言家，昨晚验6号，查杀。"
-                    "现在回头看6号刚才的发言，我认为他在带节奏。"
+                    "8号底牌预言家，昨晚验6号，查杀。现在回头看6号刚才的发言，我认为他在带节奏。"
                 ),
             ),
             _statement(
@@ -251,9 +242,7 @@ def test_ledger_preserves_first_party_investigation_before_later_motive_claims()
     )
 
     investigation = next(
-        claim
-        for claim in ledger["claims"]
-        if claim["claim_type"] == "investigation_claim"
+        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
     )
     assert investigation["source_event_id"] == "417"
     assert investigation["uttered_record_seq"] == 417
@@ -263,8 +252,7 @@ def test_ledger_preserves_first_party_investigation_before_later_motive_claims()
     later_account = next(
         claim
         for claim in ledger["claims"]
-        if claim["source_event_id"] == "597"
-        and claim["claim_type"] == "secondary_paraphrase"
+        if claim["source_event_id"] == "597" and claim["claim_type"] == "secondary_paraphrase"
     )
     assert later_account["source_kind"] == "secondary_unverified_paraphrase"
 
@@ -282,13 +270,10 @@ def test_ledger_does_not_promote_ambiguous_investigation_reference_to_first_part
         actor_ref="seat_5",
     )
 
-    assert all(
-        claim["claim_type"] != "investigation_claim"
-        for claim in ledger["claims"]
-    )
+    assert all(claim["claim_type"] != "investigation_claim" for claim in ledger["claims"])
 
 
-def test_ledger_keeps_unparsed_prior_speech_as_exact_fallback() -> None:
+def test_ledger_keeps_all_prior_speech_and_marks_unparsed_sources() -> None:
     prior = _statement(
         100,
         speaker_ref="seat_3",
@@ -314,5 +299,7 @@ def test_ledger_keeps_unparsed_prior_speech_as_exact_fallback() -> None:
     )
 
     assert first == second
-    assert first["prior_unparsed_statements"][0]["source_event_id"] == "100"
-    assert first["prior_unparsed_statements"][0]["speech"] == prior["speech"]
+    assert first["ledger_schema_version"] == 2
+    assert first["statements"][0]["source_event_id"] == "100"
+    assert first["statements"][0]["speech"] == prior["speech"]
+    assert first["unparsed_statement_refs"] == ["100", "200"]

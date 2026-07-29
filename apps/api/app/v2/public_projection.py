@@ -36,6 +36,8 @@ def project_public_rule_snapshot(
         return None
     rule_set = rule_snapshot.get("rule_set")
     if not isinstance(rule_set, dict):
+        if set(rule_snapshot) == {"model_context_contract"}:
+            return None
         raise V2PublicProjectionError("rule snapshot must contain a rule set")
 
     rule_id = _required_text(rule_set.get("id"), "rule id")
@@ -129,8 +131,7 @@ def project_public_player_seats(
                 avatar_url=avatar_url.strip() if avatar_url and avatar_url.strip() else None,
                 alive=(
                     bool(player_states[normalized_player_id].alive)
-                    if player_states is not None
-                    and normalized_player_id in player_states
+                    if player_states is not None and normalized_player_id in player_states
                     else True
                 ),
             )

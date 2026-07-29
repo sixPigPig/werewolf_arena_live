@@ -125,10 +125,13 @@ const detail = {
       model_id: "doubao-seed-2-0-lite-260215",
       model_provider: "agent_plan",
       judge_configuration_version: 5,
-      prompt_schema_version: 2,
+      prompt_schema_version: 5,
       prompt_projection: {
         serialized_char_count: 3210,
-        ledger_schema_version: 1,
+        ledger_schema_version: 2,
+        model_view_schema_version: 1,
+        ledger_statement_count: 9,
+        dropped_statement_count: 0,
         current_round_statement_count: 3,
         structured_claim_count: 5,
         open_question_count: 2,
@@ -624,10 +627,15 @@ describe("V2 game record detail workspace", () => {
     expect(within(inputPanel).getByText("对局配置")).toBeVisible();
     expect(within(inputPanel).getByText("九人标准局")).toBeVisible();
     expect(within(inputPanel).getByText("公开发言")).toBeVisible();
-    expect(within(inputPanel).getByText("V2")).toBeVisible();
+    expect(within(inputPanel).getByText("V5")).toBeVisible();
     expect(within(inputPanel).getByText("3,210")).toBeVisible();
     expect(within(inputPanel).getByText("发言账本")).toBeVisible();
+    expect(within(inputPanel).getByText("V2")).toBeVisible();
+    expect(within(inputPanel).getByText("模型视图")).toBeVisible();
     expect(within(inputPanel).getByText("V1")).toBeVisible();
+    expect(within(inputPanel).getByText("完整公开发言")).toBeVisible();
+    expect(within(inputPanel).getByText("发言截断")).toBeVisible();
+    expect(within(inputPanel).getByText("0（无截断）")).toBeVisible();
     expect(within(inputPanel).getByText("本轮完整发言")).toBeVisible();
     expect(within(inputPanel).getByText("结构化声明")).toBeVisible();
     expect(within(inputPanel).getByText("未回答提问")).toBeVisible();

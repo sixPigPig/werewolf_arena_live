@@ -18,6 +18,9 @@ from app.v2.models import (
     V2LivePresentation,
     V2VoiceAsset,
 )
+from app.v2.model_context_contract import (
+    supports_current_model_context_contract,
+)
 
 
 class V2RepositoryError(RuntimeError):
@@ -83,6 +86,8 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            if not supports_current_model_context_contract(game.rule_snapshot):
+                raise V2RepositoryError("unsupported_model_context_contract")
             if game.status != "waiting_to_start":
                 return False
             if game.phase_id != "opening" or game.phase_state != "opening_ready":
@@ -121,6 +126,8 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
             _raise_if_stop_requested(db, game)
+            if not supports_current_model_context_contract(game.rule_snapshot):
+                raise V2RepositoryError("unsupported_model_context_contract")
             expected_live_state = "awaiting_observation" if best_effort else "ready"
             if (
                 game.status != expected_live_state
@@ -459,9 +466,7 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             expected_status = "awaiting_observation" if best_effort else "generating"
             if game.status != expected_status:
-                raise V2RepositoryError(
-                    f"cannot complete silent action from {game.status}"
-                )
+                raise V2RepositoryError(f"cannot complete silent action from {game.status}")
             if game.phase_id != claim.phase_id:
                 raise V2RepositoryError("action phase changed before completion")
             if not best_effort:

@@ -344,8 +344,7 @@ class V2ModelClient:
                 exception_type=f"{type(root).__module__}.{type(root).__name__}",
                 errno=(
                     root_errno
-                    if isinstance(root_errno, int)
-                    and not isinstance(root_errno, bool)
+                    if isinstance(root_errno, int) and not isinstance(root_errno, bool)
                     else None
                 ),
                 provider_request_id=provider_request_id,
@@ -415,8 +414,7 @@ def _provider_event(
         response_object = event.get("response")
         candidate_id = (
             response_object.get("id")
-            if isinstance(response_object, dict)
-            and isinstance(response_object.get("id"), str)
+            if isinstance(response_object, dict) and isinstance(response_object.get("id"), str)
             else None
         )
         text_delta = (
@@ -436,14 +434,10 @@ def _provider_event(
             else None
         )
         response_status = (
-            response_object.get("status")
-            if isinstance(response_object, dict)
-            else None
+            response_object.get("status") if isinstance(response_object, dict) else None
         )
         incomplete_details = (
-            response_object.get("incomplete_details")
-            if isinstance(response_object, dict)
-            else None
+            response_object.get("incomplete_details") if isinstance(response_object, dict) else None
         )
         incomplete_reason = (
             incomplete_details.get("reason")
@@ -458,8 +452,7 @@ def _provider_event(
             failed=event.get("type") in {"response.failed", "error"},
             finish_reason=(
                 incomplete_reason
-                if response_status == "incomplete"
-                or event.get("type") == "response.incomplete"
+                if response_status == "incomplete" or event.get("type") == "response.incomplete"
                 else None
             ),
         )
@@ -473,9 +466,8 @@ def _provider_event(
         delta_object = choices[0].get("delta")
         if isinstance(delta_object, dict) and isinstance(delta_object.get("content"), str):
             text_delta = delta_object["content"]
-        if (
-            isinstance(delta_object, dict)
-            and isinstance(delta_object.get("reasoning_content"), str)
+        if isinstance(delta_object, dict) and isinstance(
+            delta_object.get("reasoning_content"), str
         ):
             reasoning_delta = delta_object["reasoning_content"]
         if isinstance(choices[0].get("finish_reason"), str):
@@ -702,7 +694,9 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                         "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
                         "和 public_state 是权威事实；history 只是玩家公开说法，可能真实、"
                         "撒谎或判断错误；history.source_rules 规定发言来源和时间因果边界，"
-                        "必须遵守。你可以自主判断、伪装身份和制定策略，但不得使用未提供"
+                        "必须遵守。history.timeline 按 record_seq 保留全部公开发言，"
+                        "annotations、questions 和 relations 只引用这条时间线，不是"
+                        "额外事实。你可以自主判断、伪装身份和制定策略，但不得使用未提供"
                         "的私密信息，也不要把玩家说法当成法官确认。"
                         f"{output_instruction}"
                         "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
@@ -788,7 +782,7 @@ def _repair_compatibility_key_delimiter(value: str) -> str:
     return re.sub(
         (
             r'(?P<prefix>[{｛,，]\s*)"'
-            r'(?P<key>[A-Za-z_][A-Za-z0-9_]*)'
+            r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)"
             r'(?P<delimiter>[:：])"'
         ),
         r'\g<prefix>"\g<key>"\g<delimiter>"',
@@ -816,9 +810,7 @@ def _normalize_json_syntax_nfkc(value: str) -> str:
                 in_string = False
                 string_is_key = False
                 continue
-            normalized.append(
-                unicodedata.normalize("NFKC", char) if string_is_key else char
-            )
+            normalized.append(unicodedata.normalize("NFKC", char) if string_is_key else char)
             continue
 
         compatible = unicodedata.normalize("NFKC", char)
@@ -958,9 +950,7 @@ def _speech_field(
         if value is not None and not isinstance(value, str):
             raise V2QualityError("model_decision_invalid_speech")
         return None
-    required = mode == "required" or (
-        mode == "required_if_true" and boolean_value is True
-    )
+    required = mode == "required" or (mode == "required_if_true" and boolean_value is True)
     if mode not in {"required", "optional", "required_if_true"}:
         raise V2QualityError("model_decision_contract_invalid")
     if value is None:
@@ -1124,8 +1114,7 @@ def _is_context_echo_object(value: dict[str, Any]) -> bool:
         "public_statements",
     }
     return any(
-        field in value and isinstance(value[field], (dict, list))
-        for field in context_fields
+        field in value and isinstance(value[field], (dict, list)) for field in context_fields
     )
 
 

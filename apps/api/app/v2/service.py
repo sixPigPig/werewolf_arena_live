@@ -31,6 +31,7 @@ from app.v2.god_view_access import (
     issue_god_view_access_token,
     verify_god_view_access_token,
 )
+from app.v2.model_context_contract import freeze_model_context_contract
 from app.v2.role_assignment import assign_private_roles
 
 
@@ -62,6 +63,7 @@ def create_waiting_game(
     players_snapshot: list[dict[str, Any]] | None = None,
     judge_voice_snapshot: dict[str, Any] | None = None,
 ) -> tuple[V2GameRecord, V2GameRun, str]:
+    created_from_lobby = rule_snapshot is not None
     game_id = f"v2_game_{uuid4().hex[:16]}"
     run_id = f"v2_run_{uuid4().hex[:16]}"
     god_view_token, god_view_token_hash = issue_god_view_access_token()
@@ -72,16 +74,19 @@ def create_waiting_game(
     if rule_snapshot is not None or players_snapshot is not None:
         if rule_snapshot is None or players_snapshot is None:
             raise ValueError("rule and player snapshots must be provided together")
+    frozen_rule_snapshot = freeze_model_context_contract(rule_snapshot)
+    if created_from_lobby:
+        assert players_snapshot is not None
         assignment_id = f"v2_roles_{uuid4().hex[:16]}"
         private_seed = secrets.token_hex(32)
         assignment_result = assign_private_roles(
             players_snapshot=players_snapshot,
-            rule_snapshot=rule_snapshot,
+            rule_snapshot=frozen_rule_snapshot,
             seed_hex=private_seed,
         )
         ability_snapshot = compile_ability_runtime_snapshot(
             game_id=game_id,
-            rule_snapshot=rule_snapshot,
+            rule_snapshot=frozen_rule_snapshot,
             assignments=assignment_result.assignments,
         )
     initial_record_seq = 3 if assignment_result is not None else 1
@@ -96,7 +101,7 @@ def create_waiting_game(
         phase_seq=1,
         phase_id="opening",
         phase_state="opening_ready",
-        rule_snapshot=rule_snapshot or {},
+        rule_snapshot=frozen_rule_snapshot,
         players_snapshot=players_snapshot or [],
         judge_voice_snapshot=judge_voice_snapshot or {},
         ability_snapshot=ability_snapshot,
@@ -119,18 +124,17 @@ def create_waiting_game(
         payload={
             "title": game.title,
             "start_mode": "first_ready_viewer",
-            "creation_source": (
-                "existing_mobile_lobby" if rule_snapshot is not None else "direct_v2"
-            ),
-            "rule_set_id": (rule_snapshot or {}).get("rule_set", {}).get("id"),
+            "creation_source": ("existing_mobile_lobby" if created_from_lobby else "direct_v2"),
+            "rule_set_id": frozen_rule_snapshot.get("rule_set", {}).get("id"),
             "player_count": len(players_snapshot or []),
             "judge_voice": judge_voice_snapshot or {},
+            "model_context_contract": frozen_rule_snapshot["model_context_contract"],
         },
     )
     db.add(game)
     db.flush()
     if assignment_result is not None:
-        sheriff_enabled = bool((rule_snapshot or {}).get("rule_set", {}).get("sheriff_enabled"))
+        sheriff_enabled = bool(frozen_rule_snapshot.get("rule_set", {}).get("sheriff_enabled"))
         db.add(
             V2MatchState(
                 game_id=game_id,

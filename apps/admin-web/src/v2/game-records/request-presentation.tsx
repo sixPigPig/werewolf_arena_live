@@ -60,7 +60,7 @@ const fieldLabels: Record<string, string> = {
   current_round_no: "当前轮次",
   current_round_statement_char_count: "本轮原文字符数",
   current_round_statement_count: "本轮原文数",
-  current_round_statements: "本轮完整发言",
+  timeline: "完整公开发言时间线",
   decision_rules: "决策约束",
   dead_player_ids: "出局玩家",
   display_name: "玩家名称",
@@ -98,6 +98,26 @@ const fieldLabels: Record<string, string> = {
   hard_rules: "硬规则",
   history: "公开发言历史",
   ledger_schema_version: "发言账本版本",
+  model_view_schema_version: "模型视图版本",
+  ledger_statement_count: "完整账本发言数",
+  ledger_statement_char_count: "完整账本发言字符数",
+  ledger_claim_count: "完整账本声明数",
+  ledger_question_count: "完整账本提问数",
+  ledger_relation_count: "完整账本关系数",
+  ledger_serialized_char_count: "完整账本序列化字符数",
+  model_view_statement_count: "模型视图发言数",
+  model_view_statement_char_count: "模型视图发言字符数",
+  model_view_claim_annotation_count: "模型视图声明注释数",
+  model_view_question_count: "模型视图提问数",
+  model_view_relation_count: "模型视图关系数",
+  model_view_serialized_char_count: "模型视图序列化字符数",
+  dropped_statement_count: "丢弃发言数",
+  dropped_claim_count: "丢弃声明数",
+  dropped_question_count: "丢弃提问数",
+  dropped_relation_count: "丢弃关系数",
+  selection_profile: "模型视图选择规则",
+  focus: "当前动作引用焦点",
+  annotations: "发言结构化注释",
   claim_id: "声明 ID",
   claim_type: "声明类型",
   claimed_action_in: "声明的行动时间",
@@ -107,8 +127,7 @@ const fieldLabels: Record<string, string> = {
   mentioned_player_refs: "涉及玩家",
   occurred_in: "实际发生时间",
   open_question_count: "未回答提问数",
-  prior_unparsed_statement_count: "历史原文兜底数",
-  prior_unparsed_statements: "未可靠解析的历史原文",
+  unparsed_statement_refs: "未可靠解析发言引用",
   question_count: "提问数",
   question_id: "提问 ID",
   questions: "结构化提问",
@@ -127,7 +146,6 @@ const fieldLabels: Record<string, string> = {
   specificity: "具体程度",
   statement_id: "发言 ID",
   statement_order: "发言排序规则",
-  structured_claim_char_count: "结构化声明字符数",
   structured_claim_count: "结构化声明数",
   subject_refs: "评价对象",
   temporal_order_valid: "时序是否合法",
@@ -215,6 +233,18 @@ export function ReadableModelInput({
     request.prompt_projection,
     "ledger_schema_version",
   );
+  const modelViewSchemaVersion = numericField(
+    request.prompt_projection,
+    "model_view_schema_version",
+  );
+  const ledgerStatementCount = numericField(
+    request.prompt_projection,
+    "ledger_statement_count",
+  );
+  const droppedStatementCount = numericField(
+    request.prompt_projection,
+    "dropped_statement_count",
+  );
   const currentRoundStatementCount = numericField(
     request.prompt_projection,
     "current_round_statement_count",
@@ -287,6 +317,32 @@ export function ReadableModelInput({
               ledgerSchemaVersion === null
                 ? "—"
                 : `V${ledgerSchemaVersion}`,
+          },
+          {
+            key: "model-view-schema",
+            label: "模型视图",
+            children:
+              modelViewSchemaVersion === null
+                ? "—"
+                : `V${modelViewSchemaVersion}`,
+          },
+          {
+            key: "ledger-statements",
+            label: "完整公开发言",
+            children:
+              ledgerStatementCount === null
+                ? "—"
+                : String(ledgerStatementCount),
+          },
+          {
+            key: "dropped-statements",
+            label: "发言截断",
+            children:
+              droppedStatementCount === null
+                ? "—"
+                : droppedStatementCount === 0
+                  ? "0（无截断）"
+                  : String(droppedStatementCount),
           },
           {
             key: "current-statements",

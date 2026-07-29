@@ -18,7 +18,7 @@ from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
 from app.v2.model_context import (
     V2ModelPlayerReference,
     model_prompt_metadata,
-    project_model_action_context,
+    project_model_action_context_with_metadata,
     resolve_model_target,
     sanitize_model_speech,
 )
@@ -403,11 +403,15 @@ class V2ActionEngine:
                     model_id=model_id,
                     model_parameters=model_parameters,
                 )
-                model_context = project_model_action_context(
+                projected_model_context = project_model_action_context_with_metadata(
                     context,
                     players=spec.model_players,
                 )
-                prompt_projection = model_prompt_metadata(model_context)
+                model_context = projected_model_context.context
+                prompt_projection = model_prompt_metadata(
+                    model_context,
+                    projection_metadata=(projected_model_context.projection_metadata),
+                )
                 request_payload = self._model_client.build_request_payload(
                     action_context=model_context,
                     decision=decision,
@@ -422,10 +426,7 @@ class V2ActionEngine:
                 model_deadline = time.monotonic() + retry_policy.total_seconds
                 attempt_ids = [
                     model_attempt_id,
-                    *[
-                        f"v2_model_{uuid4().hex[:16]}"
-                        for _ in range(retry_policy.max_attempts - 1)
-                    ],
+                    *[f"v2_model_{uuid4().hex[:16]}" for _ in range(retry_policy.max_attempts - 1)],
                 ]
                 for attempt_index, attempt_id in enumerate(attempt_ids):
                     model_attempt_id = attempt_id
@@ -441,9 +442,7 @@ class V2ActionEngine:
                             "attempt_no": model_attempt_no,
                             "max_attempts": retry_policy.max_attempts,
                             "retry_of_attempt_id": (
-                                attempt_ids[attempt_index - 1]
-                                if attempt_index > 0
-                                else None
+                                attempt_ids[attempt_index - 1] if attempt_index > 0 else None
                             ),
                             "request_kind": "decision" if decision else "speech",
                             "model_id": model_target.model_id,
@@ -471,9 +470,7 @@ class V2ActionEngine:
                             "actor_kind": spec.actor_kind,
                             "actor_id": spec.actor_id,
                             "audience": spec.audience,
-                            "prompt_schema_version": model_context.get(
-                                "prompt_schema_version"
-                            ),
+                            "prompt_schema_version": model_context.get("prompt_schema_version"),
                             "prompt_projection": prompt_projection,
                             "request_payload": request_payload,
                         },
@@ -485,27 +482,22 @@ class V2ActionEngine:
                     try:
                         try:
                             async with asyncio.timeout(remaining):
-                                model_decision = (
-                                    await self._model_client.generate_action_decision(
-                                        action_context=model_context,
-                                        attempt_id=model_attempt_id,
-                                        target=model_target,
-                                        check_cancellation=check_cancellation,
-                                    )
+                                model_decision = await self._model_client.generate_action_decision(
+                                    action_context=model_context,
+                                    attempt_id=model_attempt_id,
+                                    target=model_target,
+                                    check_cancellation=check_cancellation,
                                 )
                         except TimeoutError as exc:
                             raise V2ModelError(
                                 "model_total_timeout",
                                 failure_stage="action_budget",
-                                elapsed_ms=round(
-                                    (time.monotonic() - attempt_started_at) * 1000
-                                ),
+                                elapsed_ms=round((time.monotonic() - attempt_started_at) * 1000),
                             ) from exc
                     except V2ModelError as exc:
                         remaining = model_deadline - time.monotonic()
-                        delay_seconds = (
-                            retry_policy.base_delay_seconds
-                            + random.uniform(0, retry_policy.jitter_seconds)
+                        delay_seconds = retry_policy.base_delay_seconds + random.uniform(
+                            0, retry_policy.jitter_seconds
                         )
                         retryable = (
                             exc.retryable
@@ -593,9 +585,7 @@ class V2ActionEngine:
                     },
                 )
                 parsed_output: dict[str, Any] = {
-                    "target_player_ref": (
-                        original_target if spec.model_players else None
-                    ),
+                    "target_player_ref": (original_target if spec.model_players else None),
                     "target_player_id": resolved_target,
                     "speech": model_decision.speech,
                 }
@@ -603,9 +593,7 @@ class V2ActionEngine:
                     model_decision.boolean_field is not None
                     and model_decision.boolean_value is not None
                 ):
-                    parsed_output[model_decision.boolean_field] = (
-                        model_decision.boolean_value
-                    )
+                    parsed_output[model_decision.boolean_field] = model_decision.boolean_value
                 fallback_raw_output = {
                     key: value
                     for key, value in parsed_output.items()
@@ -906,10 +894,7 @@ class V2ActionEngine:
                         "retryable": False,
                         "terminal": True,
                     }
-                    if (
-                        isinstance(exc, V2QualityError)
-                        and exc.raw_response is not None
-                    ):
+                    if isinstance(exc, V2QualityError) and exc.raw_response is not None:
                         failure_payload["raw_response"] = exc.raw_response
                     self._repository.append_event(
                         game_id=claim.game_id,
@@ -1032,33 +1017,21 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
         "speech": speech,
     }
     if contract.kind == "speech":
-        output["required_fields"] = (
-            ["speech"] if contract.speech_mode == "required" else []
-        )
+        output["required_fields"] = ["speech"] if contract.speech_mode == "required" else []
         return output
     if contract.kind == "target":
         if contract.target_mode == "none":
             raise V2LiveProtocolError("target contract requires a target mode")
         if contract.target_mode == "required" and not spec.allowed_target_ids:
-            raise V2LiveProtocolError(
-                "required target contract requires allowed targets"
-            )
+            raise V2LiveProtocolError("required target contract requires allowed targets")
         output["target_field"] = "target_player_id"
         output["target_policy"] = {
             "mode": contract.target_mode,
             "allowed_target_ids": list(spec.allowed_target_ids or ()),
         }
         output["required_fields"] = [
-            *(
-                ["target_player_id"]
-                if contract.target_mode == "required"
-                else []
-            ),
-            *(
-                ["speech"]
-                if contract.speech_mode == "required"
-                else []
-            ),
+            *(["target_player_id"] if contract.target_mode == "required" else []),
+            *(["speech"] if contract.speech_mode == "required" else []),
         ]
         return output
     if not contract.boolean_field:
@@ -1066,11 +1039,7 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
     output["field"] = contract.boolean_field
     output["required_fields"] = [
         contract.boolean_field,
-        *(
-            ["speech"]
-            if contract.speech_mode == "required"
-            else []
-        ),
+        *(["speech"] if contract.speech_mode == "required" else []),
     ]
     output["boolean"] = {
         "type": "boolean",

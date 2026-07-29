@@ -7,9 +7,10 @@ from typing import Any
 
 from app.v2.ability_runtime import normalize_role_key, normalize_team_key
 from app.v2.discourse_ledger import build_public_discourse_ledger
+from app.v2.discourse_model_view import build_discourse_model_view
+from app.v2.model_context_contract import MODEL_PROMPT_SCHEMA_VERSION
 
 
-MODEL_PROMPT_SCHEMA_VERSION = 4
 _PUBLIC_JUDGE_FACT_LIMIT = 20
 _PERSONA_TEXT_LIMIT = 600
 
@@ -29,13 +30,34 @@ class V2ModelPlayerReference:
         return f"{self.seat}号"
 
 
+@dataclass(frozen=True)
+class V2ProjectedModelContext:
+    context: dict[str, Any]
+    projection_metadata: dict[str, Any]
+
+
 def project_model_action_context(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
 ) -> dict[str, Any]:
+    return project_model_action_context_with_metadata(
+        context,
+        players=players,
+    ).context
+
+
+def project_model_action_context_with_metadata(
+    context: dict[str, Any],
+    *,
+    players: tuple[V2ModelPlayerReference, ...],
+) -> V2ProjectedModelContext:
     if not players:
-        return dict(context)
+        projected = dict(context)
+        return V2ProjectedModelContext(
+            context=projected,
+            projection_metadata={},
+        )
     source = _project_value(context, players=players)
     private_facts = source.pop("private_authoritative_facts", None)
     private_facts = private_facts if isinstance(private_facts, list) else []
@@ -60,10 +82,27 @@ def project_model_action_context(
         current_round_no=current_round_no,
         actor_ref=actor_ref if isinstance(actor_ref, str) else None,
     )
+    task = _model_task(source)
+    candidates = source.get("candidates") if isinstance(source.get("candidates"), list) else []
+    candidate_refs = [
+        str(candidate["player_id"])
+        for candidate in candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
+    ]
+    latest_vote_result_ref = vote_snapshots[-1].get("source_event_id") if vote_snapshots else None
+    history_view, projection_metadata = build_discourse_model_view(
+        history_projection,
+        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
+        task=task,
+        candidate_refs=candidate_refs,
+        latest_vote_result_ref=(
+            latest_vote_result_ref if isinstance(latest_vote_result_ref, str) else None
+        ),
+    )
     hard_rules = _model_hard_rules(source.get("public_rule_contract"))
-    return {
+    projected_context = {
         "prompt_schema_version": MODEL_PROMPT_SCHEMA_VERSION,
-        "task": _model_task(source),
+        "task": task,
         "hard_rules": hard_rules,
         "self": _model_self(
             source,
@@ -76,11 +115,9 @@ def project_model_action_context(
             role_confirmations=role_confirmations,
             vote_snapshots=vote_snapshots,
         ),
-        "history": history_projection,
+        "history": history_view,
         "persona": _compact_persona(source.get("actor_profile")),
-        "candidates": (
-            source.get("candidates") if isinstance(source.get("candidates"), list) else []
-        ),
+        "candidates": candidates,
         "output_contract": (
             source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
         ),
@@ -90,62 +127,69 @@ def project_model_action_context(
             "names_available": False,
         },
     }
+    return V2ProjectedModelContext(
+        context=projected_context,
+        projection_metadata=projection_metadata,
+    )
 
 
-def model_prompt_metadata(context: dict[str, Any]) -> dict[str, Any]:
+def model_prompt_metadata(
+    context: dict[str, Any],
+    *,
+    projection_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     history = context.get("history")
     history = history if isinstance(history, dict) else {}
-    current_round_statements = history.get("current_round_statements")
-    claims = history.get("claims")
+    timeline = history.get("timeline")
     questions = history.get("questions")
     relations = history.get("relations")
-    prior_unparsed = history.get("prior_unparsed_statements")
-    current_round_statements = (
-        current_round_statements
-        if isinstance(current_round_statements, list)
-        else []
-    )
-    claims = claims if isinstance(claims, list) else []
+    timeline = timeline if isinstance(timeline, list) else []
     questions = questions if isinstance(questions, list) else []
     relations = relations if isinstance(relations, list) else []
-    prior_unparsed = prior_unparsed if isinstance(prior_unparsed, list) else []
     record_seqs = [
         value
-        for item in (*current_round_statements, *claims, *prior_unparsed)
+        for item in timeline
         if isinstance(item, dict)
-        for value in (
-            item.get("record_seq"),
-            item.get("uttered_record_seq"),
-        )
+        for value in (item.get("record_seq"),)
         if isinstance(value, int) and not isinstance(value, bool)
     ]
-    return {
+    current_round_no = history.get("current_round_no")
+    current_round_statements = [
+        item
+        for item in timeline
+        if isinstance(item, dict)
+        and isinstance(item.get("occurred_in"), dict)
+        and item["occurred_in"].get("round_no") == current_round_no
+    ]
+    annotations = [
+        annotation
+        for item in timeline
+        if isinstance(item, dict) and isinstance(item.get("annotations"), list)
+        for annotation in item["annotations"]
+        if isinstance(annotation, dict)
+    ]
+    metadata = {
         "prompt_schema_version": context.get("prompt_schema_version"),
         "serialized_char_count": len(
             json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         ),
         "ledger_schema_version": history.get("ledger_schema_version"),
+        "model_view_schema_version": history.get("model_view_schema_version"),
         "current_round_statement_count": len(current_round_statements),
         "current_round_statement_char_count": sum(
             len(str(item.get("speech") or ""))
             for item in current_round_statements
             if isinstance(item, dict)
         ),
-        "structured_claim_count": len(claims),
-        "structured_claim_char_count": sum(
-            len(str(item.get("exact_quote") or ""))
-            for item in claims
-            if isinstance(item, dict)
-        ),
+        "structured_claim_count": len(annotations),
         "secondary_paraphrase_count": sum(
             1
-            for item in claims
-            if isinstance(item, dict)
-            and item.get("claim_type") == "secondary_paraphrase"
+            for item in annotations
+            if isinstance(item, dict) and item.get("claim_type") == "secondary_paraphrase"
         ),
         "unverified_reported_response_count": sum(
             1
-            for item in claims
+            for item in annotations
             if isinstance(item, dict)
             and item.get("asserted_relation_type") == "reported_response"
             and item.get("temporal_relation_status") == "unverified"
@@ -157,10 +201,12 @@ def model_prompt_metadata(context: dict[str, Any]) -> dict[str, Any]:
             if isinstance(question, dict) and question.get("status") == "open"
         ),
         "relation_count": len(relations),
-        "prior_unparsed_statement_count": len(prior_unparsed),
         "source_record_seq_min": min(record_seqs, default=None),
         "source_record_seq_max": max(record_seqs, default=None),
     }
+    if projection_metadata:
+        metadata.update(projection_metadata)
+    return metadata
 
 
 def _current_round_no(
@@ -276,9 +322,7 @@ def _model_hard_rules(value: Any) -> dict[str, Any]:
             "policy": contract.get("speech_policy"),
             "rounds": contract.get("speech_rounds"),
             "exile_last_words_enabled": bool(contract.get("exile_last_words_enabled")),
-            "first_night_last_words_enabled": bool(
-                contract.get("first_night_last_words_enabled")
-            ),
+            "first_night_last_words_enabled": bool(contract.get("first_night_last_words_enabled")),
         },
         "werewolf_self_explosion_enabled": bool(contract.get("werewolf_self_explosion_enabled")),
         "ability_rules": ability_rules,
@@ -301,8 +345,7 @@ def _model_self(
             fact
             for fact in private_facts
             if not isinstance(fact, dict)
-            or fact.get("fact_type")
-            not in {"werewolf_teammates", "living_werewolf_teammates"}
+            or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
         ]
         if role_key == "werewolf"
         else private_facts
@@ -535,9 +578,7 @@ def build_public_rule_contract(
         "speech_rounds": int(rule.get("speech_rounds") or 1),
         "werewolf_self_explosion_enabled": bool(rule.get("werewolf_self_explosion_enabled")),
         "exile_last_words_enabled": bool(rule.get("exile_last_words_enabled")),
-        "first_night_last_words_enabled": bool(
-            rule.get("first_night_last_words_enabled")
-        ),
+        "first_night_last_words_enabled": bool(rule.get("first_night_last_words_enabled")),
     }
 
 

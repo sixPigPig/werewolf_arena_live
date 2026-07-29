@@ -58,6 +58,14 @@ _PUBLIC_SPEECH_SEQUENCE_RULE = (
     "引用公开发言时必须按实际 record_seq：先发生的发言不能回答、回应或拒绝"
     "后发生的问题；如果被提问者在问题之后没有新的公开发言，就必须视为尚未回答"
 )
+_SHERIFF_PK_SPEECH_OBJECTIVE = (
+    "你进入警长竞选平票 PK。围绕上一轮发言后的新争议自然补充，已说清的身份、"
+    "查验和竞选承诺无需从头重述。通常约300到450字，信息较少时可以更短"
+)
+_EXILE_PK_SPEECH_OBJECTIVE = (
+    "你进入公投驱逐平票 PK。围绕导致平票的核心争议自然回应，白天已经说清的"
+    "判断和全场过程无需从头重述。通常约300到450字，信息较少时可以更短"
+)
 
 
 class V2DayRuntimeError(RuntimeError):
@@ -360,8 +368,9 @@ class V2DayEngine:
                 broadcaster=broadcaster,
                 action_type="sheriff_campaign_speech",
                 objective=(
-                    "发表警长竞选发言，说明竞选理由、当前判断，以及当选后的发言方向、"
-                    "归票和警徽移交原则；只有当你选择公开跳预言家时，才说明后续查验计划"
+                    "自然发表警长竞选发言，讲清你此刻最想让其他玩家相信的内容；"
+                    "公共流程和前面已说清的内容可以略过。只有公开跳预言家时才需要"
+                    "说明后续查验计划。通常约300到450字，信息较少时可以更短"
                 ),
                 candidates=[],
                 optional=True,
@@ -458,7 +467,7 @@ class V2DayEngine:
                 player=candidate,
                 broadcaster=broadcaster,
                 action_type="sheriff_pk_speech",
-                objective="你进入警长竞选平票 PK，请发表补充竞选发言",
+                objective=_SHERIFF_PK_SPEECH_OBJECTIVE,
                 candidates=[],
                 optional=True,
                 output_kind="public_speech",
@@ -520,10 +529,8 @@ class V2DayEngine:
                     broadcaster=broadcaster,
                     action_type="day_debate_speech",
                     objective=(
-                        "结合公开发言、票型和你掌握的合法私密信息，按实际发生顺序发表本轮"
-                        "白天分析；严格区分行动发生时已经存在的信息与后续形成的事后评价，"
-                        "不得用后发生的发言解释先发生的夜间选择；引用他人理由时以当事人"
-                        "原话为准，其他玩家的转述只视为未验证观点"
+                        "像真实玩家一样自然发言，优先讲此刻最在意的判断；可以承接前置位，"
+                        "但不必完整复盘全场。通常约250到400字，按实际信息量自然变化"
                     ),
                     candidates=[],
                     optional=True,
@@ -619,7 +626,7 @@ class V2DayEngine:
                     player=candidate,
                     broadcaster=broadcaster,
                     action_type="exile_pk_speech",
-                    objective="你进入放逐平票 PK，请针对质疑发表补充发言",
+                    objective=_EXILE_PK_SPEECH_OBJECTIVE,
                     candidates=[],
                     optional=True,
                     output_kind="public_speech",

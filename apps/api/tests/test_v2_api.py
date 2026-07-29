@@ -26,9 +26,18 @@ from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.live import LiveRunRecord
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.user import User
-from app.v2.live_runtime import V2LiveRuntime, _GameChannel
+from app.v2.live_runtime import (
+    V2ClientProtocolError,
+    V2LiveRuntime,
+    _GameChannel,
+)
 from app.v2.action_engine import V2ModelRetryPolicy
-from app.v2.day_engine import V2DayEngine, _leaders
+from app.v2.day_engine import (
+    V2DayEngine,
+    _EXILE_PK_SPEECH_OBJECTIVE,
+    _SHERIFF_PK_SPEECH_OBJECTIVE,
+    _leaders,
+)
 from app.v2.match_repository import V2MatchRepository
 from app.v2.model_client import (
     V2ModelDecision,
@@ -55,6 +64,7 @@ from app.v2.models import (
     V2RoleAssignmentBatch,
     V2VoiceAsset,
 )
+from app.v2.repository import V2ActionRepository, V2RepositoryError
 
 
 PCM_CHUNK = b"\x10\x00" * 240
@@ -523,6 +533,11 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "rule_set_id": "classic_8",
             "player_count": 2,
             "judge_voice": game.judge_voice_snapshot,
+            "model_context_contract": {
+                "prompt_schema_version": 5,
+                "ledger_schema_version": 2,
+                "model_view_schema_version": 1,
+            },
         }
         assert events[1].payload == {
             "assignment_id": assignment_batch.assignment_id,
@@ -924,6 +939,36 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         }
         assert snapshot["current_presentation"] is None
         assert [item["role"] for item in snapshot["players"]]
+
+
+def test_old_model_context_contract_is_readable_but_cannot_resume(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json={"title": "旧契约只读"}).json()
+    game_id = created["game_id"]
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        assert game is not None
+        game.rule_snapshot = {}
+
+    snapshot = client.get(created["snapshot_url"])
+    assert snapshot.status_code == 200
+    assert snapshot.json()["game_id"] == game_id
+
+    runtime = client.app.state.v2_live_runtime
+    with pytest.raises(
+        V2ClientProtocolError,
+        match="unsupported_model_context_contract",
+    ):
+        asyncio.run(runtime._channel(game_id))
+
+    repository = V2ActionRepository(session_factory)
+    with pytest.raises(
+        V2RepositoryError,
+        match="unsupported_model_context_contract",
+    ):
+        repository.start_game(game_id=game_id, audience="player_public")
 
 
 def test_join_sample_cursor_is_atomic_with_audio_broadcast() -> None:
@@ -1608,17 +1653,18 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 4
+        context["prompt_schema_version"] == 5
         and "private_judge_facts" in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "public_state" in context
         and "history" in context
-        and context["history"]["ledger_schema_version"] == 1
-        and "current_round_statements" in context["history"]
-        and "claims" in context["history"]
+        and context["history"]["ledger_schema_version"] == 2
+        and context["history"]["model_view_schema_version"] == 1
+        and "timeline" in context["history"]
         and "questions" in context["history"]
         and "relations" in context["history"]
+        and "focus" in context["history"]
         and "older_claims" not in context["history"]
         and "role_information_boundaries" not in context
         and "canonical_public_timeline" not in context
@@ -1784,8 +1830,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
 
     contexts = model_client.decision_contexts
     assert all(
-        "wolf_cardinality_contradiction"
-        not in json.dumps(context, ensure_ascii=False)
+        "wolf_cardinality_contradiction" not in json.dumps(context, ensure_ascii=False)
         for context in contexts
     )
     night_contexts = [
@@ -1824,16 +1869,14 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
     assert all(
         context["self"]["werewolf_coordination"] == {"mode": "solo"}
         and all(
-            fact.get("fact_type")
-            not in {"werewolf_teammates", "living_werewolf_teammates"}
+            fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
             for fact in context["self"]["private_judge_facts"]
         )
         for context in wolf_night_contexts
     )
     assert all(
         any(
-            fact.get("fact_type") == "coordination"
-            and fact.get("payload") == "solo"
+            fact.get("fact_type") == "coordination" and fact.get("payload") == "solo"
             for fact in context["self"]["private_judge_facts"]
         )
         for context in wolf_night_contexts
@@ -1865,13 +1908,13 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 4
-            and event.payload["prompt_projection"]["ledger_schema_version"] == 1
-            and "current_round_statement_count"
-            in event.payload["prompt_projection"]
+            event.payload["prompt_schema_version"] == 5
+            and event.payload["prompt_projection"]["ledger_schema_version"] == 2
+            and event.payload["prompt_projection"]["model_view_schema_version"] == 1
+            and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["serialized_char_count"]
-            < 50_000
+            and event.payload["prompt_projection"]["dropped_statement_count"] == 0
+            and event.payload["prompt_projection"]["dropped_claim_count"] == 0
             for event in model_request_events
         )
         observed_responses = [
@@ -1928,9 +1971,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     model_client.decline_action_types.add("werewolf_self_explosion")
     model_client.decline_action_types.add("exile_vote")
     model_client.unexpected_speech_target = "model-added-irrelevant-target"
-    model_client.force_speech_action_types.update(
-        {"ability_witch.heal_decision", "exile_vote"}
-    )
+    model_client.force_speech_action_types.update({"ability_witch.heal_decision", "exile_vote"})
     request = _advanced_create_request()
     request["lobby_snapshot"]["rule_set"]["werewolf_self_explosion_enabled"] = True
     created = client.post("/api/v2/games", json=request)
@@ -1960,10 +2001,10 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     ]
     assert campaign_contexts
     assert all(
-        "警徽流安排" not in context["task"]["objective"]
-        and "只有当你选择公开跳预言家时" in context["task"]["objective"]
-        and "先发生的发言不能回答、回应或拒绝后发生的问题"
-        in context["task"]["objective"]
+        "讲清你此刻最想让其他玩家相信的内容" in context["task"]["objective"]
+        and "通常约300到450字" in context["task"]["objective"]
+        and "归票和警徽移交原则" not in context["task"]["objective"]
+        and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
         for context in campaign_contexts
     )
     debate_contexts = [
@@ -1973,11 +2014,21 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     ]
     assert debate_contexts
     assert all(
-        "不得用后发生的发言解释先发生的夜间选择" in context["task"]["objective"]
-        and "其他玩家的转述只视为未验证观点" in context["task"]["objective"]
-        and "先发生的发言不能回答、回应或拒绝后发生的问题"
-        in context["task"]["objective"]
+        "优先讲此刻最在意的判断" in context["task"]["objective"]
+        and "通常约250到400字" in context["task"]["objective"]
+        and "完整复盘全场" in context["task"]["objective"]
+        and "事后评价" not in context["task"]["objective"]
+        and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
         for context in debate_contexts
+    )
+    speech_contexts = campaign_contexts + debate_contexts
+    assert all(
+        context["prompt_schema_version"] == 5
+        and context["history"]["ledger_schema_version"] == 2
+        and context["history"]["model_view_schema_version"] == 1
+        and context["output_contract"]["speech"]
+        == {"type": "string", "mode": "required", "min_length": 1}
+        for context in speech_contexts
     )
     with session_factory() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
@@ -2134,13 +2185,10 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         assert vote_openings
         assert all(
             event.payload["context"]["output_contract"]["speech"]["mode"] == "forbidden"
-            and event.payload["context"]["output_contract"]["presentation_kind"]
-            == "private_vote"
+            and event.payload["context"]["output_contract"]["presentation_kind"] == "private_vote"
             for event in vote_openings
         )
-        vote_action_ids = {
-            event.payload["context"]["action_id"] for event in vote_openings
-        }
+        vote_action_ids = {event.payload["context"]["action_id"] for event in vote_openings}
         assert all(
             not (
                 event.event_type in {"speech_opened", "tts_stream_started"}
@@ -2151,8 +2199,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         forced_forbidden_action_ids = {
             event.payload["context"]["action_id"]
             for event in action_openings
-            if event.payload["context"].get("action_type")
-            in model_client.force_speech_action_types
+            if event.payload["context"].get("action_type") in model_client.force_speech_action_types
         }
         assert forced_forbidden_action_ids
         assert forced_forbidden_action_ids <= {
@@ -2169,9 +2216,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             for event in action_events
         )
         committed_votes = [
-            event
-            for event in action_events
-            if event.event_type == "day_vote_committed"
+            event for event in action_events if event.event_type == "day_vote_committed"
         ]
         assert committed_votes
         assert all("speech" not in event.payload for event in committed_votes)
@@ -2213,18 +2258,14 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             )
         )
         assert night_window is not None
-        direct_first_night_deaths = {
-            item["player_id"] for item in night_window.result["deaths"]
-        }
+        direct_first_night_deaths = {item["player_id"] for item in night_window.result["deaths"]}
         first_night_last_words = [
             event
             for event in action_openings
-            if event.payload["context"].get("action_type")
-            == "first_night_last_words"
+            if event.payload["context"].get("action_type") == "first_night_last_words"
         ]
         assert {
-            event.payload["context"]["actor"]["id"]
-            for event in first_night_last_words
+            event.payload["context"]["actor"]["id"] for event in first_night_last_words
         } == direct_first_night_deaths
         first_night_last_word_seats = [
             next(
@@ -2247,11 +2288,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         private_ability_action_ids = {
             event.payload["context"]["action_id"]
             for event in action_openings
-            if str(event.payload["context"].get("action_type", "")).startswith(
-                "ability_"
-            )
-            and event.payload["context"].get("action_type")
-            != "ability_werewolf.attack_decision"
+            if str(event.payload["context"].get("action_type", "")).startswith("ability_")
+            and event.payload["context"].get("action_type") != "ability_werewolf.attack_decision"
         }
         assert private_ability_action_ids
         assert all(
@@ -2271,8 +2309,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         )
         assert witch_observations
         assert all(
-            isinstance(item.payload.get("night_no"), int)
-            and "attacked_player_id" in item.payload
+            isinstance(item.payload.get("night_no"), int) and "attacked_player_id" in item.payload
             for item in witch_observations
         )
 
@@ -2469,8 +2506,7 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
             event
             for event in events
             if event.event_type == "action_opened"
-            and event.payload.get("context", {}).get("action_type")
-            == "judge_game_completed"
+            and event.payload.get("context", {}).get("action_type") == "judge_game_completed"
         ]
         assert len(completion) == len(terminal_openings) == 1
         assert completion[0].record_seq < terminal_openings[0].record_seq
@@ -2481,8 +2517,7 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
             for event in events
         )
         assert not any(
-            event.event_type in {"night_runtime_failed", "day_runtime_failed"}
-            for event in events
+            event.event_type in {"night_runtime_failed", "day_runtime_failed"} for event in events
         )
 
 
@@ -2514,9 +2549,7 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        retry = next(
-            event for event in events if event.event_type == "model_retry_scheduled"
-        )
+        retry = next(event for event in events if event.event_type == "model_retry_scheduled")
         action_id = retry.payload["action_id"]
         starts = [
             event
@@ -2562,13 +2595,11 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
         assert len(responses) == 1
         assert responses[0].payload["attempt_id"] == starts[1].payload["attempt_id"]
         assert any(
-            event.event_type == "action_succeeded"
-            and event.payload.get("action_id") == action_id
+            event.event_type == "action_succeeded" and event.payload.get("action_id") == action_id
             for event in events
         )
         assert not any(
-            event.event_type == "action_failed"
-            and event.payload.get("action_id") == action_id
+            event.event_type == "action_failed" and event.payload.get("action_id") == action_id
             for event in events
         )
 
@@ -2576,9 +2607,7 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
     assert detail.status_code == 200, detail.text
     requests = [
-        request
-        for request in detail.json()["model_requests"]
-        if request["action_id"] == action_id
+        request for request in detail.json()["model_requests"] if request["action_id"] == action_id
     ]
     assert [request["status"] for request in requests] == ["failed", "succeeded"]
     assert requests[0]["terminal"] is False
@@ -2750,6 +2779,23 @@ def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> N
     ]
     assert _leaders({"player-a": 1.0, "player-b": 1.5}) == ["player-b"]
     assert _leaders({}) == []
+
+
+@pytest.mark.parametrize(
+    ("objective", "focus"),
+    [
+        (_SHERIFF_PK_SPEECH_OBJECTIVE, "上一轮发言后的新争议"),
+        (_EXILE_PK_SPEECH_OBJECTIVE, "导致平票的核心争议"),
+    ],
+)
+def test_v2_pk_speech_objectives_avoid_replaying_prior_speeches(
+    objective: str,
+    focus: str,
+) -> None:
+    assert focus in objective
+    assert "无需从头重述" in objective
+    assert "通常约300到450字，信息较少时可以更短" in objective
+    assert "不超过" not in objective
 
 
 def test_complete_match_idiot_reveal_survives_and_loses_vote(v2_context) -> None:

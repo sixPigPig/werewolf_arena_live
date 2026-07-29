@@ -4,14 +4,8 @@ from collections.abc import Iterable
 import re
 from typing import Any
 
+from app.v2.model_context_contract import DISCOURSE_LEDGER_SCHEMA_VERSION
 
-DISCOURSE_LEDGER_SCHEMA_VERSION = 1
-
-_CLAIM_LIMIT = 96
-_CLAIM_CHAR_BUDGET = 16_000
-_QUESTION_LIMIT = 32
-_PRIOR_UNPARSED_LIMIT = 12
-_PRIOR_UNPARSED_CHAR_BUDGET = 6_000
 
 _SENTENCE = re.compile(r"[^。！？!?]+[。！？!?]?")
 _SEAT_REFERENCE = re.compile(r"(?<!\d)(?:seat_)?(2[0-9]|1[0-9]|[1-9])号?")
@@ -48,9 +42,7 @@ _DIRECT_QUESTION = re.compile(
     r"(?:我(?:现在|想|要)?问|请.{0,12}回答|"
     r"你.{0,18}(?:谁|什么|怎么|为什么|能不能|是否|哪|几号|号码))"
 )
-_OTHER_QUESTION_REPORT = re.compile(
-    r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:问|追问)"
-)
+_OTHER_QUESTION_REPORT = re.compile(r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:问|追问)")
 _SECONDARY_REPORT = re.compile(
     r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,18}"
     r"(?:说|表示|问|追问|回答|回应|只说|提过|报了|报过|声称|点过|认为)"
@@ -99,8 +91,9 @@ def build_public_discourse_ledger(
     statements: Iterable[dict[str, Any]],
     *,
     current_round_no: int,
-    actor_ref: str | None,
+    actor_ref: str | None = None,
 ) -> dict[str, Any]:
+    del actor_ref
     utterances = _normalize_utterances(statements)
     claims: list[dict[str, Any]] = []
     questions: list[dict[str, Any]] = []
@@ -142,35 +135,6 @@ def build_public_discourse_ledger(
         questions,
         utterances=utterances,
     )
-    selected_claims = _select_claims(
-        claims,
-        current_round_no=current_round_no,
-        actor_ref=actor_ref,
-    )
-    selected_questions = _select_questions(
-        resolved_questions,
-        current_round_no=current_round_no,
-        actor_ref=actor_ref,
-    )
-    selected_question_ids = {
-        str(question["question_id"]) for question in selected_questions
-    }
-    selected_relations = [
-        relation
-        for relation in relations
-        if relation["to_question_id"] in selected_question_ids
-    ]
-    current_round_statements = [
-        _public_utterance(utterance)
-        for utterance in utterances
-        if utterance["round_no"] == current_round_no
-    ]
-    prior_unparsed_statements = _select_prior_unparsed(
-        utterances,
-        current_round_no=current_round_no,
-        fully_interpreted_sources=fully_interpreted_sources,
-        actor_ref=actor_ref,
-    )
 
     return {
         "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
@@ -178,27 +142,26 @@ def build_public_discourse_ledger(
             "judge_facts": "authoritative",
             "player_claims": "unverified_even_when_repeated",
             "first_party_source_priority": "higher_than_secondary_paraphrase",
-            "statement_order": (
-                "record_seq 升序；record_seq 缺失时沿用公开历史输入顺序"
-            ),
+            "statement_order": ("record_seq 升序；record_seq 缺失时沿用公开历史输入顺序"),
             "response_rule": (
                 "只有被提问者在问题之后产生的公开发言才能回答该问题；"
                 "record_seq 更小的发言绝不能回答 record_seq 更大的问题"
             ),
             "open_question_rule": (
-                "status=open 表示尚无符合时间和说话人条件的后续回答，"
-                "不得把问题之前的发言描述成回答"
+                "status=open 表示尚无符合时间和说话人条件的后续回答，不得把问题之前的发言描述成回答"
             ),
-            "causality_rule": (
-                "后发生的发言不能成为先发生行动的原因；必须区分当时信息与事后评价"
-            ),
+            "causality_rule": ("后发生的发言不能成为先发生行动的原因；必须区分当时信息与事后评价"),
         },
         "current_round_no": current_round_no,
-        "current_round_statements": current_round_statements,
-        "claims": selected_claims,
-        "questions": selected_questions,
-        "relations": selected_relations,
-        "prior_unparsed_statements": prior_unparsed_statements,
+        "statements": [_public_utterance(utterance) for utterance in utterances],
+        "claims": claims,
+        "questions": resolved_questions,
+        "relations": relations,
+        "unparsed_statement_refs": [
+            str(utterance["source_event_id"])
+            for utterance in utterances
+            if utterance["source_event_id"] not in fully_interpreted_sources
+        ],
     }
 
 
@@ -246,18 +209,12 @@ def _normalize_utterances(
 
 
 def _public_utterance(utterance: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in utterance.items()
-        if key not in {"round_no"}
-    }
+    return {key: value for key, value in utterance.items() if key not in {"round_no"}}
 
 
 def _sentences(speech: str) -> list[str]:
     return [
-        match.group(0).strip()
-        for match in _SENTENCE.finditer(speech)
-        if match.group(0).strip()
+        match.group(0).strip() for match in _SENTENCE.finditer(speech) if match.group(0).strip()
     ]
 
 
@@ -276,18 +233,13 @@ def _extract_question(
     if addressed_to is not None:
         last_addressed_to = addressed_to
 
-    directly_asked = "？" in sentence or "?" in sentence or _DIRECT_QUESTION.search(
-        sentence
-    )
+    directly_asked = "？" in sentence or "?" in sentence or _DIRECT_QUESTION.search(sentence)
     reported_question = _OTHER_QUESTION_REPORT.search(sentence)
-    if (
-        not directly_asked
-        or (
-            reported_question is not None
-            and f"seat_{reported_question.group('seat')}" != speaker_ref
-            and "我问" not in sentence
-            and "我追问" not in sentence
-        )
+    if not directly_asked or (
+        reported_question is not None
+        and f"seat_{reported_question.group('seat')}" != speaker_ref
+        and "我问" not in sentence
+        and "我追问" not in sentence
     ):
         return None, last_addressed_to
 
@@ -296,6 +248,8 @@ def _extract_question(
     question = {
         "question_id": f"question_{source_id}_{sentence_index}",
         "source_event_id": source_id,
+        "source_sentence_id": f"sentence_{source_id}_{sentence_index}",
+        "sentence_index": sentence_index,
         "asked_turn_index": utterance["turn_index"],
         "asked_by": speaker_ref,
         "addressed_to": target_ref,
@@ -501,6 +455,8 @@ def _claim(
         "claim_id": f"claim_{source_id}_{sentence_index}_{claim_type}",
         "claim_type": claim_type,
         "source_event_id": source_id,
+        "source_sentence_id": f"sentence_{source_id}_{sentence_index}",
+        "sentence_index": sentence_index,
         "source_kind": source_kind,
         "speaker_ref": utterance["speaker_ref"],
         "uttered_turn_index": utterance["turn_index"],
@@ -531,14 +487,10 @@ def _is_first_party_investigation(
         return False
     normalized = sentence.replace(" ", "")
     speaker_label = (
-        f"{speaker_ref.removeprefix('seat_')}号"
-        if speaker_ref.startswith("seat_")
-        else ""
+        f"{speaker_ref.removeprefix('seat_')}号" if speaker_ref.startswith("seat_") else ""
     )
     speaker_leads_seer_claim = (
-        bool(speaker_label)
-        and normalized.startswith(speaker_label)
-        and "预言家" in normalized
+        bool(speaker_label) and normalized.startswith(speaker_label) and "预言家" in normalized
     )
     return (
         utterance_claims_seer
@@ -590,8 +542,7 @@ def _resolve_questions(
             if (
                 not _utterance_follows_question(utterance, question=question)
                 or utterance["speaker_ref"] != target_ref
-                or utterance["round_no"]
-                != question["asked_in"].get("round_no")
+                or utterance["round_no"] != question["asked_in"].get("round_no")
                 or not _matches_question_topic(
                     str(utterance["speech"]),
                     topic=str(question["topic"]),
@@ -659,138 +610,6 @@ def _matches_question_topic(speech: str, *, topic: str) -> bool:
     if topic == "vote_stance":
         return False
     return False
-
-
-def _select_claims(
-    claims: list[dict[str, Any]],
-    *,
-    current_round_no: int,
-    actor_ref: str | None,
-) -> list[dict[str, Any]]:
-    prompt_claims = [
-        claim
-        for claim in claims
-        if _claim_needed_in_prompt(
-            claim,
-            current_round_no=current_round_no,
-        )
-    ]
-    ordered = sorted(
-        prompt_claims,
-        key=lambda claim: (
-            _claim_priority(claim, actor_ref=actor_ref),
-            int(claim.get("uttered_turn_index") or 0),
-        ),
-        reverse=True,
-    )
-    selected: list[dict[str, Any]] = []
-    remaining_chars = _CLAIM_CHAR_BUDGET
-    for claim in ordered:
-        if len(selected) >= _CLAIM_LIMIT:
-            break
-        quote = str(claim.get("exact_quote") or "")
-        if len(quote) > remaining_chars:
-            continue
-        selected.append(claim)
-        remaining_chars -= len(quote)
-    return sorted(selected, key=lambda claim: int(claim["uttered_turn_index"]))
-
-
-def _claim_needed_in_prompt(
-    claim: dict[str, Any],
-    *,
-    current_round_no: int,
-) -> bool:
-    occurred_in = claim.get("occurred_in")
-    round_no = occurred_in.get("round_no") if isinstance(occurred_in, dict) else None
-    if round_no != current_round_no:
-        return True
-    claim_type = claim.get("claim_type")
-    if claim_type in {
-        "investigation_claim",
-        "future_investigation_plan",
-        "role_claim",
-        "secondary_paraphrase",
-    }:
-        return True
-    return False
-
-
-def _claim_priority(claim: dict[str, Any], *, actor_ref: str | None) -> int:
-    claim_type = str(claim.get("claim_type") or "")
-    source_kind = str(claim.get("source_kind") or "")
-    priority = {
-        "investigation_claim": 60,
-        "future_investigation_plan": 55,
-        "role_claim": 50,
-        "vote_stance": 40,
-        "player_assessment": 30,
-        "secondary_paraphrase": 10,
-    }.get(claim_type, 0)
-    if source_kind == "speaker_first_party_claim":
-        priority += 20
-    if actor_ref is not None and claim.get("speaker_ref") == actor_ref:
-        priority += 30
-    return priority
-
-
-def _select_questions(
-    questions: list[dict[str, Any]],
-    *,
-    current_round_no: int,
-    actor_ref: str | None,
-) -> list[dict[str, Any]]:
-    current_round_questions = [
-        question
-        for question in questions
-        if isinstance(question.get("addressed_to"), str)
-        and isinstance(question.get("asked_in"), dict)
-        and question["asked_in"].get("round_no") == current_round_no
-    ]
-    ordered = sorted(
-        current_round_questions,
-        key=lambda question: (
-            question.get("status") == "open",
-            actor_ref is not None and question.get("addressed_to") == actor_ref,
-            int(question.get("asked_turn_index") or 0),
-        ),
-        reverse=True,
-    )
-    selected = ordered[:_QUESTION_LIMIT]
-    return sorted(selected, key=lambda question: int(question["asked_turn_index"]))
-
-
-def _select_prior_unparsed(
-    utterances: list[dict[str, Any]],
-    *,
-    current_round_no: int,
-    fully_interpreted_sources: set[str],
-    actor_ref: str | None,
-) -> list[dict[str, Any]]:
-    candidates = [
-        utterance
-        for utterance in utterances
-        if utterance["round_no"] < current_round_no
-        and utterance["source_event_id"] not in fully_interpreted_sources
-    ]
-    candidates.sort(
-        key=lambda utterance: (
-            actor_ref is not None and utterance["speaker_ref"] == actor_ref,
-            int(utterance["turn_index"]),
-        ),
-        reverse=True,
-    )
-    selected: list[dict[str, Any]] = []
-    remaining_chars = _PRIOR_UNPARSED_CHAR_BUDGET
-    for utterance in candidates:
-        if len(selected) >= _PRIOR_UNPARSED_LIMIT:
-            break
-        speech = str(utterance["speech"])
-        if len(speech) > remaining_chars:
-            continue
-        selected.append(_public_utterance(utterance))
-        remaining_chars -= len(speech)
-    return sorted(selected, key=lambda utterance: int(utterance["turn_index"]))
 
 
 def _mentioned_player_refs(speech: str) -> set[str]:
