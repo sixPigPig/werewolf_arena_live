@@ -128,8 +128,10 @@ const detail = {
       prompt_schema_version: 2,
       prompt_projection: {
         serialized_char_count: 3210,
-        recent_statement_count: 0,
-        older_claim_count: 0,
+        ledger_schema_version: 1,
+        current_round_statement_count: 3,
+        structured_claim_count: 5,
+        open_question_count: 2,
       },
       status: "succeeded",
       request_payload: {
@@ -568,6 +570,11 @@ describe("V2 game record detail workspace", () => {
     expect(within(inputPanel).getByText("公开发言")).toBeVisible();
     expect(within(inputPanel).getByText("V2")).toBeVisible();
     expect(within(inputPanel).getByText("3,210")).toBeVisible();
+    expect(within(inputPanel).getByText("发言账本")).toBeVisible();
+    expect(within(inputPanel).getByText("V1")).toBeVisible();
+    expect(within(inputPanel).getByText("本轮完整发言")).toBeVisible();
+    expect(within(inputPanel).getByText("结构化声明")).toBeVisible();
+    expect(within(inputPanel).getByText("未回答提问")).toBeVisible();
     expect(
       within(inputPanel).queryByText(/"schema_version"/),
     ).not.toBeInTheDocument();

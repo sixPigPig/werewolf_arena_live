@@ -1608,12 +1608,18 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 3
+        context["prompt_schema_version"] == 4
         and "private_judge_facts" in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "public_state" in context
         and "history" in context
+        and context["history"]["ledger_schema_version"] == 1
+        and "current_round_statements" in context["history"]
+        and "claims" in context["history"]
+        and "questions" in context["history"]
+        and "relations" in context["history"]
+        and "older_claims" not in context["history"]
         and "role_information_boundaries" not in context
         and "canonical_public_timeline" not in context
         and "public_event_counters" not in context
@@ -1859,9 +1865,13 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 3
+            event.payload["prompt_schema_version"] == 4
+            and event.payload["prompt_projection"]["ledger_schema_version"] == 1
+            and "current_round_statement_count"
+            in event.payload["prompt_projection"]
+            and "open_question_count" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["serialized_char_count"]
-            < 15_000
+            < 50_000
             for event in model_request_events
         )
         observed_responses = [
@@ -1952,6 +1962,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     assert all(
         "警徽流安排" not in context["task"]["objective"]
         and "只有当你选择公开跳预言家时" in context["task"]["objective"]
+        and "先发生的发言不能回答、回应或拒绝后发生的问题"
+        in context["task"]["objective"]
         for context in campaign_contexts
     )
     debate_contexts = [
@@ -1963,6 +1975,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     assert all(
         "不得用后发生的发言解释先发生的夜间选择" in context["task"]["objective"]
         and "其他玩家的转述只视为未验证观点" in context["task"]["objective"]
+        and "先发生的发言不能回答、回应或拒绝后发生的问题"
+        in context["task"]["objective"]
         for context in debate_contexts
     )
     with session_factory() as db:

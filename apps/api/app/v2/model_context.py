@@ -3,22 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 import json
-import re
 from typing import Any
 
 from app.v2.ability_runtime import normalize_role_key, normalize_team_key
+from app.v2.discourse_ledger import build_public_discourse_ledger
 
 
-MODEL_PROMPT_SCHEMA_VERSION = 3
-_RECENT_STATEMENT_LIMIT = 3
-_RECENT_STATEMENT_CHAR_BUDGET = 5_000
+MODEL_PROMPT_SCHEMA_VERSION = 4
 _PUBLIC_JUDGE_FACT_LIMIT = 20
-_OLDER_CLAIM_LIMIT = 18
-_OLDER_CLAIM_CHAR_BUDGET = 5_000
-_CLAIMS_PER_STATEMENT_LIMIT = 4
-_CLAIM_CHAR_LIMIT = 180
-_FIRST_PARTY_INVESTIGATION_LIMIT = 12
-_FIRST_PARTY_INVESTIGATION_CHAR_BUDGET = 2_400
 _PERSONA_TEXT_LIMIT = 600
 
 
@@ -59,8 +51,15 @@ def project_model_action_context(
         role_confirmations = []
         vote_snapshots = []
 
-    recent_statements, older_claims = _compact_public_statements(statements)
-    first_party_investigation_claims = _first_party_investigation_claims(statements)
+    current_round_no = _current_round_no(source, statements=statements)
+    identity = source.get("self_identity")
+    identity = identity if isinstance(identity, dict) else {}
+    actor_ref = identity.get("player_id")
+    history_projection = build_public_discourse_ledger(
+        statements,
+        current_round_no=current_round_no,
+        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
+    )
     hard_rules = _model_hard_rules(source.get("public_rule_contract"))
     return {
         "prompt_schema_version": MODEL_PROMPT_SCHEMA_VERSION,
@@ -77,25 +76,7 @@ def project_model_action_context(
             role_confirmations=role_confirmations,
             vote_snapshots=vote_snapshots,
         ),
-        "history": {
-            "source_rules": {
-                "judge_facts": "authoritative",
-                "first_party_investigation_claims": (
-                    "unverified_first_party_investigation_claims"
-                ),
-                "player_statements": "unverified_speaker_opinions",
-                "claims_about_another_player_words_or_motives": (
-                    "secondary_unverified_paraphrases"
-                ),
-                "repetition_does_not_confirm": True,
-                "causality_rule": (
-                    "后发生的发言不能成为先发生行动的原因；必须区分当时信息与事后评价"
-                ),
-            },
-            "first_party_investigation_claims": first_party_investigation_claims,
-            "recent_statements": recent_statements,
-            "older_claims": older_claims,
-        },
+        "history": history_projection,
         "persona": _compact_persona(source.get("actor_profile")),
         "candidates": (
             source.get("candidates") if isinstance(source.get("candidates"), list) else []
@@ -114,22 +95,96 @@ def project_model_action_context(
 def model_prompt_metadata(context: dict[str, Any]) -> dict[str, Any]:
     history = context.get("history")
     history = history if isinstance(history, dict) else {}
-    recent = history.get("recent_statements")
-    older = history.get("older_claims")
-    first_party_investigation_claims = history.get("first_party_investigation_claims")
+    current_round_statements = history.get("current_round_statements")
+    claims = history.get("claims")
+    questions = history.get("questions")
+    relations = history.get("relations")
+    prior_unparsed = history.get("prior_unparsed_statements")
+    current_round_statements = (
+        current_round_statements
+        if isinstance(current_round_statements, list)
+        else []
+    )
+    claims = claims if isinstance(claims, list) else []
+    questions = questions if isinstance(questions, list) else []
+    relations = relations if isinstance(relations, list) else []
+    prior_unparsed = prior_unparsed if isinstance(prior_unparsed, list) else []
+    record_seqs = [
+        value
+        for item in (*current_round_statements, *claims, *prior_unparsed)
+        if isinstance(item, dict)
+        for value in (
+            item.get("record_seq"),
+            item.get("uttered_record_seq"),
+        )
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
     return {
         "prompt_schema_version": context.get("prompt_schema_version"),
         "serialized_char_count": len(
             json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         ),
-        "first_party_investigation_claim_count": (
-            len(first_party_investigation_claims)
-            if isinstance(first_party_investigation_claims, list)
-            else 0
+        "ledger_schema_version": history.get("ledger_schema_version"),
+        "current_round_statement_count": len(current_round_statements),
+        "current_round_statement_char_count": sum(
+            len(str(item.get("speech") or ""))
+            for item in current_round_statements
+            if isinstance(item, dict)
         ),
-        "recent_statement_count": len(recent) if isinstance(recent, list) else 0,
-        "older_claim_count": len(older) if isinstance(older, list) else 0,
+        "structured_claim_count": len(claims),
+        "structured_claim_char_count": sum(
+            len(str(item.get("exact_quote") or ""))
+            for item in claims
+            if isinstance(item, dict)
+        ),
+        "secondary_paraphrase_count": sum(
+            1
+            for item in claims
+            if isinstance(item, dict)
+            and item.get("claim_type") == "secondary_paraphrase"
+        ),
+        "unverified_reported_response_count": sum(
+            1
+            for item in claims
+            if isinstance(item, dict)
+            and item.get("asserted_relation_type") == "reported_response"
+            and item.get("temporal_relation_status") == "unverified"
+        ),
+        "question_count": len(questions),
+        "open_question_count": sum(
+            1
+            for question in questions
+            if isinstance(question, dict) and question.get("status") == "open"
+        ),
+        "relation_count": len(relations),
+        "prior_unparsed_statement_count": len(prior_unparsed),
+        "source_record_seq_min": min(record_seqs, default=None),
+        "source_record_seq_max": max(record_seqs, default=None),
     }
+
+
+def _current_round_no(
+    source: dict[str, Any],
+    *,
+    statements: list[dict[str, Any]],
+) -> int:
+    value = source.get("round_no")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    public_state = source.get("public_match_state")
+    if isinstance(public_state, dict):
+        value = public_state.get("round_no")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    statement_rounds = [
+        occurred_in["round_no"]
+        for statement in statements
+        if isinstance((occurred_in := statement.get("occurred_in")), dict)
+        and isinstance(occurred_in.get("round_no"), int)
+        and not isinstance(occurred_in.get("round_no"), bool)
+        and occurred_in["round_no"] > 0
+    ]
+    return max(statement_rounds, default=1)
 
 
 def _model_task(source: dict[str, Any]) -> dict[str, Any]:
@@ -1118,275 +1173,12 @@ def _project_public_history(
     return facts, statements, role_confirmations, vote_snapshots
 
 
-_DURABLE_STATEMENT_TERMS = (
-    "预言家",
-    "狼人",
-    "狼",
-    "好人",
-    "金水",
-    "查杀",
-    "村民",
-    "女巫",
-    "猎人",
-    "白痴",
-    "守卫",
-    "警长",
-    "警徽",
-    "上警",
-    "退水",
-    "对跳",
-    "悍跳",
-    "自爆",
-    "站边",
-    "怀疑",
-    "认下",
-    "保",
-    "打",
-    "出",
-    "投",
-    "验",
-    "毒",
-    "救",
-    "刀",
-    "归票",
-    "票型",
-    "身份",
-    "阵营",
-    "狼坑",
-    "承诺",
-    "明天",
-    "今晚",
-)
-_STRUCTURED_SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？!?；;])|[，,：:]|\n+")
-_PUBLIC_SENTENCE = re.compile(r"[^。！？!?]+[。！？!?]?")
-_SEAT_REFERENCE = re.compile(r"(?<!\d)(?:seat_)?(2[0-9]|1[0-9]|[1-9])号?")
-_ROLE_CLAIM = re.compile(r"(?:我是|我跳|我拍)(?:真)?(?:预言家|女巫|猎人|白痴|守卫|村民|好人|狼人)")
-_PAST_NIGHT_REFERENCE = re.compile(r"(?:昨晚|昨夜|首夜|第一晚|第一夜)")
-_INVESTIGATION_ACTION = re.compile(r"(?:查验|验|摸)")
-_SELF_SEER_CLAIM = re.compile(
-    r"(?:我(?:是|跳|拿的(?:是)?|这张牌是)一?张?预言家(?:牌)?|底牌预言家)"
-)
-_SELF_PAST_INVESTIGATION = re.compile(
-    r"(?:我[^。！？]{0,8}(?:昨晚|昨夜|首夜|第一晚|第一夜)|"
-    r"(?:昨晚|昨夜|首夜|第一晚|第一夜)[^。！？]{0,8}我)"
-    r"[^。！？]{0,24}(?:查验|验|摸)"
-)
-_INVESTIGATION_TARGET = re.compile(
-    r"(?:查验|验|摸)(?:的?是|了)?(?:警上|警下)?(?:的)?"
-    r"(?P<seat>2[0-9]|1[0-9]|[1-9])号"
-)
-
-
-def _compact_public_statements(
-    statements: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    if not statements:
-        return [], []
-
-    exact_ids: set[str] = set()
-    exact_statements_reversed: list[dict[str, Any]] = []
-    remaining_recent_chars = _RECENT_STATEMENT_CHAR_BUDGET
-    for statement in reversed(statements):
-        source_id = _source_id(statement.get("source_event_id"))
-        speech = statement.get("speech")
-        if source_id is None or not isinstance(speech, str):
-            continue
-        if len(exact_statements_reversed) >= _RECENT_STATEMENT_LIMIT or remaining_recent_chars <= 0:
-            break
-        bounded_speech = speech[:remaining_recent_chars]
-        if not bounded_speech:
-            continue
-        bounded_statement = dict(statement)
-        bounded_statement["speech"] = bounded_speech
-        if len(bounded_speech) < len(speech):
-            bounded_statement["speech_truncated"] = True
-        exact_statements_reversed.append(bounded_statement)
-        exact_ids.add(source_id)
-        remaining_recent_chars -= len(bounded_speech)
-
-    exact_statements = list(reversed(exact_statements_reversed))
-    older_ledger_reversed: list[dict[str, Any]] = []
-    remaining_claim_chars = _OLDER_CLAIM_CHAR_BUDGET
-    for statement in reversed(statements):
-        if len(older_ledger_reversed) >= _OLDER_CLAIM_LIMIT or remaining_claim_chars <= 0:
-            break
-        source_id = _source_id(statement.get("source_event_id"))
-        speaker_ref = statement.get("speaker_ref")
-        speech = statement.get("speech")
-        if (
-            source_id is None
-            or source_id in exact_ids
-            or not isinstance(speaker_ref, str)
-            or not isinstance(speech, str)
-        ):
-            continue
-        claims: list[str] = []
-        for clause in _durable_statement_clauses(speech):
-            if len(claims) >= _CLAIMS_PER_STATEMENT_LIMIT or remaining_claim_chars <= 0:
-                break
-            bounded_claim = clause[: min(_CLAIM_CHAR_LIMIT, remaining_claim_chars)]
-            if bounded_claim:
-                claims.append(bounded_claim)
-                remaining_claim_chars -= len(bounded_claim)
-        if not claims:
-            continue
-        older_ledger_reversed.append(
-            {
-                "source_event_id": source_id,
-                "occurred_in": statement.get("occurred_in"),
-                "stage": statement.get("stage"),
-                "speaker_ref": speaker_ref,
-                "source_kind": "speaker_statement",
-                **(
-                    {"uttered_record_seq": statement["uttered_record_seq"]}
-                    if isinstance(statement.get("uttered_record_seq"), int)
-                    and not isinstance(statement.get("uttered_record_seq"), bool)
-                    else {}
-                ),
-                "mentioned_player_refs": sorted(
-                    _mentioned_player_refs(speech),
-                    key=_seat_sort_key,
-                ),
-                "exact_claim_fragments": claims,
-                "confirmation_status": "unverified",
-            }
-        )
-    older_ledger = list(reversed(older_ledger_reversed))
-    return exact_statements, older_ledger
-
-
-def _first_party_investigation_claims(
-    statements: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    claims_reversed: list[dict[str, Any]] = []
-    remaining_chars = _FIRST_PARTY_INVESTIGATION_CHAR_BUDGET
-    for statement in reversed(statements):
-        if (
-            len(claims_reversed) >= _FIRST_PARTY_INVESTIGATION_LIMIT
-            or remaining_chars <= 0
-        ):
-            break
-        claim = _first_party_investigation_claim(
-            statement,
-            remaining_chars=remaining_chars,
-        )
-        if claim is None:
-            continue
-        claims_reversed.append(claim)
-        remaining_chars -= len(str(claim["claim_text"]))
-    return list(reversed(claims_reversed))
-
-
-def _first_party_investigation_claim(
-    statement: dict[str, Any],
-    *,
-    remaining_chars: int,
-) -> dict[str, Any] | None:
-    source_id = _source_id(statement.get("source_event_id"))
-    speaker_ref = statement.get("speaker_ref")
-    speech = statement.get("speech")
-    occurred_in = statement.get("occurred_in")
-    if (
-        source_id is None
-        or not isinstance(speaker_ref, str)
-        or not isinstance(speech, str)
-        or not isinstance(occurred_in, dict)
-    ):
-        return None
-    for sentence_match in _PUBLIC_SENTENCE.finditer(speech):
-        sentence = sentence_match.group(0).strip()
-        if (
-            not sentence
-            or _PAST_NIGHT_REFERENCE.search(sentence) is None
-            or _INVESTIGATION_ACTION.search(sentence) is None
-            or not _is_self_investigation_claim(sentence, speaker_ref=speaker_ref)
-        ):
-            continue
-        bounded_text = sentence[: min(_CLAIM_CHAR_LIMIT, remaining_chars)]
-        if not bounded_text:
-            return None
-        claimed_round = _claimed_night_round(sentence, occurred_in=occurred_in)
-        claim: dict[str, Any] = {
-            "source_event_id": source_id,
-            "source_kind": "speaker_first_party_claim",
-            "confirmation_status": "unverified",
-            "speaker_ref": speaker_ref,
-            "uttered_in": occurred_in,
-            "claimed_action_in": {"period": "night", "round_no": claimed_round},
-            "claim_type": "investigation_claim",
-            "claim_text": bounded_text,
-        }
-        uttered_record_seq = statement.get("uttered_record_seq")
-        if isinstance(uttered_record_seq, int) and not isinstance(
-            uttered_record_seq,
-            bool,
-        ):
-            claim["uttered_record_seq"] = uttered_record_seq
-        target_match = _INVESTIGATION_TARGET.search(sentence)
-        if target_match is not None:
-            claim["target_ref"] = f"seat_{target_match.group('seat')}"
-        if "查杀" in sentence or "狼人" in sentence:
-            claim["claimed_result"] = "werewolves"
-        elif "金水" in sentence or "好人" in sentence:
-            claim["claimed_result"] = "villagers"
-        return claim
-    return None
-
-
-def _is_self_investigation_claim(sentence: str, *, speaker_ref: str) -> bool:
-    normalized = sentence.replace(" ", "")
-    speaker_label = (
-        f"{speaker_ref.removeprefix('seat_')}号"
-        if speaker_ref.startswith("seat_")
-        else ""
-    )
-    speaker_leads_seer_claim = (
-        bool(speaker_label)
-        and normalized.startswith(speaker_label)
-        and "预言家" in normalized
-    )
-    return (
-        speaker_leads_seer_claim
-        or _SELF_SEER_CLAIM.search(normalized) is not None
-        or _SELF_PAST_INVESTIGATION.search(normalized) is not None
-    )
-
-
-def _claimed_night_round(sentence: str, *, occurred_in: dict[str, Any]) -> int:
-    if any(marker in sentence for marker in ("首夜", "第一晚", "第一夜")):
-        return 1
-    round_no = occurred_in.get("round_no")
-    return round_no if isinstance(round_no, int) and round_no > 0 else 1
-
-
-def _mentioned_player_refs(speech: str) -> set[str]:
-    return {f"seat_{match.group(1)}" for match in _SEAT_REFERENCE.finditer(speech)}
-
-
-def _durable_statement_clauses(speech: str) -> list[str]:
-    clauses: list[str] = []
-    for raw_clause in _STRUCTURED_SENTENCE_BOUNDARY.split(speech):
-        clause = raw_clause.strip()
-        if not clause:
-            continue
-        has_stance = any(term in clause for term in _DURABLE_STATEMENT_TERMS)
-        if (_SEAT_REFERENCE.search(clause) and has_stance) or _ROLE_CLAIM.search(clause):
-            clauses.append(clause)
-    return clauses
-
-
 def _source_id(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     return None
-
-
-def _seat_sort_key(ref: str) -> tuple[int, str]:
-    if ref.startswith("seat_") and ref[5:].isdigit():
-        return int(ref[5:]), ref
-    return 10_000, ref
 
 
 def _public_event_period(event_type: str) -> str:

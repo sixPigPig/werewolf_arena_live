@@ -54,6 +54,10 @@ _SUPPORTED_DAY_ACTIONS = {
     "hunter_shoot",
     "summarize",
 }
+_PUBLIC_SPEECH_SEQUENCE_RULE = (
+    "引用公开发言时必须按实际 record_seq：先发生的发言不能回答、回应或拒绝"
+    "后发生的问题；如果被提问者在问题之后没有新的公开发言，就必须视为尚未回答"
+)
 
 
 class V2DayRuntimeError(RuntimeError):
@@ -1278,6 +1282,12 @@ class V2DayEngine:
                 target_mode="optional" if optional else "required",
             )
         )
+        resolved_objective = (
+            f"{objective}；{_PUBLIC_SPEECH_SEQUENCE_RULE}"
+            if output_kind == "public_speech"
+            and _PUBLIC_SPEECH_SEQUENCE_RULE not in objective
+            else objective
+        )
         decision = await self._actions.run_player_decision(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1285,7 +1295,7 @@ class V2DayEngine:
                 action_type=action_type,
                 phase_id=state.phase_id,
                 required_phase_state=state.phase_state,
-                objective=objective,
+                objective=resolved_objective,
                 success_live_state="ready",
                 success_phase_state=state.phase_state,
                 actor_kind="player",

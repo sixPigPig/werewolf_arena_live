@@ -35,6 +35,10 @@ const fieldLabels: Record<string, string> = {
   activation_id: "激活 ID",
   action_id: "动作 ID",
   action_type: "动作类型",
+  addressed_to: "提问对象",
+  answer_record_seq: "回答记录序号",
+  answer_source_event_id: "回答来源事件",
+  answer_turn_index: "回答发言序号",
   actor: "执行者",
   actor_id: "玩家 ID",
   actor_kind: "执行者类型",
@@ -52,10 +56,16 @@ const fieldLabels: Record<string, string> = {
   catchphrases: "常用表达",
   consensus_rule: "共识规则",
   context: "补充上下文",
+  confirmation_status: "确认状态",
+  current_round_no: "当前轮次",
+  current_round_statement_char_count: "本轮原文字符数",
+  current_round_statement_count: "本轮原文数",
+  current_round_statements: "本轮完整发言",
   decision_rules: "决策约束",
   dead_player_ids: "出局玩家",
   display_name: "玩家名称",
   event_type: "事件类型",
+  exact_quote: "原话",
   facts: "已知事实",
   game_id: "对局 ID",
   game_setup: "对局配置",
@@ -87,8 +97,58 @@ const fieldLabels: Record<string, string> = {
   public_history: "公开历史",
   hard_rules: "硬规则",
   history: "公开发言历史",
-  recent_statements: "近期原始发言",
-  older_claims: "更早的观点摘录",
+  ledger_schema_version: "发言账本版本",
+  claim_id: "声明 ID",
+  claim_type: "声明类型",
+  claimed_action_in: "声明的行动时间",
+  claimed_result: "声明的结果",
+  claims: "结构化声明",
+  first_party_source_priority: "第一方来源优先级",
+  mentioned_player_refs: "涉及玩家",
+  occurred_in: "实际发生时间",
+  open_question_count: "未回答提问数",
+  prior_unparsed_statement_count: "历史原文兜底数",
+  prior_unparsed_statements: "未可靠解析的历史原文",
+  question_count: "提问数",
+  question_id: "提问 ID",
+  questions: "结构化提问",
+  record_seq: "记录序号",
+  relation_count: "时序关系数",
+  relation_id: "关系 ID",
+  relation_type: "关系类型",
+  relations: "确定性时序关系",
+  reported_speaker_ref: "被转述玩家",
+  secondary_paraphrase_count: "二手转述数",
+  source_event_id: "来源事件",
+  source_kind: "来源类型",
+  source_record_seq_max: "最大来源记录序号",
+  source_record_seq_min: "最小来源记录序号",
+  source_rules: "来源与时序规则",
+  specificity: "具体程度",
+  statement_id: "发言 ID",
+  statement_order: "发言排序规则",
+  structured_claim_char_count: "结构化声明字符数",
+  structured_claim_count: "结构化声明数",
+  subject_refs: "评价对象",
+  temporal_order_valid: "时序是否合法",
+  temporal_relation_status: "时序关系状态",
+  to_question_id: "关联提问 ID",
+  to_record_seq: "提问记录序号",
+  to_source_event_id: "提问来源事件",
+  to_turn_index: "提问发言序号",
+  turn_index: "发言序号",
+  unverified_reported_response_count: "未验证回答转述数",
+  uttered_record_seq: "发言记录序号",
+  uttered_turn_index: "发言序号",
+  asked_by: "提问者",
+  asked_in: "提问发生时间",
+  asked_record_seq: "提问记录序号",
+  asked_turn_index: "提问发言序号",
+  asserted_relation_type: "转述所声称的关系",
+  from_record_seq: "回应记录序号",
+  from_source_event_id: "回应来源事件",
+  from_speaker_ref: "回应者",
+  from_turn_index: "回应发言序号",
   role_summary: "身份配置",
   round_no: "轮次",
   rule_name: "规则",
@@ -100,16 +160,19 @@ const fieldLabels: Record<string, string> = {
   speech: "发言内容",
   stage: "阶段",
   status: "状态",
+  speaker_ref: "发言者",
   strategy_profile: "策略类型",
   self: "玩家自身与私有事实",
   strength: "影响强度",
   target_optional: "目标可为空",
   target_player_id: "目标玩家",
+  target_ref: "目标玩家",
   target_policy: "目标规则",
   thinking: "思考模式",
   tts_speaker: "语音角色",
   type: "类型",
   version: "版本",
+  topic: "主题",
   knowledge_fact_ids: "知识事实 ID",
   knowledge_projection_hash: "信息投影摘要",
   werewolf_teammates: "狼人队友",
@@ -147,6 +210,22 @@ export function ReadableModelInput({
   const serializedCharCount = numericField(
     request.prompt_projection,
     "serialized_char_count",
+  );
+  const ledgerSchemaVersion = numericField(
+    request.prompt_projection,
+    "ledger_schema_version",
+  );
+  const currentRoundStatementCount = numericField(
+    request.prompt_projection,
+    "current_round_statement_count",
+  );
+  const structuredClaimCount = numericField(
+    request.prompt_projection,
+    "structured_claim_count",
+  );
+  const openQuestionCount = numericField(
+    request.prompt_projection,
+    "open_question_count",
   );
   return (
     <div className="v2-inspector-panel">
@@ -200,6 +279,36 @@ export function ReadableModelInput({
               serializedCharCount === null
                 ? "—"
                 : serializedCharCount.toLocaleString("zh-CN"),
+          },
+          {
+            key: "ledger-schema",
+            label: "发言账本",
+            children:
+              ledgerSchemaVersion === null
+                ? "—"
+                : `V${ledgerSchemaVersion}`,
+          },
+          {
+            key: "current-statements",
+            label: "本轮完整发言",
+            children:
+              currentRoundStatementCount === null
+                ? "—"
+                : String(currentRoundStatementCount),
+          },
+          {
+            key: "structured-claims",
+            label: "结构化声明",
+            children:
+              structuredClaimCount === null
+                ? "—"
+                : String(structuredClaimCount),
+          },
+          {
+            key: "open-questions",
+            label: "未回答提问",
+            children:
+              openQuestionCount === null ? "—" : String(openQuestionCount),
           },
         ]}
         size="small"
