@@ -7139,60 +7139,51 @@ a {
 }
 
 .v2-phase-rail nav {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
+  margin-top: 18px;
 }
 
-.v2-phase-button {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-  padding: 10px 9px;
-  border: 0;
+.v2-phase-steps .ant-steps-item-wrapper {
+  padding: 5px 7px;
   border-radius: 7px;
-  color: #344054;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 
-.v2-phase-button:hover {
+.v2-phase-steps.ant-steps-vertical
+  > .ant-steps-item
+  .ant-steps-item-rail {
+  inset-inline-start: 19px;
+}
+
+.v2-phase-steps .ant-steps-item[role="button"]:hover
+  .ant-steps-item-wrapper {
   background: #f2f4f7;
 }
 
-.v2-phase-button.is-selected {
-  color: #175cd3;
+.v2-phase-steps .ant-steps-item.is-selected-phase
+  .ant-steps-item-wrapper {
   background: #eff8ff;
 }
 
-.v2-phase-button > span {
-  display: flex;
-  gap: 7px;
-  align-items: center;
+.v2-phase-steps .ant-steps-item-title {
+  font-weight: 600;
 }
 
-.v2-phase-button small {
-  color: #667085;
+.v2-phase-steps .ant-steps-item-content {
   font-size: 11px;
 }
 
-.v2-phase-status.is-succeeded,
-.v2-action-row .is-succeeded {
+.v2-action-status.is-succeeded {
   color: #12b76a;
 }
 
-.v2-action-row .is-running,
-.v2-phase-status.is-running {
+.v2-action-status.is-running {
   color: #1570ef;
 }
 
-.v2-action-row .is-failed,
-.v2-phase-status.is-failed {
+.v2-action-status.is-failed {
   color: #d92d20;
 }
 
-.v2-phase-status.is-canceled {
+.v2-action-status.is-canceled {
   color: #f79009;
 }
 
@@ -7201,101 +7192,70 @@ a {
   overflow: hidden;
 }
 
-.v2-action-timeline > header,
-.v2-action-phase-header {
+.v2-action-timeline > header {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.v2-action-table-header,
-.v2-action-row {
-  display: grid;
-  grid-template-columns:
-    62px minmax(88px, 0.8fr) minmax(124px, 1.25fr) 58px 72px
-    minmax(110px, 1fr) 62px;
-  gap: 8px;
-  align-items: center;
-}
-
-.v2-action-table-header {
+.v2-action-table {
   margin-top: 14px;
-  padding: 8px 10px;
-  border-top: 1px solid #eaecf0;
-  border-bottom: 1px solid #eaecf0;
+}
+
+.v2-action-table .ant-table {
+  font-size: 11px;
+}
+
+.v2-action-table .ant-table-thead > tr > th {
   color: #667085;
-  font-size: 11px;
+  background: #fcfcfd;
+  font-weight: 500;
 }
 
-.v2-action-virtual-viewport {
-  position: relative;
-  height: 680px;
-  overflow: auto;
-  border-bottom: 1px solid #eaecf0;
-}
-
-.v2-action-virtual-canvas {
-  position: relative;
-  min-width: 760px;
-}
-
-.v2-action-virtual-row {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  overflow: hidden;
-}
-
-.v2-action-phase-header {
-  height: 42px;
-  padding: 14px 6px 8px;
-  border-bottom: 1px solid #f2f4f7;
-}
-
-.v2-action-item {
-  height: 100%;
-  border-bottom: 1px solid #f2f4f7;
-}
-
-.v2-action-item.is-selected {
-  margin: 0 -1px;
-  border: 1px solid #84adff;
-  border-radius: 7px;
-  background: #f5f8ff;
-}
-
-.v2-action-row {
-  width: 100%;
-  min-height: 42px;
-  padding: 8px 10px;
-  border: 0;
+.v2-action-table .ant-table-tbody > tr > td {
   color: #344054;
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
+}
+
+.v2-action-table .ant-table-row {
   cursor: pointer;
 }
 
-.v2-action-row:hover {
-  background: #f9fafb;
+.v2-action-table .ant-table-tbody > tr.is-selected > td {
+  background: #f5f8ff;
 }
 
-.v2-action-row > * {
-  min-width: 0;
+.v2-action-table .ant-table-tbody > tr.is-selected:hover > td {
+  background: #eff4ff;
+}
+
+.v2-action-table .ant-table-expanded-row > td {
+  padding: 0 12px 12px;
+  background: #f8faff;
+}
+
+.v2-action-link.ant-btn {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  color: #344054;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.v2-action-row > span:nth-child(5) {
+.v2-action-status {
   display: flex;
   gap: 4px;
   align-items: center;
+  white-space: nowrap;
 }
 
-.v2-action-row time,
+.v2-action-time,
 .v2-lifecycle-step time {
   color: #667085;
   font-family: "SFMono-Regular", Consolas, monospace;
@@ -7704,22 +7664,6 @@ a {
   .v2-phase-rail {
     border-right: 0;
     border-bottom: 1px solid #eaecf0;
-  }
-
-  .v2-phase-rail nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .v2-action-table-header {
-    display: none;
-  }
-
-  .v2-action-row {
-    grid-template-columns: 64px 1fr 80px;
-  }
-
-  .v2-action-row > *:nth-child(n + 4) {
-    display: none;
   }
 
   .v2-lifecycle-strip {

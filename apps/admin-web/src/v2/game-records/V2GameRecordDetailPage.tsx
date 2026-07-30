@@ -20,17 +20,13 @@ import Input from "antd/es/input";
 import Modal from "antd/es/modal";
 import Select from "antd/es/select";
 import Space from "antd/es/space";
+import Steps, { type StepsProps } from "antd/es/steps";
 import Switch from "antd/es/switch";
+import Table, { type ColumnsType } from "antd/es/table";
 import Tabs from "antd/es/tabs";
 import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type UIEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { isAdminApiError } from "@/api/problem-details";
@@ -468,10 +464,6 @@ function V2GameRecordWorkspace({
     statusFilter,
     timeline,
   ]);
-  const visiblePhases = useMemo(
-    () => groupV2Phases(filteredItems, game.phase_id),
-    [filteredItems, game.phase_id],
-  );
   const selected = timeline.find((item) => item.id === selectedId) ?? null;
   const selectSituationMoment = (id: string, phaseId: string) => {
     setSelectedId(id);
@@ -699,7 +691,6 @@ function V2GameRecordWorkspace({
             setSelectedId(id);
             setRequestDrawerOpen(true);
           }}
-          phases={visiblePhases}
           selectedId={selected?.id ?? ""}
         />
       </section>
@@ -804,45 +795,39 @@ function PhaseRail({
   selectedPhaseId: string;
   onSelect: (phaseId: string) => void;
 }) {
+  const currentPhaseIndex = phases.findIndex((phase) => phase.isCurrent);
+  const stepItems: NonNullable<StepsProps["items"]> = phases.map((phase) => {
+    const progressStatus = phaseStatus(
+      phase.failureCount,
+      phase.isCurrent,
+      gameStatus,
+    );
+    return {
+      className:
+        selectedPhaseId === phase.phaseId ? "is-selected-phase" : undefined,
+      content: `${phase.items.length} 步 · ${phase.modelRequestCount} 次模型请求`,
+      icon: <StatusIcon status={progressStatus} />,
+      key: phase.phaseId,
+      status: phaseStepStatus(progressStatus),
+      title: phase.label,
+    };
+  });
+
   return (
     <aside className="v2-phase-rail">
       <Typography.Title level={5}>阶段进度</Typography.Title>
       <nav aria-label="对局阶段">
-        {phases.map((phase) => {
-          const progressStatus = phaseStatus(
-            phase.failureCount,
-            phase.isCurrent,
-            gameStatus,
-          );
-          return (
-            <button
-              aria-current={
-                selectedPhaseId === phase.phaseId ? "location" : undefined
-              }
-              aria-label={`${phase.label}，${statusLabel(progressStatus)}，${phase.items.length} 步，${phase.modelRequestCount} 次模型请求`}
-              className={
-                selectedPhaseId === phase.phaseId
-                  ? "v2-phase-button is-selected"
-                  : "v2-phase-button"
-              }
-              key={phase.phaseId}
-              onClick={() => onSelect(phase.phaseId)}
-              type="button"
-            >
-              <span>
-                <span
-                  className={`v2-phase-status is-${progressStatus}`}
-                >
-                  <StatusIcon status={progressStatus} />
-                </span>
-                <strong>{phase.label}</strong>
-              </span>
-              <small>
-                {phase.items.length} 步 · {phase.modelRequestCount} 次模型请求
-              </small>
-            </button>
-          );
-        })}
+        <Steps
+          className="v2-phase-steps"
+          current={currentPhaseIndex}
+          items={stepItems}
+          onChange={(index) => {
+            const phase = phases[index];
+            if (phase) onSelect(phase.phaseId);
+          }}
+          orientation="vertical"
+          size="small"
+        />
       </nav>
     </aside>
   );
@@ -850,63 +835,95 @@ function PhaseRail({
 
 function ActionTimeline({
   items,
-  phases,
   selectedId,
   onSelect,
 }: {
   items: V2TimelineItem[];
-  phases: ReturnType<typeof groupV2Phases>;
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
-  const [scrollTop, setScrollTop] = useState(0);
-  const viewportHeight = 680;
-  const overscan = 360;
-  const layout = useMemo(() => {
-    const rows: Array<
-      | {
-          kind: "phase";
-          key: string;
-          label: string;
-          count: number;
-          height: number;
-        }
-      | {
-          kind: "action";
-          key: string;
-          item: V2TimelineItem;
-          height: number;
-        }
-    > = [];
-    for (const phase of phases) {
-      rows.push({
-        count: phase.items.length,
-        height: 42,
-        key: `phase:${phase.phaseId}`,
-        kind: "phase",
-        label: phase.label,
-      });
-      for (const item of phase.items) {
-        rows.push({
-          height: item.id === selectedId ? 250 : 48,
-          item,
-          key: `action:${item.id}`,
-          kind: "action",
-        });
-      }
-    }
-    let top = 0;
-    const positioned = rows.map((row) => {
-      const positionedRow = { ...row, top };
-      top += row.height;
-      return positionedRow;
-    });
-    return { rows: positioned, totalHeight: top };
-  }, [phases, selectedId]);
-  const visibleRows = layout.rows.filter(
-    (row) =>
-      row.top + row.height >= scrollTop - overscan &&
-      row.top <= scrollTop + viewportHeight + overscan,
+  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
+  const columns = useMemo<ColumnsType<V2TimelineItem>>(
+    () => [
+      {
+        dataIndex: "startedAt",
+        render: (value: string) => (
+          <time className="v2-action-time">{formatClock(value)}</time>
+        ),
+        title: "时间",
+        width: 80,
+      },
+      {
+        dataIndex: "actorLabel",
+        ellipsis: true,
+        title: "演员 / 角色",
+        width: 130,
+      },
+      {
+        dataIndex: "label",
+        render: (value: string, item) => (
+          <Button
+            aria-label={`查看 ${item.actorLabel} ${value}`}
+            className="v2-action-link"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(item.id);
+            }}
+            type="link"
+          >
+            {value}
+          </Button>
+        ),
+        title: "动作",
+        width: 190,
+      },
+      {
+        dataIndex: "audience",
+        render: (value: string) => audienceLabel(value),
+        title: "受众",
+        width: 72,
+      },
+      {
+        dataIndex: "status",
+        render: (value: V2TimelineItem["status"]) => (
+          <span className={`v2-action-status is-${value}`}>
+            <StatusIcon status={value} />
+            {statusLabel(value)}
+          </span>
+        ),
+        title: "结果",
+        width: 88,
+      },
+      {
+        key: "source",
+        render: (_, item) => (
+          <Typography.Text
+            ellipsis={{
+              tooltip: item.templateRender
+                ? "系统模板"
+                : item.modelRequest?.model_id ?? "—",
+            }}
+          >
+            {item.templateRender
+              ? "系统模板"
+              : `${item.modelRequest?.model_id ?? "—"}${
+                  item.modelRequests.length > 1
+                    ? ` · 重试 ${item.modelRequests.length - 1} 次`
+                    : ""
+                }`}
+          </Typography.Text>
+        ),
+        title: "内容来源",
+        width: 210,
+      },
+      {
+        dataIndex: "durationMs",
+        render: (value: number | null) => formatDuration(value),
+        title: "耗时",
+        width: 72,
+      },
+    ],
+    [onSelect],
   );
 
   return (
@@ -917,83 +934,26 @@ function ActionTimeline({
           {items.length} 个可读步骤
         </Typography.Text>
       </header>
-      <div className="v2-action-table-header" aria-hidden="true">
-        <span>时间</span>
-        <span>演员 / 角色</span>
-        <span>动作</span>
-        <span>受众</span>
-        <span>结果</span>
-        <span>内容来源</span>
-        <span>耗时</span>
-      </div>
-      {phases.length ? (
-        <div
-          className="v2-action-virtual-viewport"
-          onScroll={(event: UIEvent<HTMLDivElement>) =>
-            setScrollTop(event.currentTarget.scrollTop)
+      {items.length ? (
+        <Table<V2TimelineItem>
+          className="v2-action-table"
+          columns={columns}
+          dataSource={items}
+          expandable={{
+            expandRowByClick: true,
+            expandedRowKeys,
+            expandedRowRender: (item) => <LifecycleStrip item={item} />,
+            onExpandedRowsChange: (keys) =>
+              setExpandedRowKeys(keys.map(String)),
+          }}
+          pagination={false}
+          rowClassName={(item) =>
+            item.id === selectedId ? "is-selected" : ""
           }
-        >
-          <div
-            className="v2-action-virtual-canvas"
-            style={{ height: layout.totalHeight }}
-          >
-            {visibleRows.map((row) => (
-              <div
-                className="v2-action-virtual-row"
-                key={row.key}
-                style={{ height: row.height, transform: `translateY(${row.top}px)` }}
-              >
-                {row.kind === "phase" ? (
-                  <header className="v2-action-phase-header">
-                    <strong>{row.label}</strong>
-                    <Typography.Text type="secondary">
-                      {row.count} 步
-                    </Typography.Text>
-                  </header>
-                ) : (
-                  <div
-                    className={
-                      row.item.id === selectedId
-                        ? "v2-action-item is-selected"
-                        : "v2-action-item"
-                    }
-                  >
-                    <button
-                      aria-label={`查看 ${row.item.actorLabel} ${row.item.label}`}
-                      className="v2-action-row"
-                      onClick={() => onSelect(row.item.id)}
-                      type="button"
-                    >
-                      <time>{formatClock(row.item.startedAt)}</time>
-                      <span>{row.item.actorLabel}</span>
-                      <strong>{row.item.label}</strong>
-                      <span>{audienceLabel(row.item.audience)}</span>
-                      <span className={`is-${row.item.status}`}>
-                        <StatusIcon status={row.item.status} />
-                        {statusLabel(row.item.status)}
-                      </span>
-                      <span>
-                        {row.item.templateRender
-                          ? "系统模板"
-                          : `${row.item.modelRequest?.model_id ?? "—"}${
-                              row.item.modelRequests.length > 1
-                                ? ` · 重试 ${
-                                    row.item.modelRequests.length - 1
-                                  } 次`
-                                : ""
-                            }`}
-                      </span>
-                      <span>{formatDuration(row.item.durationMs)}</span>
-                    </button>
-                    {row.item.id === selectedId ? (
-                      <LifecycleStrip item={row.item} />
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+          rowKey="id"
+          scroll={{ x: 900, y: 680 }}
+          size="small"
+        />
       ) : (
         <Empty
           description="没有符合筛选条件的流程步骤"
@@ -1420,10 +1380,22 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
       ) : null}
       {item.voiceAsset?.audio_url ? (
         <section>
-          <Typography.Text strong>
-            <SoundOutlined /> 保存语音
-          </Typography.Text>
-          <audio controls preload="none" src={item.voiceAsset.audio_url}>
+          <Space align="center" size={8}>
+            <Typography.Text strong>
+              <SoundOutlined /> 保存语音
+            </Typography.Text>
+            {item.voiceAsset.duration_ms !== null ? (
+              <Typography.Text type="secondary">
+                时长 {formatDuration(item.voiceAsset.duration_ms)}
+              </Typography.Text>
+            ) : null}
+          </Space>
+          <audio
+            aria-label={`${item.actorLabel}保存语音`}
+            controls
+            preload="metadata"
+            src={item.voiceAsset.audio_url}
+          >
             当前浏览器不支持播放 V2 保存语音。
           </audio>
         </section>
@@ -1680,6 +1652,15 @@ function phaseStatus(
   if (gameStatus === "failed") return "failed";
   if (gameStatus === "canceled") return "canceled";
   return isLiveV2StatusActive(gameStatus) ? "running" : "succeeded";
+}
+
+function phaseStepStatus(
+  status: ReturnType<typeof phaseStatus>,
+): "wait" | "process" | "finish" | "error" {
+  if (status === "running") return "process";
+  if (status === "succeeded") return "finish";
+  if (status === "failed") return "error";
+  return "wait";
 }
 
 function recordText(value: unknown): string | null {

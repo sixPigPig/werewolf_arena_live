@@ -91,6 +91,62 @@
 
 final result: passed
 
+## 2026-07-31 Phase Steps / Expandable Action Table
+
+**Findings**
+
+- No actionable P0, P1, or P2 differences remain for the annotated phase-progress and action-timeline regions.
+- The phase rail now uses the native Ant Design vertical `Steps` component and preserves each phase's persisted step/model-request counts and terminal status.
+- The action timeline now uses the native Ant Design `Table` with a 680 px vertical viewport. Every row can expand to show the action lifecycle, while the action label still opens the complete request-detail drawer.
+- The reference contains illustrative actors and 136 readable steps; the verified implementation intentionally renders the real persisted game with 65 readable steps.
+
+**Required Fidelity Surfaces**
+
+- Fonts and typography: retained the existing Admin system font stack and compact hierarchy. Step titles, counts, table headers, actions, statuses, and monospace timestamps remain readable without unintended wrapping.
+- Spacing and layout rhythm: the phase rail keeps the source-like narrow proportion; the table fills the remaining workspace; the final desktop capture has no unnecessary horizontal scrollbar.
+- Colors and visual tokens: native Ant Design blue step progress, green success state, white/slate surfaces, borders, hover states, and selected-row treatment remain aligned with the existing Admin theme.
+- Image quality and asset fidelity: this region has no raster content. All visible controls use the existing Ant Design icon set; no custom SVG, emoji, placeholder, or CSS illustration was introduced.
+- Copy and content: Chinese labels and the seven source columns are preserved. Actor, audience, status, model/template source, duration, phase count, and lifecycle values come from persisted facts.
+
+**Interaction And Responsive Verification**
+
+- [x] Clicking “第 1 夜” filters the table from 65 rows to 15; clicking it again restores all 65 rows.
+- [x] Expanding “法官 / 开场播报” exposes one visible “动作生命周期” region.
+- [x] Clicking the action label still opens the complete request-detail drawer; closing it returns to zero open dialogs.
+- [x] At a 1536 x 900 requested viewport, the table body has `clientWidth = scrollWidth = 978 px`.
+- [x] At a 1024 x 900 requested viewport, the page has no document-level horizontal overflow; the 900 px table scroll width is contained inside its 726 px body.
+- [x] Browser console contains no task-introduced runtime exception. The existing global Ant Design cssVar `App` development warning remains.
+
+**Comparison History**
+
+1. Initial P2 finding:
+   - At the 1536 px desktop viewport, the first Ant Design Table column widths plus the expansion column exceeded the available table body by approximately 30 px, producing an unnecessary horizontal scrollbar.
+   Fix:
+   - Reduced the seven data-column widths and the table's horizontal scroll target from 980 px to 900 px.
+2. Post-fix evidence:
+   - The desktop table body measures `978 px` for both client and scroll width.
+   - The same-screen source/implementation comparison shows the intended Steps rail, seven-column table, compact density, and vertical table scrolling without desktop horizontal overflow.
+
+**Evidence**
+
+- Source visual truth: `/var/folders/02/1d84m8gn0m7dr08p6kk2jlyw0000gn/T/codex-clipboard-41ef330f-5087-4e71-87d3-aa4c794557b0.png`
+- Browser-rendered implementation: `/private/tmp/v2-steps-expandable-table-implementation.png`
+- Same-input comparison: `/private/tmp/v2-steps-expandable-table-comparison.png`
+- Source pixels: 3138 x 1624.
+- Implementation region pixels: 1213 x 804.
+- CSS viewport requested: 1536 x 900 at device scale 1; the in-app browser content capture measured 1521 x 891.
+- Density normalization: the full source was proportionally downsampled to 1213 px wide and vertically centered beside the native 1213 x 804 implementation crop. The comparison judges component structure and region proportions; persisted row content is intentionally different.
+- State: authenticated development Admin, light theme, real game `v2_game_0027bccb8e6c4859`, all phase filters cleared, action rows collapsed.
+- Full-view comparison evidence: the same-input comparison above covers the complete task-target region.
+- Focused comparison was not required because the complete task-target region is readable at the implementation's native 1213 x 804 resolution. The expanded lifecycle state was verified separately through the browser and targeted component test.
+- Primary interactions tested: phase select/toggle, action-row expand, request-detail drawer open, and drawer close.
+
+**Follow-up Polish**
+
+- None required for this change.
+
+final result: passed
+
 ## 2026-07-30 Private Knowledge Ownership / Localization
 
 **Root Cause**

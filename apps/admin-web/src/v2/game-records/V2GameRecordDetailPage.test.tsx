@@ -931,6 +931,18 @@ describe("V2 game record detail workspace", () => {
     expect(
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
     ).toBeInTheDocument();
+    const phaseRail = screen.getByRole("navigation", { name: "对局阶段" });
+    expect(phaseRail.querySelector(".ant-steps-vertical")).not.toBeNull();
+    const actionRow = screen
+      .getByRole("button", { name: "查看 法官 开场播报" })
+      .closest("tr");
+    expect(actionRow).not.toBeNull();
+    await user.click(
+      within(actionRow as HTMLTableRowElement).getByRole("button", {
+        name: "Expand row",
+      }),
+    );
+    expect(screen.getByLabelText("动作生命周期")).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(([input]) =>
@@ -1100,6 +1112,52 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("preloads saved voice metadata and shows the persisted duration", async () => {
+    stubRecordFetch({
+      ...detail,
+      presentations: [
+        {
+          ...detail.presentations[0],
+          audio_duration_ms: 1_800,
+          voice_asset_id: "v2_voice_1",
+        },
+      ],
+      voice_assets: [
+        {
+          voice_asset_id: "v2_voice_1",
+          action_id: actionId,
+          activation_id: null,
+          audience: "all",
+          presentation_id: "v2_presentation_1",
+          speech_id: "v2_speech_1",
+          segment_index: 0,
+          state: "ready",
+          mime_type: "audio/wav",
+          sample_rate: 24_000,
+          channels: 1,
+          sample_count: 43_200,
+          duration_ms: 1_800,
+          pcm_sha256: "voice-sha",
+          size_bytes: 86_444,
+          audio_url:
+            "/api/v1/admin/v2/games/v2_game_observable/voice-assets/v2_voice_1/audio",
+          created_at: occurredAt,
+          completed_at: "2026-07-23T08:00:03Z",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const audio = await screen.findByLabelText("法官保存语音");
+
+    expect(audio).toHaveAttribute("preload", "metadata");
+    expect(screen.getByText("时长 1.80 s")).toBeVisible();
   });
 
   it("shows only persisted owner knowledge and localizes empty/action states", async () => {
@@ -1349,14 +1407,36 @@ describe("V2 game record detail workspace", () => {
     expect(screen.getAllByText("狼人自爆").length).toBeGreaterThan(0);
 
     const currentPhase = screen.getByRole("button", {
-      name: "第 2 天，成功，2 步，0 次模型请求",
+      name: /第 2 天 2 步 · 0 次模型请求/,
     });
+    expect(currentPhase).toHaveClass("ant-steps-item-finish");
+    expect(currentPhase).not.toHaveClass("ant-steps-item-process");
+  });
+
+  it("renders an active phase with a loading icon instead of a numeric index", async () => {
+    stubRecordFetch({
+      ...detail,
+      status: "broadcasting",
+      runs: detail.runs.map((run) => ({
+        ...run,
+        status: "broadcasting",
+      })),
+    });
+    renderPage();
+
     expect(
-      currentPhase.querySelector(".v2-phase-status.is-succeeded"),
-    ).not.toBeNull();
+      await screen.findByRole("heading", { name: "模型可观测性验收" }),
+    ).toBeVisible();
+    const phaseRail = screen.getByRole("navigation", { name: "对局阶段" });
+    const currentPhase = within(phaseRail).getByRole("button", {
+      name: /开场/,
+    });
+
+    expect(currentPhase).toHaveClass("ant-steps-item-process");
+    expect(currentPhase.querySelector(".anticon-loading")).toBeInTheDocument();
     expect(
-      currentPhase.querySelector(".v2-phase-status.is-running"),
-    ).toBeNull();
+      currentPhase.querySelector(".ant-steps-item-icon")?.textContent,
+    ).toBe("");
   });
 
   it("refreshes active games every two seconds and stops polling terminal games", () => {
