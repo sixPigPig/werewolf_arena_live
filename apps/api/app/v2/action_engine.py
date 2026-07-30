@@ -160,6 +160,9 @@ class V2SpeechSpec:
     allowed_target_ids: tuple[str, ...] | None = None
     model_players: tuple[V2ModelPlayerReference, ...] = ()
     best_effort: bool = False
+    defer_presentation: bool = False
+    isolated_failure: bool = False
+    batch_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,9 +184,7 @@ class V2ModelRetryPolicy:
         if self.attempt_total_seconds <= 0:
             raise ValueError("attempt_total_seconds must be positive")
         if self.action_total_seconds < self.attempt_total_seconds:
-            raise ValueError(
-                "action_total_seconds must be at least attempt_total_seconds"
-            )
+            raise ValueError("action_total_seconds must be at least attempt_total_seconds")
         if self.base_delay_seconds < 0 or self.jitter_seconds < 0:
             raise ValueError("retry delays must not be negative")
 
@@ -231,11 +232,7 @@ class V2ActionEngine:
     ) -> bool:
         async with self._paused_model_actions_lock:
             waiter = self._paused_model_actions.get(game_id)
-            if (
-                waiter is None
-                or waiter.action_id != action_id
-                or waiter.requested.is_set()
-            ):
+            if waiter is None or waiter.action_id != action_id or waiter.requested.is_set():
                 return False
             waiter.control_request_id = control_request_id
             waiter.requested.set()
@@ -379,6 +376,25 @@ class V2ActionEngine:
         )
         return result.decision if result is not None else None
 
+    async def present_player_decision(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+        decision: V2ModelDecision,
+    ) -> bool:
+        return (
+            await self._run_model_action(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+                decision=True,
+                precomputed_decision=decision,
+            )
+            is not None
+        )
+
     async def _run_judge_sentence(
         self,
         *,
@@ -399,6 +415,7 @@ class V2ActionEngine:
         broadcaster: V2BroadcastPort,
         spec: V2SpeechSpec,
         decision: bool,
+        precomputed_decision: V2ModelDecision | None = None,
     ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
         judge_configuration = None
@@ -427,6 +444,7 @@ class V2ActionEngine:
             expected_phase_state=spec.required_phase_state,
             activation_id=spec.activation_id,
             best_effort=spec.best_effort,
+            non_blocking=spec.defer_presentation,
         )
         if claim is None:
             return None
@@ -443,7 +461,7 @@ class V2ActionEngine:
         model_failure_recorded = False
         try:
             check_cancellation()
-            if not spec.best_effort:
+            if not spec.best_effort and not spec.defer_presentation:
                 await broadcaster.broadcast_json(
                     director_scene_changed(
                         game_id=claim.game_id,
@@ -465,7 +483,11 @@ class V2ActionEngine:
                     audience=spec.audience,
                 )
             model_decision: V2ModelDecision | None = None
-            if judge_configuration is not None:
+            if precomputed_decision is not None:
+                model_decision = precomputed_decision
+                speech_text = precomputed_decision.speech
+                sentence_ms = precomputed_decision.completed_ms
+            elif judge_configuration is not None:
                 rendered = render_judge_speech(
                     action_type=spec.action_type,
                     context=context,
@@ -522,9 +544,7 @@ class V2ActionEngine:
                 model_attempt_no = 0
                 while model_decision is None:
                     model_started_at = time.monotonic()
-                    model_deadline = (
-                        model_started_at + retry_policy.action_total_seconds
-                    )
+                    model_deadline = model_started_at + retry_policy.action_total_seconds
                     attempt_ids = [
                         (
                             model_attempt_id
@@ -556,14 +576,10 @@ class V2ActionEngine:
                                 "attempt_budget_ms": round(
                                     retry_policy.attempt_total_seconds * 1000
                                 ),
-                                "action_budget_ms": round(
-                                    retry_policy.action_total_seconds * 1000
-                                ),
+                                "action_budget_ms": round(retry_policy.action_total_seconds * 1000),
                                 "action_remaining_ms": max(
                                     0,
-                                    round(
-                                        (model_deadline - time.monotonic()) * 1000
-                                    ),
+                                    round((model_deadline - time.monotonic()) * 1000),
                                 ),
                                 "retry_of_attempt_id": previous_attempt_id,
                                 "request_kind": "decision" if decision else "speech",
@@ -592,9 +608,7 @@ class V2ActionEngine:
                                 "actor_kind": spec.actor_kind,
                                 "actor_id": spec.actor_id,
                                 "audience": spec.audience,
-                                "prompt_schema_version": model_context.get(
-                                    "prompt_schema_version"
-                                ),
+                                "prompt_schema_version": model_context.get("prompt_schema_version"),
                                 "prompt_projection": prompt_projection,
                                 "request_payload": request_payload,
                             },
@@ -638,9 +652,8 @@ class V2ActionEngine:
                                 ) from exc
                         except V2ModelError as exc:
                             remaining = model_deadline - time.monotonic()
-                            delay_seconds = (
-                                retry_policy.base_delay_seconds
-                                + random.uniform(0, retry_policy.jitter_seconds)
+                            delay_seconds = retry_policy.base_delay_seconds + random.uniform(
+                                0, retry_policy.jitter_seconds
                             )
                             retryable = (
                                 exc.retryable
@@ -670,18 +683,14 @@ class V2ActionEngine:
                                     ),
                                     action_remaining_ms=max(
                                         0,
-                                        round(
-                                            (model_deadline - time.monotonic()) * 1000
-                                        ),
+                                        round((model_deadline - time.monotonic()) * 1000),
                                     ),
                                 ),
                             )
                             model_failure_recorded = True
                             previous_attempt_id = model_attempt_id
                             if retryable:
-                                next_attempt_id = attempt_ids[
-                                    cycle_attempt_index + 1
-                                ]
+                                next_attempt_id = attempt_ids[cycle_attempt_index + 1]
                                 self._repository.append_event(
                                     game_id=claim.game_id,
                                     event_type="model_retry_scheduled",
@@ -698,13 +707,7 @@ class V2ActionEngine:
                                         "delay_ms": round(delay_seconds * 1000),
                                         "action_remaining_ms": max(
                                             0,
-                                            round(
-                                                (
-                                                    model_deadline
-                                                    - time.monotonic()
-                                                )
-                                                * 1000
-                                            ),
+                                            round((model_deadline - time.monotonic()) * 1000),
                                         ),
                                     },
                                 )
@@ -715,6 +718,7 @@ class V2ActionEngine:
                                 continue
                             if (
                                 not spec.best_effort
+                                and not spec.isolated_failure
                                 and _can_pause_for_model_failure(exc)
                             ):
                                 await self._pause_for_model_retry(
@@ -846,9 +850,7 @@ class V2ActionEngine:
                             "constraints": list(speech_constraint_reasons),
                             "max_chars": spec.decision_contract.speech_max_chars,
                             "max_sentences": spec.decision_contract.speech_max_sentences,
-                            "original_chars": _speech_character_count(
-                                sanitized_speech or ""
-                            ),
+                            "original_chars": _speech_character_count(sanitized_speech or ""),
                             "normalized_chars": _speech_character_count(
                                 model_decision.speech or ""
                             ),
@@ -909,14 +911,14 @@ class V2ActionEngine:
                 speech_text = model_decision.speech
                 sentence_ms = model_decision.completed_ms
             check_cancellation()
-            if speech_text is None:
+            if speech_text is None or spec.defer_presentation:
                 self._repository.complete_silent_action(
                     claim=claim,
                     next_live_state=spec.success_live_state,
                     next_phase_state=spec.success_phase_state,
                     best_effort=spec.best_effort,
                 )
-                if not spec.best_effort:
+                if not spec.best_effort and not spec.defer_presentation:
                     await broadcaster.broadcast_json(
                         live_state(
                             game_id=claim.game_id,
@@ -1143,7 +1145,7 @@ class V2ActionEngine:
                 )
             except Exception:
                 logger.exception("Live V2 could not persist action failure")
-            if identity is None and not spec.best_effort:
+            if identity is None and not spec.best_effort and not spec.defer_presentation:
                 await broadcaster.broadcast_json(
                     live_state(
                         game_id=claim.game_id,
@@ -1208,6 +1210,7 @@ def _action_context(
             "strength": 0,
             "signals": [],
         },
+        **({"batch_id": spec.batch_id} if spec.batch_id is not None else {}),
         **(spec.context or {}),
     }
 
@@ -1301,20 +1304,13 @@ def _constrain_model_speech(
         ]
         if len(boundaries) >= max_sentences:
             cutoff = boundaries[max_sentences - 1] + 1
-            while (
-                cutoff < len(constrained)
-                and constrained[cutoff] in _SPEECH_SENTENCE_CLOSERS
-            ):
+            while cutoff < len(constrained) and constrained[cutoff] in _SPEECH_SENTENCE_CLOSERS:
                 cutoff += 1
             if constrained[cutoff:].strip():
                 constrained = constrained[:cutoff].strip()
                 reasons.append("max_sentences_exceeded")
 
-    if (
-        max_chars is not None
-        and max_chars > 0
-        and _speech_character_count(constrained) > max_chars
-    ):
+    if max_chars is not None and max_chars > 0 and _speech_character_count(constrained) > max_chars:
         constrained = _speech_prefix(constrained, max_chars=max_chars).rstrip()
         reasons.append("max_chars_exceeded")
 

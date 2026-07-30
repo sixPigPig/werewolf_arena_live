@@ -96,6 +96,9 @@ class FakeV2ModelClient:
         self.force_speech_action_types: set[str] = set()
         self.speech_by_action_type: dict[str, str] = {}
         self.retryable_transport_failures_remaining = 0
+        self.retryable_transport_failures_by_stage: dict[str, int] = {}
+        self.split_werewolf_preferences = False
+        self._preference_target_indexes: dict[str, int] = {}
         self.transport_failure = threading.Event()
         self.attempt_ids: list[str] = []
         self.call_delay_seconds = 0.0
@@ -147,12 +150,39 @@ class FakeV2ModelClient:
         assert target.provider == "agent_plan"
         assert target.model_id in {"private-model-id", "test-model"}
         call_delay_seconds = (
-            self.call_delays_seconds.pop(0)
-            if self.call_delays_seconds
-            else self.call_delay_seconds
+            self.call_delays_seconds.pop(0) if self.call_delays_seconds else self.call_delay_seconds
         )
         if call_delay_seconds > 0:
             await asyncio.sleep(call_delay_seconds)
+        decision_stage = next(
+            (
+                fact.get("payload")
+                for fact in action_context.get("self", {}).get(
+                    "private_judge_facts",
+                    [],
+                )
+                if fact.get("fact_type") == "decision_stage"
+            ),
+            None,
+        )
+        stage_failures_remaining = self.retryable_transport_failures_by_stage.get(
+            str(decision_stage),
+            0,
+        )
+        if stage_failures_remaining > 0:
+            self.retryable_transport_failures_by_stage[str(decision_stage)] = (
+                stage_failures_remaining - 1
+            )
+            self.transport_failure.set()
+            raise V2ModelError(
+                "model_transport_failed",
+                retryable=True,
+                failure_stage="connect",
+                exception_type="builtins.ConnectionResetError",
+                errno=54,
+                first_token_seen=False,
+                elapsed_ms=5,
+            )
         if self.retryable_transport_failures_remaining > 0:
             self.retryable_transport_failures_remaining -= 1
             self.transport_failure.set()
@@ -196,7 +226,18 @@ class FakeV2ModelClient:
         elif action_type in self.decline_action_types:
             target = None
         elif candidates:
-            target = candidates[0]["player_id"]
+            candidate_index = 0
+            if (
+                self.split_werewolf_preferences
+                and decision_stage == "preference_probe"
+                and len(candidates) > 1
+            ):
+                actor_id = str(action_context["self"]["identity"]["player_id"])
+                candidate_index = self._preference_target_indexes.setdefault(
+                    actor_id,
+                    len(self._preference_target_indexes) % 2,
+                )
+            target = candidates[candidate_index]["player_id"]
         elif output_contract["kind"] == "speech":
             target = self.unexpected_speech_target
         else:
@@ -1627,6 +1668,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
+    model_client.split_werewolf_preferences = True
     tts_client = client.app.state.v2_test_tts_client
     create_request = _six_player_create_request()
     for profile in create_request["lobby_snapshot"]["player_configs"]:
@@ -1719,39 +1761,70 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
         if context["self"].get("identity")
     )
-    wolf_final_vote_contexts = [
+    wolf_preference_contexts = [
         context
         for context in player_contexts
         if context["task"].get("ability_id") == "werewolf.attack"
         and any(
             fact.get("fact_type") == "coordination"
-            and fact.get("payload") == "shared_transcript_final_vote"
+            and fact.get("payload") == "parallel_preference_probe"
             for fact in context["self"]["private_judge_facts"]
         )
     ]
-    assert wolf_final_vote_contexts
-    final_transcripts_by_night: dict[int, set[str]] = {}
-    for context in wolf_final_vote_contexts:
-        discussion = next(
-            fact["payload"]
+    assert wolf_preference_contexts
+    assert all(
+        any(
+            fact.get("fact_type") == "decision_stage" and fact.get("payload") == "preference_probe"
             for fact in context["self"]["private_judge_facts"]
-            if fact.get("fact_type") == "werewolf_discussion"
         )
-        assert len(discussion) == 2
+        and all(
+            fact.get("fact_type") not in {"werewolf_first_round", "werewolf_second_round_so_far"}
+            for fact in context["self"]["private_judge_facts"]
+        )
+        for context in wolf_preference_contexts
+    )
+    wolf_sequential_contexts = [
+        context
+        for context in player_contexts
+        if context["task"].get("ability_id") == "werewolf.attack"
+        and any(
+            fact.get("fact_type") == "coordination"
+            and fact.get("payload") == "sequential_shared_discussion"
+            for fact in context["self"]["private_judge_facts"]
+        )
+    ]
+    assert wolf_sequential_contexts
+    first_round_by_night: dict[int, set[str]] = {}
+    for context in wolf_sequential_contexts:
+        private_facts = context["self"]["private_judge_facts"]
+        first_round = next(
+            fact["payload"]
+            for fact in private_facts
+            if fact.get("fact_type") == "werewolf_first_round"
+        )
+        second_round_so_far = next(
+            fact["payload"]
+            for fact in private_facts
+            if fact.get("fact_type") == "werewolf_second_round_so_far"
+        )
+        speaking_position = next(
+            fact["payload"]
+            for fact in private_facts
+            if fact.get("fact_type") == "speaking_position"
+        )
+        assert len(first_round) == 2
         assert all(
             item["player_id"].startswith("seat_")
             and item["target_player_id"].startswith("seat_")
             and item["speech"]
-            for item in discussion
+            for item in first_round
         )
-        final_transcripts_by_night.setdefault(
+        assert len(second_round_so_far) == speaking_position - 1
+        first_round_by_night.setdefault(
             context["task"]["night_no"],
             set(),
-        ).add(json.dumps(discussion, ensure_ascii=False, sort_keys=True))
-    assert all(
-        len(transcripts) == 1
-        for transcripts in final_transcripts_by_night.values()
-    )
+        ).add(json.dumps(first_round, ensure_ascii=False, sort_keys=True))
+    assert all(len(transcripts) == 1 for transcripts in first_round_by_night.values())
     seer_contexts = [
         context
         for context in player_contexts
@@ -1954,11 +2027,6 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         )
         for context in wolf_night_contexts
     )
-    assert any(
-        fact.get("fact_type") == "private_ability_action_committed"
-        for context in wolf_night_contexts
-        for fact in context["self"]["private_judge_facts"]
-    )
     seer_day_contexts = [
         context for context in day_contexts if context["self"]["identity"]["role_key"] == "seer"
     ]
@@ -1969,6 +2037,19 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         for fact in context["self"]["private_judge_facts"]
     )
     with session_factory() as db:
+        committed_wolf_facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == identifiers["game_id"],
+                    V2KnowledgeFact.fact_type == "private_ability_action_committed",
+                )
+            )
+        )
+        assert any(
+            fact.payload.get("ability_id") == "werewolf.attack"
+            and fact.payload.get("decision", {}).get("decision_stage") == "team_resolution"
+            for fact in committed_wolf_facts
+        )
         events = list(
             db.scalars(
                 select(V2GameRecordEvent)
@@ -1990,10 +2071,8 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and event.payload["prompt_projection"]["model_view_schema_version"] == 2
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
-            and "awaiting_scheduled_turn_question_count"
-            in event.payload["prompt_projection"]
-            and "prior_relevant_statement_question_count"
-            in event.payload["prompt_projection"]
+            and "awaiting_scheduled_turn_question_count" in event.payload["prompt_projection"]
+            and "prior_relevant_statement_question_count" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["dropped_statement_count"] == 0
             and event.payload["prompt_projection"]["dropped_claim_count"] == 0
             for event in model_request_events
@@ -2683,9 +2762,7 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
             "first_token_seen": False,
             "elapsed_ms": 5,
         }
-        assert {
-            key: failures[0].payload[key] for key in expected_failure
-        } == expected_failure
+        assert {key: failures[0].payload[key] for key in expected_failure} == expected_failure
         assert failures[0].payload["attempt_budget_ms"] == 5000
         assert failures[0].payload["action_budget_ms"] == 5000
         assert failures[0].payload["action_elapsed_ms"] >= 0
@@ -2799,7 +2876,7 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
             if value.get("live_state") == "canceled":
                 break
 
-    assert len(model_client.attempt_ids) == 1
+    assert len(model_client.attempt_ids) == 2
     with session_factory() as db:
         events = list(
             db.scalars(
@@ -2808,7 +2885,7 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        assert sum(event.event_type == "model_request_started" for event in events) == 1
+        assert sum(event.event_type == "model_request_started" for event in events) == 2
         assert sum(event.event_type == "model_retry_scheduled" for event in events) == 1
         assert "game_canceled" in {event.event_type for event in events}
         assert "action_failed" not in {event.event_type for event in events}
@@ -2866,9 +2943,7 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        assert sum(
-            event.payload.get("action_id") == action_id for event in starts
-        ) == 2
+        assert sum(event.payload.get("action_id") == action_id for event in starts) == 2
         assert failures[0].payload["terminal"] is False
         assert failures[0].payload["attempt_budget_ms"] == 100
         assert failures[0].payload["action_budget_ms"] == 250
@@ -2929,15 +3004,14 @@ def test_attempt_budget_timeout_is_retryable_within_action_budget(
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        assert sum(
-            event.payload.get("action_id") == action_id for event in attempts
-        ) == 2
+        assert sum(event.payload.get("action_id") == action_id for event in attempts) == 2
 
 
 def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
-    model_client.retryable_transport_failures_remaining = 2
+    model_client.split_werewolf_preferences = True
+    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -3016,11 +3090,7 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        action_events = [
-            event
-            for event in events
-            if event.payload.get("action_id") == action_id
-        ]
+        action_events = [event for event in events if event.payload.get("action_id") == action_id]
         assert [
             event.event_type
             for event in action_events
@@ -3035,17 +3105,17 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
             "model_action_retry_requested",
             "model_action_resumed",
         ]
-        starts = [
-            event
-            for event in action_events
-            if event.event_type == "model_request_started"
-        ]
+        starts = [event for event in action_events if event.event_type == "model_request_started"]
         assert [event.payload["attempt_no"] for event in starts] == [1, 2, 3]
         assert [event.payload["retry_cycle"] for event in starts] == [1, 1, 2]
         assert starts[2].payload["retry_of_attempt_id"] == starts[1].payload["attempt_id"]
-        assert len({json.dumps(event.payload["request_payload"], sort_keys=True) for event in starts}) == 1
+        assert (
+            len({json.dumps(event.payload["request_payload"], sort_keys=True) for event in starts})
+            == 1
+        )
         assert not any(
-            event.event_type in {
+            event.event_type
+            in {
                 "action_failed",
                 "ability_runtime_failed",
                 "day_runtime_failed",
@@ -3058,7 +3128,9 @@ def test_admin_can_stop_a_game_paused_after_model_attempts_exhausted(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
-    client.app.state.v2_test_model_client.retryable_transport_failures_remaining = 2
+    model_client = client.app.state.v2_test_model_client
+    model_client.split_werewolf_preferences = True
+    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -3129,10 +3201,7 @@ def test_admin_cannot_retry_model_action_when_game_is_not_paused(
     assert response.status_code == 409
     assert response.json()["code"] == "admin_v2_model_action_not_paused"
     with session_factory() as db:
-        assert (
-            db.scalar(select(func.count()).select_from(V2GameControlRequest))
-            == 0
-        )
+        assert db.scalar(select(func.count()).select_from(V2GameControlRequest)) == 0
 
 
 def test_withdraw_quality_failure_persists_exact_raw_model_response(

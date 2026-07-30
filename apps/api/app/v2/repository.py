@@ -39,6 +39,7 @@ class V2ActionClaim:
     phase_id: str
     activation_id: str | None = None
     best_effort: bool = False
+    non_blocking: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class V2ActionRepository:
         expected_phase_state: str,
         activation_id: str | None = None,
         best_effort: bool = False,
+        non_blocking: bool = False,
     ) -> V2ActionClaim | None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id)
@@ -157,7 +159,7 @@ class V2ActionRepository:
                 ):
                     raise V2RepositoryError("ability activation cannot claim action")
                 activation.action_id = action_id
-            if not best_effort:
+            if not best_effort and not non_blocking:
                 game.status = "generating"
                 run.status = "generating"
             _append_event(
@@ -178,6 +180,7 @@ class V2ActionRepository:
                 phase_id=game.phase_id,
                 activation_id=activation_id,
                 best_effort=best_effort,
+                non_blocking=non_blocking,
             )
 
     def append_event(
@@ -464,12 +467,18 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
-            expected_status = "awaiting_observation" if best_effort else "generating"
+            expected_status = (
+                "ready"
+                if claim.non_blocking
+                else "awaiting_observation"
+                if best_effort
+                else "generating"
+            )
             if game.status != expected_status:
                 raise V2RepositoryError(f"cannot complete silent action from {game.status}")
             if game.phase_id != claim.phase_id:
                 raise V2RepositoryError("action phase changed before completion")
-            if not best_effort:
+            if not best_effort and not claim.non_blocking:
                 game.status = next_live_state
                 game.phase_state = next_phase_state
                 _run(db, claim.run_id).status = next_live_state
@@ -601,7 +610,7 @@ class V2ActionRepository:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
-            if not best_effort:
+            if not best_effort and not claim.non_blocking:
                 game.status = "failed"
                 game.phase_state = "failed"
                 run.status = "failed"
@@ -681,10 +690,7 @@ class V2ActionRepository:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
-            if (
-                game.status != "paused_model_error"
-                or run.status != "paused_model_error"
-            ):
+            if game.status != "paused_model_error" or run.status != "paused_model_error":
                 raise V2RepositoryError(
                     f"cannot resume model action from {game.status}/{run.status}"
                 )
