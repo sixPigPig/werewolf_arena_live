@@ -445,3 +445,97 @@ def test_matching_historical_vote_prevents_ambiguous_cross_round_warning() -> No
         )
         == []
     )
+
+
+def test_unfair_silence_claim_is_observed_when_target_has_not_reached_turn() -> None:
+    observations = observe_model_speech(
+        ("可5号你是警长了，拿着1.5票的归票权，总得开口吧？一个字都不解释，确实让人心里打鼓。"),
+        hard_rules={},
+        model_context={
+            "task": {
+                "speech_progress": {
+                    "current_speaker_ref": "seat_8",
+                    "remaining_speaker_refs": ["seat_7", "seat_6", "seat_5"],
+                }
+            },
+            "history": {
+                "questions": [
+                    {
+                        "question_id": "question_471_1",
+                        "status": "open",
+                        "addressed_to": "seat_5",
+                        "reply_opportunity": "awaiting_scheduled_turn",
+                        "prior_relevant_statement_refs": ["437"],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert [observation["code"] for observation in observations] == [
+        "premature_silence_accusation",
+        "prior_explanation_denial",
+    ]
+    assert all(observation["effect"] == "observed_only" for observation in observations)
+    assert observations[0]["signals"][0]["target_ref"] == "seat_5"
+    assert observations[0]["signals"][0]["reply_opportunity"] == ("awaiting_scheduled_turn")
+    assert observations[1]["signals"][0]["prior_relevant_statement_refs"] == ["437"]
+
+
+def test_awaiting_turn_wording_is_not_misclassified_as_a_silence_accusation() -> None:
+    model_context = {
+        "task": {
+            "speech_progress": {
+                "current_speaker_ref": "seat_8",
+                "remaining_speaker_refs": ["seat_7", "seat_6", "seat_5"],
+            }
+        },
+        "history": {
+            "questions": [
+                {
+                    "question_id": "question_471_1",
+                    "status": "open",
+                    "addressed_to": "seat_5",
+                    "reply_opportunity": "awaiting_scheduled_turn",
+                    "prior_relevant_statement_refs": ["437"],
+                },
+            ]
+        },
+    }
+
+    for speech in (
+        "还没轮到5号回应，不能说他一个字都没解释，等他发言再判断。",
+        "9号说5号一个字都没解释，但我不同意这个说法。",
+    ):
+        assert observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context=model_context,
+        ) == []
+
+
+def test_silence_claim_after_target_turn_is_not_premature() -> None:
+    observations = observe_model_speech(
+        "5号你这一轮还是没有正面回应9号的问题。",
+        hard_rules={},
+        model_context={
+            "task": {
+                "speech_progress": {
+                    "current_speaker_ref": "seat_6",
+                    "remaining_speaker_refs": [],
+                }
+            },
+            "history": {
+                "questions": [
+                    {
+                        "question_id": "question_471_1",
+                        "status": "open",
+                        "addressed_to": "seat_5",
+                        "reply_opportunity": "scheduled_turn_passed",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert observations == []

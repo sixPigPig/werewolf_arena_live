@@ -188,10 +188,10 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     }
     assert timeline[0]["annotations"][0]["claim_type"] == "player_assessment"
     assert "exact_quote" not in timeline[0]["annotations"][0]
-    assert projected["prompt_schema_version"] == 6
+    assert projected["prompt_schema_version"] == 7
     assert projected["public_timeline"]["schema_version"] == 1
     assert projected["history"]["ledger_schema_version"] == 2
-    assert projected["history"]["model_view_schema_version"] == 1
+    assert projected["history"]["model_view_schema_version"] == 2
     assert projected["history"]["questions"] == []
     assert projected["history"]["relations"] == []
     assert "information_semantics" not in projected
@@ -199,12 +199,12 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "current_information_summary" not in projected
     assert "role_information_boundaries" not in projected
     metadata = model_prompt_metadata(projected)
-    assert metadata["prompt_schema_version"] == 6
+    assert metadata["prompt_schema_version"] == 7
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
     assert metadata["ledger_schema_version"] == 2
-    assert metadata["model_view_schema_version"] == 1
+    assert metadata["model_view_schema_version"] == 2
     assert metadata["public_timeline_schema_version"] == 1
     assert metadata["public_timeline_event_count"] == 3
     assert metadata["public_timeline_missing_record_seq_count"] == 3
@@ -303,6 +303,40 @@ def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> 
     assert metadata["public_timeline_kind_counts"] == {
         "player_statement": 1,
         "day_vote": 2,
+    }
+
+
+def test_model_context_projects_current_speech_position_and_remaining_speakers() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "speech_order": [
+                "system-player-09",
+                "system-player-01",
+                "system-player-07",
+            ],
+        },
+        players=PLAYERS,
+    )
+
+    assert projected["task"]["speech_order"] == ["seat_4", "seat_2", "seat_1"]
+    assert projected["task"]["speech_progress"] == {
+        "current_speaker_ref": "seat_2",
+        "current_position": 2,
+        "total_speakers": 3,
+        "scheduled_before_refs": ["seat_4"],
+        "remaining_speaker_refs": ["seat_1"],
+        "instruction": (
+            "remaining_speaker_refs 中的玩家本轮尚未轮到发言；"
+            "不得因此描述成拒绝回应、故意沉默或轮到后仍不解释"
+        ),
     }
 
 
@@ -826,7 +860,7 @@ def test_private_authoritative_facts_flattens_known_investigations() -> None:
 def test_player_prompt_explains_information_sources_without_forcing_strategy() -> None:
     payload = build_model_request_payload(
         {
-            "prompt_schema_version": 6,
+            "prompt_schema_version": 7,
             "hard_rules": {"werewolf_count": 1},
             "self": {"private_judge_facts": []},
             "public_state": {},
@@ -837,7 +871,7 @@ def test_player_prompt_explains_information_sources_without_forcing_strategy() -
             },
             "history": {
                 "ledger_schema_version": 2,
-                "model_view_schema_version": 1,
+                "model_view_schema_version": 2,
                 "source_rules": {},
                 "current_round_no": 1,
                 "timeline": [],

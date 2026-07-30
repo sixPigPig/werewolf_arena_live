@@ -35,6 +35,7 @@ from app.v2.action_engine import V2ModelRetryPolicy
 from app.v2.day_engine import (
     V2DayEngine,
     _EXILE_PK_SPEECH_OBJECTIVE,
+    _PUBLIC_SPEECH_MAX_CHARS,
     _SHERIFF_PK_SPEECH_OBJECTIVE,
     _leaders,
 )
@@ -542,10 +543,10 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "player_count": 2,
             "judge_voice": game.judge_voice_snapshot,
             "model_context_contract": {
-                "prompt_schema_version": 6,
+                "prompt_schema_version": 7,
                 "public_timeline_schema_version": 1,
                 "ledger_schema_version": 2,
-                "model_view_schema_version": 1,
+                "model_view_schema_version": 2,
             },
         }
         assert events[1].payload == {
@@ -1689,7 +1690,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 6
+        context["prompt_schema_version"] == 7
         and "private_judge_facts" in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
@@ -1699,7 +1700,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         and "events" in context["public_timeline"]
         and "history" in context
         and context["history"]["ledger_schema_version"] == 2
-        and context["history"]["model_view_schema_version"] == 1
+        and context["history"]["model_view_schema_version"] == 2
         and "timeline" in context["history"]
         and "questions" in context["history"]
         and "relations" in context["history"]
@@ -1980,15 +1981,19 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 6
+            event.payload["prompt_schema_version"] == 7
             and event.payload["prompt_projection"]["public_timeline_schema_version"] == 1
             and "public_timeline_event_count" in event.payload["prompt_projection"]
             and "public_timeline_missing_record_seq_count" in event.payload["prompt_projection"]
             and "public_timeline_kind_counts" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["ledger_schema_version"] == 2
-            and event.payload["prompt_projection"]["model_view_schema_version"] == 1
+            and event.payload["prompt_projection"]["model_view_schema_version"] == 2
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
+            and "awaiting_scheduled_turn_question_count"
+            in event.payload["prompt_projection"]
+            and "prior_relevant_statement_question_count"
+            in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["dropped_statement_count"] == 0
             and event.payload["prompt_projection"]["dropped_claim_count"] == 0
             for event in model_request_events
@@ -2078,7 +2083,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     assert campaign_contexts
     assert all(
         "讲清你此刻最想让其他玩家相信的内容" in context["task"]["objective"]
-        and "通常约300到450字" in context["task"]["objective"]
+        and "不得超过300字" in context["task"]["objective"]
         and "归票和警徽移交原则" not in context["task"]["objective"]
         and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
         for context in campaign_contexts
@@ -2091,20 +2096,28 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     assert debate_contexts
     assert all(
         "优先讲此刻最在意的判断" in context["task"]["objective"]
-        and "通常约250到400字" in context["task"]["objective"]
+        and "不得超过300字" in context["task"]["objective"]
         and "完整复盘全场" in context["task"]["objective"]
         and "后发生的发言、投票或法官事件只能用于事后评价" in context["task"]["objective"]
         and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
+        and "本轮尚未轮到其发言" in context["task"]["objective"]
+        and context["task"]["speech_progress"]["current_speaker_ref"]
+        == context["self"]["identity"]["player_id"]
         for context in debate_contexts
     )
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
-        context["prompt_schema_version"] == 6
+        context["prompt_schema_version"] == 7
         and context["public_timeline"]["schema_version"] == 1
         and context["history"]["ledger_schema_version"] == 2
-        and context["history"]["model_view_schema_version"] == 1
+        and context["history"]["model_view_schema_version"] == 2
         and context["output_contract"]["speech"]
-        == {"type": "string", "mode": "required", "min_length": 1}
+        == {
+            "type": "string",
+            "mode": "required",
+            "min_length": 1,
+            "max_chars": 300,
+        }
         for context in speech_contexts
     )
     with session_factory() as db:
@@ -2422,7 +2435,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         assert all(
             context["output_contract"]["kind"] == "boolean"
             and context["output_contract"]["field"] == "explode"
-            and context["output_contract"]["speech"]["mode"] == "required_if_true"
+            and context["output_contract"]["speech"]["mode"] == "forbidden"
             and context["task"]["mechanical_effect"]["target_mode"] == "none"
             and context["task"]["mechanical_effect"]["if_executed"]["actor_eliminated"] is True
             and context["task"]["mechanical_effect"]["if_executed"]["target_allowed"] is False
@@ -3210,8 +3223,18 @@ def test_v2_pk_speech_objectives_avoid_replaying_prior_speeches(
 ) -> None:
     assert focus in objective
     assert "无需从头重述" in objective
-    assert "通常约300到450字，信息较少时可以更短" in objective
-    assert "不超过" not in objective
+    assert "不得超过300字，信息较少时应更短" in objective
+
+
+def test_v2_public_speech_limits_cover_all_bounded_day_speech_actions() -> None:
+    assert _PUBLIC_SPEECH_MAX_CHARS == {
+        "first_night_last_words": 200,
+        "sheriff_campaign_speech": 300,
+        "sheriff_pk_speech": 300,
+        "day_debate_speech": 300,
+        "exile_pk_speech": 300,
+        "exile_last_words": 200,
+    }
 
 
 def test_complete_match_idiot_reveal_survives_and_loses_vote(v2_context) -> None:

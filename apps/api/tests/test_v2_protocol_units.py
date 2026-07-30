@@ -16,6 +16,7 @@ from app.v2.action_engine import (
     V2ModelRetryPolicy,
     V2SpeechSpec,
     _action_model_parameters,
+    _constrain_model_speech,
 )
 from app.v2.director_projection import project_director_scene
 from app.v2.god_view_access import (
@@ -30,6 +31,7 @@ from app.v2.model_client import (
     V2ModelError,
     V2QualityError,
     _decision_fields,
+    _speech_output_instruction,
     _required_speech,
     _sse_data,
     _next_with_cancellation,
@@ -525,6 +527,42 @@ def test_required_if_true_allows_silent_false_but_requires_true_speech() -> None
     ) == (None, "我选择自爆！", "explode", True)
 
 
+def test_model_speech_constraints_cap_characters_and_sentences() -> None:
+    long_speech = "甲" * 299 + "。" + "乙" * 20
+
+    assert _constrain_model_speech(
+        long_speech,
+        max_chars=300,
+        max_sentences=None,
+    ) == ("甲" * 299 + "。", ("max_chars_exceeded",))
+    assert _constrain_model_speech(
+        "我建议袭击3号。因为他的身份最可疑。",
+        max_chars=None,
+        max_sentences=1,
+    ) == ("我建议袭击3号。", ("max_sentences_exceeded",))
+    assert _constrain_model_speech(
+        "我建议袭击3号",
+        max_chars=None,
+        max_sentences=1,
+    ) == ("我建议袭击3号", ())
+
+
+def test_model_speech_instructions_include_hard_contract_limits() -> None:
+    assert _speech_output_instruction(
+        {
+            "speech": {
+                "mode": "required",
+                "max_chars": 300,
+                "max_sentences": 1,
+            }
+        }
+    ) == (
+        "speech 必须是准备直接播报的非空自然中文。"
+        "speech 不得超过300字。"
+        "speech 只能包含一句话。"
+    )
+
+
 def test_boolean_actions_disable_thinking_without_changing_other_parameters() -> None:
     parameters, source = _action_model_parameters(
         V2SpeechSpec(
@@ -538,7 +576,7 @@ def test_boolean_actions_disable_thinking_without_changing_other_parameters() ->
             decision_contract=V2DecisionContract(
                 kind="boolean",
                 boolean_field="explode",
-                speech_mode="required_if_true",
+                speech_mode="forbidden",
             ),
         )
     )

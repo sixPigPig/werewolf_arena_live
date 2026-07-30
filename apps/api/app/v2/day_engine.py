@@ -58,16 +58,27 @@ _PUBLIC_SPEECH_SEQUENCE_RULE = (
     "引用任何公开事件时必须按实际 record_seq：后发生的发言、投票或法官事件"
     "只能用于事后评价，不得描述成更早行动当时已有的理由、信息、回答或反应；"
     "先发生的发言不能回答、回应或拒绝后发生的问题；如果被提问者在问题之后"
-    "没有新的公开发言，就必须视为尚未回答"
+    "没有新的公开发言，只能视为尚未在提问后回应，不表示此前从未解释或拒绝回应；"
+    "若其位于 task.speech_progress.remaining_speaker_refs，本轮尚未轮到其发言，"
+    "不得描述成故意沉默、拒绝回应或轮到后仍不解释；判断其是否曾解释时，"
+    "第一方原话优先于其他玩家的二手复述"
 )
 _SHERIFF_PK_SPEECH_OBJECTIVE = (
     "你进入警长竞选平票 PK。围绕上一轮发言后的新争议自然补充，已说清的身份、"
-    "查验和竞选承诺无需从头重述。通常约300到450字，信息较少时可以更短"
+    "查验和竞选承诺无需从头重述。不得超过300字，信息较少时应更短"
 )
 _EXILE_PK_SPEECH_OBJECTIVE = (
     "你进入公投驱逐平票 PK。围绕导致平票的核心争议自然回应，白天已经说清的"
-    "判断和全场过程无需从头重述。通常约300到450字，信息较少时可以更短"
+    "判断和全场过程无需从头重述。不得超过300字，信息较少时应更短"
 )
+_PUBLIC_SPEECH_MAX_CHARS = {
+    "first_night_last_words": 200,
+    "sheriff_campaign_speech": 300,
+    "sheriff_pk_speech": 300,
+    "day_debate_speech": 300,
+    "exile_pk_speech": 300,
+    "exile_last_words": 200,
+}
 
 
 class V2DayRuntimeError(RuntimeError):
@@ -129,7 +140,10 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="first_night_last_words",
-                objective="你在首夜直接死亡，请发表一次公开遗言；不得声称自己知道具体死亡原因",
+                objective=(
+                    "你在首夜直接死亡，请发表一次不超过200字的公开遗言；"
+                    "不得声称自己知道具体死亡原因"
+                ),
                 candidates=[],
                 optional=True,
                 output_kind="public_speech",
@@ -372,7 +386,7 @@ class V2DayEngine:
                 objective=(
                     "自然发表警长竞选发言，讲清你此刻最想让其他玩家相信的内容；"
                     "公共流程和前面已说清的内容可以略过。只有公开跳预言家时才需要"
-                    "说明后续查验计划。通常约300到450字，信息较少时可以更短"
+                    "说明后续查验计划。不得超过300字，信息较少时应更短"
                 ),
                 candidates=[],
                 optional=True,
@@ -532,7 +546,7 @@ class V2DayEngine:
                     action_type="day_debate_speech",
                     objective=(
                         "像真实玩家一样自然发言，优先讲此刻最在意的判断；可以承接前置位，"
-                        "但不必完整复盘全场。通常约250到400字，按实际信息量自然变化"
+                        "但不必完整复盘全场。不得超过300字，按实际信息量自然缩短"
                     ),
                     candidates=[],
                     optional=True,
@@ -707,7 +721,7 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="exile_last_words",
-                objective="发表被放逐后的最后遗言",
+                objective="发表被放逐后的最后遗言，不得超过200字",
                 candidates=[],
                 optional=True,
                 output_kind="public_speech",
@@ -1023,7 +1037,7 @@ class V2DayEngine:
             decision_contract=V2DecisionContract(
                 kind="boolean",
                 boolean_field="explode",
-                speech_mode="required_if_true",
+                speech_mode="forbidden",
                 true_meaning="立即自爆",
                 false_meaning="不自爆",
             ),
@@ -1284,7 +1298,10 @@ class V2DayEngine:
                 },
             ]
         resolved_contract = decision_contract or (
-            V2DecisionContract(kind="speech")
+            V2DecisionContract(
+                kind="speech",
+                speech_max_chars=_PUBLIC_SPEECH_MAX_CHARS.get(action_type),
+            )
             if output_kind == "public_speech"
             else V2DecisionContract(
                 kind="target",

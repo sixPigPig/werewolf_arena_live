@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 from typing import Any
 
+from app.v2.discourse_ledger import speech_matches_question_topic
 from app.v2.model_context_contract import DISCOURSE_MODEL_VIEW_SCHEMA_VERSION
 
 
@@ -36,21 +37,40 @@ def build_discourse_model_view(
         }
         for statement in statements
     ]
+    projected_questions = _project_questions(
+        questions,
+        statements=statements,
+        actor_ref=actor_ref,
+        task=task,
+    )
     focus = _build_focus(
         statements=statements,
-        questions=questions,
+        questions=projected_questions,
         actor_ref=actor_ref,
         task=task,
         candidate_refs=candidate_refs,
         latest_vote_result_ref=latest_vote_result_ref,
     )
+    source_rules = dict(ledger.get("source_rules") or {})
+    source_rules.update(
+        {
+            "turn_opportunity_rule": (
+                "reply_opportunity=awaiting_scheduled_turn 表示被提问者本轮尚未轮到发言；"
+                "不得描述成拒绝回应、故意沉默或轮到后仍不解释"
+            ),
+            "prior_explanation_rule": (
+                "prior_relevant_statement_refs 是问题之前同一玩家对相关主题的第一方原话；"
+                "它不是对后来问题的回答，但判断其是否曾解释时优先于其他玩家的二手复述"
+            ),
+        }
+    )
     model_view = {
         "ledger_schema_version": ledger.get("ledger_schema_version"),
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
-        "source_rules": ledger.get("source_rules"),
+        "source_rules": source_rules,
         "current_round_no": ledger.get("current_round_no"),
         "timeline": timeline,
-        "questions": [_question_reference(question) for question in questions],
+        "questions": projected_questions,
         "relations": relations,
         "focus": focus,
     }
@@ -77,7 +97,7 @@ def build_discourse_model_view(
         "model_view_statement_count": len(timeline),
         "model_view_statement_char_count": _statement_chars(timeline),
         "model_view_claim_annotation_count": sum(len(item["annotations"]) for item in timeline),
-        "model_view_question_count": len(model_view["questions"]),
+        "model_view_question_count": len(projected_questions),
         "model_view_relation_count": len(relations),
         "dropped_statement_count": 0,
         "dropped_claim_count": 0,
@@ -94,6 +114,13 @@ def build_discourse_model_view(
             for claim in claims
         ),
         "open_question_count": sum(question.get("status") == "open" for question in questions),
+        "awaiting_scheduled_turn_question_count": sum(
+            question.get("reply_opportunity") == "awaiting_scheduled_turn"
+            for question in projected_questions
+        ),
+        "prior_relevant_statement_question_count": sum(
+            bool(question.get("prior_relevant_statement_refs")) for question in projected_questions
+        ),
         "selection_profile": "full_public_history_with_reference_only_focus",
         "source_record_seq_min": min(record_seqs, default=None),
         "source_record_seq_max": max(record_seqs, default=None),
@@ -118,6 +145,104 @@ def _claim_annotation(claim: dict[str, Any]) -> dict[str, Any]:
 
 def _question_reference(question: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in question.items() if key not in {"exact_quote"}}
+
+
+def _project_questions(
+    questions: list[dict[str, Any]],
+    *,
+    statements: list[dict[str, Any]],
+    actor_ref: str | None,
+    task: dict[str, Any],
+) -> list[dict[str, Any]]:
+    speech_order = _string_list(task.get("speech_order"))
+    current_position = (
+        speech_order.index(actor_ref)
+        if actor_ref is not None and actor_ref in speech_order
+        else None
+    )
+    projected: list[dict[str, Any]] = []
+    for question in questions:
+        item = _question_reference(question)
+        target_ref = item.get("addressed_to")
+        if item.get("status") == "open":
+            item["status_semantics"] = "no_response_after_question"
+            reply_opportunity = _reply_opportunity(
+                target_ref,
+                speech_order=speech_order,
+                current_position=current_position,
+            )
+            if reply_opportunity is not None:
+                item["reply_opportunity"] = reply_opportunity
+        if isinstance(target_ref, str):
+            prior_refs = [
+                str(statement["source_event_id"])
+                for statement in statements
+                if statement.get("speaker_ref") == target_ref
+                and _same_round(statement, question=question)
+                and _statement_precedes_question(statement, question=question)
+                and speech_matches_question_topic(
+                    str(statement.get("speech") or ""),
+                    topic=str(question.get("topic") or ""),
+                )
+                and isinstance(statement.get("source_event_id"), str)
+            ]
+            if prior_refs:
+                item["prior_relevant_statement_refs"] = prior_refs
+        projected.append(item)
+    return projected
+
+
+def _reply_opportunity(
+    target_ref: Any,
+    *,
+    speech_order: list[str],
+    current_position: int | None,
+) -> str | None:
+    if not isinstance(target_ref, str) or current_position is None:
+        return None
+    if target_ref not in speech_order:
+        return "not_in_current_speech_order"
+    target_position = speech_order.index(target_ref)
+    if target_position > current_position:
+        return "awaiting_scheduled_turn"
+    if target_position == current_position:
+        return "current_speaker_turn"
+    return "scheduled_turn_passed"
+
+
+def _same_round(statement: dict[str, Any], *, question: dict[str, Any]) -> bool:
+    occurred_in = statement.get("occurred_in")
+    asked_in = question.get("asked_in")
+    return (
+        isinstance(occurred_in, dict)
+        and isinstance(asked_in, dict)
+        and occurred_in.get("round_no") == asked_in.get("round_no")
+    )
+
+
+def _statement_precedes_question(
+    statement: dict[str, Any],
+    *,
+    question: dict[str, Any],
+) -> bool:
+    statement_record_seq = statement.get("record_seq")
+    asked_record_seq = question.get("asked_record_seq")
+    if (
+        isinstance(statement_record_seq, int)
+        and not isinstance(statement_record_seq, bool)
+        and isinstance(asked_record_seq, int)
+        and not isinstance(asked_record_seq, bool)
+    ):
+        return statement_record_seq < asked_record_seq
+    statement_turn_index = statement.get("turn_index")
+    asked_turn_index = question.get("asked_turn_index")
+    return (
+        isinstance(statement_turn_index, int)
+        and not isinstance(statement_turn_index, bool)
+        and isinstance(asked_turn_index, int)
+        and not isinstance(asked_turn_index, bool)
+        and statement_turn_index < asked_turn_index
+    )
 
 
 def _build_focus(
@@ -158,6 +283,29 @@ def _build_focus(
             and actor_ref is not None
             and question.get("addressed_to") == actor_ref
         ],
+        "open_question_contexts": [
+            {
+                key: question[key]
+                for key in (
+                    "question_id",
+                    "asked_by",
+                    "addressed_to",
+                    "topic",
+                    "reply_opportunity",
+                    "prior_relevant_statement_refs",
+                )
+                if key in question
+            }
+            for question in questions
+            if question.get("status") == "open" and isinstance(question.get("addressed_to"), str)
+        ],
+        "first_party_relevant_statement_refs": list(
+            dict.fromkeys(
+                ref
+                for question in questions
+                for ref in _string_list(question.get("prior_relevant_statement_refs"))
+            )
+        ),
         "candidate_latest_statement_refs": [
             source_event_id
             for candidate_ref in candidate_refs

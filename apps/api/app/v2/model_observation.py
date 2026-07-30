@@ -63,6 +63,28 @@ _DIRECT_ADDRESSEE = re.compile(
     rf"|(?P<seat_before_you>{_SEAT_NUMBER})号\s*[，,:：]?\s*你"
     rf"|(?:聊|说说|谈谈|再看|回到)\s*(?P<topic_seat>{_SEAT_NUMBER})号"
 )
+_SILENCE_MARKER = re.compile(
+    r"(?:"
+    r"一个字(?:都|也)?(?:没|不)(?:解释|回答|回应|说|开口)"
+    r"|(?:到现在|一直|始终|从头到尾)[^。！？!?；;]{0,16}"
+    r"(?:没|没有|不|未)(?:正面)?(?:解释|回答|回应|答|开口)"
+    r"|(?:没|没有|不|未)(?:正面)?(?:解释|回答|回应|答过)"
+    r"|(?:拒绝|不肯)(?:解释|回答|回应|开口)"
+    r")"
+)
+_SILENCE_TARGET_BEFORE = re.compile(
+    rf"(?P<seat>{_SEAT_NUMBER})号[^。！？!?；;]{{0,64}}"
+    rf"{_SILENCE_MARKER.pattern}"
+)
+_SILENCE_NON_ACCUSATION = re.compile(
+    r"(?:尚未轮到|还没轮到|没有轮到|没轮到|等(?:下|会|一会|到).{0,12}"
+    r"(?:解释|回答|回应|开口)|希望.{0,12}(?:解释|回答|回应)|"
+    r"不能说|不该说|别说|不认为|不同意|并非|并不是|错误信息|说法不对)"
+)
+_SILENCE_ATTRIBUTION = re.compile(
+    rf"(?:{_SEAT_NUMBER}号|有人|他|她)[^。！？!?；;]{{0,16}}"
+    r"(?:说|声称|认为|提到|表示)[^。！？!?；;]{0,16}$"
+)
 
 
 def observe_model_speech(
@@ -113,6 +135,12 @@ def _observe_model_speech(
     )
     if vote_observation is not None:
         observations.append(vote_observation)
+    observations.extend(
+        _observe_response_opportunity(
+            speech,
+            model_context=model_context,
+        )
+    )
     return observations
 
 
@@ -329,6 +357,175 @@ def _vote_claims(
         if direct_matches:
             prior_addressee = f"seat_{_matched_addressee(direct_matches[-1])}"
     return claims
+
+
+def _observe_response_opportunity(
+    speech: str,
+    *,
+    model_context: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    accusations = _silence_accusations(speech)
+    if not accusations or not isinstance(model_context, dict):
+        return []
+
+    task = model_context.get("task")
+    progress = task.get("speech_progress") if isinstance(task, dict) else None
+    remaining_refs = (
+        {ref for ref in progress.get("remaining_speaker_refs", []) if isinstance(ref, str)}
+        if isinstance(progress, dict)
+        else set()
+    )
+    question_contexts = _open_question_contexts(model_context)
+
+    premature_signals: list[dict[str, Any]] = []
+    prior_explanation_signals: list[dict[str, Any]] = []
+    for accusation in accusations:
+        target_ref = accusation["target_ref"]
+        target_questions = [
+            question for question in question_contexts if question.get("addressed_to") == target_ref
+        ]
+        awaiting_turn = target_ref in remaining_refs or any(
+            question.get("reply_opportunity") == "awaiting_scheduled_turn"
+            for question in target_questions
+        )
+        question_refs = [
+            str(question["question_id"])
+            for question in target_questions
+            if isinstance(question.get("question_id"), str)
+        ]
+        if awaiting_turn:
+            premature_signals.append(
+                {
+                    "target_ref": target_ref,
+                    "reply_opportunity": "awaiting_scheduled_turn",
+                    "question_refs": question_refs,
+                    "evidence": accusation["evidence"],
+                }
+            )
+        prior_refs = list(
+            dict.fromkeys(
+                ref
+                for question in target_questions
+                for ref in question.get("prior_relevant_statement_refs", [])
+                if isinstance(ref, str)
+            )
+        )
+        if prior_refs:
+            prior_explanation_signals.append(
+                {
+                    "target_ref": target_ref,
+                    "prior_relevant_statement_refs": prior_refs,
+                    "question_refs": question_refs,
+                    "evidence": accusation["evidence"],
+                }
+            )
+
+    observations: list[dict[str, Any]] = []
+    if premature_signals:
+        observations.append(
+            {
+                "code": "premature_silence_accusation",
+                "severity": "warning",
+                "confidence": "high",
+                "detector_version": 1,
+                "signals": _deduplicate_signals(premature_signals),
+                "effect": "observed_only",
+            }
+        )
+    if prior_explanation_signals:
+        observations.append(
+            {
+                "code": "prior_explanation_denial",
+                "severity": "warning",
+                "confidence": "medium",
+                "detector_version": 1,
+                "signals": _deduplicate_signals(prior_explanation_signals),
+                "effect": "observed_only",
+            }
+        )
+    return observations
+
+
+def _silence_accusations(speech: str) -> list[dict[str, str]]:
+    accusations: list[dict[str, str]] = []
+    prior_addressee: str | None = None
+    seen: set[tuple[str, str]] = set()
+    for sentence_match in re.finditer(r"[^。！？!?；;]+[。！？!?；;]?", speech):
+        sentence = sentence_match.group(0)
+        if not sentence.strip():
+            continue
+        direct_matches = list(_DIRECT_ADDRESSEE.finditer(sentence))
+        direct_target = f"seat_{_matched_addressee(direct_matches[-1])}" if direct_matches else None
+        target_match = _SILENCE_TARGET_BEFORE.search(sentence)
+        marker_match = _SILENCE_MARKER.search(sentence)
+        marker_prefix = sentence[: marker_match.start()] if marker_match is not None else ""
+        if (
+            marker_match is not None
+            and _SILENCE_NON_ACCUSATION.search(sentence) is None
+            and _SILENCE_ATTRIBUTION.search(marker_prefix) is None
+        ):
+            target_ref = (
+                f"seat_{target_match.group('seat')}"
+                if target_match is not None
+                else direct_target or prior_addressee
+            )
+            if target_ref is not None and not _is_rejected_claim(
+                sentence,
+                start=marker_match.start(),
+                end=marker_match.end(),
+            ):
+                absolute_start = sentence_match.start() + marker_match.start()
+                absolute_end = sentence_match.start() + marker_match.end()
+                evidence = _evidence(speech, start=absolute_start, end=absolute_end)
+                identity = (target_ref, evidence)
+                if identity not in seen:
+                    seen.add(identity)
+                    accusations.append(
+                        {
+                            "target_ref": target_ref,
+                            "evidence": evidence,
+                        }
+                    )
+        if direct_target is not None:
+            prior_addressee = direct_target
+    return accusations
+
+
+def _open_question_contexts(
+    model_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    history = model_context.get("history")
+    if not isinstance(history, dict):
+        return []
+    questions = history.get("questions")
+    if not isinstance(questions, list):
+        return []
+    return [
+        question
+        for question in questions
+        if isinstance(question, dict)
+        and question.get("status") == "open"
+        and isinstance(question.get("addressed_to"), str)
+    ]
+
+
+def _deduplicate_signals(
+    signals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for signal in signals:
+        identity = (
+            signal.get("target_ref"),
+            signal.get("reply_opportunity"),
+            tuple(signal.get("prior_relevant_statement_refs", [])),
+            signal.get("evidence"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(signal)
+    return deduplicated
 
 
 def _is_uncertain_or_rejected_vote_claim(

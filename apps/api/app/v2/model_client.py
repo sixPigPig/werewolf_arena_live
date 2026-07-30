@@ -774,17 +774,30 @@ def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
     speech = speech if isinstance(speech, dict) else {}
     mode = speech.get("mode")
     if mode == "required":
-        return "speech 必须是准备直接播报的非空自然中文，可以包含多句话。"
-    if mode == "optional":
-        return "speech 可省略或为 null；若提供，必须是可直接播报的非空自然中文。"
-    if mode == "forbidden":
+        instruction = "speech 必须是准备直接播报的非空自然中文。"
+    elif mode == "optional":
+        instruction = "speech 可省略或为 null；若提供，必须是可直接播报的非空自然中文。"
+    elif mode == "forbidden":
         return "不得输出 speech。"
-    if mode == "required_if_true":
-        return (
+    elif mode == "required_if_true":
+        instruction = (
             "决定字段为 true 时 speech 必须是可直接播报的非空自然中文；"
             "为 false 时不要发言，speech 应省略或为 null。"
         )
-    raise V2ModelError("model_decision_contract_invalid")
+    else:
+        raise V2ModelError("model_decision_contract_invalid")
+
+    max_chars = speech.get("max_chars")
+    if isinstance(max_chars, int) and max_chars > 0:
+        instruction += f"speech 不得超过{max_chars}字。"
+    max_sentences = speech.get("max_sentences")
+    if isinstance(max_sentences, int) and max_sentences > 0:
+        instruction += (
+            "speech 只能包含一句话。"
+            if max_sentences == 1
+            else f"speech 不得超过{max_sentences}句话。"
+        )
+    return instruction
 
 
 def _sse_data(line: str) -> dict[str, Any] | None:

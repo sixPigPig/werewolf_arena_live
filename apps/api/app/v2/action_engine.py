@@ -129,6 +129,8 @@ class V2DecisionContract:
         "forbidden",
         "required_if_true",
     ] = "required"
+    speech_max_chars: int | None = None
+    speech_max_sentences: int | None = None
     target_mode: Literal["none", "required", "optional"] = "none"
     boolean_field: str | None = None
     true_meaning: str | None = None
@@ -742,20 +744,26 @@ class V2ActionEngine:
                     if spec.model_players
                     else original_target
                 )
+                sanitized_speech = (
+                    sanitize_model_speech(
+                        raw_model_speech,
+                        players=spec.model_players,
+                    )
+                    if raw_model_speech is not None
+                    else None
+                )
+                constrained_speech, speech_constraint_reasons = _constrain_model_speech(
+                    sanitized_speech,
+                    max_chars=spec.decision_contract.speech_max_chars,
+                    max_sentences=spec.decision_contract.speech_max_sentences,
+                )
                 model_decision = replace(
                     model_decision,
                     target_player_id=resolved_target,
                     speech=(
                         None
                         if spec.decision_contract.speech_mode == "forbidden"
-                        else (
-                            sanitize_model_speech(
-                                raw_model_speech,
-                                players=spec.model_players,
-                            )
-                            if raw_model_speech is not None
-                            else None
-                        )
+                        else constrained_speech
                     ),
                 )
                 passive_observations = observe_model_speech(
@@ -825,6 +833,25 @@ class V2ActionEngine:
                             "action_id": claim.action_id,
                             "attempt_id": model_attempt_id,
                             "reason": "speech_forbidden",
+                        },
+                    )
+                elif speech_constraint_reasons:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_decision_speech_normalized",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "reason": "speech_constraint",
+                            "constraints": list(speech_constraint_reasons),
+                            "max_chars": spec.decision_contract.speech_max_chars,
+                            "max_sentences": spec.decision_contract.speech_max_sentences,
+                            "original_chars": _speech_character_count(
+                                sanitized_speech or ""
+                            ),
+                            "normalized_chars": _speech_character_count(
+                                model_decision.speech or ""
+                            ),
                         },
                     )
                 model_request_completed = True
@@ -1203,6 +1230,10 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
     }
     if contract.speech_mode in {"required", "required_if_true"}:
         speech["min_length"] = 1
+    if contract.speech_max_chars is not None:
+        speech["max_chars"] = contract.speech_max_chars
+    if contract.speech_max_sentences is not None:
+        speech["max_sentences"] = contract.speech_max_sentences
     output: dict[str, Any] = {
         "kind": contract.kind,
         "presentation_kind": spec.output_kind,
@@ -1245,6 +1276,65 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
             "equals": True,
         }
     return output
+
+
+_SPEECH_SENTENCE_ENDINGS = frozenset("。！？!?\n")
+_SPEECH_SENTENCE_CLOSERS = frozenset("”’」』）)]}")
+
+
+def _constrain_model_speech(
+    speech: str | None,
+    *,
+    max_chars: int | None,
+    max_sentences: int | None,
+) -> tuple[str | None, tuple[str, ...]]:
+    if speech is None:
+        return None, ()
+
+    constrained = speech.strip()
+    reasons: list[str] = []
+    if max_sentences is not None and max_sentences > 0:
+        boundaries = [
+            index
+            for index, character in enumerate(constrained)
+            if character in _SPEECH_SENTENCE_ENDINGS
+        ]
+        if len(boundaries) >= max_sentences:
+            cutoff = boundaries[max_sentences - 1] + 1
+            while (
+                cutoff < len(constrained)
+                and constrained[cutoff] in _SPEECH_SENTENCE_CLOSERS
+            ):
+                cutoff += 1
+            if constrained[cutoff:].strip():
+                constrained = constrained[:cutoff].strip()
+                reasons.append("max_sentences_exceeded")
+
+    if (
+        max_chars is not None
+        and max_chars > 0
+        and _speech_character_count(constrained) > max_chars
+    ):
+        constrained = _speech_prefix(constrained, max_chars=max_chars).rstrip()
+        reasons.append("max_chars_exceeded")
+
+    return constrained, tuple(reasons)
+
+
+def _speech_character_count(text: str) -> int:
+    return sum(not character.isspace() for character in text)
+
+
+def _speech_prefix(text: str, *, max_chars: int) -> str:
+    accepted: list[str] = []
+    used = 0
+    for character in text:
+        if not character.isspace():
+            if used >= max_chars:
+                break
+            used += 1
+        accepted.append(character)
+    return "".join(accepted)
 
 
 def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> str:

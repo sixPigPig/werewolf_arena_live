@@ -106,6 +106,10 @@ def test_all_wolves_receive_the_same_complete_discussion_before_final_vote() -> 
     asyncio.run(engine._run_werewolves(state, _FakeBroadcaster(), working))
 
     assert working.attack_target == "good-3"
+    assert all(
+        spec.decision_contract.speech_max_sentences == 1 for spec in actions.specs
+    )
+    assert all("一句话" in spec.objective for spec in actions.specs)
     assert "werewolf_discussion" not in repository.knowledge[0]
     assert "werewolf_discussion" not in repository.knowledge[1]
     first_final = repository.knowledge[2]["werewolf_discussion"]

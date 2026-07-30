@@ -88,6 +88,82 @@ def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
     assert paraphrase["temporal_relation_status"] == "unverified"
 
 
+def test_model_view_distinguishes_prior_explanation_from_awaiting_reply_turn() -> None:
+    ledger = build_public_discourse_ledger(
+        [
+            _statement(
+                437,
+                speaker_ref="seat_5",
+                speech=(
+                    "5号是真预言家，第一晚首验1号没什么特殊心路，就是随便选的。"
+                    "警徽流先留8号排警下坑，再留警上的9号多攒信息。"
+                ),
+            ),
+            _statement(
+                471,
+                speaker_ref="seat_9",
+                speech="5号你首验为什么选1号？5号你警徽流为什么留9号？",
+            ),
+            _statement(
+                771,
+                speaker_ref="seat_9",
+                stage="day_debate_speech",
+                speech="5号到现在一个字都没解释。",
+            ),
+        ],
+        current_round_no=1,
+        actor_ref="seat_8",
+    )
+
+    model_view, metadata = build_discourse_model_view(
+        ledger,
+        actor_ref="seat_8",
+        task={
+            "action_type": "day_debate_speech",
+            "speech_order": [
+                "seat_4",
+                "seat_3",
+                "seat_2",
+                "seat_1",
+                "seat_12",
+                "seat_11",
+                "seat_10",
+                "seat_9",
+                "seat_8",
+                "seat_7",
+                "seat_6",
+                "seat_5",
+            ],
+        },
+        candidate_refs=[],
+        latest_vote_result_ref=None,
+    )
+
+    open_questions = [
+        question for question in model_view["questions"] if question["status"] == "open"
+    ]
+    assert len(open_questions) == 2
+    assert {question["topic"] for question in open_questions} == {
+        "investigation_reason",
+        "sheriff_plan",
+    }
+    assert all(
+        question["status_semantics"] == "no_response_after_question" for question in open_questions
+    )
+    assert all(
+        question["reply_opportunity"] == "awaiting_scheduled_turn" for question in open_questions
+    )
+    assert all(question["prior_relevant_statement_refs"] == ["437"] for question in open_questions)
+    assert model_view["focus"]["first_party_relevant_statement_refs"] == ["437"]
+    assert {
+        context["reply_opportunity"] for context in model_view["focus"]["open_question_contexts"]
+    } == {"awaiting_scheduled_turn"}
+    assert metadata["awaiting_scheduled_turn_question_count"] == 2
+    assert metadata["prior_relevant_statement_question_count"] == 2
+    assert "不表示被提问者此前从未解释" in model_view["source_rules"]["open_question_rule"]
+    assert "不得描述成拒绝回应" in model_view["source_rules"]["turn_opportunity_rule"]
+
+
 def test_ledger_does_not_reuse_seat_8_for_seat_6_self_or_table_questions() -> None:
     ledger = build_public_discourse_ledger(
         [

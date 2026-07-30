@@ -84,6 +84,12 @@ def project_model_action_context_with_metadata(
         actor_ref=actor_ref if isinstance(actor_ref, str) else None,
     )
     task = _model_task(source)
+    speech_progress = _model_speech_progress(
+        task,
+        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
+    )
+    if speech_progress is not None:
+        task["speech_progress"] = speech_progress
     candidates = source.get("candidates") if isinstance(source.get("candidates"), list) else []
     candidate_refs = [
         str(candidate["player_id"])
@@ -289,6 +295,34 @@ def _model_task(source: dict[str, Any]) -> dict[str, Any]:
         current_action_effect = _default_current_action_effect(source)
     task["mechanical_effect"] = _without_explanations(current_action_effect)
     return {key: value for key, value in task.items() if value is not None}
+
+
+def _model_speech_progress(
+    task: dict[str, Any],
+    *,
+    actor_ref: str | None,
+) -> dict[str, Any] | None:
+    raw_order = task.get("speech_order")
+    if (
+        not isinstance(raw_order, list)
+        or not raw_order
+        or actor_ref is None
+        or actor_ref not in raw_order
+        or any(not isinstance(item, str) for item in raw_order)
+    ):
+        return None
+    current_index = raw_order.index(actor_ref)
+    return {
+        "current_speaker_ref": actor_ref,
+        "current_position": current_index + 1,
+        "total_speakers": len(raw_order),
+        "scheduled_before_refs": raw_order[:current_index],
+        "remaining_speaker_refs": raw_order[current_index + 1 :],
+        "instruction": (
+            "remaining_speaker_refs 中的玩家本轮尚未轮到发言；"
+            "不得因此描述成拒绝回应、故意沉默或轮到后仍不解释"
+        ),
+    }
 
 
 def _model_hard_rules(value: Any) -> dict[str, Any]:

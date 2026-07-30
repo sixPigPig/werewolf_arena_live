@@ -149,7 +149,9 @@ def build_public_discourse_ledger(
                 "record_seq 更小的发言绝不能回答 record_seq 更大的问题"
             ),
             "open_question_rule": (
-                "status=open 表示尚无符合时间和说话人条件的后续回答，不得把问题之前的发言描述成回答"
+                "status=open 只表示尚无符合时间和说话人条件的后续回答；"
+                "不表示被提问者此前从未解释，也不表示其拒绝回应；"
+                "不得把问题之前的发言描述成对后来问题的回答"
             ),
             "causality_rule": ("后发生的发言不能成为先发生行动的原因；必须区分当时信息与事后评价"),
         },
@@ -550,7 +552,7 @@ def _resolve_questions(
                 not _utterance_follows_question(utterance, question=question)
                 or utterance["speaker_ref"] != target_ref
                 or utterance["round_no"] != question["asked_in"].get("round_no")
-                or not _matches_question_topic(
+                or not speech_matches_question_topic(
                     str(utterance["speech"]),
                     topic=str(question["topic"]),
                 )
@@ -602,7 +604,7 @@ def _utterance_follows_question(
     return int(utterance["turn_index"]) > int(question["asked_turn_index"])
 
 
-def _matches_question_topic(speech: str, *, topic: str) -> bool:
+def speech_matches_question_topic(speech: str, *, topic: str) -> bool:
     if topic == "future_investigation_target":
         return _INVESTIGATION.search(speech) is not None and (
             _INVESTIGATION_TARGET.search(speech) is not None
@@ -610,7 +612,7 @@ def _matches_question_topic(speech: str, *, topic: str) -> bool:
         )
     if topic == "investigation_reason":
         return _INVESTIGATION.search(speech) is not None and any(
-            term in speech for term in ("原因", "理由", "因为", "为什么选")
+            term in speech for term in ("原因", "理由", "因为", "为什么选", "心路", "随机", "随便")
         )
     if topic in {"investigation_plan", "sheriff_plan"}:
         return _INVESTIGATION.search(speech) is not None or "警徽流" in speech

@@ -369,7 +369,8 @@ class V2NightEngine:
                     player=wolf,
                     candidates=candidates,
                     objective=(
-                        "在尚未看到其他狼人意见的情况下，提出你的袭击建议并说明理由；"
+                        "在尚未看到其他狼人意见的情况下，仅用一句话提出袭击建议"
+                        "并说明最关键理由；"
                         "这段完整私聊会在终投前同步给所有存活狼人"
                     ),
                     knowledge={
@@ -427,9 +428,9 @@ class V2NightEngine:
                 player=wolf,
                 candidates=candidates,
                 objective=(
-                    "直接作出本夜袭击的最终选择"
+                    "仅用一句话作出本夜袭击的最终选择"
                     if len(wolves) == 1
-                    else "阅读全部狼人私聊后，独立提交最终一票并简要说明取舍"
+                    else "阅读全部狼人私聊后，仅用一句话独立提交最终一票并简要说明取舍"
                 ),
                 knowledge=(
                     {
@@ -1142,6 +1143,9 @@ class V2NightEngine:
                         "required"
                         if activation.ability_id == "werewolf.attack"
                         else "forbidden"
+                    ),
+                    speech_max_sentences=(
+                        1 if activation.ability_id == "werewolf.attack" else None
                     ),
                 ),
                 allowed_target_ids=tuple(item.player_id for item in candidates),
