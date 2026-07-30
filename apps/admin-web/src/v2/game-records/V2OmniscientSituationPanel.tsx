@@ -101,11 +101,7 @@ export function V2OmniscientSituationPanel({
   const situationItems = situationPhases.flatMap((phase) =>
     phase.stages.map((stage) => stage.item),
   );
-  const latestItem =
-    situationItems.at(-1) ??
-    [...timeline].reverse().find((item) => item.kind === "action") ??
-    timeline.at(-1) ??
-    null;
+  const latestItem = latestTimelineItem(timeline);
   const selectedItem =
     (selectedId
       ? timeline.find((item) => item.id === selectedId)
@@ -317,13 +313,6 @@ export function V2OmniscientSituationPanel({
               历史回看
             </button>
           </div>
-          <Button
-            disabled={followingLatest}
-            onClick={onReturnLatest}
-            size="small"
-          >
-            回到最新
-          </Button>
           <Typography.Text className="v2-situation-sync" type="secondary">
             {isRefreshing ? (
               <>
@@ -751,9 +740,16 @@ function buildSituationPhases(
       const meta = stageMeta(item);
       if (!meta) continue;
       const previous = stages.get(meta.key);
+      const priority = situationItemPriority(item);
+      const previousPriority = previous
+        ? situationItemPriority(previous.item)
+        : null;
       if (
         !previous ||
-        situationItemPriority(item) > situationItemPriority(previous.item)
+        previousPriority === null ||
+        priority > previousPriority ||
+        (priority === previousPriority &&
+          isLaterTimelineItem(item, previous.item))
       ) {
         stages.set(meta.key, { ...meta, item });
       }
@@ -776,6 +772,26 @@ function buildSituationPhases(
       },
     ];
   });
+}
+
+function latestTimelineItem(
+  timeline: V2TimelineItem[],
+): V2TimelineItem | null {
+  return timeline.reduce<V2TimelineItem | null>(
+    (latest, item) =>
+      latest === null || isLaterTimelineItem(item, latest) ? item : latest,
+    null,
+  );
+}
+
+function isLaterTimelineItem(
+  candidate: V2TimelineItem,
+  current: V2TimelineItem,
+): boolean {
+  if (candidate.lastRecordSeq !== current.lastRecordSeq) {
+    return candidate.lastRecordSeq > current.lastRecordSeq;
+  }
+  return candidate.firstRecordSeq > current.firstRecordSeq;
 }
 
 function situationItemPriority(item: V2TimelineItem): number {

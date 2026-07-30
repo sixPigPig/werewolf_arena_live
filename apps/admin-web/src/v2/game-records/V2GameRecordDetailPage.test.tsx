@@ -1394,6 +1394,81 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
   });
 
+  it("keeps follow-live focused on the latest repeated stage event", async () => {
+    const firstSpeechActionId = "v2_action_first_day_speech";
+    const latestSpeechActionId = "v2_action_latest_day_speech";
+    const user = userEvent.setup();
+    stubRecordFetch({
+      ...detail,
+      title: "实时事件跟随验收",
+      phase_id: "day_2",
+      phase_state: "public_discussion_open",
+      last_record_seq: 6,
+      events: [
+        event(1, "game_phase_changed", {
+          previous_phase_id: "night_2",
+          phase_id: "day_2",
+        }),
+        event(2, "action_opened", {
+          action_id: firstSpeechActionId,
+          context: {
+            phase_id: "day_2",
+            action_type: "day_debate_speech",
+            objective: "较早玩家发言",
+            actor: { kind: "player", id: "profile-1" },
+          },
+        }),
+        event(3, "action_succeeded", {
+          action_id: firstSpeechActionId,
+        }),
+        event(4, "action_opened", {
+          action_id: latestSpeechActionId,
+          context: {
+            phase_id: "day_2",
+            action_type: "day_debate_speech",
+            objective: "最新玩家发言",
+            actor: { kind: "player", id: "profile-2" },
+          },
+        }),
+        event(5, "speech_segment_committed", {
+          action_id: latestSpeechActionId,
+          presentation_seq: 2,
+        }),
+        event(6, "action_succeeded", {
+          action_id: latestSpeechActionId,
+        }),
+      ],
+      model_requests: [],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "实时事件跟随验收" }),
+    ).toBeVisible();
+    const panel = screen.getByRole("region", { name: "全知战局态势" });
+    expect(within(panel).getAllByText("最新玩家发言")).not.toHaveLength(0);
+    expect(within(panel).queryByText("较早玩家发言")).not.toBeInTheDocument();
+    expect(
+      within(panel).getByRole("button", { name: "回看第 2 天发言" }),
+    ).toHaveAttribute("aria-current", "step");
+    expect(within(panel).getByText("事实 #6")).toBeVisible();
+    expect(
+      within(panel).queryByRole("button", { name: "回到最新" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(panel).getByRole("button", { name: "查看上一事件" }),
+    );
+    expect(within(panel).getAllByText("较早玩家发言")).not.toHaveLength(0);
+    await user.click(
+      within(panel).getByRole("button", { name: "跟随实时" }),
+    );
+    expect(within(panel).getAllByText("最新玩家发言")).not.toHaveLength(0);
+    expect(
+      within(panel).getByRole("button", { name: "跟随实时" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("keeps phase, night-window and terminal labels aligned to persisted rounds", async () => {
     stubRecordFetch(phaseIntegrityDetail);
     renderPage();
