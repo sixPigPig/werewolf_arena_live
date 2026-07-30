@@ -168,8 +168,8 @@ class V2ActionResult:
 @dataclass(frozen=True)
 class V2ModelRetryPolicy:
     max_attempts: int = 2
-    attempt_total_seconds: float = 30.0
-    action_total_seconds: float = 45.0
+    attempt_total_seconds: float = 60.0
+    action_total_seconds: float = 90.0
     base_delay_seconds: float = 0.3
     jitter_seconds: float = 0.3
 

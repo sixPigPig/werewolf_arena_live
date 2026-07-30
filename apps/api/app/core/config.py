@@ -124,9 +124,9 @@ class Settings(BaseSettings):
             "DEEPSEEK_BASE_URL",
         ),
     )
-    live_v2_model_first_token_seconds: float = Field(default=10.0, ge=0.1, le=120.0)
+    live_v2_model_first_token_seconds: float = Field(default=20.0, ge=0.1, le=120.0)
     live_v2_model_attempt_total_seconds: float = Field(
-        default=30.0,
+        default=60.0,
         ge=0.1,
         le=180.0,
         validation_alias=AliasChoices(
@@ -134,7 +134,7 @@ class Settings(BaseSettings):
             "LIVE_V2_MODEL_TOTAL_SECONDS",
         ),
     )
-    live_v2_model_action_total_seconds: float = Field(default=45.0, ge=0.1, le=300.0)
+    live_v2_model_action_total_seconds: float = Field(default=90.0, ge=0.1, le=300.0)
     live_v2_model_max_attempts: int = Field(default=2, ge=1, le=3)
     live_v2_model_retry_base_delay_seconds: float = Field(default=0.3, ge=0.0, le=5.0)
     live_v2_model_retry_jitter_seconds: float = Field(default=0.3, ge=0.0, le=5.0)

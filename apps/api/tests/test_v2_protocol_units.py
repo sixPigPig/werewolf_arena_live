@@ -13,6 +13,7 @@ import pytest
 
 from app.v2.action_engine import (
     V2DecisionContract,
+    V2ModelRetryPolicy,
     V2SpeechSpec,
     _action_model_parameters,
 )
@@ -59,6 +60,13 @@ from app.v2.tts_client import (
 )
 from app.v2 import tts_client as v2_tts
 from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
+
+
+def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
+    policy = V2ModelRetryPolicy()
+
+    assert policy.attempt_total_seconds == 60.0
+    assert policy.action_total_seconds == 90.0
 
 
 def _identity() -> V2PresentationIdentity:
