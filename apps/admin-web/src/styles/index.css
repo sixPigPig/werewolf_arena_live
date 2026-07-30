@@ -5950,12 +5950,16 @@ a {
   gap: 0;
 }
 
+.admin-main:has(.v2-game-record-detail-page) {
+  padding-top: 16px;
+}
+
 .v2-record-heading {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) auto auto;
-  gap: 28px;
+  gap: 20px;
   align-items: center;
-  padding: 0 0 10px;
+  padding: 0;
 }
 
 .v2-record-heading .ant-admin-page-kicker {
@@ -5978,7 +5982,7 @@ a {
 .v2-record-heading-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(78px, auto));
-  gap: 24px;
+  gap: 8px 24px;
 }
 
 .v2-record-summary-metric {
@@ -6316,6 +6320,780 @@ a {
   line-height: 1.65;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 6;
+}
+
+.v2-situation-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 14px 18px;
+  border: 1px solid #d9e3f0;
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(239, 248, 255, 0.64), transparent 34%),
+    #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+}
+
+.v2-situation-heading,
+.v2-situation-now > header,
+.v2-situation-state > header,
+.v2-situation-public > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.v2-situation-heading {
+  align-items: flex-start;
+}
+
+.v2-situation-heading h4 {
+  margin: 0 0 2px;
+  color: #101828;
+  font-size: 21px;
+}
+
+.v2-situation-heading h4 .anticon {
+  margin-right: 5px;
+  color: #175cd3;
+}
+
+.v2-situation-heading p {
+  margin: 0;
+  color: #667085;
+  font-size: 11px;
+}
+
+.v2-situation-heading-actions,
+.v2-situation-state-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.v2-situation-heading-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.v2-situation-mode {
+  display: inline-flex;
+  overflow: hidden;
+  padding: 2px;
+  border: 1px solid #d0d5dd;
+  border-radius: 7px;
+  background: #f9fafb;
+}
+
+.v2-situation-mode button {
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 5px;
+  color: #475467;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.v2-situation-mode button:hover {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.v2-situation-mode button.is-active {
+  color: #fff;
+  background: #175cd3;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.14);
+}
+
+.v2-situation-mode.is-compact button {
+  min-height: 23px;
+  padding: 2px 9px;
+  font-size: 10px;
+}
+
+.v2-situation-sync {
+  min-width: 84px;
+  font-size: 10px;
+  text-align: right;
+}
+
+.v2-situation-scrubber {
+  overflow: hidden;
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.v2-situation-phases {
+  display: flex;
+  overflow-x: auto;
+}
+
+.v2-situation-phase {
+  flex: 1 0 220px;
+  min-width: 0;
+  border-right: 1px solid #e4e7ec;
+}
+
+.v2-situation-phase:last-child {
+  border-right: 0;
+}
+
+.v2-situation-phase > header {
+  display: grid;
+  min-height: 43px;
+  place-content: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid #eef2f6;
+  text-align: center;
+}
+
+.v2-situation-phase > header strong {
+  color: #344054;
+  font-size: 11px;
+}
+
+.v2-situation-phase > header span {
+  overflow: hidden;
+  max-width: 200px;
+  color: #98a2b3;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-stage-list {
+  display: flex;
+  justify-content: center;
+  min-height: 56px;
+  padding: 6px 5px;
+}
+
+.v2-situation-stage-list button {
+  position: relative;
+  display: grid;
+  min-width: 48px;
+  place-items: center;
+  gap: 2px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: #667085;
+  background: transparent;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.v2-situation-stage-list button:hover {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.v2-situation-stage-list button.is-active {
+  color: #175cd3;
+  background: #eaf2ff;
+  box-shadow: inset 0 0 0 1px #b2ccff;
+}
+
+.v2-situation-stage-list button .anticon {
+  font-size: 16px;
+}
+
+.v2-situation-cursor {
+  display: flex;
+  min-height: 35px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-top: 1px solid #dfe7f1;
+  color: #667085;
+  background: #fff;
+  font-size: 10px;
+}
+
+.v2-situation-cursor strong {
+  color: #175cd3;
+}
+
+.v2-situation-cursor .ant-tag {
+  margin-left: auto;
+}
+
+.v2-situation-main-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.82fr) minmax(520px, 1.45fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.v2-situation-now,
+.v2-situation-state,
+.v2-situation-public {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.v2-situation-now,
+.v2-situation-state {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.v2-situation-now > header,
+.v2-situation-state > header,
+.v2-situation-public > header {
+  min-height: 46px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eaecf0;
+  background: #fcfcfd;
+}
+
+.v2-situation-now > header h5,
+.v2-situation-state > header h5,
+.v2-situation-public > header h5 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.v2-situation-event {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.v2-situation-event-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.v2-situation-actor-mark,
+.v2-situation-seat {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #b2ccff;
+  border-radius: 50%;
+  color: #175cd3;
+  background: #eff8ff;
+  font-weight: 800;
+}
+
+.v2-situation-actor-mark {
+  width: 34px;
+  height: 34px;
+  font-size: 12px;
+}
+
+.v2-situation-event-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.v2-situation-event-title .ant-typography:last-child {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-event-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 9px;
+}
+
+.v2-situation-event-result > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 7px;
+  background: #f9fafb;
+}
+
+.v2-situation-event-result > div.is-danger {
+  border-color: #fecdca;
+  background: #fff6f5;
+}
+
+.v2-situation-event-result > div .ant-typography {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-event-result > div strong {
+  color: #101828;
+  font-size: 12px;
+}
+
+.v2-situation-event-result > .anticon {
+  align-self: center;
+  color: #98a2b3;
+}
+
+.v2-situation-event-copy {
+  overflow-y: auto;
+  min-height: 35px;
+  max-height: 110px;
+  margin: 0 !important;
+  padding-right: 4px;
+  color: #344054;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.v2-situation-event > footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px dashed #e4e7ec;
+  color: #667085;
+  font-size: 9px;
+}
+
+.v2-situation-event > footer span:last-child {
+  margin-left: auto;
+}
+
+.v2-situation-neighbors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.v2-situation-neighbors button {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 9px 28px;
+  border: 1px solid #eaecf0;
+  border-radius: 7px;
+  color: #667085;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2-situation-neighbors button:hover:not(:disabled) {
+  border-color: #84adff;
+  color: #175cd3;
+  background: #f5f9ff;
+}
+
+.v2-situation-neighbors button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.v2-situation-neighbors button span {
+  font-size: 9px;
+}
+
+.v2-situation-neighbors button strong {
+  overflow: hidden;
+  color: #344054;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-neighbors button .anticon {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.v2-situation-neighbors button:first-child .anticon {
+  left: 9px;
+}
+
+.v2-situation-neighbors button:last-child .anticon {
+  right: 9px;
+}
+
+.v2-situation-cause {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  contain: size;
+  overflow: hidden;
+  margin: 0 14px 14px;
+  padding: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 7px;
+  background: #f5f9ff;
+}
+
+.v2-situation-cause > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.v2-situation-cause > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-situation-cause > header strong {
+  color: #344054;
+  font-size: 10px;
+}
+
+.v2-situation-cause > header .ant-typography-secondary {
+  font-size: 9px;
+}
+
+.v2-situation-cause-list {
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
+.v2-situation-cause-step {
+  padding: 8px 9px;
+  border: 1px solid #cfe0ff;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.v2-situation-cause-step > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.v2-situation-cause-step > header span {
+  color: #175cd3;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.v2-situation-cause-step > header strong {
+  color: #344054;
+  font-size: 9px;
+}
+
+.v2-situation-cause-step > header small {
+  margin-left: auto;
+  color: #98a2b3;
+  font-size: 8px;
+}
+
+.v2-situation-cause-step p {
+  margin: 5px 0;
+  color: #344054;
+  font-size: 9px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.v2-situation-cause-step > small {
+  color: #667085;
+  font-size: 8px;
+}
+
+.v2-situation-cause-connector {
+  display: grid;
+  height: 18px;
+  place-items: center;
+}
+
+.v2-situation-cause-connector .anticon {
+  color: #84adff;
+  font-size: 10px;
+}
+
+.v2-situation-state > header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.v2-situation-state-controls > .ant-typography {
+  font-size: 9px;
+}
+
+.v2-situation-roster-wrap {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.v2-situation-roster-table {
+  height: 100%;
+}
+
+.v2-situation-roster-table .ant-spin-nested-loading,
+.v2-situation-roster-table .ant-spin-container {
+  height: 100%;
+}
+
+.v2-situation-roster-table .ant-table {
+  height: 100%;
+}
+
+.v2-situation-roster-table .ant-table-tbody > tr.is-involved > td {
+  background: #f5f9ff;
+}
+
+.v2-situation-roster-table .ant-table-tbody > tr.is-involved > td:first-child {
+  box-shadow: inset 3px 0 #2e90fa;
+}
+
+.v2-situation-player {
+  display: flex;
+  min-width: 135px;
+  align-items: center;
+  gap: 7px;
+}
+
+.v2-situation-player > span:last-child,
+.v2-situation-life-cell {
+  display: grid;
+  gap: 1px;
+}
+
+.v2-situation-roster-table small {
+  display: block;
+  overflow: hidden;
+  max-width: 145px;
+  color: #98a2b3;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-private-info {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-situation-private-info > span {
+  overflow-wrap: anywhere;
+}
+
+.v2-situation-private-info .ant-btn {
+  width: fit-content;
+  height: auto;
+  padding: 0;
+}
+
+.v2-situation-private-info-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 4px 0 0;
+  list-style: none;
+}
+
+.v2-situation-private-info-list li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.v2-situation-private-info-list li > span:first-child {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  color: #175cd3;
+  background: #eff8ff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.v2-situation-private-info-list .ant-typography {
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.v2-situation-seat {
+  width: 24px;
+  height: 24px;
+  font-size: 9px;
+}
+
+.v2-situation-life {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.v2-situation-life::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  content: "";
+}
+
+.v2-situation-life.is-alive {
+  color: #027a48;
+}
+
+.v2-situation-life.is-alive::before {
+  background: #12b76a;
+}
+
+.v2-situation-life.is-dead {
+  color: #b42318;
+}
+
+.v2-situation-life.is-dead::before {
+  background: #f04438;
+}
+
+.v2-situation-public-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 0.8fr 1fr;
+}
+
+.v2-situation-public-grid > article {
+  min-width: 0;
+  min-height: 108px;
+  padding: 11px 12px;
+  border-right: 1px solid #eaecf0;
+}
+
+.v2-situation-public-grid > article:last-child {
+  border-right: 0;
+}
+
+.v2-situation-public-grid > article > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #344054;
+  font-size: 10px;
+}
+
+.v2-situation-public-grid > article > header .anticon {
+  color: #2e90fa;
+}
+
+.v2-situation-public-grid ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.v2-situation-public-speeches ol {
+  max-height: 150px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.v2-situation-public-grid li {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 6px;
+  color: #344054;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.v2-situation-public-speeches li span {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.v2-situation-public-grid time {
+  color: #98a2b3;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.v2-situation-vote {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: #667085;
+  font-size: 9px;
+}
+
+.v2-situation-vote strong {
+  color: #175cd3;
+  font-size: 15px;
+}
+
+.v2-situation-vote span:last-child {
+  overflow: hidden;
+  color: #344054;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-situation-public-grid .ant-typography-secondary {
+  font-size: 9px;
+}
+
+.v2-situation-diagnostics {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 7px;
+  color: #475467;
+  background: #fcfcfd;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2-situation-diagnostics:hover {
+  border-color: #84adff;
+  color: #175cd3;
+  background: #f5f9ff;
+}
+
+.v2-situation-diagnostics .anticon:last-child {
+  margin-left: auto;
 }
 
 .v2-record-toolbar {
@@ -6765,6 +7543,10 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .v2-situation-main-grid {
+    grid-template-columns: 1fr;
+  }
+
   .v2-record-toolbar {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -6803,6 +7585,19 @@ a {
     justify-self: end;
   }
 
+  .v2-situation-public-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-situation-public-grid > article:nth-child(2) {
+    border-right: 0;
+  }
+
+  .v2-situation-public-grid > article:last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid #eaecf0;
+  }
+
   .model-parameter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6831,9 +7626,48 @@ a {
     grid-template-columns: 1fr;
   }
 
-  .v2-omniscient-heading {
+  .v2-omniscient-heading,
+  .v2-situation-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .v2-situation-heading-actions {
+    justify-content: flex-start;
+  }
+
+  .v2-situation-panel {
+    padding: 12px;
+  }
+
+  .v2-situation-phase {
+    flex-basis: 190px;
+  }
+
+  .v2-situation-state > header,
+  .v2-situation-public > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-situation-public-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-situation-public-grid > article,
+  .v2-situation-public-grid > article:nth-child(2) {
+    border-right: 0;
+    border-bottom: 1px solid #eaecf0;
+  }
+
+  .v2-situation-public-grid > article:last-child {
+    grid-column: auto;
+    border-top: 0;
+    border-bottom: 0;
+  }
+
+  .v2-situation-neighbors {
+    grid-template-columns: 1fr;
   }
 
   .v2-round-summary-panel > header {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   actionLabel,
+  buildV2HistoricalIdentities,
   buildV2RoundSummaries,
   phaseLabel,
 } from "@/v2/game-records/presentation";
@@ -215,6 +216,52 @@ describe("V2 game record presentation", () => {
       endedAt: "2026-07-29T08:00:02Z",
     });
     expect(summaries[0].highlights[0].label).toBe("管理员已中止本局");
+  });
+
+  it("reconstructs player life state at a historical fact sequence", () => {
+    const events = [
+      event(1, "game_phase_changed", {
+        phase_id: "first_night",
+      }),
+      event(2, "action_window_closed", {
+        result: {
+          deaths: [
+            { player_id: "player-1", cause: "werewolf_attack" },
+          ],
+        },
+      }),
+      event(3, "player_exiled", {
+        player_id: "player-2",
+      }),
+    ];
+
+    expect(
+      buildV2HistoricalIdentities(events, identities, 1).map((item) => ({
+        alive: item.alive,
+        cause: item.death_cause,
+        playerId: item.player_id,
+      })),
+    ).toEqual([
+      { alive: true, cause: null, playerId: "player-1" },
+      { alive: true, cause: null, playerId: "player-2" },
+      { alive: true, cause: null, playerId: "player-3" },
+    ]);
+
+    expect(
+      buildV2HistoricalIdentities(events, identities, 2).map((item) => ({
+        alive: item.alive,
+        cause: item.death_cause,
+        playerId: item.player_id,
+      })),
+    ).toEqual([
+      { alive: false, cause: "werewolf_attack", playerId: "player-1" },
+      { alive: true, cause: null, playerId: "player-2" },
+      { alive: true, cause: null, playerId: "player-3" },
+    ]);
+
+    expect(buildV2HistoricalIdentities(events, identities, 3)).toEqual(
+      identities,
+    );
   });
 });
 

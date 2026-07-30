@@ -334,7 +334,79 @@ const detail = {
     },
   ],
   effect_intents: [],
-  knowledge_facts: [],
+  knowledge_facts: [
+    {
+      knowledge_fact_id: "v2_fact_seer_result",
+      source_activation_id: "v2_activation_seer",
+      owner_scope: "player",
+      owner_id: "profile-1",
+      fact_type: "investigation_alignment",
+      payload: {
+        night_no: 1,
+        target_player_id: "profile-2",
+        alignment: "werewolves",
+      },
+    },
+  ],
+};
+
+const privateInformationDetail = {
+  ...detail,
+  title: "私有信息归属验收",
+  player_identities: [
+    ...detail.player_identities,
+    {
+      seat: 3,
+      player_id: "profile-3",
+      display_name: "未行动者",
+      avatar_url: null,
+      role: "villager",
+      team: "village",
+      alive: false,
+      death_cause: "witch_poison",
+    },
+  ],
+  ability_instances: [
+    ...detail.ability_instances,
+    {
+      ability_instance_id: "v2_ability_werewolf",
+      ability_id: "werewolf.attack",
+    },
+  ],
+  ability_activations: [
+    ...detail.ability_activations,
+    {
+      activation_id: "v2_activation_werewolf_discussion",
+      window_id: "v2_window_first_night",
+      ability_instance_id: "v2_ability_werewolf",
+      actor_player_id: "profile-2",
+      status: "completed",
+      skip_reason: null,
+      decision: {
+        decision_stage: "discussion",
+        target_player_id: "profile-3",
+      },
+      result: {
+        adopted: false,
+        decision_stage: "discussion",
+      },
+    },
+  ],
+  knowledge_facts: [
+    ...detail.knowledge_facts,
+    {
+      knowledge_fact_id: "v2_fact_seer_result_second_night",
+      source_activation_id: "v2_activation_seer",
+      owner_scope: "player",
+      owner_id: "profile-1",
+      fact_type: "investigation_alignment",
+      payload: {
+        night_no: 2,
+        target_player_id: "profile-3",
+        alignment: "villagers",
+      },
+    },
+  ],
 };
 
 const deepSeekDetail = {
@@ -864,25 +936,41 @@ describe("V2 game record detail workspace", () => {
       fetchMock.mock.calls.some(([input]) =>
         String(input).includes("/model-requests/v2_model_attempt_1"),
       ),
-    ).toBe(false);
-    const livePanel = screen.getByRole("region", { name: "实时全知态势" });
+    ).toBe(true);
+    const livePanel = screen.getByRole("region", { name: "全知战局态势" });
     expect(
-      within(livePanel).getByRole("heading", { name: /实时全知态势/ }),
+      within(livePanel).getByRole("heading", { name: /全知战局态势/ }),
     ).toBeVisible();
-    expect(within(livePanel).getByText("完整身份总览")).toBeVisible();
+    expect(within(livePanel).getByText("此刻发生了什么")).toBeVisible();
+    expect(
+      within(livePanel).queryByTitle(
+        "展示当前历史游标对应的权威事实与动作内容",
+      ),
+    ).not.toBeInTheDocument();
+    expect(within(livePanel).getByText("此刻全知状态")).toBeVisible();
+    expect(within(livePanel).getByText("本轮已知公开信息")).toBeVisible();
     expect(within(livePanel).getByText("预言家")).toBeVisible();
     expect(within(livePanel).getByText("狼人")).toBeVisible();
     expect(within(livePanel).getByText("投票放逐")).toBeVisible();
-    expect(within(livePanel).getByText("预言家查验")).toBeVisible();
-    expect(within(livePanel).getByText("1号 阿青 → 2号 白石")).toBeVisible();
-    expect(within(livePanel).getByText("查验为狼人阵营")).toBeVisible();
     expect(
-      within(livePanel).getByText("出局：2号 白石（狼人袭击）"),
+      within(livePanel).getByText("预言家查验 → 2号 白石"),
     ).toBeVisible();
     expect(
-      within(livePanel).getByText("夜幕将至，九位玩家请准备。"),
+      within(livePanel).getByText("第1夜查验：2号 白石为狼人阵营"),
     ).toBeVisible();
+    expect(
+      within(livePanel).getAllByText("夜幕将至，九位玩家请准备。"),
+    ).not.toHaveLength(0);
+    const causalFacts = within(livePanel).getByLabelText("传给模型的全部事实");
+    expect(await within(causalFacts).findByText("#448")).toBeVisible();
+    expect(
+      within(causalFacts).queryByText(/警徽流：今晚验2号/),
+    ).not.toBeInTheDocument();
+    expect(within(livePanel).getByText("3 条")).toBeVisible();
+    expect(within(livePanel).getByText("#562")).toBeVisible();
+    expect(within(livePanel).getByText("#564")).toBeVisible();
     expect(within(livePanel).queryByText(/target_player_id/)).not.toBeInTheDocument();
+    expect(within(livePanel).queryByText("权威事实")).not.toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
@@ -1012,6 +1100,54 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
+  });
+
+  it("shows only persisted owner knowledge and localizes empty/action states", async () => {
+    stubRecordFetch(privateInformationDetail);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "私有信息归属验收" }),
+    ).toBeVisible();
+    const panel = screen.getByRole("region", { name: "全知战局态势" });
+    const inactivePlayer = within(panel).getByText("未行动者").closest("tr");
+    expect(inactivePlayer).not.toBeNull();
+    expect(within(inactivePlayer!).getByText("暂无私有信息")).toBeVisible();
+    expect(within(inactivePlayer!).getByText("--")).toBeVisible();
+    expect(within(inactivePlayer!).getByText("女巫毒杀")).toBeVisible();
+    expect(within(panel).queryByText("被袭击")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("witch_poison")).not.toBeInTheDocument();
+    expect(
+      within(panel).getByText("第2夜查验：3号 未行动者为好人阵营"),
+    ).toBeVisible();
+    expect(
+      within(panel).queryByText("第1夜查验：2号 白石为狼人阵营"),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(panel).getByRole("button", {
+        name: "查看 1号 阿青的全部私有信息（2条）",
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText("1号 阿青 · 全部私有信息"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("第1夜查验：2号 白石为狼人阵营"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("第2夜查验：3号 未行动者为好人阵营"),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: /Close|关闭/ }),
+    );
+    await waitFor(() =>
+      expect(dialog).toHaveClass("ant-zoom-leave"),
+    );
   });
 
   it("derives public timeline evidence from persisted input for older summaries", async () => {
@@ -1166,22 +1302,38 @@ describe("V2 game record detail workspace", () => {
 
   it("shows a compact digest for each persisted match round", async () => {
     stubRecordFetch(roundSummaryDetail);
+    const user = userEvent.setup();
     renderPage();
 
     expect(
       await screen.findByRole("heading", { name: "轮次摘要验收" }),
     ).toBeInTheDocument();
-    const summary = screen.getByRole("region", { name: "对局轮次摘要" });
+    const summary = screen.getByRole("region", { name: "全知战局态势" });
     expect(
-      within(summary).getByRole("heading", { name: "对局轮次摘要" }),
+      within(summary).getByRole("heading", { name: /全知战局态势/ }),
     ).toBeVisible();
-    expect(within(summary).getByRole("heading", { name: "第 1 轮" })).toBeVisible();
+    expect(within(summary).getByText("第 1 夜")).toBeVisible();
+    expect(within(summary).getAllByText("第 1 天")).not.toHaveLength(0);
     expect(within(summary).getByText("平安夜")).toBeVisible();
     expect(
       within(summary).getByText("投票放逐：2号 白石（狼人）"),
     ).toBeVisible();
-    expect(within(summary).getByText("对局结束：好人阵营获胜")).toBeVisible();
-    expect(within(summary).getByText("事实 #1–#6")).toBeVisible();
+    expect(within(summary).getAllByText("好人阵营获胜")).not.toHaveLength(0);
+
+    await user.click(
+      within(summary).getByRole("button", {
+        name: "回看第 1 夜进度",
+      }),
+    );
+    expect(
+      within(summary).getByRole("button", { name: "历史回看" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(within(summary).getByText("历史状态")).toBeVisible();
+    expect(
+      within(summary).getByRole("row", {
+        name: /2白石profile-2 狼人 存活/,
+      }),
+    ).toBeVisible();
   });
 
   it("keeps phase, night-window and terminal labels aligned to persisted rounds", async () => {
@@ -1196,7 +1348,9 @@ describe("V2 game record detail workspace", () => {
     expect(screen.queryByText("第 3 个夜间窗口")).not.toBeInTheDocument();
     expect(screen.getAllByText("狼人自爆").length).toBeGreaterThan(0);
 
-    const currentPhase = screen.getByRole("button", { name: /第 2 天/ });
+    const currentPhase = screen.getByRole("button", {
+      name: "第 2 天，成功，2 步，0 次模型请求",
+    });
     expect(
       currentPhase.querySelector(".v2-phase-status.is-succeeded"),
     ).not.toBeNull();

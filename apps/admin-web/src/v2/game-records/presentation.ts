@@ -314,6 +314,90 @@ export function buildV2RoundSummaries(
   });
 }
 
+export function buildV2HistoricalIdentities(
+  events: V2GameRecordEvent[],
+  identities: V2PlayerIdentity[],
+  recordSeq: number,
+): V2PlayerIdentity[] {
+  const latestRecordSeq = events.reduce(
+    (latest, event) => Math.max(latest, event.record_seq),
+    0,
+  );
+  if (recordSeq >= latestRecordSeq) {
+    return identities.map((identity) => ({ ...identity }));
+  }
+
+  const snapshot = new Map<string, V2PlayerIdentity>(
+    identities.map((identity) => [
+      identity.player_id,
+      {
+        ...identity,
+        alive: true,
+        death_cause: null,
+      },
+    ]),
+  );
+  const markDead = (playerId: string | null, cause: string | null) => {
+    if (!playerId) return;
+    const identity = snapshot.get(playerId);
+    if (!identity) return;
+    identity.alive = false;
+    identity.death_cause = cause ?? identity.death_cause;
+  };
+
+  for (const event of [...events].sort(
+    (left, right) => left.record_seq - right.record_seq,
+  )) {
+    if (event.record_seq > recordSeq) break;
+    const payload = event.payload;
+
+    if (event.event_type === "action_window_closed") {
+      const result = objectValue(payload.result);
+      const deaths = Array.isArray(result.deaths)
+        ? result.deaths.map(objectValue)
+        : [];
+      for (const death of deaths) {
+        markDead(
+          stringValue(death.player_id),
+          stringValue(death.cause) ?? "night_resolution",
+        );
+      }
+      continue;
+    }
+
+    if (event.event_type === "dawn_public_result") {
+      const deadPlayerIds = Array.isArray(payload.dead_player_ids)
+        ? payload.dead_player_ids
+        : [];
+      for (const playerId of deadPlayerIds) {
+        markDead(stringValue(playerId), "night_resolution");
+      }
+      continue;
+    }
+
+    if (event.event_type === "player_exiled") {
+      markDead(stringValue(payload.player_id), "exile");
+      continue;
+    }
+
+    if (event.event_type === "werewolf_self_exploded") {
+      markDead(stringValue(payload.player_id), "werewolf_self_explosion");
+      continue;
+    }
+
+    if (
+      event.event_type === "hunter_response_resolved" ||
+      event.event_type === "hunter_shot_resolved"
+    ) {
+      markDead(stringValue(payload.target_player_id), "hunter_shot");
+    }
+  }
+
+  return identities.map(
+    (identity) => snapshot.get(identity.player_id) ?? { ...identity },
+  );
+}
+
 export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
   const eventsByAction = new Map<string, V2GameRecordEvent[]>();
   const actionOpenEvents: V2GameRecordEvent[] = [];
