@@ -1241,6 +1241,125 @@ describe("V2 game record detail workspace", () => {
     expect(within(inputPanel).getByText("白天投票 × 2")).toBeVisible();
   });
 
+  it("shows V8 known-event chronology and selector audit", async () => {
+    const knownEvents = {
+      events: [
+        {
+          authority: "judge_fact",
+          data: {
+            decision: {
+              decision_note: "在警上发言前已经决定查验6号。",
+              target_player_id: "seat_6",
+            },
+            result: { alignment: "werewolves" },
+          },
+          event_ref: "knowledge-seer-night-1",
+          kind: "private_ability_action_committed",
+          known_at_seq: 258,
+          visibility: "actor_private",
+        },
+        {
+          authority: "player_statement",
+          event_ref: "472",
+          kind: "player_statement",
+          known_at_seq: 472,
+          speaker_ref: "seat_6",
+          speech: "6号上警，我先听后置位怎么说。",
+          visibility: "public",
+        },
+      ],
+      schema_version: 1,
+    };
+    stubRecordFetch({
+      ...detail,
+      title: "V8 已知事件验收",
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          model_context_schema_version: 8,
+          model_view_selector_version: 1,
+          prompt_schema_version: 8,
+          prompt_template_version: 1,
+          prompt_projection: {
+            dropped_event_count: 3,
+            dropped_event_refs: ["100", "101", "102"],
+            known_event_count: 2,
+            known_event_record_seq_max: 472,
+            known_event_record_seq_min: 258,
+            known_event_total_count: 5,
+            known_events_schema_version: 1,
+            model_context_schema_version: 8,
+            model_view_schema_version: 3,
+            model_view_selector_version: 1,
+            prompt_template_version: 1,
+            retained_event_refs: ["knowledge-seer-night-1", "472"],
+            retention_reasons: {
+              "472": "current_round",
+              "knowledge-seer-night-1": "actor_private",
+            },
+            section_char_counts: { known_events: 680, task: 90 },
+            selection_budget_chars: 8000,
+            selection_budget_exceeded_by_required: false,
+            selection_used_chars: 680,
+            serialized_char_count: 1600,
+          },
+          request_payload: {
+            input: [
+              {
+                content: [
+                  {
+                    text: `请执行这个实时动作：${JSON.stringify({
+                      known_events: knownEvents,
+                      model_context_schema_version: 8,
+                      prompt_template_version: 1,
+                      state: { as_of_seq: 501, round_no: 1 },
+                      task: {
+                        at_seq: 501,
+                        goal: "发表警长竞选发言。",
+                        type: "sheriff_campaign_speech",
+                      },
+                    })}`,
+                    type: "input_text",
+                  },
+                ],
+                role: "user",
+              },
+            ],
+            model: "doubao-seed-2-0-lite-260215",
+            stream: true,
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "V8 已知事件验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+
+    expect(within(inputPanel).getByText("已选 2 / 完整 5")).toBeVisible();
+    expect(within(inputPanel).getByText("未送入模型 3")).toBeVisible();
+    expect(within(inputPanel).getByText("#258 – #472")).toBeVisible();
+    expect(within(inputPanel).getByText("680 / 8,000 字符")).toBeVisible();
+    await user.click(
+      within(inputPanel).getByRole("button", {
+        name: /查看动作前已知事件（2 个）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(inputPanel).getByText("在警上发言前已经决定查验6号。"),
+      ).toBeVisible(),
+    );
+    expect(within(inputPanel).getAllByText("仅当前玩家可见")).toHaveLength(2);
+  });
+
   it("clears detail and on-demand query cache after leaving the route", async () => {
     const user = userEvent.setup();
     const { queryClient } = renderPage();

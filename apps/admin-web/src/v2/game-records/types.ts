@@ -109,6 +109,23 @@ export type V2VoiceAsset = {
 };
 
 export type V2PromptProjection = Record<string, unknown> & {
+  model_context_schema_version?: number | null;
+  prompt_template_version?: number | null;
+  known_events_schema_version?: number | null;
+  model_view_schema_version?: number | null;
+  model_view_selector_version?: number | null;
+  known_event_count?: number;
+  known_event_total_count?: number;
+  dropped_event_count?: number;
+  known_event_record_seq_min?: number | null;
+  known_event_record_seq_max?: number | null;
+  selection_budget_chars?: number;
+  selection_used_chars?: number;
+  selection_budget_exceeded_by_required?: boolean;
+  retained_event_refs?: string[];
+  dropped_event_refs?: string[];
+  retention_reasons?: Record<string, string>;
+  section_char_counts?: Record<string, number>;
   public_timeline_schema_version?: number | null;
   public_timeline_event_count?: number;
   public_timeline_record_seq_min?: number | null;
@@ -138,6 +155,9 @@ export type V2ModelRequestSummary = {
   model_provider: string | null;
   judge_configuration_version: number | null;
   prompt_schema_version: number | null;
+  model_context_schema_version: number | null;
+  prompt_template_version: number | null;
+  model_view_selector_version: number | null;
   prompt_projection: V2PromptProjection | null;
   status: "running" | "succeeded" | "failed";
   input_source: "persisted" | "reconstructed" | "unavailable";

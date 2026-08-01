@@ -525,6 +525,9 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     model_provider: str | None
     judge_configuration_version: int | None
     prompt_schema_version: int | None
+    model_context_schema_version: int | None
+    prompt_template_version: int | None
+    model_view_selector_version: int | None
     prompt_projection: dict[str, Any] | None
     status: Literal["running", "succeeded", "failed"]
     input_source: Literal["persisted", "reconstructed", "unavailable"]

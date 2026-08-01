@@ -58,6 +58,7 @@ class V2ModelDecision:
     provider_request_id: str
     first_token_ms: int
     completed_ms: int
+    decision_note: str | None = None
     raw_response: str | None = None
     boolean_field: str | None = None
     boolean_value: bool | None = None
@@ -188,7 +189,7 @@ class V2ModelClient:
             target=target,
             check_cancellation=check_cancellation,
         )
-        output_contract = action_context.get("output_contract")
+        output_contract = _decision_output_contract(action_context)
         repair_kind = _decision_repair_kind(raw, output_contract)
         try:
             (
@@ -197,6 +198,7 @@ class V2ModelClient:
                 boolean_field,
                 boolean_value,
             ) = _decision_fields(raw, output_contract)
+            decision_note = _decision_note(raw, output_contract)
         except V2QualityError as exc:
             raise V2QualityError(exc.code, raw_response=raw) from exc
         return V2ModelDecision(
@@ -205,6 +207,7 @@ class V2ModelClient:
             provider_request_id=provider_request_id,
             first_token_ms=first_token_ms,
             completed_ms=completed_ms,
+            decision_note=decision_note,
             raw_response=raw,
             boolean_field=boolean_field,
             boolean_value=boolean_value,
@@ -695,11 +698,12 @@ def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:
     context_json = json.dumps(action_context, ensure_ascii=False, separators=(",", ":"))
-    output_contract = action_context.get("output_contract")
+    output_contract = _decision_output_contract(action_context)
     if not isinstance(output_contract, dict):
         raise V2ModelError("model_decision_contract_missing")
     kind = output_contract.get("kind")
     speech_instruction = _speech_output_instruction(output_contract)
+    note_instruction = _decision_note_output_instruction(output_contract)
     if kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
@@ -710,7 +714,7 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
             f"输出一个 JSON 对象，决定字段必须是 {field}，且必须为布尔值。"
             f"true 表示{boolean.get('true_means') or '执行该动作'}，"
             f"false 表示{boolean.get('false_means') or '不执行该动作'}。"
-            f"{speech_instruction}"
+            f"{speech_instruction}{note_instruction}"
             "不要输出 target_player_id。"
         )
     elif kind == "target":
@@ -725,35 +729,44 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
                 if target_mode == "required"
                 else "该动作允许放弃，放弃时 target_player_id 为 null。"
             )
-            + f"{speech_instruction}"
+            + f"{speech_instruction}{note_instruction}"
         )
     elif kind == "speech":
         output_instruction = (
             "输出一个 JSON 对象，只使用 speech 表示本次发言。"
-            f"{speech_instruction}"
+            f"{speech_instruction}{note_instruction}"
             "不要输出 target_player_id。"
         )
     else:
         raise V2ModelError("model_decision_contract_invalid")
+    if action_context.get("model_context_schema_version") == 8:
+        system_text = (
+            "你正在扮演一名狼人杀玩家。法官事实可信，玩家发言均为未核实说法。"
+            "只能依据当前动作发生前已经对你可见的信息行动；带 seq 的信息按 seq "
+            "判断先后。策略、身份伪装和表达由你自主决定，不得使用未提供的私密信息。"
+            f"{output_instruction}只能用“N号”称呼玩家，不得生成玩家姓名。"
+        )
+    else:
+        system_text = (
+            "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
+            "和 public_state 是当前权威事实。public_timeline.events 是全部公开"
+            "事件的唯一时间轴，必须按 record_seq 判断跨发言、投票和法官事件"
+            "的先后；后发生事件只能用于事后评价，不能成为更早行动当时已有的"
+            "理由、信息、回答或反应。history 是从该时间轴派生的玩家发言与"
+            "话语标注，可能真实、撒谎或判断错误；player_statement 的"
+            "statement_ref 对应 history.timeline 的 source_event_id。"
+            "你可以自主判断、伪装身份和制定策略，但不得使用未提供的私密信息，"
+            "也不要把玩家说法当成法官确认。"
+            f"{output_instruction}"
+            "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
+        )
     return [
         {
             "role": "system",
             "content": [
                 {
                     "type": "input_text",
-                    "text": (
-                        "你正在扮演一名狼人杀玩家。hard_rules、self 中的法官私密信息"
-                        "和 public_state 是当前权威事实。public_timeline.events 是全部公开"
-                        "事件的唯一时间轴，必须按 record_seq 判断跨发言、投票和法官事件"
-                        "的先后；后发生事件只能用于事后评价，不能成为更早行动当时已有的"
-                        "理由、信息、回答或反应。history 是从该时间轴派生的玩家发言与"
-                        "话语标注，可能真实、撒谎或判断错误；player_statement 的"
-                        "statement_ref 对应 history.timeline 的 source_event_id。"
-                        "你可以自主判断、伪装身份和制定策略，但不得使用未提供的私密信息，"
-                        "也不要把玩家说法当成法官确认。"
-                        f"{output_instruction}"
-                        "只能用“N号”称呼玩家，不得猜测或生成玩家姓名。"
-                    ),
+                    "text": system_text,
                 }
             ],
         },
@@ -767,6 +780,14 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
             ],
         },
     ]
+
+
+def _decision_output_contract(action_context: dict[str, Any]) -> dict[str, Any] | None:
+    response = action_context.get("response")
+    if isinstance(response, dict):
+        return response
+    output_contract = action_context.get("output_contract")
+    return output_contract if isinstance(output_contract, dict) else None
 
 
 def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
@@ -798,6 +819,20 @@ def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
             else f"speech 不得超过{max_sentences}句话。"
         )
     return instruction
+
+
+def _decision_note_output_instruction(output_contract: dict[str, Any]) -> str:
+    note = output_contract.get("decision_note")
+    if not isinstance(note, dict) or note.get("mode") == "none":
+        return ""
+    if note.get("mode") != "optional":
+        raise V2ModelError("model_decision_contract_invalid")
+    max_chars = note.get("max_chars")
+    limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else 120
+    return (
+        f"可用 decision_note 提供不超过{limit}字的简短对局理由；"
+        "它是可供后续动作引用的声明，不是隐藏推理过程。"
+    )
 
 
 def _sse_data(line: str) -> dict[str, Any] | None:
@@ -893,7 +928,7 @@ def _normalize_json_syntax_nfkc(value: str) -> str:
 
 def _repair_structural_smart_quotes(value: str) -> str:
     repaired = re.sub(
-        r'("(?:target_player_id|speech)"\s*:\s*)“',
+        r'("(?:target_player_id|speech|decision_note)"\s*:\s*)“',
         r'\1"',
         value,
     )
@@ -998,6 +1033,31 @@ def _decision_repair_kind(raw: str, output_contract: Any) -> str | None:
     return None
 
 
+def _decision_note(raw: str, output_contract: Any) -> str | None:
+    if not isinstance(output_contract, dict):
+        return None
+    note_contract = output_contract.get("decision_note")
+    if not isinstance(note_contract, dict) or note_contract.get("mode") == "none":
+        return None
+    if note_contract.get("mode") != "optional":
+        raise V2QualityError("model_decision_contract_invalid")
+    try:
+        value = _decision_payload(
+            _decision_object(raw),
+            output_contract=output_contract,
+        ).get("decision_note")
+    except V2QualityError:
+        return None
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise V2QualityError("model_decision_invalid_note")
+    note = value.strip()
+    if not note:
+        return None
+    return note
+
+
 def _speech_field(
     value: Any,
     *,
@@ -1011,7 +1071,16 @@ def _speech_field(
     if mode == "forbidden":
         if value is None or value == "":
             return None
-        raise V2QualityError("model_decision_unexpected_speech")
+        if not isinstance(value, str):
+            raise V2QualityError("model_decision_invalid_speech")
+        speech = value.strip()
+        if not speech:
+            return None
+        if _looks_like_structured_speech(speech):
+            raise V2QualityError("model_decision_structured_speech_leak")
+        # Parsing must preserve a provider's extra speech so the action layer can
+        # audit and normalize the contract violation without retrying the model.
+        return speech
     if mode == "required_if_true" and boolean_value is False:
         if value is not None and not isinstance(value, str):
             raise V2QualityError("model_decision_invalid_speech")
@@ -1107,6 +1176,9 @@ def _looks_like_context_echo(value: str) -> bool:
         marker in prefix
         for marker in (
             '"output_contract"',
+            '"response"',
+            '"known_events"',
+            '"model_context_schema_version"',
             '"hard_rules"',
             '"public_state"',
             '"history"',
@@ -1150,17 +1222,31 @@ def _expected_output_fields(output_contract: dict[str, Any]) -> set[str]:
     kind = output_contract.get("kind")
     if kind == "boolean":
         field = output_contract.get("field")
-        return {"speech", field} if isinstance(field, str) else {"speech"}
+        fields = {"speech", field} if isinstance(field, str) else {"speech"}
+        return _with_decision_note(fields, output_contract)
     if kind == "target":
-        return {"target_player_id", "speech"}
+        return _with_decision_note({"target_player_id", "speech"}, output_contract)
     if kind == "speech":
-        return {"speech"}
+        return _with_decision_note({"speech"}, output_contract)
     return set()
+
+
+def _with_decision_note(
+    fields: set[str],
+    output_contract: dict[str, Any],
+) -> set[str]:
+    note = output_contract.get("decision_note")
+    if isinstance(note, dict) and note.get("mode") == "optional":
+        return {*fields, "decision_note"}
+    return fields
 
 
 def _is_context_echo_object(value: dict[str, Any]) -> bool:
     context_fields = {
         "output_contract",
+        "response",
+        "known_events",
+        "model_context_schema_version",
         "hard_rules",
         "public_state",
         "history",

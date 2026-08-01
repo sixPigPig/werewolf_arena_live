@@ -19,6 +19,7 @@ from app.v2.models import (
     V2VoiceAsset,
 )
 from app.v2.model_context_contract import (
+    frozen_model_context_contract,
     supports_current_model_context_contract,
 )
 
@@ -40,6 +41,8 @@ class V2ActionClaim:
     activation_id: str | None = None
     best_effort: bool = False
     non_blocking: bool = False
+    action_record_seq: int | None = None
+    model_context_contract: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -162,7 +165,8 @@ class V2ActionRepository:
             if not best_effort and not non_blocking:
                 game.status = "generating"
                 run.status = "generating"
-            _append_event(
+            action_record_seq = game.last_record_seq + 1
+            opened = _append_event(
                 db,
                 game=game,
                 run_id=run.run_id,
@@ -170,9 +174,15 @@ class V2ActionRepository:
                 payload={
                     "action_id": action_id,
                     "activation_id": activation_id,
-                    "context": {**context, "run_id": run.run_id},
+                    "context": {
+                        **context,
+                        "run_id": run.run_id,
+                        "action_record_seq": action_record_seq,
+                    },
                 },
             )
+            if opened.record_seq != action_record_seq:
+                raise V2RepositoryError("action record sequence changed while opening")
             return V2ActionClaim(
                 game_id=game.game_id,
                 run_id=run.run_id,
@@ -181,6 +191,8 @@ class V2ActionRepository:
                 activation_id=activation_id,
                 best_effort=best_effort,
                 non_blocking=non_blocking,
+                action_record_seq=action_record_seq,
+                model_context_contract=frozen_model_context_contract(game.rule_snapshot),
             )
 
     def append_event(

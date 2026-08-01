@@ -8,6 +8,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.models import (
     V2GameRecord,
     V2GameRecordEvent,
@@ -87,9 +88,7 @@ class V2MatchRepository:
                 raise V2RepositoryError("V2 match has no frozen rule")
             compiled_rule = dict(rule)
             compiled_rule["day_actions"] = list(game.ability_snapshot.get("day_actions") or [])
-            compiled_rule["ability_policies"] = dict(
-                game.ability_snapshot.get("policies") or {}
-            )
+            compiled_rule["ability_policies"] = dict(game.ability_snapshot.get("policies") or {})
             for key, value in dict(game.ability_snapshot.get("day_policies") or {}).items():
                 compiled_rule.setdefault(key, value)
             return V2MatchSnapshot(
@@ -109,22 +108,11 @@ class V2MatchRepository:
 
     def private_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
         with self._session_factory() as db:
-            rows = list(
-                db.scalars(
-                    select(V2KnowledgeFact)
-                    .where(
-                        V2KnowledgeFact.game_id == game_id,
-                        V2KnowledgeFact.owner_scope == "player",
-                        V2KnowledgeFact.owner_id == player_id,
-                    )
-                    .order_by(V2KnowledgeFact.created_at)
-                )
+            return player_private_knowledge(
+                db,
+                game_id=game_id,
+                player_id=player_id,
             )
-            return [
-                {"fact_type": row.fact_type, "payload": dict(row.payload or {})}
-                for row in rows
-                if row.fact_type != "action_context_projection"
-            ]
 
     def append_event(
         self,
@@ -319,9 +307,10 @@ class V2MatchRepository:
             hunter.state = hunter_state
             if target_player_id is not None:
                 _kill(db, game=game, player_id=target_player_id, cause="hunter_shot")
+            knowledge_fact_id = f"v2_fact_{uuid4().hex[:16]}"
             db.add(
                 V2KnowledgeFact(
-                    knowledge_fact_id=f"v2_fact_{uuid4().hex[:16]}",
+                    knowledge_fact_id=knowledge_fact_id,
                     game_id=game_id,
                     source_activation_id=None,
                     owner_scope="player",
@@ -348,6 +337,7 @@ class V2MatchRepository:
                     "period": "day",
                     "hunter_player_id": hunter_id,
                     "target_player_id": target_player_id,
+                    "knowledge_fact_id": knowledge_fact_id,
                 },
             )
 
@@ -562,9 +552,7 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
                 team="werewolves" if assignment.role_key == "werewolf" else "villagers",
                 alive=state.alive,
                 tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
-                tts_dialect=(
-                    str(profile["tts_dialect"]) if profile.get("tts_dialect") else None
-                ),
+                tts_dialect=(str(profile["tts_dialect"]) if profile.get("tts_dialect") else None),
                 model_provider=str(profile["model_provider"]),
                 model_id=str(profile["model"]),
                 model_parameters=dict(profile.get("model_parameters") or {}),

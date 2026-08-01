@@ -89,6 +89,87 @@ def test_model_client_disables_environment_proxy(
     assert captured_client_options[0]["trust_env"] is False
 
 
+def test_model_client_preserves_forbidden_speech_for_action_normalization() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "forbidden-speech-request"},
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"target_player_id\\":\\"seat_6\\",'
+                '\\"speech\\":\\"违规发言只供审计\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+    context = {
+        "model_context_schema_version": 8,
+        "response": {
+            "kind": "target",
+            "target_policy": {"mode": "required"},
+            "speech": {"mode": "forbidden"},
+        },
+    }
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=context,
+            attempt_id="v2_model_forbidden_speech",
+            target=target,
+        )
+    )
+
+    assert decision.target_player_id == "seat_6"
+    assert decision.speech == "违规发言只供审计"
+
+
+def test_model_client_parses_optional_private_decision_note() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "decision-note-request"},
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"target_player_id\\":\\"seat_6\\",'
+                '\\"decision_note\\":\\"首夜随机覆盖中置位\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+    context = {
+        "model_context_schema_version": 8,
+        "response": {
+            "kind": "target",
+            "target_policy": {"mode": "required"},
+            "speech": {"mode": "forbidden"},
+            "decision_note": {"mode": "optional", "max_chars": 120},
+        },
+    }
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=context,
+            attempt_id="v2_model_decision_note",
+            target=target,
+        )
+    )
+
+    assert decision.target_player_id == "seat_6"
+    assert decision.decision_note == "首夜随机覆盖中置位"
+
+
 def test_model_client_does_not_timeout_immediately_under_uvloop() -> None:
     uvloop = pytest.importorskip("uvloop")
 

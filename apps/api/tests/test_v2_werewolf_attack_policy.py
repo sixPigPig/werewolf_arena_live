@@ -141,7 +141,11 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
 
     assert working.attack_target == "good-3"
     assert all(spec.decision_contract.speech_max_sentences == 1 for spec in actions.specs)
-    assert all("一句话" in spec.objective for spec in actions.specs)
+    assert {spec.objective for spec in actions.specs} == {
+        "提交本夜初步袭击选择。",
+        "提交本夜最终袭击选择。",
+    }
+    assert all("一句话" not in spec.objective for spec in actions.specs)
     assert actions.specs[0].defer_presentation is True
     assert actions.specs[1].defer_presentation is True
     assert actions.specs[0].batch_id == actions.specs[1].batch_id

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 import json
 from typing import Any
 
@@ -9,12 +9,20 @@ from app.v2.ability_runtime import normalize_role_key, normalize_team_key
 from app.v2.discourse_ledger import build_public_discourse_ledger
 from app.v2.discourse_model_view import build_discourse_model_view
 from app.v2.model_context_contract import (
-    MODEL_PROMPT_SCHEMA_VERSION,
+    DISCOURSE_LEDGER_SCHEMA_VERSION,
+    DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+    KNOWN_EVENTS_SCHEMA_VERSION,
+    MODEL_CONTEXT_SCHEMA_VERSION,
+    MODEL_VIEW_SELECTOR_VERSION,
+    PROMPT_TEMPLATE_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
+    current_model_context_contract,
+    is_legacy_v7_model_context_contract,
 )
 
 
 _PERSONA_TEXT_LIMIT = 600
+_KNOWN_EVENTS_CHAR_BUDGET = 8_000
 
 
 @dataclass(frozen=True)
@@ -36,20 +44,47 @@ class V2ModelPlayerReference:
 class V2ProjectedModelContext:
     context: dict[str, Any]
     projection_metadata: dict[str, Any]
+    observation_context: dict[str, Any] = dataclass_field(default_factory=dict)
 
 
 def project_model_action_context(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
+    model_context_contract: dict[str, Any] | None = None,
+    action_record_seq: int | None = None,
 ) -> dict[str, Any]:
     return project_model_action_context_with_metadata(
         context,
         players=players,
+        model_context_contract=model_context_contract,
+        action_record_seq=action_record_seq,
     ).context
 
 
 def project_model_action_context_with_metadata(
+    context: dict[str, Any],
+    *,
+    players: tuple[V2ModelPlayerReference, ...],
+    model_context_contract: dict[str, Any] | None = None,
+    action_record_seq: int | None = None,
+) -> V2ProjectedModelContext:
+    contract = model_context_contract or current_model_context_contract()
+    if is_legacy_v7_model_context_contract(contract):
+        return _project_v7_model_action_context_with_metadata(
+            context,
+            players=players,
+        )
+    if contract != current_model_context_contract():
+        raise ValueError("unsupported_model_context_contract")
+    return _project_v8_model_action_context_with_metadata(
+        context,
+        players=players,
+        action_record_seq=action_record_seq,
+    )
+
+
+def _project_v7_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
@@ -59,6 +94,7 @@ def project_model_action_context_with_metadata(
         return V2ProjectedModelContext(
             context=projected,
             projection_metadata={},
+            observation_context=projected,
         )
     source = _project_value(context, players=players)
     private_facts = source.pop("private_authoritative_facts", None)
@@ -105,10 +141,11 @@ def project_model_action_context_with_metadata(
         latest_vote_result_ref=(
             latest_vote_result_ref if isinstance(latest_vote_result_ref, str) else None
         ),
+        model_view_schema_version=2,
     )
     hard_rules = _model_hard_rules(source.get("public_rule_contract"))
     projected_context = {
-        "prompt_schema_version": MODEL_PROMPT_SCHEMA_VERSION,
+        "prompt_schema_version": 7,
         "task": task,
         "hard_rules": hard_rules,
         "self": _model_self(
@@ -133,7 +170,469 @@ def project_model_action_context_with_metadata(
     return V2ProjectedModelContext(
         context=projected_context,
         projection_metadata=projection_metadata,
+        observation_context=projected_context,
     )
+
+
+def _project_v8_model_action_context_with_metadata(
+    context: dict[str, Any],
+    *,
+    players: tuple[V2ModelPlayerReference, ...],
+    action_record_seq: int | None,
+) -> V2ProjectedModelContext:
+    if not players:
+        projected = dict(context)
+        return V2ProjectedModelContext(
+            context=projected,
+            projection_metadata={},
+        )
+    source = _project_value(context, players=players)
+    private_facts = source.pop("private_authoritative_facts", None)
+    private_facts = private_facts if isinstance(private_facts, list) else []
+    public_history = context.get("public_history")
+    if isinstance(public_history, (list, tuple)):
+        statements, _vote_snapshots, public_events = _project_public_history(
+            public_history,
+            players=players,
+        )
+    else:
+        statements = []
+        public_events = []
+
+    current_round_no = _current_round_no(source, statements=statements)
+    identity = source.get("self_identity")
+    identity = identity if isinstance(identity, dict) else {}
+    actor_ref = identity.get("player_id")
+    actor_ref = actor_ref if isinstance(actor_ref, str) else None
+    candidates = source.get("candidates")
+    candidates = candidates if isinstance(candidates, list) else []
+    candidate_refs = [
+        str(candidate["player_id"])
+        for candidate in candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
+    ]
+    hard_rules = _model_hard_rules(source.get("public_rule_contract"))
+    if identity.get("role_key") == "werewolf" and hard_rules.get("werewolf_count") == 1:
+        private_facts = [
+            fact
+            for fact in private_facts
+            if not isinstance(fact, dict)
+            or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
+        ]
+    task_at_seq = _action_at_seq(
+        action_record_seq,
+        source=source,
+        public_events=public_events,
+        private_facts=private_facts,
+    )
+    task = _model_task_v8(source, at_seq=task_at_seq, actor_ref=actor_ref)
+    ledger = build_public_discourse_ledger(
+        statements,
+        current_round_no=current_round_no,
+        actor_ref=actor_ref,
+    )
+    observation_task = _model_task(source)
+    observation_speech_progress = _model_speech_progress(
+        observation_task,
+        actor_ref=actor_ref,
+    )
+    if observation_speech_progress is not None:
+        observation_task["speech_progress"] = observation_speech_progress
+    observation_history, _observation_metadata = build_discourse_model_view(
+        ledger,
+        actor_ref=actor_ref,
+        task=observation_task,
+        candidate_refs=candidate_refs,
+        latest_vote_result_ref=None,
+    )
+    all_known_events = _known_events(
+        public_events=public_events,
+        statements=statements,
+        private_facts=private_facts,
+        task_at_seq=task_at_seq,
+        current_round_no=current_round_no,
+    )
+    selected_events, selection_metadata = _select_known_events(
+        all_known_events,
+        actor_ref=actor_ref,
+        candidate_refs=candidate_refs,
+        current_round_no=current_round_no,
+        char_budget=_KNOWN_EVENTS_CHAR_BUDGET,
+    )
+    state = _model_public_state(source)
+    if task_at_seq is not None:
+        state["as_of_seq"] = task_at_seq
+    projected_context = {
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "task": task,
+        "self": _model_self_v8(source, hard_rules=hard_rules),
+        "rules": _model_action_rules(source, hard_rules=hard_rules),
+        "state": state,
+        "known_events": {
+            "schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
+            "events": selected_events,
+        },
+        "persona": _compact_persona(source.get("actor_profile")),
+        "candidates": candidates,
+        "response": (
+            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
+        ),
+        "player_reference_format": "seat_N",
+    }
+    projection_metadata = _v8_projection_metadata(
+        ledger=ledger,
+        projected_context=projected_context,
+        all_events=all_known_events,
+        selected_events=selected_events,
+        selection_metadata=selection_metadata,
+        current_round_no=current_round_no,
+    )
+    return V2ProjectedModelContext(
+        context=projected_context,
+        projection_metadata=projection_metadata,
+        observation_context={
+            "task": observation_task,
+            "hard_rules": hard_rules,
+            "public_timeline": _model_public_timeline(public_events),
+            "history": observation_history,
+            "known_events": projected_context["known_events"],
+        },
+    )
+
+
+def _model_task_v8(
+    source: dict[str, Any],
+    *,
+    at_seq: int | None,
+    actor_ref: str | None,
+) -> dict[str, Any]:
+    legacy = _model_task(source)
+    task: dict[str, Any] = {
+        "type": legacy.pop("action_type", None),
+        "goal": legacy.pop("objective", None),
+        "at_seq": at_seq,
+        **legacy,
+    }
+    speech_progress = _model_speech_progress(task, actor_ref=actor_ref)
+    if speech_progress is not None:
+        speech_progress.pop("instruction", None)
+        task["speech_progress"] = speech_progress
+    return {key: value for key, value in task.items() if value is not None}
+
+
+def _model_self_v8(
+    source: dict[str, Any],
+    *,
+    hard_rules: dict[str, Any],
+) -> dict[str, Any]:
+    projected = _model_self(source, private_facts=[], hard_rules=hard_rules)
+    projected.pop("private_judge_facts", None)
+    return projected
+
+
+def _model_action_rules(
+    source: dict[str, Any],
+    *,
+    hard_rules: dict[str, Any],
+) -> dict[str, Any]:
+    action_type = str(source.get("action_type") or "")
+    ability_id = source.get("ability_id")
+    ability_id = ability_id if isinstance(ability_id, str) else None
+    if ability_id is None:
+        ability_id = {
+            "guard_protect": "guard.protect",
+            "seer_investigate": "seer.investigate",
+            "witch_heal": "witch.heal",
+            "witch_poison": "witch.poison",
+            "hunter_death_shot": "hunter.death_shot",
+        }.get(action_type)
+    all_ability_rules = hard_rules.get("ability_rules")
+    all_ability_rules = all_ability_rules if isinstance(all_ability_rules, dict) else {}
+    result: dict[str, Any] = {
+        "rule_id": hard_rules.get("rule_id"),
+        "rule_version": hard_rules.get("rule_version"),
+        "player_count": hard_rules.get("player_count"),
+        "role_summary": hard_rules.get("roles"),
+        "werewolf_count": hard_rules.get("werewolf_count"),
+        "win_condition": hard_rules.get("win_condition"),
+        "reveal_policy": hard_rules.get("reveal_policy"),
+        "role_reveal_rule": hard_rules.get("role_reveal_rule"),
+        "sheriff": hard_rules.get("sheriff"),
+    }
+    ability_rule = all_ability_rules.get(ability_id) if ability_id is not None else None
+    if ability_rule is None and ability_id is not None:
+        ability_rule = all_ability_rules.get(ability_id.replace(".", "_"))
+    if ability_id is not None and isinstance(ability_rule, dict):
+        result["current_ability"] = {
+            "ability_id": ability_id,
+            **dict(ability_rule),
+        }
+    if action_type == "werewolf_self_explosion":
+        result["werewolf_self_explosion_enabled"] = hard_rules.get(
+            "werewolf_self_explosion_enabled"
+        )
+    return {
+        key: value
+        for key, value in result.items()
+        if value is not None and value != {} and value != []
+    }
+
+
+def _action_at_seq(
+    explicit: int | None,
+    *,
+    source: dict[str, Any],
+    public_events: list[dict[str, Any]],
+    private_facts: list[Any],
+) -> int | None:
+    for candidate in (explicit, source.get("action_record_seq")):
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+            return candidate
+    known_sequences = [
+        value
+        for item in [*public_events, *private_facts]
+        if isinstance(item, dict)
+        for value in (item.get("known_at_seq"), item.get("record_seq"))
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    ]
+    return max(known_sequences, default=0) + 1
+
+
+def _known_events(
+    *,
+    public_events: list[dict[str, Any]],
+    statements: list[dict[str, Any]],
+    private_facts: list[Any],
+    task_at_seq: int | None,
+    current_round_no: int,
+) -> list[dict[str, Any]]:
+    speech_by_ref = {
+        str(item.get("source_event_id")): item.get("speech")
+        for item in statements
+        if isinstance(item.get("source_event_id"), str)
+    }
+    events: list[dict[str, Any]] = []
+    for index, source_event in enumerate(public_events, start=1):
+        record_seq = _positive_int(source_event.get("record_seq"))
+        if task_at_seq is not None and record_seq is not None and record_seq > task_at_seq:
+            continue
+        item = dict(source_event)
+        statement_ref = item.pop("statement_ref", None)
+        if isinstance(statement_ref, str):
+            item["speech"] = speech_by_ref.get(statement_ref)
+        item.update(
+            {
+                "event_ref": str(item.get("source_event_id") or f"public_event_{index}"),
+                "visibility": "public",
+                "known_at_seq": record_seq,
+            }
+        )
+        if item.get("authority") == "player_claim_unverified":
+            item["authority"] = "player_statement"
+        if record_seq is None:
+            item["sequence_status"] = "legacy_unknown"
+        events.append(_drop_none_values(item))
+
+    for index, fact in enumerate(private_facts, start=1):
+        if not isinstance(fact, dict):
+            continue
+        fact_id = fact.get("knowledge_fact_id")
+        known_at_seq = _positive_int(fact.get("known_at_seq"))
+        record_seq = _positive_int(fact.get("record_seq")) or known_at_seq
+        historical = isinstance(fact_id, str) or isinstance(fact.get("source_activation_id"), str)
+        if known_at_seq is None and not historical:
+            known_at_seq = task_at_seq
+            record_seq = task_at_seq
+        if task_at_seq is not None and known_at_seq is not None and known_at_seq > task_at_seq:
+            continue
+        payload = fact.get("payload")
+        payload = dict(payload) if isinstance(payload, dict) else payload
+        occurred_in = fact.get("occurred_in")
+        if not isinstance(occurred_in, dict):
+            occurred_in = _private_fact_occurrence(payload, current_round_no=current_round_no)
+        item = {
+            "event_ref": (fact_id if isinstance(fact_id, str) else f"current_private_fact_{index}"),
+            "kind": fact.get("fact_type") or "private_judge_fact",
+            "authority": "judge_fact",
+            "visibility": "actor_private",
+            "source_activation_id": fact.get("source_activation_id"),
+            "record_seq": record_seq,
+            "known_at_seq": known_at_seq,
+            "occurred_in": occurred_in,
+            "data": payload,
+        }
+        if known_at_seq is None:
+            item["sequence_status"] = "legacy_unknown"
+        events.append(_drop_none_values(item))
+    return sorted(events, key=_known_event_sort_key)
+
+
+def _private_fact_occurrence(payload: Any, *, current_round_no: int) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        night_no = _positive_int(payload.get("night_no"))
+        if night_no is not None:
+            return {"period": "night", "round_no": night_no}
+        round_no = _positive_int(payload.get("round_no"))
+        if round_no is not None:
+            return {"period": "day", "round_no": round_no}
+    return {"period": "current_action", "round_no": current_round_no}
+
+
+def _select_known_events(
+    events: list[dict[str, Any]],
+    *,
+    actor_ref: str | None,
+    candidate_refs: list[str],
+    current_round_no: int,
+    char_budget: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    required: list[tuple[dict[str, Any], str]] = []
+    optional: list[dict[str, Any]] = []
+    candidate_set = set(candidate_refs)
+    for event in events:
+        occurred_in = event.get("occurred_in")
+        event_round = occurred_in.get("round_no") if isinstance(occurred_in, dict) else None
+        reason: str | None = None
+        if event.get("visibility") != "public":
+            reason = "actor_private"
+        elif event.get("authority") == "judge_fact":
+            reason = "authoritative_fact"
+        elif event_round == current_round_no:
+            reason = "current_round"
+        elif actor_ref is not None and event.get("speaker_ref") == actor_ref:
+            reason = "actor_statement"
+        elif event.get("speaker_ref") in candidate_set:
+            reason = "candidate_statement"
+        if reason is None:
+            optional.append(event)
+        else:
+            required.append((event, reason))
+
+    selected: list[dict[str, Any]] = [event for event, _reason in required]
+    reasons = {str(event.get("event_ref")): reason for event, reason in required}
+    used_chars = sum(_serialized_chars(event) for event in selected)
+    for event in reversed(optional):
+        event_chars = _serialized_chars(event)
+        if used_chars + event_chars > char_budget:
+            continue
+        selected.append(event)
+        used_chars += event_chars
+        reasons[str(event.get("event_ref"))] = "recent_within_budget"
+    selected_refs = {str(event.get("event_ref")) for event in selected}
+    dropped = [
+        str(event.get("event_ref"))
+        for event in events
+        if str(event.get("event_ref")) not in selected_refs
+    ]
+    selected.sort(key=_known_event_sort_key)
+    return selected, {
+        "selection_profile": "v8_action_relevant_bounded",
+        "selection_budget_chars": char_budget,
+        "selection_used_chars": used_chars,
+        "selection_budget_exceeded_by_required": used_chars > char_budget,
+        "retained_event_refs": [str(event.get("event_ref")) for event in selected],
+        "dropped_event_refs": dropped,
+        "retention_reasons": reasons,
+    }
+
+
+def _v8_projection_metadata(
+    *,
+    ledger: dict[str, Any],
+    projected_context: dict[str, Any],
+    all_events: list[dict[str, Any]],
+    selected_events: list[dict[str, Any]],
+    selection_metadata: dict[str, Any],
+    current_round_no: int,
+) -> dict[str, Any]:
+    statements = ledger.get("statements")
+    statements = statements if isinstance(statements, list) else []
+    claims = ledger.get("claims")
+    claims = claims if isinstance(claims, list) else []
+    questions = ledger.get("questions")
+    questions = questions if isinstance(questions, list) else []
+    relations = ledger.get("relations")
+    relations = relations if isinstance(relations, list) else []
+    selected_sequences = [
+        sequence
+        for event in selected_events
+        for sequence in (_positive_int(event.get("known_at_seq")),)
+        if sequence is not None
+    ]
+    section_char_counts = {
+        key: _serialized_chars(value)
+        for key, value in projected_context.items()
+        if key not in {"model_context_schema_version", "prompt_template_version"}
+    }
+    current_round_statements = [
+        statement
+        for statement in statements
+        if isinstance(statement, dict)
+        and isinstance(statement.get("occurred_in"), dict)
+        and statement["occurred_in"].get("round_no") == current_round_no
+    ]
+    return {
+        "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
+        "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+        "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
+        "serialized_char_count": _serialized_chars(projected_context),
+        "section_char_counts": section_char_counts,
+        "ledger_statement_count": len(statements),
+        "ledger_statement_char_count": sum(
+            len(str(item.get("speech") or "")) for item in statements if isinstance(item, dict)
+        ),
+        "ledger_claim_count": len(claims),
+        "ledger_question_count": len(questions),
+        "ledger_relation_count": len(relations),
+        "open_question_count": sum(
+            isinstance(question, dict) and question.get("status") == "open"
+            for question in questions
+        ),
+        "known_event_count": len(selected_events),
+        "known_event_total_count": len(all_events),
+        "dropped_event_count": len(all_events) - len(selected_events),
+        "known_event_record_seq_min": min(selected_sequences, default=None),
+        "known_event_record_seq_max": max(selected_sequences, default=None),
+        "current_round_statement_count": len(current_round_statements),
+        "current_round_statement_char_count": sum(
+            len(str(item.get("speech") or ""))
+            for item in current_round_statements
+            if isinstance(item, dict)
+        ),
+        **selection_metadata,
+    }
+
+
+def _known_event_sort_key(event: dict[str, Any]) -> tuple[int, int, int, str]:
+    known_at_seq = _positive_int(event.get("known_at_seq"))
+    record_seq = _positive_int(event.get("record_seq"))
+    sequence = known_at_seq if known_at_seq is not None else record_seq
+    timeline_index = _positive_int(event.get("timeline_index"))
+    return (
+        1 if sequence is None else 0,
+        sequence or 0,
+        timeline_index or 0,
+        str(event.get("event_ref") or ""),
+    )
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None}
+
+
+def _serialized_chars(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
 def model_prompt_metadata(
@@ -192,6 +691,8 @@ def model_prompt_metadata(
     ]
     metadata = {
         "prompt_schema_version": context.get("prompt_schema_version"),
+        "model_context_schema_version": context.get("model_context_schema_version"),
+        "prompt_template_version": context.get("prompt_template_version"),
         "serialized_char_count": len(
             json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         ),

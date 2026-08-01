@@ -15,6 +15,7 @@ def build_discourse_model_view(
     task: dict[str, Any],
     candidate_refs: list[str],
     latest_vote_result_ref: str | None,
+    model_view_schema_version: int = DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     statements = _dict_list(ledger.get("statements"))
     claims = _dict_list(ledger.get("claims"))
@@ -66,7 +67,7 @@ def build_discourse_model_view(
     )
     model_view = {
         "ledger_schema_version": ledger.get("ledger_schema_version"),
-        "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+        "model_view_schema_version": model_view_schema_version,
         "source_rules": source_rules,
         "current_round_no": ledger.get("current_round_no"),
         "timeline": timeline,
@@ -88,7 +89,7 @@ def build_discourse_model_view(
         and statement["occurred_in"].get("round_no") == current_round_no
     ]
     metadata = {
-        "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+        "model_view_schema_version": model_view_schema_version,
         "ledger_statement_count": len(statements),
         "ledger_statement_char_count": _statement_chars(statements),
         "ledger_claim_count": len(claims),

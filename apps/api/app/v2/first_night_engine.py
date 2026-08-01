@@ -373,11 +373,7 @@ class V2NightEngine:
                     activation=activation,
                     player=wolf,
                     candidates=candidates,
-                    objective=(
-                        "在看不到其他狼人本轮选择的情况下，并发提交一个初步刀口，"
-                        "并用一句话缓冲最关键理由；若全员刀口一致将直接结算，"
-                        "只有出现分歧时这句话才会进入狼队共享讨论"
-                    ),
+                    objective="提交本夜初步袭击选择。",
                     knowledge={
                         "werewolf_teammates": [
                             item.player_id for item in wolves if item.player_id != wolf.player_id
@@ -437,6 +433,7 @@ class V2NightEngine:
                         decision.target_player_id if decision is not None else None
                     ),
                     "speech": decision.speech if decision is not None else "",
+                    "decision_note": decision.speech if decision is not None else None,
                 },
                 result={
                     "adopted": complete_unanimous_proposal,
@@ -564,13 +561,7 @@ class V2NightEngine:
                     activation=activation,
                     player=wolf,
                     candidates=candidates,
-                    objective=(
-                        "阅读所有狼人第一轮初步意见，以及排在你之前的第二轮发言后，"
-                        "依次作出本夜最终选择并用一句话向后续狼人说明取舍；"
-                        "本次 target 就是你的最终票，不会再进行第三轮普通投票"
-                    )
-                    if len(wolves) > 1
-                    else "仅用一句话作出本夜袭击的最终选择",
+                    objective="提交本夜最终袭击选择。",
                     knowledge=(
                         {
                             "living_werewolf_teammates": [],
@@ -637,10 +628,7 @@ class V2NightEngine:
                     candidates=[
                         state.player(target) for target in tied_targets if target is not None
                     ],
-                    objective=(
-                        "狼队最终票出现平票。阅读全部两轮讨论和最终票型后，"
-                        "仅从最高票并列刀口中确认最终目标，并用一句话说明归票理由"
-                    ),
+                    objective="提交本夜平票裁决选择。",
                     knowledge={
                         "werewolf_teammates": [
                             item.player_id
@@ -681,6 +669,7 @@ class V2NightEngine:
                         "decision_stage": "tiebreak",
                         "target_player_id": tiebreak_decision.target_player_id,
                         "speech": tiebreak_decision.speech,
+                        "decision_note": tiebreak_decision.speech,
                     },
                     result={
                         "adopted": True,
@@ -698,6 +687,7 @@ class V2NightEngine:
                     "decision_stage": "sequential_final_vote",
                     "target_player_id": decision.target_player_id,
                     "speech": decision.speech,
+                    "decision_note": decision.speech,
                 },
                 result={
                     "adopted": decision.target_player_id == resolution.target_player_id,
@@ -859,7 +849,7 @@ class V2NightEngine:
             activation=activation,
             player=guard,
             candidates=candidates,
-            objective="选择一名今晚要守护的存活玩家；不能连续两夜守护同一目标",
+            objective="选择今晚的守护目标。",
             knowledge={
                 "night_no": state.round_no,
                 "previous_protected_target": previous_target,
@@ -870,7 +860,7 @@ class V2NightEngine:
         self._repository.complete_activation(
             state=state,
             activation=activation,
-            decision={"target_player_id": decision.target_player_id},
+            decision=_private_decision_record(decision),
             result={"effect": "protect_registered"},
             effect_type="protect",
             target_player_id=decision.target_player_id,
@@ -925,7 +915,7 @@ class V2NightEngine:
             activation=activation,
             player=seer,
             candidates=candidates,
-            objective="选择一名其他存活玩家进行查验",
+            objective="选择今晚的查验目标。",
             knowledge={
                 "known_investigations": self._repository.player_knowledge(
                     game_id=state.game_id,
@@ -939,7 +929,10 @@ class V2NightEngine:
         self._repository.complete_activation(
             state=state,
             activation=activation,
-            decision={"target_player_id": target.player_id},
+            decision=_private_decision_record(
+                decision,
+                target_player_id=target.player_id,
+            ),
             result={"alignment": alignment},
             effect_type="investigate",
             target_player_id=target.player_id,
@@ -1084,7 +1077,7 @@ class V2NightEngine:
                     activation=activation,
                     player=witch,
                     candidates=[attacked],
-                    objective="决定是否使用唯一解药救下今晚被袭击的玩家；放弃则 target_player_id 为 null",
+                    objective="决定是否使用解药。",
                     knowledge={
                         "attacked_player_id": attacked.player_id,
                         "heal_remaining": int(heal_state.get("remaining", 1)),
@@ -1097,7 +1090,7 @@ class V2NightEngine:
                 self._repository.complete_activation(
                     state=state,
                     activation=activation,
-                    decision={"target_player_id": decision.target_player_id},
+                    decision=_private_decision_record(decision),
                     result={
                         "heal_used": heal_used,
                         "decision_status": "used" if heal_used else "declined",
@@ -1165,7 +1158,7 @@ class V2NightEngine:
                         activation=activation,
                         player=witch,
                         candidates=poison_candidates,
-                        objective="决定是否使用唯一毒药；放弃则 target_player_id 为 null",
+                        objective="决定是否使用毒药；使用时选择目标。",
                         knowledge={
                             "poison_remaining": int(poison_state.get("remaining", 1)),
                             "excluded_player_ids": [
@@ -1181,7 +1174,7 @@ class V2NightEngine:
                     self._repository.complete_activation(
                         state=state,
                         activation=activation,
-                        decision={"target_player_id": decision.target_player_id},
+                        decision=_private_decision_record(decision),
                         result={
                             "poison_used": poison_used,
                             "decision_status": "used" if poison_used else "declined",
@@ -1231,7 +1224,7 @@ class V2NightEngine:
             activation=activation,
             player=hunter,
             candidates=candidates,
-            objective="你已在黎明死亡，决定是否发动猎人技能带走一名存活玩家；放弃则 target_player_id 为 null",
+            objective="决定是否发动猎人技能；发动时选择目标。",
             knowledge={"death_cause_allows_shot": True},
             optional=True,
             audience="god_view",
@@ -1239,7 +1232,7 @@ class V2NightEngine:
         self._repository.complete_activation(
             state=reaction_state,
             activation=activation,
-            decision={"target_player_id": decision.target_player_id},
+            decision=_private_decision_record(decision),
             result={"shot_used": decision.target_player_id is not None},
             effect_type="shoot" if decision.target_player_id else None,
             target_player_id=decision.target_player_id,
@@ -1399,6 +1392,9 @@ class V2NightEngine:
                     speech_max_sentences=(
                         1 if activation.ability_id == "werewolf.attack" else None
                     ),
+                    decision_note_mode=(
+                        "none" if activation.ability_id == "werewolf.attack" else "optional"
+                    ),
                 ),
                 allowed_target_ids=tuple(item.player_id for item in candidates),
                 model_players=tuple(
@@ -1504,6 +1500,19 @@ class V2NightEngine:
             ),
             audience="god_view",
         )
+
+
+def _private_decision_record(
+    decision: V2ModelDecision,
+    *,
+    target_player_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "target_player_id": (
+            decision.target_player_id if target_player_id is None else target_player_id
+        ),
+        **({"decision_note": decision.decision_note} if decision.decision_note is not None else {}),
+    }
 
 
 def _werewolf_attack_policy(state: V2NightRuntimeState) -> dict[str, Any]:

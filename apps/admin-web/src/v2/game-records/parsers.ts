@@ -255,6 +255,18 @@ export function parseV2ModelRequestSummary(
       record.prompt_schema_version === undefined
         ? null
         : nullableInteger(record.prompt_schema_version, 0),
+    model_context_schema_version:
+      record.model_context_schema_version === undefined
+        ? null
+        : nullableInteger(record.model_context_schema_version, 0),
+    prompt_template_version:
+      record.prompt_template_version === undefined
+        ? null
+        : nullableInteger(record.prompt_template_version, 0),
+    model_view_selector_version:
+      record.model_view_selector_version === undefined
+        ? null
+        : nullableInteger(record.model_view_selector_version, 0),
     prompt_projection:
       record.prompt_projection === undefined ||
       record.prompt_projection === null
@@ -333,6 +345,41 @@ export function parseV2ModelRequestSummary(
 
 function parsePromptProjection(value: unknown): V2PromptProjection {
   const projection = object(value);
+  for (const key of [
+    "model_context_schema_version",
+    "prompt_template_version",
+    "known_events_schema_version",
+    "model_view_schema_version",
+    "model_view_selector_version",
+  ]) {
+    validateOptionalInteger(projection, key, 0, true);
+  }
+  for (const key of [
+    "known_event_count",
+    "known_event_total_count",
+    "dropped_event_count",
+    "selection_budget_chars",
+    "selection_used_chars",
+  ]) {
+    validateOptionalInteger(projection, key, 0);
+  }
+  for (const key of [
+    "known_event_record_seq_min",
+    "known_event_record_seq_max",
+  ]) {
+    validateOptionalInteger(projection, key, 1, true);
+  }
+  if (projection.selection_budget_exceeded_by_required !== undefined) {
+    boolean(projection.selection_budget_exceeded_by_required);
+  }
+  for (const key of ["retained_event_refs", "dropped_event_refs"]) {
+    if (projection[key] !== undefined) {
+      array(projection[key]).forEach(text);
+    }
+  }
+  for (const key of ["retention_reasons", "section_char_counts"]) {
+    if (projection[key] !== undefined) object(projection[key]);
+  }
   validateOptionalInteger(
     projection,
     "public_timeline_schema_version",

@@ -45,6 +45,18 @@ type PublicTimelineSummary = {
   schemaVersion: number | null;
 };
 
+type KnownEventsSummary = {
+  budgetChars: number | null;
+  budgetExceededByRequired: boolean;
+  droppedCount: number;
+  recordSeqMax: number | null;
+  recordSeqMin: number | null;
+  schemaVersion: number | null;
+  selectedCount: number;
+  totalCount: number;
+  usedChars: number | null;
+};
+
 const fieldLabels: Record<string, string> = {
   ability_id: "能力",
   ability_instance_id: "能力实例 ID",
@@ -59,6 +71,7 @@ const fieldLabels: Record<string, string> = {
   actor_id: "玩家 ID",
   actor_kind: "执行者类型",
   actor_profile: "角色画像",
+  at_seq: "动作发生序号",
   allowed_knowledge: "允许使用的信息",
   allowed_target_ids: "可选目标",
   audience: "受众",
@@ -75,16 +88,20 @@ const fieldLabels: Record<string, string> = {
   current_round_no: "当前轮次",
   current_round_statement_char_count: "本轮原文字符数",
   current_round_statement_count: "本轮原文数",
+  data: "事件数据",
+  decision_note: "当时声明的简短理由",
   timeline: "完整公开发言时间线",
   decision_rules: "决策约束",
   dead_player_ids: "出局玩家",
   display_name: "玩家名称",
   event_type: "事件类型",
   events: "公开事件",
+  event_ref: "事件引用",
   exact_quote: "原话",
   facts: "已知事实",
   game_id: "对局 ID",
   game_setup: "对局配置",
+  goal: "动作目标",
   heal_remaining: "解药剩余",
   id: "ID",
   influence: "影响信号",
@@ -110,12 +127,32 @@ const fieldLabels: Record<string, string> = {
   prior_team_proposals: "此前提议",
   projection_policy_id: "信息投影规则",
   public_state: "公开事实",
+  state: "动作发生时公开状态",
   public_timeline: "统一公开时间线",
   public_history: "公开历史",
   hard_rules: "硬规则",
+  rules: "本动作相关规则",
   history: "公开发言历史",
   ledger_schema_version: "发言账本版本",
   model_view_schema_version: "模型视图版本",
+  model_context_schema_version: "模型上下文版本",
+  prompt_template_version: "提示词模板版本",
+  known_events_schema_version: "已知事件版本",
+  model_view_selector_version: "模型视图选择器版本",
+  known_events: "动作发生前已知事件",
+  known_at_seq: "获知时记录序号",
+  known_event_count: "模型已选事件数",
+  known_event_total_count: "完整已知事件数",
+  dropped_event_count: "未送入模型事件数",
+  known_event_record_seq_min: "最早已知记录序号",
+  known_event_record_seq_max: "最晚已知记录序号",
+  retained_event_refs: "保留事件引用",
+  dropped_event_refs: "未送入模型事件引用",
+  retention_reasons: "事件保留原因",
+  selection_budget_chars: "事件选择字符预算",
+  selection_used_chars: "已选事件字符数",
+  selection_budget_exceeded_by_required: "必保事件超出预算",
+  section_char_counts: "各输入区块字符数",
   ledger_statement_count: "完整账本发言数",
   ledger_statement_char_count: "完整账本发言字符数",
   ledger_claim_count: "完整账本声明数",
@@ -189,6 +226,7 @@ const fieldLabels: Record<string, string> = {
   rule_name: "规则",
   run_id: "运行 ID",
   schema_version: "结构版本",
+  response: "输出要求",
   self_heal_allowed: "允许自救",
   seat: "座位",
   signals: "信号",
@@ -198,9 +236,11 @@ const fieldLabels: Record<string, string> = {
   speaker_ref: "发言者",
   authority: "事实权威性",
   strategy_profile: "策略类型",
+  visibility: "可见范围",
   self: "玩家自身与私有事实",
   strength: "影响强度",
   target_optional: "目标可为空",
+  task: "当前动作",
   target_player_id: "目标玩家",
   target_ref: "目标玩家",
   voter_ref: "投票玩家",
@@ -208,6 +248,7 @@ const fieldLabels: Record<string, string> = {
   thinking: "思考模式",
   tts_speaker: "语音角色",
   type: "类型",
+  player_reference_format: "玩家引用格式",
   version: "版本",
   topic: "主题",
   knowledge_fact_ids: "知识事实 ID",
@@ -235,6 +276,7 @@ const valueLabels: Record<string, string> = {
   player_eliminated: "玩家出局",
   player_statement: "玩家发言",
   private: "私密",
+  actor_private: "仅当前玩家可见",
   public: "公开",
   public_speech: "公开发言",
   required: "必须选择",
@@ -257,6 +299,10 @@ export function ReadableModelInput({
   const publicTimeline = summarizePublicTimeline(
     request.prompt_projection,
     publicTimelineFromMessages(messages),
+  );
+  const knownEvents = summarizeKnownEvents(
+    request.prompt_projection,
+    knownEventsFromMessages(messages),
   );
   const serializedCharCount = numericField(
     request.prompt_projection,
@@ -335,11 +381,35 @@ export function ReadableModelInput({
           },
           {
             key: "prompt-schema",
-            label: "提示词结构",
+            label: "兼容提示词版本",
             children:
               request.prompt_schema_version === null
                 ? "—"
                 : `V${request.prompt_schema_version}`,
+          },
+          {
+            key: "model-context-schema",
+            label: "模型上下文",
+            children:
+              request.model_context_schema_version === null
+                ? "—"
+                : `V${request.model_context_schema_version}`,
+          },
+          {
+            key: "prompt-template",
+            label: "提示词模板",
+            children:
+              request.prompt_template_version === null
+                ? "—"
+                : `V${request.prompt_template_version}`,
+          },
+          {
+            key: "model-view-selector",
+            label: "事件选择器",
+            children:
+              request.model_view_selector_version === null
+                ? "—"
+                : `V${request.model_view_selector_version}`,
           },
           {
             key: "prompt-size",
@@ -405,6 +475,54 @@ export function ReadableModelInput({
             children:
               openQuestionCount === null ? "—" : String(openQuestionCount),
           },
+          ...(knownEvents
+            ? [
+                {
+                  key: "known-events",
+                  label: "动作前已知事件",
+                  children: (
+                    <Space size={6} wrap>
+                      {knownEvents.schemaVersion === null ? null : (
+                        <Tag>V{knownEvents.schemaVersion}</Tag>
+                      )}
+                      <Typography.Text>
+                        已选 {knownEvents.selectedCount} / 完整 {knownEvents.totalCount}
+                      </Typography.Text>
+                      {knownEvents.droppedCount ? (
+                        <Tag color="warning">
+                          未送入模型 {knownEvents.droppedCount}
+                        </Tag>
+                      ) : (
+                        <Tag color="success">无丢弃</Tag>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  key: "known-events-range",
+                  label: "已知事件序号范围",
+                  children: recordSeqRange(knownEvents),
+                },
+                {
+                  key: "known-events-budget",
+                  label: "事件选择预算",
+                  children:
+                    knownEvents.budgetChars === null ||
+                    knownEvents.usedChars === null
+                      ? "—"
+                      : (
+                          <Space size={6} wrap>
+                            <Typography.Text>
+                              {knownEvents.usedChars.toLocaleString("zh-CN")} / {knownEvents.budgetChars.toLocaleString("zh-CN")} 字符
+                            </Typography.Text>
+                            {knownEvents.budgetExceededByRequired ? (
+                              <Tag color="warning">必保事件超出预算</Tag>
+                            ) : null}
+                          </Space>
+                        ),
+                },
+              ]
+            : []),
           ...(publicTimeline
             ? [
                 {
@@ -450,6 +568,31 @@ export function ReadableModelInput({
         ]}
         size="small"
       />
+      {knownEvents && request.prompt_projection ? (
+        <Collapse
+          items={[
+            {
+              children: (
+                <ReadableValue
+                  value={{
+                    retained_event_refs:
+                      request.prompt_projection.retained_event_refs ?? [],
+                    dropped_event_refs:
+                      request.prompt_projection.dropped_event_refs ?? [],
+                    retention_reasons:
+                      request.prompt_projection.retention_reasons ?? {},
+                    section_char_counts:
+                      request.prompt_projection.section_char_counts ?? {},
+                  }}
+                />
+              ),
+              key: "known-event-selection-audit",
+              label: "查看事件选择审计",
+            },
+          ]}
+          size="small"
+        />
+      ) : null}
       {messages.length ? (
         messages.map((message, index) => (
           <PromptMessageCard
@@ -711,6 +854,15 @@ function ActionContext({
 }: {
   context: Record<string, unknown>;
 }) {
+  const task = isRecord(context.task) ? context.task : null;
+  const phaseId = context.phase_id ?? task?.phase_id;
+  const actionType = context.action_type ?? task?.type;
+  const objective =
+    typeof context.objective === "string"
+      ? context.objective
+      : typeof task?.goal === "string"
+        ? task.goal
+        : null;
   const primaryKeys = new Set([
     "schema_version",
     "action_id",
@@ -722,18 +874,25 @@ function ActionContext({
     "objective",
   ]);
   const descriptionItems = [
-    context.phase_id !== undefined
+    phaseId !== undefined
       ? {
           key: "phase",
           label: "阶段",
-          children: displayScalar(context.phase_id, "phase_id"),
+          children: displayScalar(phaseId, "phase_id"),
         }
       : null,
-    context.action_type !== undefined
+    actionType !== undefined
       ? {
           key: "action",
           label: "动作",
-          children: displayScalar(context.action_type, "action_type"),
+          children: displayScalar(actionType, "action_type"),
+        }
+      : null,
+    task?.at_seq !== undefined
+      ? {
+          key: "at-seq",
+          label: "动作发生序号",
+          children: displayScalar(task.at_seq, "record_seq"),
         }
       : null,
     context.actor !== undefined
@@ -782,16 +941,18 @@ function ActionContext({
           size="small"
         />
       ) : null}
-      {typeof context.objective === "string" && context.objective ? (
+      {objective ? (
         <section className="v2-objective-callout">
           <Typography.Text type="secondary">动作目标</Typography.Text>
-          <Typography.Paragraph>{context.objective}</Typography.Paragraph>
+          <Typography.Paragraph>{objective}</Typography.Paragraph>
         </section>
       ) : null}
       {groups.length ? (
         <div className="v2-readable-groups">
           {groups.map(([key, value]) =>
-            key === "public_timeline" && isRecord(value) ? (
+            key === "known_events" && isRecord(value) ? (
+              <KnownEventsGroup key={key} value={value} />
+            ) : key === "public_timeline" && isRecord(value) ? (
               <PublicTimelineGroup key={key} value={value} />
             ) : (
               <ReadableGroup key={key} label={fieldLabel(key)} value={value} />
@@ -800,6 +961,76 @@ function ActionContext({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function KnownEventsGroup({
+  value,
+}: {
+  value: Record<string, unknown>;
+}) {
+  const events = Array.isArray(value.events) ? value.events : [];
+  return (
+    <section className="v2-readable-group">
+      <Typography.Text className="v2-readable-group-title" strong>
+        动作发生前已知事件
+      </Typography.Text>
+      <Collapse
+        items={[
+          {
+            children: events.length ? (
+              <div className="v2-readable-list">
+                {events.map((event, index) => (
+                  <div className="v2-readable-list-item" key={index}>
+                    <KnownEventHeader event={event} index={index} />
+                    <ReadableValue value={event} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty description="当前动作没有已知事件" />
+            ),
+            key: "known-events-details",
+            label: `查看动作前已知事件（${events.length} 个）`,
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
+function KnownEventHeader({
+  event,
+  index,
+}: {
+  event: unknown;
+  index: number;
+}) {
+  if (!isRecord(event)) {
+    return <Typography.Text type="secondary">{index + 1}</Typography.Text>;
+  }
+  const knownAtSeq = integerNumber(event.known_at_seq);
+  const kind = typeof event.kind === "string" ? event.kind : null;
+  const authority =
+    typeof event.authority === "string" ? event.authority : null;
+  const visibility =
+    typeof event.visibility === "string" ? event.visibility : null;
+  return (
+    <Space size={6} wrap>
+      <Tag>{knownAtSeq === null ? `事件 ${index + 1}` : `#${knownAtSeq}`}</Tag>
+      {kind ? <Tag color="blue">{timelineKindLabel(kind)}</Tag> : null}
+      {visibility ? (
+        <Tag color={visibility === "actor_private" ? "purple" : "default"}>
+          {valueLabels[visibility] ?? visibility}
+        </Tag>
+      ) : null}
+      {authority ? (
+        <Typography.Text type="secondary">
+          {valueLabels[authority] ?? authority}
+        </Typography.Text>
+      ) : null}
+    </Space>
   );
 }
 
@@ -972,6 +1203,67 @@ function publicTimelineFromMessages(
   return null;
 }
 
+function knownEventsFromMessages(
+  messages: RequestMessage[],
+): Record<string, unknown> | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const structured = parseStructuredPrompt(messages[index].text);
+    if (structured && isRecord(structured.value.known_events)) {
+      return structured.value.known_events;
+    }
+  }
+  return null;
+}
+
+function summarizeKnownEvents(
+  projection: V2PromptProjection | null,
+  value: Record<string, unknown> | null,
+): KnownEventsSummary | null {
+  const events = value && Array.isArray(value.events) ? value.events : null;
+  const metadataPresent =
+    projection !== null &&
+    [
+      "known_events_schema_version",
+      "known_event_count",
+      "known_event_total_count",
+      "dropped_event_count",
+      "known_event_record_seq_min",
+      "known_event_record_seq_max",
+    ].some((key) => projection[key] !== undefined);
+  if (!events && !metadataPresent) return null;
+
+  const eventRecords = (events ?? []).filter(isRecord);
+  const sequences = eventRecords.flatMap((event) => {
+    const sequence =
+      integerNumber(event.known_at_seq) ?? integerNumber(event.record_seq);
+    return sequence === null ? [] : [sequence];
+  });
+  const selectedCount =
+    numericField(projection, "known_event_count") ?? events?.length ?? 0;
+  const totalCount =
+    numericField(projection, "known_event_total_count") ?? selectedCount;
+  return {
+    budgetChars: numericField(projection, "selection_budget_chars"),
+    budgetExceededByRequired:
+      projection?.selection_budget_exceeded_by_required === true,
+    droppedCount:
+      numericField(projection, "dropped_event_count") ??
+      Math.max(0, totalCount - selectedCount),
+    recordSeqMax:
+      numericField(projection, "known_event_record_seq_max") ??
+      (sequences.length ? Math.max(...sequences) : null),
+    recordSeqMin:
+      numericField(projection, "known_event_record_seq_min") ??
+      (sequences.length ? Math.min(...sequences) : null),
+    schemaVersion:
+      numericField(projection, "known_events_schema_version") ??
+      integerNumber(value?.schema_version),
+    selectedCount,
+    totalCount,
+    usedChars: numericField(projection, "selection_used_chars"),
+  };
+}
+
 function summarizePublicTimeline(
   projection: V2PromptProjection | null,
   value: Record<string, unknown> | null,
@@ -1050,7 +1342,10 @@ function integerNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
-function recordSeqRange(summary: PublicTimelineSummary) {
+function recordSeqRange(summary: {
+  recordSeqMax: number | null;
+  recordSeqMin: number | null;
+}) {
   if (summary.recordSeqMin === null || summary.recordSeqMax === null) return "—";
   if (summary.recordSeqMin === summary.recordSeqMax) {
     return `#${summary.recordSeqMin}`;

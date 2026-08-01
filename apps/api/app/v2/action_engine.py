@@ -135,6 +135,8 @@ class V2DecisionContract:
     boolean_field: str | None = None
     true_meaning: str | None = None
     false_meaning: str | None = None
+    decision_note_mode: Literal["none", "optional"] = "none"
+    decision_note_max_chars: int = 120
 
 
 @dataclass(frozen=True)
@@ -522,8 +524,11 @@ class V2ActionEngine:
                 projected_model_context = project_model_action_context_with_metadata(
                     context,
                     players=spec.model_players,
+                    model_context_contract=claim.model_context_contract,
+                    action_record_seq=claim.action_record_seq,
                 )
                 model_context = projected_model_context.context
+                observation_context = projected_model_context.observation_context
                 prompt_projection = model_prompt_metadata(
                     model_context,
                     projection_metadata=(projected_model_context.projection_metadata),
@@ -608,7 +613,19 @@ class V2ActionEngine:
                                 "actor_kind": spec.actor_kind,
                                 "actor_id": spec.actor_id,
                                 "audience": spec.audience,
-                                "prompt_schema_version": model_context.get("prompt_schema_version"),
+                                "prompt_schema_version": (
+                                    model_context.get("prompt_schema_version")
+                                    or model_context.get("model_context_schema_version")
+                                ),
+                                "model_context_schema_version": model_context.get(
+                                    "model_context_schema_version"
+                                ),
+                                "prompt_template_version": model_context.get(
+                                    "prompt_template_version"
+                                ),
+                                "model_view_selector_version": prompt_projection.get(
+                                    "model_view_selector_version"
+                                ),
                                 "prompt_projection": prompt_projection,
                                 "request_payload": request_payload,
                             },
@@ -756,10 +773,27 @@ class V2ActionEngine:
                     if raw_model_speech is not None
                     else None
                 )
+                passive_observations = observe_model_speech(
+                    sanitized_speech,
+                    hard_rules=(
+                        observation_context.get("hard_rules")
+                        if isinstance(observation_context.get("hard_rules"), dict)
+                        else {}
+                    ),
+                    model_context=observation_context,
+                )
                 constrained_speech, speech_constraint_reasons = _constrain_model_speech(
                     sanitized_speech,
                     max_chars=spec.decision_contract.speech_max_chars,
                     max_sentences=spec.decision_contract.speech_max_sentences,
+                )
+                raw_decision_note = model_decision.decision_note
+                constrained_decision_note, decision_note_constraint_reasons = (
+                    _constrain_model_speech(
+                        raw_decision_note,
+                        max_chars=spec.decision_contract.decision_note_max_chars,
+                        max_sentences=None,
+                    )
                 )
                 model_decision = replace(
                     model_decision,
@@ -769,15 +803,7 @@ class V2ActionEngine:
                         if spec.decision_contract.speech_mode == "forbidden"
                         else constrained_speech
                     ),
-                )
-                passive_observations = observe_model_speech(
-                    model_decision.speech,
-                    hard_rules=(
-                        model_context.get("hard_rules")
-                        if isinstance(model_context.get("hard_rules"), dict)
-                        else {}
-                    ),
-                    model_context=model_context,
+                    decision_note=constrained_decision_note,
                 )
                 self._repository.append_event(
                     game_id=claim.game_id,
@@ -793,6 +819,7 @@ class V2ActionEngine:
                     "target_player_ref": (original_target if spec.model_players else None),
                     "target_player_id": resolved_target,
                     "speech": model_decision.speech,
+                    "decision_note": model_decision.decision_note,
                 }
                 if (
                     model_decision.boolean_field is not None
@@ -853,6 +880,22 @@ class V2ActionEngine:
                             "original_chars": _speech_character_count(sanitized_speech or ""),
                             "normalized_chars": _speech_character_count(
                                 model_decision.speech or ""
+                            ),
+                        },
+                    )
+                if decision_note_constraint_reasons:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_decision_note_normalized",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "reason": "decision_note_constraint",
+                            "constraints": list(decision_note_constraint_reasons),
+                            "max_chars": spec.decision_contract.decision_note_max_chars,
+                            "original_chars": _speech_character_count(raw_decision_note or ""),
+                            "normalized_chars": _speech_character_count(
+                                constrained_decision_note or ""
                             ),
                         },
                     )
@@ -1243,6 +1286,12 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
         "language": "zh-CN",
         "speech": speech,
     }
+    if contract.decision_note_mode == "optional":
+        output["decision_note"] = {
+            "type": "string",
+            "mode": "optional",
+            "max_chars": contract.decision_note_max_chars,
+        }
     if contract.kind == "speech":
         output["required_fields"] = ["speech"] if contract.speech_mode == "required" else []
         return output

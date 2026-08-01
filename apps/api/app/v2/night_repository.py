@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.ability_runtime import ability_snapshot_hash, resolve_first_night
+from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
@@ -289,9 +290,7 @@ class V2NightRepository:
                                 "ability_id": activation.ability_id,
                                 "night_no": state.round_no,
                                 "decision": {
-                                    key: value
-                                    for key, value in decision.items()
-                                    if key != "speech"
+                                    key: value for key, value in decision.items() if key != "speech"
                                 },
                                 "result": dict(result),
                                 "resolution_scope": (
@@ -522,9 +521,7 @@ class V2NightRepository:
                 and not _pending_terminal_is_inevitable(db, game)
             )
             game.phase_state = (
-                "sheriff_election_ready"
-                if should_elect_before_dawn
-                else "dawn_announcement_ready"
+                "sheriff_election_ready" if should_elect_before_dawn else "dawn_announcement_ready"
             )
             game.status = "ready"
             _run(db, game.current_run_id).status = "ready"
@@ -960,21 +957,11 @@ class V2NightRepository:
 
     def player_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
         with self._session_factory() as db:
-            rows = list(
-                db.scalars(
-                    select(V2KnowledgeFact)
-                    .where(
-                        V2KnowledgeFact.game_id == game_id,
-                        V2KnowledgeFact.owner_scope == "player",
-                        V2KnowledgeFact.owner_id == player_id,
-                        V2KnowledgeFact.fact_type != "action_context_projection",
-                    )
-                    .order_by(V2KnowledgeFact.created_at)
-                )
+            return player_private_knowledge(
+                db,
+                game_id=game_id,
+                player_id=player_id,
             )
-            return [
-                {"fact_type": row.fact_type, "payload": dict(row.payload or {})} for row in rows
-            ]
 
     def record_player_knowledge(
         self,
@@ -1145,9 +1132,7 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
                 team=("werewolves" if assignment.role_key == "werewolf" else "villagers"),
                 alive=player_state.alive,
                 tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
-                tts_dialect=(
-                    str(profile["tts_dialect"]) if profile.get("tts_dialect") else None
-                ),
+                tts_dialect=(str(profile["tts_dialect"]) if profile.get("tts_dialect") else None),
                 model_provider=str(profile["model_provider"]),
                 model_id=str(profile["model"]),
                 model_parameters=dict(profile.get("model_parameters") or {}),

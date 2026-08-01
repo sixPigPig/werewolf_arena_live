@@ -10,10 +10,12 @@ from app.v2.model_context import (
     model_prompt_metadata,
     private_authoritative_facts,
     project_model_action_context,
+    project_model_action_context_with_metadata,
     resolve_model_target,
     sanitize_model_speech,
 )
 from app.v2.model_client import build_model_request_payload
+from app.v2.model_context_contract import legacy_v7_model_context_contract
 
 
 PLAYERS = (
@@ -124,7 +126,9 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "沈砚" not in serialized
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
-    assert projected["task"]["objective"] == "2号需要判断4号是否可信"
+    assert projected["model_context_schema_version"] == 8
+    assert projected["prompt_template_version"] == 1
+    assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
         "seat": 2,
@@ -136,25 +140,37 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
         "seat": 4,
         "display_name": "4号",
     }
-    assert projected["self"]["private_judge_facts"] == [
-        {
-            "fact_type": "investigation_alignment",
-            "payload": {
-                "target_player_id": "seat_4",
-                "alignment": "werewolves",
-                "night_no": 1,
-            },
-        }
-    ]
-    assert projected["public_state"] == {
+    private_fact = next(
+        event
+        for event in projected["known_events"]["events"]
+        if event["visibility"] == "actor_private"
+    )
+    assert private_fact == {
+        "event_ref": "current_private_fact_1",
+        "kind": "investigation_alignment",
+        "authority": "judge_fact",
+        "visibility": "actor_private",
+        "record_seq": 1,
+        "known_at_seq": 1,
+        "occurred_in": {"period": "night", "round_no": 1},
+        "data": {
+            "target_player_id": "seat_4",
+            "alignment": "werewolves",
+            "night_no": 1,
+        },
+    }
+    assert projected["state"] == {
         "round_no": 1,
         "alive_player_count": 2,
         "alive_player_ids": ["seat_2", "seat_4"],
         "eliminated_player_count": 1,
         "eliminated_player_ids": ["seat_1"],
         "identity_information_included": False,
+        "as_of_seq": 1,
     }
-    public_events = projected["public_timeline"]["events"]
+    public_events = [
+        event for event in projected["known_events"]["events"] if event["visibility"] == "public"
+    ]
     assert [item["kind"] for item in public_events] == [
         "night_result",
         "player_statement",
@@ -162,62 +178,24 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     ]
     assert [item["timeline_index"] for item in public_events] == [1, 2, 3]
     assert public_events[0]["authority"] == "judge_fact"
-    assert public_events[1] == {
-        "kind": "player_statement",
-        "authority": "player_claim_unverified",
-        "source_event_id": "history_2",
-        "occurred_in": {"period": "day", "round_no": 1},
-        "stage": "day_debate",
-        "speaker_ref": "seat_2",
-        "statement_ref": "history_2",
-        "timeline_index": 2,
-    }
+    assert public_events[1]["authority"] == "player_statement"
+    assert public_events[1]["speaker_ref"] == "seat_2"
+    assert public_events[1]["speech"] == "昨晚1号出局，我怀疑4号。"
+    assert public_events[1]["event_ref"] == "history_2"
     assert public_events[2]["public_reason"] == "exile"
     assert public_events[2]["role_revealed"] is False
-    timeline = projected["history"]["timeline"]
-    assert len(timeline) == 1
-    assert {key: value for key, value in timeline[0].items() if key != "annotations"} == {
-        "statement_id": "statement_history_2",
-        "source_event_id": "history_2",
-        "turn_index": 1,
-        "occurred_in": {"period": "day", "round_no": 1},
-        "stage": "day_debate",
-        "speaker_ref": "seat_2",
-        "source_kind": "speaker_statement",
-        "speech": "昨晚1号出局，我怀疑4号。",
-    }
-    assert timeline[0]["annotations"][0]["claim_type"] == "player_assessment"
-    assert "exact_quote" not in timeline[0]["annotations"][0]
-    assert projected["prompt_schema_version"] == 7
-    assert projected["public_timeline"]["schema_version"] == 1
-    assert projected["history"]["ledger_schema_version"] == 2
-    assert projected["history"]["model_view_schema_version"] == 2
-    assert projected["history"]["questions"] == []
-    assert projected["history"]["relations"] == []
-    assert "information_semantics" not in projected
-    assert "player_claims" not in projected
-    assert "current_information_summary" not in projected
-    assert "role_information_boundaries" not in projected
+    assert projected["known_events"]["schema_version"] == 1
+    assert "history" not in projected
+    assert "public_timeline" not in projected
+    assert "source_rules" not in serialized
+    assert "annotations" not in serialized
     metadata = model_prompt_metadata(projected)
-    assert metadata["prompt_schema_version"] == 7
+    assert metadata["prompt_schema_version"] is None
+    assert metadata["model_context_schema_version"] == 8
+    assert metadata["prompt_template_version"] == 1
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
-    assert metadata["ledger_schema_version"] == 2
-    assert metadata["model_view_schema_version"] == 2
-    assert metadata["public_timeline_schema_version"] == 1
-    assert metadata["public_timeline_event_count"] == 3
-    assert metadata["public_timeline_missing_record_seq_count"] == 3
-    assert metadata["public_timeline_kind_counts"] == {
-        "night_result": 1,
-        "player_statement": 1,
-        "player_eliminated": 1,
-    }
-    assert metadata["current_round_statement_count"] == 1
-    assert metadata["current_round_statement_char_count"] == len("昨晚1号出局，我怀疑4号。")
-    assert metadata["structured_claim_count"] == 1
-    assert metadata["question_count"] == 0
-    assert metadata["relation_count"] == 0
 
 
 def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> None:
@@ -280,30 +258,70 @@ def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> 
         players=players,
     )
 
-    events = projected["public_timeline"]["events"]
+    events = projected["known_events"]["events"]
     assert [(item["record_seq"], item["kind"]) for item in events] == [
         (448, "player_statement"),
         (562, "day_vote"),
         (564, "day_vote"),
     ]
-    assert events[0]["statement_ref"] == "448"
+    assert events[0]["event_ref"] == "448"
+    assert events[0]["speech"] == "警徽流：今晚验2号，明晚验5号。"
     assert [
         (item["voter_ref"], item["target_ref"]) for item in events if item["kind"] == "day_vote"
     ] == [
         ("seat_2", "seat_7"),
         ("seat_5", "seat_7"),
     ]
-    assert projected["history"]["timeline"][0]["record_seq"] == 448
-    assert projected["history"]["timeline"][0]["speech"] == "警徽流：今晚验2号，明晚验5号。"
-    assert "judge_facts" not in projected["public_state"]
-    metadata = model_prompt_metadata(projected)
-    assert metadata["public_timeline_record_seq_min"] == 448
-    assert metadata["public_timeline_record_seq_max"] == 564
-    assert metadata["public_timeline_missing_record_seq_count"] == 0
-    assert metadata["public_timeline_kind_counts"] == {
-        "player_statement": 1,
-        "day_vote": 2,
-    }
+    assert "judge_facts" not in projected["state"]
+    assert projected["task"]["at_seq"] == 565
+    projection = project_model_action_context_with_metadata(
+        {
+            "round_no": 1,
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "system-player-08",
+                "seat": 8,
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+            "public_history": [
+                {
+                    "source_event_id": event["source_event_id"],
+                    "record_seq": event["record_seq"],
+                    "event_type": (
+                        "public_player_speech_presented"
+                        if event["kind"] == "player_statement"
+                        else "day_vote_committed"
+                    ),
+                    "payload": (
+                        {
+                            "round_no": 1,
+                            "stage": "sheriff_campaign_speech",
+                            "player_id": "system-player-06",
+                            "speech": "警徽流：今晚验2号，明晚验5号。",
+                        }
+                        if event["kind"] == "player_statement"
+                        else {
+                            "round_no": 1,
+                            "action_type": "sheriff_vote",
+                            "voter_player_id": (
+                                "system-player-02"
+                                if event["record_seq"] == 562
+                                else "system-player-05"
+                            ),
+                            "target_player_id": "system-player-07",
+                            "weight": 1.0,
+                        }
+                    ),
+                }
+                for event in events
+            ],
+        },
+        players=players,
+    )
+    assert projection.projection_metadata["known_event_record_seq_min"] == 448
+    assert projection.projection_metadata["known_event_record_seq_max"] == 564
+    assert projection.projection_metadata["known_event_count"] == 3
 
 
 def test_model_context_projects_current_speech_position_and_remaining_speakers() -> None:
@@ -333,10 +351,6 @@ def test_model_context_projects_current_speech_position_and_remaining_speakers()
         "total_speakers": 3,
         "scheduled_before_refs": ["seat_4"],
         "remaining_speaker_refs": ["seat_1"],
-        "instruction": (
-            "remaining_speaker_refs 中的玩家本轮尚未轮到发言；"
-            "不得因此描述成拒绝回应、故意沉默或轮到后仍不解释"
-        ),
     }
 
 
@@ -375,12 +389,114 @@ def test_public_timeline_preserves_input_order_for_legacy_duplicate_sequence() -
 
     assert [
         (event["source_event_id"], event["timeline_index"])
-        for event in projected["public_timeline"]["events"]
+        for event in projected["known_events"]["events"]
     ] == [("562", 1), ("legacy-duplicate", 2)]
-    assert (
-        "不得推断这些同序事件之间的精确因果先后"
-        in (projected["public_timeline"]["source_rules"]["duplicate_record_seq_rule"])
+    assert "source_rules" not in json.dumps(projected, ensure_ascii=False)
+
+
+def test_v8_known_events_places_private_investigation_before_later_public_speech() -> None:
+    players = tuple(
+        V2ModelPlayerReference(
+            player_id=f"system-player-{seat:02d}",
+            seat=seat,
+            display_name=f"{seat}号玩家",
+        )
+        for seat in (6, 8)
     )
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "action_type": "sheriff_campaign_speech",
+            "objective": "发表警长竞选发言。",
+            "self_identity": {
+                "player_id": "system-player-08",
+                "seat": 8,
+                "role_key": "seer",
+                "team": "villagers",
+            },
+            "private_authoritative_facts": [
+                {
+                    "knowledge_fact_id": "knowledge-seer-night-1",
+                    "source_activation_id": "activation-seer-night-1",
+                    "fact_type": "private_ability_action_committed",
+                    "record_seq": 258,
+                    "known_at_seq": 258,
+                    "occurred_in": {"period": "night", "round_no": 1},
+                    "payload": {
+                        "ability_id": "seer.investigate",
+                        "night_no": 1,
+                        "decision": {
+                            "target_player_id": "system-player-06",
+                            "decision_note": "在任何警上发言前已决定查验6号。",
+                        },
+                        "result": {
+                            "target_player_id": "system-player-06",
+                            "alignment": "werewolves",
+                        },
+                    },
+                }
+            ],
+            "public_history": [
+                {
+                    "source_event_id": 472,
+                    "record_seq": 472,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "sheriff_campaign_speech",
+                        "player_id": "system-player-06",
+                        "speech": "6号上警，我先听后置位怎么说。",
+                    },
+                }
+            ],
+        },
+        players=players,
+        action_record_seq=501,
+    )
+
+    events = projected["known_events"]["events"]
+    assert [(event["event_ref"], event["known_at_seq"]) for event in events] == [
+        ("knowledge-seer-night-1", 258),
+        ("472", 472),
+    ]
+    assert events[0]["visibility"] == "actor_private"
+    assert events[0]["data"]["decision"] == {
+        "target_player_id": "seat_6",
+        "decision_note": "在任何警上发言前已决定查验6号。",
+    }
+    assert events[1]["speaker_ref"] == "seat_6"
+    assert projected["task"]["at_seq"] == 501
+    assert projected["state"]["as_of_seq"] == 501
+    assert events[0]["known_at_seq"] < events[1]["known_at_seq"] < projected["task"]["at_seq"]
+
+
+def test_legacy_v7_contract_keeps_legacy_projection_shape() -> None:
+    projected = project_model_action_context(
+        {
+            "action_type": "day_debate_speech",
+            "objective": "发表白天发言。",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "public_history": [],
+            "output_contract": {
+                "kind": "speech",
+                "speech": {"mode": "required"},
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=legacy_v7_model_context_contract(),
+    )
+
+    assert projected["prompt_schema_version"] == 7
+    assert projected["task"]["action_type"] == "day_debate_speech"
+    assert projected["output_contract"]["kind"] == "speech"
+    assert "history" in projected
+    assert "public_timeline" in projected
+    assert "known_events" not in projected
 
 
 def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> None:
@@ -452,21 +568,18 @@ def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> 
         players=PLAYERS,
     )
 
-    assert {item["source_event_id"] for item in projected["history"]["timeline"]} == {
+    events = projected["known_events"]["events"]
+    assert {item["source_event_id"] for item in events} == {
         "101",
         "102",
         "103",
         "104",
         "105",
     }
-    prior_claims = [
-        claim
-        for claim in _history_claims(projected)
-        if claim["source_event_id"] in {"101", "102"} and claim["claim_type"] == "player_assessment"
-    ]
-    assert [claim["source_event_id"] for claim in prior_claims] == ["101", "102"]
-    assert all("exact_quote" not in claim for claim in prior_claims)
-    assert projected["history"]["timeline"][0]["speech"].endswith(quiet_detail)
+    assert next(item for item in events if item["source_event_id"] == "101")["speech"].endswith(
+        quiet_detail
+    )
+    assert "annotations" not in json.dumps(projected, ensure_ascii=False)
 
 
 def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
@@ -483,7 +596,7 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
         }
         for index in range(1, 41)
     ]
-    projected = project_model_action_context(
+    projection = project_model_action_context_with_metadata(
         {
             "action_type": "day_debate_speech",
             "public_history": public_history,
@@ -495,14 +608,25 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
         players=PLAYERS,
     )
 
-    timeline = projected["history"]["timeline"]
-    claims = _history_claims(projected)
-    assert len(timeline) == 40
-    assert all("speech_truncated" not in item for item in timeline)
-    assert all(len(item["speech"]) > 1_800 for item in timeline)
-    assert len(claims) == 40
-    assert len({claim["claim_id"] for claim in claims}) == len(claims)
-    assert model_prompt_metadata(projected)["serialized_char_count"] > 50_000
+    projected = projection.context
+    events = projected["known_events"]["events"]
+    metadata = projection.projection_metadata
+    assert metadata["ledger_statement_count"] == 40
+    assert metadata["known_event_total_count"] == 40
+    assert metadata["known_event_count"] < 40
+    assert metadata["dropped_event_count"] > 0
+    assert metadata["dropped_event_refs"]
+    assert set(metadata["retained_event_refs"]).isdisjoint(metadata["dropped_event_refs"])
+    assert all("speech_truncated" not in item for item in events)
+    assert all(len(item["speech"]) > 1_800 for item in events)
+    assert metadata["selection_budget_exceeded_by_required"] is True
+    assert (
+        model_prompt_metadata(
+            projected,
+            projection_metadata=metadata,
+        )["serialized_char_count"]
+        < 20_000
+    )
 
 
 def test_model_context_uses_every_presented_public_player_speech_without_duplicates() -> None:
@@ -555,16 +679,14 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
         players=PLAYERS,
     )
 
-    assert [statement["source_event_id"] for statement in projected["history"]["timeline"]] == [
+    events = projected["known_events"]["events"]
+    assert [statement["source_event_id"] for statement in events] == [
         "11",
+        "20",
         "21",
     ]
-    assert projected["history"]["timeline"][1]["speech"] == ("我昨夜验了2号，2号是金水。")
-    transfer = next(
-        event
-        for event in projected["public_timeline"]["events"]
-        if event["kind"] == "sheriff_badge_transferred"
-    )
+    assert events[2]["speech"] == "我昨夜验了2号，2号是金水。"
+    transfer = next(event for event in events if event["kind"] == "sheriff_badge_transferred")
     assert transfer["source_event_id"] == "20"
     assert transfer["authority"] == "judge_fact"
     assert transfer["payload"] == {
@@ -572,10 +694,7 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
         "player_id": "seat_2",
         "from_player_id": "seat_1",
     }
-    prior_claim = next(
-        claim for claim in _history_claims(projected) if claim["source_event_id"] == "11"
-    )
-    assert prior_claim["source_sentence_id"] == "sentence_11_1"
+    assert events[0]["speech"] == "第一天我怀疑4号。"
     assert "这条事件副本不应重复进入上下文" not in json.dumps(
         projected,
         ensure_ascii=False,
@@ -659,39 +778,19 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
         players=players,
     )
 
-    investigation = next(
-        claim
-        for claim in _history_claims(projected)
-        if claim["claim_type"] == "investigation_claim"
-    )
-    assert investigation["source_event_id"] == "417"
-    assert investigation["source_kind"] == "speaker_first_party_claim"
-    assert investigation["speaker_ref"] == "seat_8"
-    assert investigation["claimed_action_in"] == {"period": "night", "round_no": 1}
-    assert investigation["source_sentence_id"] == "sentence_417_1"
-    assert investigation["uttered_record_seq"] == 417
-    assert investigation["target_ref"] == "seat_6"
-    assert investigation["claimed_result"] == "werewolves"
-    assert [
-        (item["speaker_ref"], item["record_seq"]) for item in projected["history"]["timeline"]
-    ] == [
+    events = projected["known_events"]["events"]
+    assert [(item["speaker_ref"], item["record_seq"]) for item in events] == [
         ("seat_6", 400),
         ("seat_8", 417),
         ("seat_9", 597),
         ("seat_10", 620),
         ("seat_11", 637),
     ]
-    secondary_sources = {
-        claim["source_event_id"]
-        for claim in _history_claims(projected)
-        if claim["claim_type"] == "secondary_paraphrase"
-    }
-    assert {"597", "620", "637"} <= secondary_sources
-    assert projected["history"]["source_rules"]["player_claims"] == "unverified_even_when_repeated"
-    assert (
-        "后发生的发言不能成为先发生行动的原因"
-        in (projected["history"]["source_rules"]["causality_rule"])
-    )
+    assert events[1]["speech"].startswith("8号上警竞选，底牌预言家，昨晚验6号，查杀。")
+    assert events[2]["speech"] == "8号因为6号发言带节奏，所以昨晚验了6号。"
+    assert all(event["authority"] == "player_statement" for event in events)
+    assert "annotations" not in json.dumps(projected, ensure_ascii=False)
+    assert "source_rules" not in json.dumps(projected, ensure_ascii=False)
 
 
 def test_model_target_and_speech_are_mapped_back_to_internal_identity() -> None:
@@ -857,7 +956,7 @@ def test_private_authoritative_facts_flattens_known_investigations() -> None:
     ]
 
 
-def test_player_prompt_explains_information_sources_without_forcing_strategy() -> None:
+def test_legacy_v7_player_prompt_explains_information_sources_without_forcing_strategy() -> None:
     payload = build_model_request_payload(
         {
             "prompt_schema_version": 7,
@@ -901,6 +1000,32 @@ def test_player_prompt_explains_information_sources_without_forcing_strategy() -
     assert "role_information_boundaries" not in system_text
     assert "current_information_summary" not in system_text
     assert len(system_text) < 500
+
+
+def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
+    payload = build_model_request_payload(
+        {
+            "model_context_schema_version": 8,
+            "prompt_template_version": 1,
+            "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
+            "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
+            "rules": {"reveal_policy": "hidden"},
+            "state": {"round_no": 1, "as_of_seq": 472},
+            "known_events": {"schema_version": 1, "events": []},
+            "response": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        decision=True,
+        model_id="test-model",
+    )
+    system_text = payload["input"][0]["content"][0]["text"]
+
+    assert "法官事实可信" in system_text
+    assert "策略、身份伪装和表达由你自主决定" in system_text
+    assert "不得使用未提供的私密信息" in system_text
+    assert "public_timeline" not in system_text
+    assert "history" not in system_text
+    assert "source_rules" not in system_text
+    assert len(system_text) < 350
 
 
 def test_actor_information_composes_role_and_sheriff_capabilities() -> None:
@@ -1099,14 +1224,11 @@ def test_model_context_states_single_wolf_rule_without_generic_teammate_prompt()
         players=PLAYERS,
     )
 
-    assert projected["hard_rules"]["werewolf_count"] == 1
-    assert projected["hard_rules"]["ability_rules"]["werewolf_attack"]["coordination"] == "solo"
-    assert (
-        "can_target_werewolf_teammates"
-        not in projected["hard_rules"]["ability_rules"]["werewolf_attack"]
-    )
+    assert projected["rules"]["werewolf_count"] == 1
+    assert "ability_rules" not in projected["rules"]
+    assert "current_ability" not in projected["rules"]
     assert projected["self"]["werewolf_coordination"] == {"mode": "solo"}
-    assert "role_information_boundaries" not in projected
+    assert projected["known_events"]["events"] == []
     assert "狼人队友" not in json.dumps(projected, ensure_ascii=False)
 
 
@@ -1182,9 +1304,9 @@ def test_model_context_separates_reveals_claims_and_vote_snapshot() -> None:
         players=PLAYERS,
     )
 
-    assert projected["history"]["timeline"][0]["speech"] == ("我是预言家，2号是我的金水。")
-    assert projected["public_state"] == {}
-    public_events = projected["public_timeline"]["events"]
+    public_events = projected["known_events"]["events"]
+    assert public_events[0]["speech"] == "我是预言家，2号是我的金水。"
+    assert projected["state"]["as_of_seq"] == 1
     vote_snapshot = next(item for item in public_events if item["kind"] == "vote_result")
     assert vote_snapshot["eligible_voter_refs"] == [
         "seat_2",
@@ -1198,12 +1320,11 @@ def test_model_context_separates_reveals_claims_and_vote_snapshot() -> None:
     assert vote_snapshot["totals"] == {"seat_4": 1.5}
     exile_fact = next(item for item in public_events if item.get("public_reason") == "exile")
     assert exile_fact["role_revealed"] is False
-    assert exile_fact["known_role"] is None
+    assert "known_role" not in exile_fact
     explosion = next(
         item for item in public_events if item.get("public_reason") == "self_explosion"
     )
     assert explosion["player_ref"] == "seat_1"
     assert explosion["known_role"] == "werewolf"
-    assert "canonical_public_timeline" not in projected
-    assert "public_event_counters" not in projected
-    assert "current_information_summary" not in projected
+    assert "history" not in projected
+    assert "public_timeline" not in projected

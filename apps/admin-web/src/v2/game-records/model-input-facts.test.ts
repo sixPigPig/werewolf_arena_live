@@ -3,6 +3,44 @@ import { describe, expect, it } from "vitest";
 import { extractV2ModelInputFacts } from "@/v2/game-records/model-input-facts";
 
 describe("extractV2ModelInputFacts", () => {
+  it("lists V8 public and actor-private known events on the same clock", () => {
+    const facts = extractV2ModelInputFacts(
+      requestPayload({
+        known_events: {
+          events: [
+            {
+              authority: "judge_fact",
+              data: {
+                decision: { target_player_id: "seat_6" },
+                result: { alignment: "werewolves" },
+              },
+              event_ref: "knowledge-seer-night-1",
+              kind: "private_ability_action_committed",
+              known_at_seq: 258,
+              visibility: "actor_private",
+            },
+            {
+              authority: "player_statement",
+              event_ref: "472",
+              kind: "player_statement",
+              known_at_seq: 472,
+              speaker_ref: "seat_6",
+              speech: "6号上警，我先听后置位怎么说。",
+              visibility: "public",
+            },
+          ],
+          schema_version: 1,
+        },
+      }),
+    );
+
+    expect(facts.map((fact) => [fact.id, fact.recordSeq])).toEqual([
+      ["knowledge-seer-night-1", 258],
+      ["472", 472],
+    ]);
+    expect(facts[1].summary).toBe("6号上警，我先听后置位怎么说。");
+  });
+
   it("lists every persisted public timeline fact in source order", () => {
     const facts = extractV2ModelInputFacts(
       requestPayload({

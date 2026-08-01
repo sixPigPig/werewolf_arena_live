@@ -85,6 +85,16 @@ _SILENCE_ATTRIBUTION = re.compile(
     rf"(?:{_SEAT_NUMBER}号|有人|他|她)[^。！？!?；;]{{0,16}}"
     r"(?:说|声称|认为|提到|表示)[^。！？!?；;]{0,16}$"
 )
+_INVESTIGATION_REASON_MARKER = re.compile(
+    r"(?:验人逻辑|为什么.{0,12}(?:验|查验)|"
+    r"(?:我)?(?:验|查验|选(?:择)?(?:了)?(?:他|她|\d{1,2}号)?)"
+    r"[^。！？!?；;]{0,48}(?:因为|基于|看了|听了|看过|听过))"
+)
+_LATER_PUBLIC_INFORMATION_MARKER = re.compile(r"(?:发言|警上|上警|刚才|前面|前几位|态度|站边|逻辑)")
+_INVESTIGATION_CAUSALITY_REJECTION = re.compile(
+    r"(?:不是|并非|不能|不可能|绝不是).{0,12}(?:因为|基于)|"
+    r"(?:发言|警上|上警|刚才|前面).{0,12}(?:无关|没关系)"
+)
 
 
 def observe_model_speech(
@@ -135,6 +145,12 @@ def _observe_model_speech(
     )
     if vote_observation is not None:
         observations.append(vote_observation)
+    investigation_observation = _observe_private_action_causality(
+        speech,
+        model_context=model_context,
+    )
+    if investigation_observation is not None:
+        observations.append(investigation_observation)
     observations.extend(
         _observe_response_opportunity(
             speech,
@@ -142,6 +158,138 @@ def _observe_model_speech(
         )
     )
     return observations
+
+
+def _observe_private_action_causality(
+    speech: str,
+    *,
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(model_context, dict):
+        return None
+    known_events = model_context.get("known_events")
+    events = known_events.get("events") if isinstance(known_events, dict) else None
+    if not isinstance(events, list):
+        return None
+
+    investigations: list[dict[str, Any]] = []
+    public_statements: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("kind") == "player_statement":
+            public_statements.append(event)
+            continue
+        if event.get("visibility") != "actor_private":
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        target_ref: str | None = None
+        if event.get("kind") == "private_ability_action_committed":
+            if data.get("ability_id") != "seer.investigate":
+                continue
+            decision = data.get("decision")
+            result = data.get("result")
+            if isinstance(decision, dict):
+                target_ref = _normalized_seat_ref(decision.get("target_player_id"))
+            if target_ref is None and isinstance(result, dict):
+                target_ref = _normalized_seat_ref(result.get("target_player_id"))
+        elif event.get("kind") == "investigation_alignment":
+            target_ref = _normalized_seat_ref(data.get("target_player_id"))
+        if target_ref is None:
+            continue
+        known_at_seq = _integer_source_value(event.get("known_at_seq"))
+        if known_at_seq is None:
+            continue
+        investigations.append(
+            {
+                "event_ref": _scalar_source_value(event.get("event_ref")),
+                "known_at_seq": known_at_seq,
+                "target_ref": target_ref,
+            }
+        )
+
+    signals: list[dict[str, Any]] = []
+    for sentence_match in re.finditer(r"[^。！？!?；;]+[。！？!?；;]?", speech):
+        sentence = sentence_match.group(0)
+        if (
+            _INVESTIGATION_REASON_MARKER.search(sentence) is None
+            or _LATER_PUBLIC_INFORMATION_MARKER.search(sentence) is None
+            or _INVESTIGATION_CAUSALITY_REJECTION.search(sentence) is not None
+        ):
+            continue
+        for investigation in investigations:
+            target_ref = str(investigation["target_ref"])
+            target_number = target_ref.removeprefix("seat_")
+            if re.search(rf"(?<!\d){re.escape(target_number)}号", sentence) is None:
+                continue
+            later_statement = next(
+                (
+                    event
+                    for event in public_statements
+                    if _normalized_seat_ref(event.get("speaker_ref")) == target_ref
+                    and (
+                        statement_seq := _integer_source_value(
+                            event.get("known_at_seq", event.get("record_seq"))
+                        )
+                    )
+                    is not None
+                    and statement_seq > investigation["known_at_seq"]
+                ),
+                None,
+            )
+            if later_statement is None:
+                continue
+            signals.append(
+                {
+                    "ability_id": "seer.investigate",
+                    "target_ref": target_ref,
+                    "private_event_ref": investigation["event_ref"],
+                    "private_action_known_at_seq": investigation["known_at_seq"],
+                    "later_public_event_ref": _scalar_source_value(
+                        later_statement.get("event_ref")
+                    ),
+                    "later_public_known_at_seq": _integer_source_value(
+                        later_statement.get(
+                            "known_at_seq",
+                            later_statement.get("record_seq"),
+                        )
+                    ),
+                    "evidence": sentence.strip(),
+                }
+            )
+
+    if not signals:
+        return None
+    return {
+        "code": "private_action_causality_contradiction",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "judge_fact",
+        "signals": _deduplicate_causality_signals(signals),
+        "effect": "observed_only",
+    }
+
+
+def _deduplicate_causality_signals(
+    signals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for signal in signals:
+        identity = (
+            signal.get("target_ref"),
+            signal.get("private_action_known_at_seq"),
+            signal.get("later_public_event_ref"),
+            signal.get("evidence"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(signal)
+    return deduplicated
 
 
 def _observe_wolf_cardinality(

@@ -159,10 +159,7 @@ def create_v2_game(
             ):
                 raise HTTPException(
                     status_code=422,
-                    detail=(
-                        "Player model is not enabled: "
-                        f"{item.model_provider}/{item.model}"
-                    ),
+                    detail=(f"Player model is not enabled: {item.model_provider}/{item.model}"),
                 )
             player_snapshot = item.model_dump(mode="json", exclude_none=True)
             player_snapshot["model_parameters"] = parameter_values_with_default_max_tokens(
@@ -737,9 +734,7 @@ def list_admin_v2_model_requests(
     if len(changed) > len(page) and page:
         boundary_record_seq = page[-1].last_record_seq
         page.extend(
-            item
-            for item in changed[len(page) :]
-            if item.last_record_seq == boundary_record_seq
+            item for item in changed[len(page) :] if item.last_record_seq == boundary_record_seq
         )
     has_more = len(changed) > len(page)
     current_record_seq = events[-1].record_seq if events else after_record_seq
@@ -1309,6 +1304,21 @@ def _admin_model_requests(
                 prompt_schema_version=(
                     payload.get("prompt_schema_version")
                     if isinstance(payload.get("prompt_schema_version"), int)
+                    else None
+                ),
+                model_context_schema_version=(
+                    payload.get("model_context_schema_version")
+                    if isinstance(payload.get("model_context_schema_version"), int)
+                    else None
+                ),
+                prompt_template_version=(
+                    payload.get("prompt_template_version")
+                    if isinstance(payload.get("prompt_template_version"), int)
+                    else None
+                ),
+                model_view_selector_version=(
+                    payload.get("model_view_selector_version")
+                    if isinstance(payload.get("model_view_selector_version"), int)
                     else None
                 ),
                 prompt_projection=(

@@ -54,23 +54,8 @@ _SUPPORTED_DAY_ACTIONS = {
     "hunter_shoot",
     "summarize",
 }
-_PUBLIC_SPEECH_SEQUENCE_RULE = (
-    "引用任何公开事件时必须按实际 record_seq：后发生的发言、投票或法官事件"
-    "只能用于事后评价，不得描述成更早行动当时已有的理由、信息、回答或反应；"
-    "先发生的发言不能回答、回应或拒绝后发生的问题；如果被提问者在问题之后"
-    "没有新的公开发言，只能视为尚未在提问后回应，不表示此前从未解释或拒绝回应；"
-    "若其位于 task.speech_progress.remaining_speaker_refs，本轮尚未轮到其发言，"
-    "不得描述成故意沉默、拒绝回应或轮到后仍不解释；判断其是否曾解释时，"
-    "第一方原话优先于其他玩家的二手复述"
-)
-_SHERIFF_PK_SPEECH_OBJECTIVE = (
-    "你进入警长竞选平票 PK。围绕上一轮发言后的新争议自然补充，已说清的身份、"
-    "查验和竞选承诺无需从头重述。不得超过300字，信息较少时应更短"
-)
-_EXILE_PK_SPEECH_OBJECTIVE = (
-    "你进入公投驱逐平票 PK。围绕导致平票的核心争议自然回应，白天已经说清的"
-    "判断和全场过程无需从头重述。不得超过300字，信息较少时应更短"
-)
+_SHERIFF_PK_SPEECH_OBJECTIVE = "发表警长竞选平票 PK 发言。"
+_EXILE_PK_SPEECH_OBJECTIVE = "发表放逐平票 PK 发言。"
 _PUBLIC_SPEECH_MAX_CHARS = {
     "first_night_last_words": 200,
     "sheriff_campaign_speech": 300,
@@ -140,12 +125,9 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="first_night_last_words",
-                objective=(
-                    "你在首夜直接死亡，请发表一次不超过200字的公开遗言；"
-                    "不得声称自己知道具体死亡原因"
-                ),
+                objective="发表首夜遗言；你不知道具体死亡原因。",
                 candidates=[],
-                optional=True,
+                target_optional=None,
                 output_kind="public_speech",
                 extra_context={"death_cause_reveal_policy": "hidden"},
             )
@@ -335,9 +317,9 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="sheriff_run",
-                objective="决定是否竞选警长；run_for_sheriff=true 表示参选",
+                objective="决定是否竞选警长。",
                 candidates=[],
-                optional=False,
+                target_optional=None,
                 output_kind="public_decision",
                 decision_contract=V2DecisionContract(
                     kind="boolean",
@@ -383,13 +365,9 @@ class V2DayEngine:
                 player=candidate,
                 broadcaster=broadcaster,
                 action_type="sheriff_campaign_speech",
-                objective=(
-                    "自然发表警长竞选发言，讲清你此刻最想让其他玩家相信的内容；"
-                    "公共流程和前面已说清的内容可以略过。只有公开跳预言家时才需要"
-                    "说明后续查验计划。不得超过300字，信息较少时应更短"
-                ),
+                objective="发表警长竞选发言。",
                 candidates=[],
-                optional=True,
+                target_optional=None,
                 output_kind="public_speech",
             )
             self._record_speech(state, candidate, decision, "sheriff_campaign")
@@ -402,9 +380,9 @@ class V2DayEngine:
                 player=candidate,
                 broadcaster=broadcaster,
                 action_type="sheriff_withdraw",
-                objective="决定是否退水；withdraw=true 表示退水，false 表示不退水",
+                objective="决定是否退水。",
                 candidates=[],
-                optional=False,
+                target_optional=None,
                 output_kind="sheriff_withdraw_decision",
                 decision_contract=V2DecisionContract(
                     kind="boolean",
@@ -485,7 +463,7 @@ class V2DayEngine:
                 action_type="sheriff_pk_speech",
                 objective=_SHERIFF_PK_SPEECH_OBJECTIVE,
                 candidates=[],
-                optional=True,
+                target_optional=None,
                 output_kind="public_speech",
             )
             self._record_speech(state, candidate, decision, "sheriff_pk")
@@ -544,12 +522,9 @@ class V2DayEngine:
                     player=player,
                     broadcaster=broadcaster,
                     action_type="day_debate_speech",
-                    objective=(
-                        "像真实玩家一样自然发言，优先讲此刻最在意的判断；可以承接前置位，"
-                        "但不必完整复盘全场。不得超过300字，按实际信息量自然缩短"
-                    ),
+                    objective="发表本轮白天讨论发言。",
                     candidates=[],
-                    optional=True,
+                    target_optional=None,
                     output_kind="public_speech",
                     extra_context={"speech_round": speech_round, "speech_order": order},
                 )
@@ -583,9 +558,9 @@ class V2DayEngine:
             player=sheriff,
             broadcaster=broadcaster,
             action_type="sheriff_speech_order",
-            objective="选择警左或警右的相邻存活玩家作为第一位发言者",
+            objective="选择本轮第一位发言者。",
             candidates=candidates,
-            optional=False,
+            target_optional=False,
             output_kind="public_decision",
             decision_contract=V2DecisionContract(
                 kind="target",
@@ -644,7 +619,7 @@ class V2DayEngine:
                     action_type="exile_pk_speech",
                     objective=_EXILE_PK_SPEECH_OBJECTIVE,
                     candidates=[],
-                    optional=True,
+                    target_optional=None,
                     output_kind="public_speech",
                 )
                 self._record_speech(state, candidate, decision, "exile_pk")
@@ -721,9 +696,9 @@ class V2DayEngine:
                 player=player,
                 broadcaster=broadcaster,
                 action_type="exile_last_words",
-                objective="发表被放逐后的最后遗言，不得超过200字",
+                objective="发表被放逐后的遗言。",
                 candidates=[],
-                optional=True,
+                target_optional=None,
                 output_kind="public_speech",
             )
             self._record_speech(state, player, decision, "exile_last_words")
@@ -742,10 +717,9 @@ class V2DayEngine:
             for hunter_id in self._repository.pending_hunters(game_id)
             if hunter_id not in resolved_hunters
         ):
-            if (
-                self._repository.current_winner(game_id) is not None
-                and not self._repository.hunter_settlement_can_change_winner(game_id)
-            ):
+            if self._repository.current_winner(
+                game_id
+            ) is not None and not self._repository.hunter_settlement_can_change_winner(game_id):
                 break
             self._actions.check_cancellation(game_id)
             hunter_id = pending_hunters[0]
@@ -760,9 +734,9 @@ class V2DayEngine:
                 player=hunter,
                 broadcaster=broadcaster,
                 action_type="hunter_death_shot",
-                objective="你已死亡且可以发动猎人技能；选择一名存活玩家开枪，或返回 null 放弃",
+                objective="决定是否发动猎人技能；发动时选择目标。",
                 candidates=candidates,
-                optional=True,
+                target_optional=True,
                 output_kind="private_decision",
                 decision_contract=V2DecisionContract(
                     kind="target",
@@ -819,9 +793,9 @@ class V2DayEngine:
             player=sheriff,
             broadcaster=broadcaster,
             action_type="sheriff_badge_resolution",
-            objective="你已死亡；选择一名存活玩家移交警徽，或返回 null 撕毁警徽",
+            objective="决定移交警徽给谁，或撕毁警徽。",
             candidates=candidates,
-            optional=True,
+            target_optional=True,
             output_kind="public_death_reaction",
             decision_contract=V2DecisionContract(
                 kind="target",
@@ -883,9 +857,9 @@ class V2DayEngine:
                 player=voter,
                 broadcaster=broadcaster,
                 action_type=action_type,
-                objective="从合法候选人中选择一名投票，只返回目标玩家，不要发言",
+                objective="投票选择一名合法候选人。",
                 candidates=eligible,
-                optional=False,
+                target_optional=False,
                 output_kind="private_vote",
                 decision_contract=V2DecisionContract(
                     kind="target",
@@ -930,8 +904,7 @@ class V2DayEngine:
                 "ineligible_voter_ids": [
                     item.player_id
                     for item in state.players
-                    if item.alive
-                    and item.player_id not in {voter.player_id for voter in voters}
+                    if item.alive and item.player_id not in {voter.player_id for voter in voters}
                 ],
                 "candidate_player_ids": [item.player_id for item in candidates],
                 "weighted": weighted,
@@ -1015,23 +988,14 @@ class V2DayEngine:
             stage=stage,
             pre_sheriff=pre_sheriff,
         )
-        flow_description = (
-            "当前警长竞选会被中断并按照本局警徽规则处理"
-            if pre_sheriff
-            else "当天剩余流程中止"
-        )
         decision = await self._player_action(
             game_id=game_id,
             player=player,
             broadcaster=broadcaster,
             action_type="werewolf_self_explosion",
-            objective=(
-                "秘密决定是否立即自爆；explode=true 表示立即自爆。"
-                "自爆只会使你本人立即出局并公开确认狼人身份，不会选择、"
-                f"杀死或带走其他玩家；自爆后{flow_description}。"
-            ),
+            objective="决定是否立即自爆。",
             candidates=[],
-            optional=False,
+            target_optional=None,
             audience="god_view",
             output_kind="private_decision",
             decision_contract=V2DecisionContract(
@@ -1271,7 +1235,7 @@ class V2DayEngine:
         action_type: str,
         objective: str,
         candidates: list[V2MatchPlayer],
-        optional: bool,
+        target_optional: bool | None,
         output_kind: str,
         decision_contract: V2DecisionContract | None = None,
         audience: str = "all",
@@ -1305,15 +1269,13 @@ class V2DayEngine:
             if output_kind == "public_speech"
             else V2DecisionContract(
                 kind="target",
-                target_mode="optional" if optional else "required",
+                target_mode="optional" if target_optional else "required",
             )
         )
-        resolved_objective = (
-            f"{objective}；{_PUBLIC_SPEECH_SEQUENCE_RULE}"
-            if output_kind == "public_speech"
-            and _PUBLIC_SPEECH_SEQUENCE_RULE not in objective
-            else objective
-        )
+        if resolved_contract.kind == "target" and target_optional is None:
+            raise V2DayRuntimeError("target action requires target_optional")
+        if resolved_contract.kind != "target" and target_optional is not None:
+            raise V2DayRuntimeError("non-target action cannot set target_optional")
         decision = await self._actions.run_player_decision(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1321,7 +1283,7 @@ class V2DayEngine:
                 action_type=action_type,
                 phase_id=state.phase_id,
                 required_phase_state=state.phase_state,
-                objective=resolved_objective,
+                objective=objective,
                 success_live_state="ready",
                 success_phase_state=state.phase_state,
                 actor_kind="player",
@@ -1363,9 +1325,7 @@ class V2DayEngine:
                         private_facts=private_facts,
                         current_action_type=action_type,
                     ),
-                    "private_authoritative_facts": private_authoritative_facts(
-                        private_facts
-                    ),
+                    "private_authoritative_facts": private_authoritative_facts(private_facts),
                     "public_match_state": build_public_match_state(
                         round_no=state.round_no,
                         players=state.players,
@@ -1476,9 +1436,7 @@ def _self_explosion_action_effect(
         policy = str(state.rule.get("sheriff_badge_bomb_policy") or "none")
         next_explosion_count = state.pre_sheriff_explosion_count + 1
         badge_result = (
-            "destroyed"
-            if policy == "double" and next_explosion_count >= 2
-            else "pending"
+            "destroyed" if policy == "double" and next_explosion_count >= 2 else "pending"
         )
         remaining_day_flow = "sheriff_election_interrupted"
     else:

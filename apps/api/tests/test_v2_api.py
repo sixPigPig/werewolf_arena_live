@@ -83,6 +83,24 @@ def _nested_strings(value: Any) -> Generator[str, None, None]:
         yield value
 
 
+def _private_known_facts(context: dict[str, Any]) -> list[dict[str, Any]]:
+    known_events = context.get("known_events")
+    known_events = known_events if isinstance(known_events, dict) else {}
+    events = known_events.get("events")
+    events = events if isinstance(events, list) else []
+    return [
+        {
+            "fact_type": event.get("kind"),
+            "payload": event.get("data"),
+            "record_seq": event.get("record_seq"),
+            "known_at_seq": event.get("known_at_seq"),
+            "event_ref": event.get("event_ref"),
+        }
+        for event in events
+        if isinstance(event, dict) and event.get("visibility") == "actor_private"
+    ]
+
+
 class FakeV2ModelClient:
     def __init__(self) -> None:
         self.call_count = 0
@@ -95,6 +113,7 @@ class FakeV2ModelClient:
         self.unexpected_speech_target: str | None = None
         self.force_speech_action_types: set[str] = set()
         self.speech_by_action_type: dict[str, str] = {}
+        self.decision_note_by_action_type: dict[str, str] = {}
         self.retryable_transport_failures_remaining = 0
         self.retryable_transport_failures_by_stage: dict[str, int] = {}
         self.split_werewolf_preferences = False
@@ -154,14 +173,12 @@ class FakeV2ModelClient:
         )
         if call_delay_seconds > 0:
             await asyncio.sleep(call_delay_seconds)
+        known_events = action_context.get("known_events", {})
         decision_stage = next(
             (
-                fact.get("payload")
-                for fact in action_context.get("self", {}).get(
-                    "private_judge_facts",
-                    [],
-                )
-                if fact.get("fact_type") == "decision_stage"
+                event.get("data")
+                for event in known_events.get("events", [])
+                if event.get("kind") == "decision_stage"
             ),
             None,
         )
@@ -195,9 +212,10 @@ class FakeV2ModelClient:
                 first_token_seen=False,
                 elapsed_ms=5,
             )
-        action_type = action_context["task"]["action_type"]
+        action_type = action_context["task"]["type"]
+        output_contract = action_context["response"]
         if action_type in self.quality_failure_action_types:
-            boolean_field = action_context["output_contract"].get("field")
+            boolean_field = output_contract.get("field")
             raise V2QualityError(
                 "model_decision_invalid_speech",
                 raw_response=json.dumps(
@@ -206,7 +224,6 @@ class FakeV2ModelClient:
                 ),
             )
         candidates = action_context["candidates"]
-        output_contract = action_context["output_contract"]
         boolean_field: str | None = None
         boolean_value: bool | None = None
         speech: str | None = self.speech_by_action_type.get(
@@ -242,15 +259,25 @@ class FakeV2ModelClient:
             target = self.unexpected_speech_target
         else:
             target = None
+        decision_note = (
+            self.decision_note_by_action_type.get(
+                action_type,
+                f"在{action_type}动作发生时选择当前目标。",
+            )
+            if output_contract.get("decision_note", {}).get("mode") == "optional"
+            else None
+        )
         raw_output = (
             {
                 boolean_field: boolean_value,
                 **({"speech": speech} if speech is not None else {}),
+                **({"decision_note": decision_note} if decision_note is not None else {}),
             }
             if boolean_field is not None
             else {
                 "target_player_id": target,
                 "speech": speech,
+                **({"decision_note": decision_note} if decision_note is not None else {}),
             }
         )
         return V2ModelDecision(
@@ -262,6 +289,7 @@ class FakeV2ModelClient:
             raw_response=json.dumps(raw_output, ensure_ascii=False),
             boolean_field=boolean_field,
             boolean_value=boolean_value,
+            decision_note=decision_note,
         )
 
 
@@ -584,10 +612,12 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "player_count": 2,
             "judge_voice": game.judge_voice_snapshot,
             "model_context_contract": {
-                "prompt_schema_version": 7,
-                "public_timeline_schema_version": 1,
+                "model_context_schema_version": 8,
+                "prompt_template_version": 1,
+                "known_events_schema_version": 1,
                 "ledger_schema_version": 2,
-                "model_view_schema_version": 2,
+                "model_view_schema_version": 3,
+                "model_view_selector_version": 1,
             },
         }
         assert events[1].payload == {
@@ -992,7 +1022,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         assert [item["role"] for item in snapshot["players"]]
 
 
-def test_old_model_context_contract_is_readable_but_cannot_resume(
+def test_v7_model_context_contract_can_resume_but_unknown_contract_cannot(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -1001,25 +1031,41 @@ def test_old_model_context_contract_is_readable_but_cannot_resume(
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, game_id)
         assert game is not None
-        game.rule_snapshot = {}
+        game.rule_snapshot = {
+            "model_context_contract": {
+                "prompt_schema_version": 7,
+                "public_timeline_schema_version": 1,
+                "ledger_schema_version": 2,
+                "model_view_schema_version": 2,
+            }
+        }
 
     snapshot = client.get(created["snapshot_url"])
     assert snapshot.status_code == 200
     assert snapshot.json()["game_id"] == game_id
 
     runtime = client.app.state.v2_live_runtime
+    channel = asyncio.run(runtime._channel(game_id))
+    assert channel.game_id == game_id
+
+    unsupported = client.post("/api/v2/games", json={"title": "未知契约"}).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, unsupported["game_id"])
+        assert game is not None
+        game.rule_snapshot = {}
+
     with pytest.raises(
         V2ClientProtocolError,
         match="unsupported_model_context_contract",
     ):
-        asyncio.run(runtime._channel(game_id))
+        asyncio.run(runtime._channel(unsupported["game_id"]))
 
     repository = V2ActionRepository(session_factory)
     with pytest.raises(
         V2RepositoryError,
         match="unsupported_model_context_contract",
     ):
-        repository.start_game(game_id=game_id, audience="player_public")
+        repository.start_game(game_id=unsupported["game_id"], audience="player_public")
 
 
 def test_join_sample_cursor_is_atomic_with_audio_broadcast() -> None:
@@ -1723,31 +1769,25 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     assert "sichuan" in tts_client.dialects
     player_contexts = model_client.decision_contexts
     assert player_contexts
-    assert any(context["task"]["action_type"].startswith("ability_") for context in player_contexts)
-    assert any(context["task"]["action_type"] == "day_debate_speech" for context in player_contexts)
+    assert any(context["task"]["type"].startswith("ability_") for context in player_contexts)
+    assert any(context["task"]["type"] == "day_debate_speech" for context in player_contexts)
     assert all(
-        context["hard_rules"]["player_count"] == 6
-        and context["hard_rules"]["werewolf_count"] == 2
-        and context["hard_rules"]["sheriff"]["enabled"] is False
+        context["rules"]["player_count"] == 6
+        and context["rules"]["werewolf_count"] == 2
+        and context["rules"]["sheriff"]["enabled"] is False
         for context in player_contexts
     )
     assert all(
-        context["prompt_schema_version"] == 7
-        and "private_judge_facts" in context["self"]
+        context["model_context_schema_version"] == 8
+        and context["prompt_template_version"] == 1
+        and "private_judge_facts" not in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
-        and "public_state" in context
-        and context["public_timeline"]["schema_version"] == 1
-        and "source_rules" in context["public_timeline"]
-        and "events" in context["public_timeline"]
-        and "history" in context
-        and context["history"]["ledger_schema_version"] == 2
-        and context["history"]["model_view_schema_version"] == 2
-        and "timeline" in context["history"]
-        and "questions" in context["history"]
-        and "relations" in context["history"]
-        and "focus" in context["history"]
-        and "older_claims" not in context["history"]
+        and "state" in context
+        and context["known_events"]["schema_version"] == 1
+        and "events" in context["known_events"]
+        and "public_timeline" not in context
+        and "history" not in context
         and "role_information_boundaries" not in context
         and "canonical_public_timeline" not in context
         and "public_event_counters" not in context
@@ -1768,18 +1808,18 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         and any(
             fact.get("fact_type") == "coordination"
             and fact.get("payload") == "parallel_preference_probe"
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
     ]
     assert wolf_preference_contexts
     assert all(
         any(
             fact.get("fact_type") == "decision_stage" and fact.get("payload") == "preference_probe"
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
         and all(
             fact.get("fact_type") not in {"werewolf_first_round", "werewolf_second_round_so_far"}
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
         for context in wolf_preference_contexts
     )
@@ -1790,13 +1830,13 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         and any(
             fact.get("fact_type") == "coordination"
             and fact.get("payload") == "sequential_shared_discussion"
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
     ]
     assert wolf_sequential_contexts
     first_round_by_night: dict[int, set[str]] = {}
     for context in wolf_sequential_contexts:
-        private_facts = context["self"]["private_judge_facts"]
+        private_facts = _private_known_facts(context)
         first_round = next(
             fact["payload"]
             for fact in private_facts
@@ -1837,15 +1877,13 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in seer_contexts
     )
     surviving_seer_day_contexts = [
-        context
-        for context in seer_contexts
-        if not context["task"]["action_type"].startswith("ability_")
+        context for context in seer_contexts if not context["task"]["type"].startswith("ability_")
     ]
     if surviving_seer_day_contexts:
         assert any(
             fact.get("fact_type") == "investigation_alignment"
             for context in surviving_seer_day_contexts
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
     contexts_after_heal_use = [
         context
@@ -1854,7 +1892,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
             fact.get("fact_type") == "private_ability_action_committed"
             and fact.get("payload", {}).get("ability_id") == "witch.heal"
             and fact.get("payload", {}).get("result", {}).get("heal_used") is True
-            for fact in context["self"]["private_judge_facts"]
+            for fact in _private_known_facts(context)
         )
     ]
     if contexts_after_heal_use:
@@ -1918,6 +1956,12 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert len(facts) >= 5
         assert sum(item.fact_type == "investigation_alignment" for item in facts) >= 1
         assert sum(item.fact_type == "private_ability_action_committed" for item in facts) >= 4
+        assert any(
+            item.fact_type == "private_ability_action_committed"
+            and item.payload.get("ability_id") == "seer.investigate"
+            and item.payload.get("decision", {}).get("decision_note")
+            for item in facts
+        )
         assert all(
             item.payload["resolution_scope"].startswith("法官已接受本次私有动作")
             for item in facts
@@ -1951,8 +1995,10 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
-    contradictory_speech = "我判断1号和2号是双狼，今天先出1号。"
+    normalized_speech = "甲" * 299 + "。"
+    contradictory_speech = normalized_speech + "我判断1号和2号是双狼，今天先出1号。"
     model_client.speech_by_action_type["day_debate_speech"] = contradictory_speech
+    model_client.decision_note_by_action_type["ability_guard.protect_decision"] = "守" * 130
     request = _six_player_create_request()
     request["lobby_snapshot"]["rule_set"]["roles"] = [
         {"role": "werewolf", "count": 1, "team": "werewolves"},
@@ -1980,30 +2026,25 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         for context in contexts
     )
     night_contexts = [
-        context for context in contexts if context["task"]["action_type"].startswith("ability_")
+        context for context in contexts if context["task"]["type"].startswith("ability_")
     ]
     day_contexts = [
-        context for context in contexts if context["task"]["action_type"] == "day_debate_speech"
+        context for context in contexts if context["task"]["type"] == "day_debate_speech"
     ]
     assert night_contexts
     assert day_contexts
     assert all(
-        context["hard_rules"]["werewolf_count"] == 1
-        and context["hard_rules"]["reveal_policy"] == "hidden"
-        and "不会公开其身份或阵营" in context["hard_rules"]["role_reveal_rule"]
-        and context["hard_rules"]["sheriff"]["enabled"] is False
-        and context["hard_rules"]["ability_rules"]["werewolf_attack"]["can_target_self"] is False
-        and context["hard_rules"]["ability_rules"]["werewolf_attack"]["coordination"] == "solo"
-        and "can_target_werewolf_teammates"
-        not in context["hard_rules"]["ability_rules"]["werewolf_attack"]
+        context["rules"]["werewolf_count"] == 1
+        and context["rules"]["reveal_policy"] == "hidden"
+        and "不会公开其身份或阵营" in context["rules"]["role_reveal_rule"]
+        and context["rules"]["sheriff"]["enabled"] is False
         for context in contexts
     )
     assert all(
-        context["public_state"]["alive_player_count"]
-        == len(context["public_state"]["alive_player_ids"])
-        and context["public_state"]["eliminated_player_count"]
-        == len(context["public_state"]["eliminated_player_ids"])
-        and context["public_state"]["identity_information_included"] is False
+        context["state"]["alive_player_count"] == len(context["state"]["alive_player_ids"])
+        and context["state"]["eliminated_player_count"]
+        == len(context["state"]["eliminated_player_ids"])
+        and context["state"]["identity_information_included"] is False
         for context in contexts
     )
     wolf_night_contexts = [
@@ -2015,27 +2056,65 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
     assert all(
         context["self"]["werewolf_coordination"] == {"mode": "solo"}
         and all(
-            fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
-            for fact in context["self"]["private_judge_facts"]
+            event.get("kind") not in {"werewolf_teammates", "living_werewolf_teammates"}
+            for event in context["known_events"]["events"]
         )
+        and context["rules"]["current_ability"]["can_target_self"] is False
+        and context["rules"]["current_ability"]["coordination"] == "solo"
+        and "can_target_werewolf_teammates" not in context["rules"]["current_ability"]
         for context in wolf_night_contexts
     )
     assert all(
         any(
-            fact.get("fact_type") == "coordination" and fact.get("payload") == "solo"
-            for fact in context["self"]["private_judge_facts"]
+            event.get("kind") == "coordination" and event.get("data") == "solo"
+            for event in context["known_events"]["events"]
         )
         for context in wolf_night_contexts
     )
     seer_day_contexts = [
         context for context in day_contexts if context["self"]["identity"]["role_key"] == "seer"
     ]
-    assert seer_day_contexts
+    if not seer_day_contexts:
+        with session_factory() as db:
+            failures = [
+                event.payload
+                for event in db.scalars(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == identifiers["game_id"],
+                        V2GameRecordEvent.event_type == "action_failed",
+                    )
+                )
+            ]
+        pytest.fail(f"seer never reached a day action; failures={failures!r}")
     assert any(
-        fact.get("fact_type") == "investigation_alignment"
+        event.get("kind") == "investigation_alignment"
         for context in seer_day_contexts
-        for fact in context["self"]["private_judge_facts"]
+        for event in context["known_events"]["events"]
     )
+    committed_investigations = [
+        (context, event)
+        for context in seer_day_contexts
+        for event in context["known_events"]["events"]
+        if event.get("kind") == "private_ability_action_committed"
+        and event.get("data", {}).get("ability_id") == "seer.investigate"
+    ]
+    assert committed_investigations
+    invalid_investigations = [
+        {
+            "task_at_seq": context["task"]["at_seq"],
+            "event": event,
+        }
+        for context, event in committed_investigations
+        if not (
+            event["visibility"] == "actor_private"
+            and event["authority"] == "judge_fact"
+            and event["known_at_seq"] < context["task"]["at_seq"]
+            and event["occurred_in"].get("period") == "night"
+            and event["occurred_in"].get("round_no", 0) > 0
+            and event["data"]["decision"]["decision_note"]
+        )
+    ]
+    assert not invalid_investigations, invalid_investigations
     with session_factory() as db:
         committed_wolf_facts = list(
             db.scalars(
@@ -2062,26 +2141,31 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 7
-            and event.payload["prompt_projection"]["public_timeline_schema_version"] == 1
-            and "public_timeline_event_count" in event.payload["prompt_projection"]
-            and "public_timeline_missing_record_seq_count" in event.payload["prompt_projection"]
-            and "public_timeline_kind_counts" in event.payload["prompt_projection"]
+            event.payload["prompt_schema_version"] == 8
+            and event.payload["model_context_schema_version"] == 8
+            and event.payload["prompt_template_version"] == 1
+            and event.payload["model_view_selector_version"] == 1
+            and event.payload["prompt_projection"]["known_events_schema_version"] == 1
+            and "known_event_count" in event.payload["prompt_projection"]
+            and "known_event_total_count" in event.payload["prompt_projection"]
+            and "known_event_record_seq_min" in event.payload["prompt_projection"]
+            and "known_event_record_seq_max" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["ledger_schema_version"] == 2
-            and event.payload["prompt_projection"]["model_view_schema_version"] == 2
+            and event.payload["prompt_projection"]["model_view_schema_version"] == 3
+            and event.payload["prompt_projection"]["model_view_selector_version"] == 1
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
-            and "awaiting_scheduled_turn_question_count" in event.payload["prompt_projection"]
-            and "prior_relevant_statement_question_count" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["dropped_statement_count"] == 0
-            and event.payload["prompt_projection"]["dropped_claim_count"] == 0
+            and "dropped_event_count" in event.payload["prompt_projection"]
+            and "retained_event_refs" in event.payload["prompt_projection"]
+            and "dropped_event_refs" in event.payload["prompt_projection"]
+            and "section_char_counts" in event.payload["prompt_projection"]
             for event in model_request_events
         )
         observed_responses = [
             event
             for event in events
             if event.event_type == "model_response_received"
-            and event.payload.get("parsed_output", {}).get("speech") == contradictory_speech
+            and contradictory_speech in str(event.payload.get("raw_response") or "")
         ]
         assert observed_responses
         observed_action_ids = {event.payload["action_id"] for event in observed_responses}
@@ -2117,8 +2201,37 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             presentation.action_id for presentation in adopted_presentations
         } == observed_action_ids
         assert all(
-            presentation.subtitle_text == contradictory_speech
+            presentation.subtitle_text == normalized_speech
             for presentation in adopted_presentations
+        )
+        normalized_action_ids = {
+            event.payload["action_id"]
+            for event in events
+            if event.event_type == "model_decision_speech_normalized"
+            and event.payload.get("reason") == "speech_constraint"
+            and event.payload.get("constraints") == ["max_chars_exceeded"]
+        }
+        assert observed_action_ids <= normalized_action_ids
+        note_normalizations = [
+            event for event in events if event.event_type == "model_decision_note_normalized"
+        ]
+        assert note_normalizations
+        assert all(
+            event.payload["constraints"] == ["max_chars_exceeded"]
+            and event.payload["original_chars"] == 130
+            and event.payload["normalized_chars"] == 120
+            for event in note_normalizations
+        )
+        guard_responses = [
+            event
+            for event in events
+            if event.event_type == "model_response_received"
+            and "守" * 130 in str(event.payload.get("raw_response") or "")
+        ]
+        assert guard_responses
+        assert all(
+            event.payload["parsed_output"]["decision_note"] == "守" * 120
+            for event in guard_responses
         )
 
 
@@ -2157,40 +2270,30 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     campaign_contexts = [
         context
         for context in model_client.decision_contexts
-        if context["task"]["action_type"] == "sheriff_campaign_speech"
+        if context["task"]["type"] == "sheriff_campaign_speech"
     ]
     assert campaign_contexts
-    assert all(
-        "讲清你此刻最想让其他玩家相信的内容" in context["task"]["objective"]
-        and "不得超过300字" in context["task"]["objective"]
-        and "归票和警徽移交原则" not in context["task"]["objective"]
-        and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
-        for context in campaign_contexts
-    )
+    assert all(context["task"]["goal"] == "发表警长竞选发言。" for context in campaign_contexts)
     debate_contexts = [
         context
         for context in model_client.decision_contexts
-        if context["task"]["action_type"] == "day_debate_speech"
+        if context["task"]["type"] == "day_debate_speech"
     ]
     assert debate_contexts
     assert all(
-        "优先讲此刻最在意的判断" in context["task"]["objective"]
-        and "不得超过300字" in context["task"]["objective"]
-        and "完整复盘全场" in context["task"]["objective"]
-        and "后发生的发言、投票或法官事件只能用于事后评价" in context["task"]["objective"]
-        and "先发生的发言不能回答、回应或拒绝后发生的问题" in context["task"]["objective"]
-        and "本轮尚未轮到其发言" in context["task"]["objective"]
+        context["task"]["goal"] == "发表本轮白天讨论发言。"
+        and "instruction" not in context["task"]["speech_progress"]
         and context["task"]["speech_progress"]["current_speaker_ref"]
         == context["self"]["identity"]["player_id"]
         for context in debate_contexts
     )
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
-        context["prompt_schema_version"] == 7
-        and context["public_timeline"]["schema_version"] == 1
-        and context["history"]["ledger_schema_version"] == 2
-        and context["history"]["model_view_schema_version"] == 2
-        and context["output_contract"]["speech"]
+        context["model_context_schema_version"] == 8
+        and context["prompt_template_version"] == 1
+        and context["known_events"]["schema_version"] == 1
+        and "source_rules" not in context["known_events"]
+        and context["response"]["speech"]
         == {
             "type": "string",
             "mode": "required",
@@ -2253,24 +2356,24 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         sheriff_run_contexts = [
             context
             for context in model_client.decision_contexts
-            if context["task"]["action_type"] == "sheriff_run"
+            if context["task"]["type"] == "sheriff_run"
         ]
         assert sheriff_run_contexts
         assert all(
-            context["output_contract"]["kind"] == "boolean"
-            and context["output_contract"]["field"] == "run_for_sheriff"
-            and context["output_contract"]["speech"]["mode"] == "forbidden"
+            context["response"]["kind"] == "boolean"
+            and context["response"]["field"] == "run_for_sheriff"
+            and context["response"]["speech"]["mode"] == "forbidden"
             for context in sheriff_run_contexts
         )
         withdraw_contexts = [
             context
             for context in model_client.decision_contexts
-            if context["task"]["action_type"] == "sheriff_withdraw"
+            if context["task"]["type"] == "sheriff_withdraw"
         ]
         assert withdraw_contexts
         assert all(
             context["candidates"] == []
-            and context["output_contract"]
+            and context["response"]
             == {
                 "kind": "boolean",
                 "presentation_kind": "sheriff_withdraw_decision",
@@ -2391,7 +2494,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         assert all("speech" not in event.payload for event in committed_votes)
         vote_context_batches: dict[tuple[str, str, int | None], list[dict[str, Any]]] = {}
         for context in model_client.decision_contexts:
-            action_type = context["task"]["action_type"]
+            action_type = context["task"]["type"]
             if action_type not in vote_action_types:
                 continue
             batch_key = (
@@ -2406,7 +2509,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             visible_vote_ids = [
                 tuple(
                     item["source_event_id"]
-                    for item in context["public_timeline"]["events"]
+                    for item in context["known_events"]["events"]
                     if item["kind"] in {"day_vote", "vote_result"}
                 )
                 for context in contexts
@@ -2508,13 +2611,13 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         self_explosion_contexts = [
             context
             for context in model_client.decision_contexts
-            if context["task"]["action_type"] == "werewolf_self_explosion"
+            if context["task"]["type"] == "werewolf_self_explosion"
         ]
         assert self_explosion_contexts
         assert all(
-            context["output_contract"]["kind"] == "boolean"
-            and context["output_contract"]["field"] == "explode"
-            and context["output_contract"]["speech"]["mode"] == "forbidden"
+            context["response"]["kind"] == "boolean"
+            and context["response"]["field"] == "explode"
+            and context["response"]["speech"]["mode"] == "forbidden"
             and context["task"]["mechanical_effect"]["target_mode"] == "none"
             and context["task"]["mechanical_effect"]["if_executed"]["actor_eliminated"] is True
             and context["task"]["mechanical_effect"]["if_executed"]["target_allowed"] is False
@@ -2528,21 +2631,21 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
                 if context["task"]["public_stage"] == "pre_sheriff_election"
                 else "terminated"
             )
-            and "不会选择、杀死或带走其他玩家" in context["task"]["objective"]
+            and context["task"]["goal"] == "决定是否立即自爆。"
             for context in self_explosion_contexts
         )
         ability_contexts = [
             context
             for context in model_client.decision_contexts
-            if context["task"]["action_type"].startswith("ability_")
+            if context["task"]["type"].startswith("ability_")
         ]
         assert ability_contexts
-        assert all(context["output_contract"]["kind"] == "target" for context in ability_contexts)
+        assert all(context["response"]["kind"] == "target" for context in ability_contexts)
         assert all(
-            context["output_contract"]["speech"]["mode"]
+            context["response"]["speech"]["mode"]
             == (
                 "required"
-                if context["task"]["action_type"] == "ability_werewolf.attack_decision"
+                if context["task"]["type"] == "ability_werewolf.attack_decision"
                 else "forbidden"
             )
             for context in ability_contexts
@@ -2623,14 +2726,14 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         for context in model_client.contexts
         if any(
             event.get("authority") == "judge_fact"
-            for event in context.get("public_timeline", {}).get("events", [])
+            for event in context.get("known_events", {}).get("events", [])
         )
     ]
     assert fact_contexts
     assert all(
         "public_history" not in context
-        and "judge_facts" not in context.get("public_state", {})
-        and "latest_vote_snapshot" not in context.get("public_state", {})
+        and "judge_facts" not in context.get("state", {})
+        and "latest_vote_snapshot" not in context.get("state", {})
         for context in fact_contexts
     )
 
@@ -3280,19 +3383,19 @@ def test_complete_match_vote_resolution_preserves_ties_and_sheriff_weight() -> N
 
 
 @pytest.mark.parametrize(
-    ("objective", "focus"),
+    ("objective", "expected"),
     [
-        (_SHERIFF_PK_SPEECH_OBJECTIVE, "上一轮发言后的新争议"),
-        (_EXILE_PK_SPEECH_OBJECTIVE, "导致平票的核心争议"),
+        (_SHERIFF_PK_SPEECH_OBJECTIVE, "发表警长竞选平票 PK 发言。"),
+        (_EXILE_PK_SPEECH_OBJECTIVE, "发表放逐平票 PK 发言。"),
     ],
 )
-def test_v2_pk_speech_objectives_avoid_replaying_prior_speeches(
+def test_v2_pk_speech_objectives_only_state_the_current_task(
     objective: str,
-    focus: str,
+    expected: str,
 ) -> None:
-    assert focus in objective
-    assert "无需从头重述" in objective
-    assert "不得超过300字，信息较少时应更短" in objective
+    assert objective == expected
+    assert "应" not in objective
+    assert "不得" not in objective
 
 
 def test_v2_public_speech_limits_cover_all_bounded_day_speech_actions() -> None:

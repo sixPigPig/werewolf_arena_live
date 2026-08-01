@@ -15,10 +15,13 @@ export function extractV2ModelInputFacts(
   const prompt = structuredPromptFromPayload(requestPayload);
   if (!prompt) return [];
 
+  const knownEvents = objectValue(prompt.known_events);
   const publicTimeline = objectValue(prompt.public_timeline);
   const history = objectValue(prompt.history);
   const historyTimeline = arrayValue(history?.timeline).filter(isRecord);
-  const publicEvents = arrayValue(publicTimeline?.events).filter(isRecord);
+  const publicEvents = arrayValue(
+    knownEvents?.events ?? publicTimeline?.events,
+  ).filter(isRecord);
 
   if (publicEvents.length) {
     return publicEvents.map((event, index) =>
@@ -78,13 +81,15 @@ function publicEventFact(
   event: Record<string, unknown>,
   index: number,
 ): V2ModelInputFact {
-  const recordSeq = numberValue(event.record_seq);
+  const recordSeq =
+    numberValue(event.known_at_seq) ?? numberValue(event.record_seq);
   const kind = textValue(event.kind) ?? "unknown";
 
   return {
     authority: textValue(event.authority),
     context: eventContext(event),
     id:
+      textValue(event.event_ref) ??
       textValue(event.source_event_id) ??
       `${recordSeq ?? "unknown"}-${kind}-${index}`,
     kind,
@@ -129,7 +134,7 @@ function eventTitle(kind: string): string {
 function eventSummary(event: Record<string, unknown>): string | null {
   const kind = textValue(event.kind);
   if (kind === "player_statement") {
-    return null;
+    return textValue(event.speech);
   }
   if (kind === "day_vote") {
     const voter = playerReference(event.voter_ref);

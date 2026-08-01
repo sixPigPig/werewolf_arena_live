@@ -156,9 +156,7 @@ def test_v2_tts_sends_documented_explicit_dialect_in_additions(
 
     assert audio == [b"pcm"]
     start_session = next(payload for event, payload in sent if event == _START_SESSION)
-    assert json.loads(start_session["req_params"]["additions"]) == {
-        "explicit_dialect": "dongbei"
-    }
+    assert json.loads(start_session["req_params"]["additions"]) == {"explicit_dialect": "dongbei"}
 
 
 def test_directed_audience_merges_public_and_private_stage_events_only() -> None:
@@ -302,10 +300,7 @@ def test_decision_fields_keep_only_fundamental_failures() -> None:
 
 
 def test_decision_fields_recovers_clean_speech_from_truncated_json_wrapper() -> None:
-    raw = (
-        '{"speech":"我是7号，今天站边12号。\\n'
-        '2号昨天的票型需要解释，我暂时不会跟票'
-    )
+    raw = '{"speech":"我是7号，今天站边12号。\\n2号昨天的票型需要解释，我暂时不会跟票'
     assert _decision_fields(raw, {"kind": "speech", "speech": {"mode": "required"}}) == (
         None,
         "我是7号，今天站边12号。\n2号昨天的票型需要解释，我暂时不会跟票",
@@ -315,10 +310,7 @@ def test_decision_fields_recovers_clean_speech_from_truncated_json_wrapper() -> 
 
 
 def test_decision_fields_recovers_target_and_speech_from_truncated_json() -> None:
-    raw = (
-        '{"target_player_id":"seat_4","speech":"我选择查验4号，'
-        "因为他的站边变化最明显"
-    )
+    raw = '{"target_player_id":"seat_4","speech":"我选择查验4号，因为他的站边变化最明显'
     assert _decision_fields(raw, _target_contract()) == (
         "seat_4",
         "我选择查验4号，因为他的站边变化最明显",
@@ -463,10 +455,7 @@ def test_boolean_decisions_use_semantic_field_and_speech_policy() -> None:
 
 
 def test_boolean_decision_recovers_real_truncated_json_response() -> None:
-    raw = (
-        '{"run_for_sheriff":true,"speech":"9号上警。'
-        '我会把发言顺序和矛盾一条条捋清楚。"'
-    )
+    raw = '{"run_for_sheriff":true,"speech":"9号上警。我会把发言顺序和矛盾一条条捋清楚。"'
 
     assert _decision_fields(
         raw,
@@ -527,6 +516,24 @@ def test_required_if_true_allows_silent_false_but_requires_true_speech() -> None
     ) == (None, "我选择自爆！", "explode", True)
 
 
+def test_forbidden_speech_is_preserved_for_action_normalization() -> None:
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+    }
+
+    assert _decision_fields(
+        '{"target_player_id":"seat_6","speech":"这段违规发言只用于审计。"}',
+        contract,
+    ) == (
+        "seat_6",
+        "这段违规发言只用于审计。",
+        None,
+        None,
+    )
+
+
 def test_model_speech_constraints_cap_characters_and_sentences() -> None:
     long_speech = "甲" * 299 + "。" + "乙" * 20
 
@@ -556,11 +563,7 @@ def test_model_speech_instructions_include_hard_contract_limits() -> None:
                 "max_sentences": 1,
             }
         }
-    ) == (
-        "speech 必须是准备直接播报的非空自然中文。"
-        "speech 不得超过300字。"
-        "speech 只能包含一句话。"
-    )
+    ) == ("speech 必须是准备直接播报的非空自然中文。speech 不得超过300字。speech 只能包含一句话。")
 
 
 def test_boolean_actions_disable_thinking_without_changing_other_parameters() -> None:
@@ -734,9 +737,9 @@ def test_public_rule_projection_excludes_internal_rule_fields() -> None:
                     {"role": "村民", "count": 1, "model_group": "private-model-group"},
                 ],
                 "sheriff_enabled": False,
-                    "werewolf_self_explosion_enabled": True,
-                    "exile_last_words_enabled": True,
-                    "first_night_last_words_enabled": True,
+                "werewolf_self_explosion_enabled": True,
+                "exile_last_words_enabled": True,
+                "first_night_last_words_enabled": True,
             },
         }
     )

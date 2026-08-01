@@ -58,6 +58,93 @@ def test_unrelated_negation_does_not_hide_a_later_contradiction() -> None:
     assert observations[0]["code"] == "wolf_cardinality_contradiction"
 
 
+def test_later_public_speech_cannot_be_the_reason_for_an_earlier_private_investigation() -> None:
+    observations = observe_model_speech(
+        ("12号预言家，昨晚验6号查杀。我验人逻辑：6号在3号位发言，我选他是因为前几位发言太像模板。"),
+        hard_rules={},
+        model_context={
+            "known_events": {
+                "events": [
+                    {
+                        "authority": "judge_fact",
+                        "data": {
+                            "ability_id": "seer.investigate",
+                            "decision": {"target_player_id": "seat_6"},
+                            "result": {"alignment": "werewolves"},
+                        },
+                        "event_ref": "knowledge-seer-night-1",
+                        "kind": "private_ability_action_committed",
+                        "known_at_seq": 258,
+                        "visibility": "actor_private",
+                    },
+                    {
+                        "authority": "player_statement",
+                        "event_ref": "472",
+                        "kind": "player_statement",
+                        "known_at_seq": 472,
+                        "speaker_ref": "seat_6",
+                        "speech": "6号上警，不跳预言家。",
+                        "visibility": "public",
+                    },
+                ]
+            }
+        },
+    )
+
+    assert observations == [
+        {
+            "code": "private_action_causality_contradiction",
+            "severity": "warning",
+            "confidence": "high",
+            "detector_version": 1,
+            "authority": "judge_fact",
+            "signals": [
+                {
+                    "ability_id": "seer.investigate",
+                    "target_ref": "seat_6",
+                    "private_event_ref": "knowledge-seer-night-1",
+                    "private_action_known_at_seq": 258,
+                    "later_public_event_ref": "472",
+                    "later_public_known_at_seq": 472,
+                    "evidence": ("我验人逻辑：6号在3号位发言，我选他是因为前几位发言太像模板。"),
+                }
+            ],
+            "effect": "observed_only",
+        }
+    ]
+
+
+def test_explicitly_rejecting_later_speech_as_an_investigation_reason_is_not_flagged() -> None:
+    observations = observe_model_speech(
+        "我昨晚验6号，我的验人逻辑不是因为6号警上发言。",
+        hard_rules={},
+        model_context={
+            "known_events": {
+                "events": [
+                    {
+                        "data": {
+                            "target_player_id": "seat_6",
+                            "alignment": "werewolves",
+                        },
+                        "event_ref": "knowledge-seer-night-1",
+                        "kind": "investigation_alignment",
+                        "known_at_seq": 258,
+                        "visibility": "actor_private",
+                    },
+                    {
+                        "event_ref": "472",
+                        "kind": "player_statement",
+                        "known_at_seq": 472,
+                        "speaker_ref": "seat_6",
+                    },
+                ]
+            }
+        },
+    )
+
+    assert observations == []
+
+
 def test_multi_wolf_speech_is_not_checked_by_single_wolf_detector() -> None:
     assert (
         observe_model_speech(
@@ -507,11 +594,14 @@ def test_awaiting_turn_wording_is_not_misclassified_as_a_silence_accusation() ->
         "还没轮到5号回应，不能说他一个字都没解释，等他发言再判断。",
         "9号说5号一个字都没解释，但我不同意这个说法。",
     ):
-        assert observe_model_speech(
-            speech,
-            hard_rules={},
-            model_context=model_context,
-        ) == []
+        assert (
+            observe_model_speech(
+                speech,
+                hard_rules={},
+                model_context=model_context,
+            )
+            == []
+        )
 
 
 def test_silence_claim_after_target_turn_is_not_premature() -> None:

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "T01_private_action_before_public_speech",
+      "action_record_seq": 501,
+      "players": [
+        {
+          "player_id": "system-player-08",
+          "seat": 6
+        },
+        {
+          "player_id": "system-player-11",
+          "seat": 12
+        }
+      ],
+      "context": {
+        "action_type": "sheriff_campaign_speech",
+        "objective": "发表警长竞选发言。",
+        "round_no": 1,
+        "self_identity": {
+          "player_id": "system-player-11",
+          "seat": 12,
+          "role_key": "seer",
+          "team": "villagers"
+        },
+        "private_authoritative_facts": [
+          {
+            "knowledge_fact_id": "knowledge-seer-night-1",
+            "source_activation_id": "activation-seer-night-1",
+            "fact_type": "private_ability_action_committed",
+            "record_seq": 258,
+            "known_at_seq": 258,
+            "occurred_in": {
+              "period": "night",
+              "round_no": 1
+            },
+            "payload": {
+              "ability_id": "seer.investigate",
+              "night_no": 1,
+              "decision": {
+                "target_player_id": "system-player-08",
+                "decision_note": "在警上发言前已经决定查验6号。"
+              },
+              "result": {
+                "alignment": "werewolves"
+              }
+            }
+          }
+        ],
+        "public_history": [
+          {
+            "source_event_id": 472,
+            "record_seq": 472,
+            "event_type": "public_player_speech_presented",
+            "payload": {
+              "round_no": 1,
+              "stage": "sheriff_campaign_speech",
+              "player_id": "system-player-08",
+              "speech": "6号上警，我先听后置位怎么说。"
+            }
+          }
+        ],
+        "output_contract": {
+          "kind": "speech",
+          "speech": {
+            "mode": "required",
+            "max_chars": 300
+          }
+        }
+      },
+      "expect": {
+        "event_refs": [
+          "knowledge-seer-night-1",
+          "472"
+        ],
+        "event_sequences": [
+          258,
+          472
+        ],
+        "max_serialized_chars": 3500
+      }
+    },
+    {
+      "case_id": "T02_auditable_history_selection",
+      "history_count": 40,
+      "speech_chars": 1800,
+      "current_round_no": 7,
+      "expected_current_round_refs": [
+        "36",
+        "37",
+        "38",
+        "39",
+        "40"
+      ],
+      "max_serialized_chars": 20000
+    }
+  ]
+}
