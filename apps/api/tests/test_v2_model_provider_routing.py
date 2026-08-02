@@ -110,6 +110,7 @@ def test_model_client_preserves_forbidden_speech_for_action_normalization() -> N
     )
     context = {
         "model_context_schema_version": 8,
+        "prompt_template_version": 2,
         "response": {
             "kind": "target",
             "target_policy": {"mode": "required"},
@@ -150,6 +151,7 @@ def test_model_client_parses_optional_private_decision_note() -> None:
     )
     context = {
         "model_context_schema_version": 8,
+        "prompt_template_version": 2,
         "response": {
             "kind": "target",
             "target_policy": {"mode": "required"},

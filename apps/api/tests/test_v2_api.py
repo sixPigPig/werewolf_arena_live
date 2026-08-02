@@ -613,7 +613,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "judge_voice": game.judge_voice_snapshot,
             "model_context_contract": {
                 "model_context_schema_version": 8,
-                "prompt_template_version": 1,
+                "prompt_template_version": 2,
                 "known_events_schema_version": 1,
                 "ledger_schema_version": 2,
                 "model_view_schema_version": 3,
@@ -1022,7 +1022,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         assert [item["role"] for item in snapshot["players"]]
 
 
-def test_v7_model_context_contract_can_resume_but_unknown_contract_cannot(
+def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -1047,6 +1047,27 @@ def test_v7_model_context_contract_can_resume_but_unknown_contract_cannot(
     runtime = client.app.state.v2_live_runtime
     channel = asyncio.run(runtime._channel(game_id))
     assert channel.game_id == game_id
+
+    v8_created = client.post("/api/v2/games", json={"title": "V8 旧模板可续跑"}).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, v8_created["game_id"])
+        assert game is not None
+        game.rule_snapshot = {
+            "model_context_contract": {
+                "model_context_schema_version": 8,
+                "prompt_template_version": 1,
+                "known_events_schema_version": 1,
+                "ledger_schema_version": 2,
+                "model_view_schema_version": 3,
+                "model_view_selector_version": 1,
+            }
+        }
+
+    v8_snapshot = client.get(v8_created["snapshot_url"])
+    assert v8_snapshot.status_code == 200
+    assert v8_snapshot.json()["game_id"] == v8_created["game_id"]
+    v8_channel = asyncio.run(runtime._channel(v8_created["game_id"]))
+    assert v8_channel.game_id == v8_created["game_id"]
 
     unsupported = client.post("/api/v2/games", json={"title": "未知契约"}).json()
     with session_factory.begin() as db:
@@ -1779,7 +1800,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     )
     assert all(
         context["model_context_schema_version"] == 8
-        and context["prompt_template_version"] == 1
+        and context["prompt_template_version"] == 2
         and "private_judge_facts" not in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
@@ -2143,7 +2164,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         assert all(
             event.payload["prompt_schema_version"] == 8
             and event.payload["model_context_schema_version"] == 8
-            and event.payload["prompt_template_version"] == 1
+            and event.payload["prompt_template_version"] == 2
             and event.payload["model_view_selector_version"] == 1
             and event.payload["prompt_projection"]["known_events_schema_version"] == 1
             and "known_event_count" in event.payload["prompt_projection"]
@@ -2290,7 +2311,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
         context["model_context_schema_version"] == 8
-        and context["prompt_template_version"] == 1
+        and context["prompt_template_version"] == 2
         and context["known_events"]["schema_version"] == 1
         and "source_rules" not in context["known_events"]
         and context["response"]["speech"]

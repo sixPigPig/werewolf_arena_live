@@ -14,10 +14,10 @@ from app.v2.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
-    PROMPT_TEMPLATE_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
     current_model_context_contract,
     is_legacy_v7_model_context_contract,
+    is_v8_model_context_contract,
 )
 
 
@@ -75,12 +75,13 @@ def project_model_action_context_with_metadata(
             context,
             players=players,
         )
-    if contract != current_model_context_contract():
+    if not is_v8_model_context_contract(contract):
         raise ValueError("unsupported_model_context_contract")
     return _project_v8_model_action_context_with_metadata(
         context,
         players=players,
         action_record_seq=action_record_seq,
+        prompt_template_version=int(contract["prompt_template_version"]),
     )
 
 
@@ -179,6 +180,7 @@ def _project_v8_model_action_context_with_metadata(
     *,
     players: tuple[V2ModelPlayerReference, ...],
     action_record_seq: int | None,
+    prompt_template_version: int,
 ) -> V2ProjectedModelContext:
     if not players:
         projected = dict(context)
@@ -264,7 +266,7 @@ def _project_v8_model_action_context_with_metadata(
         state["as_of_seq"] = task_at_seq
     projected_context = {
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
-        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "prompt_template_version": prompt_template_version,
         "task": task,
         "self": _model_self_v8(source, hard_rules=hard_rules),
         "rules": _model_action_rules(source, hard_rules=hard_rules),
@@ -575,7 +577,7 @@ def _v8_projection_metadata(
     return {
         "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
-        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "prompt_template_version": projected_context["prompt_template_version"],
         "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
         "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,

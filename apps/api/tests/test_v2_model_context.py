@@ -15,7 +15,10 @@ from app.v2.model_context import (
     sanitize_model_speech,
 )
 from app.v2.model_client import build_model_request_payload
-from app.v2.model_context_contract import legacy_v7_model_context_contract
+from app.v2.model_context_contract import (
+    legacy_v7_model_context_contract,
+    legacy_v8_prompt_v1_model_context_contract,
+)
 
 
 PLAYERS = (
@@ -127,7 +130,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
     assert projected["model_context_schema_version"] == 8
-    assert projected["prompt_template_version"] == 1
+    assert projected["prompt_template_version"] == 2
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
@@ -192,7 +195,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] is None
     assert metadata["model_context_schema_version"] == 8
-    assert metadata["prompt_template_version"] == 1
+    assert metadata["prompt_template_version"] == 2
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
@@ -468,6 +471,87 @@ def test_v8_known_events_places_private_investigation_before_later_public_speech
     assert projected["task"]["at_seq"] == 501
     assert projected["state"]["as_of_seq"] == 501
     assert events[0]["known_at_seq"] < events[1]["known_at_seq"] < projected["task"]["at_seq"]
+
+
+def test_v8_prompt_separates_event_occurrence_from_delayed_announcement() -> None:
+    action_context = {
+        "round_no": 1,
+        "action_type": "first_night_last_words",
+        "objective": "发表首夜遗言；你不知道具体死亡原因。",
+        "self_identity": {
+            "player_id": "system-player-07",
+            "seat": 1,
+            "role_key": "seer",
+            "team": "villagers",
+        },
+        "public_history": [
+            {
+                "source_event_id": 608,
+                "record_seq": 608,
+                "event_type": "sheriff_elected",
+                "payload": {
+                    "round_no": 1,
+                    "player_id": "system-player-07",
+                    "from_player_id": None,
+                    "reason": "sheriff_vote_unique_leader",
+                },
+            },
+            {
+                "source_event_id": 624,
+                "record_seq": 624,
+                "event_type": "dawn_public_result",
+                "payload": {
+                    "round_no": 1,
+                    "dead_player_ids": ["system-player-07"],
+                },
+            },
+        ],
+        "output_contract": {
+            "kind": "speech",
+            "speech": {"mode": "required", "max_chars": 200},
+        },
+    }
+    projected = project_model_action_context(
+        action_context,
+        players=PLAYERS,
+        action_record_seq=639,
+    )
+
+    events = projected["known_events"]["events"]
+    assert [(event["event_ref"], event["known_at_seq"]) for event in events] == [
+        ("608", 608),
+        ("624", 624),
+    ]
+    assert events[0]["kind"] == "sheriff_elected"
+    assert events[0]["occurred_in"] == {"period": "day", "round_no": 1}
+    assert events[1]["kind"] == "night_result"
+    assert events[1]["occurred_in"] == {"period": "night", "round_no": 1}
+    assert events[1]["announced_in"] == {"period": "dawn", "round_no": 1}
+
+    request = build_model_request_payload(projected, decision=True, model_id="test-model")
+    system_text = request["input"][0]["content"][0]["text"]
+    assert projected["prompt_template_version"] == 2
+    assert "known_at_seq/record_seq 表示信息何时被记录或获知" in system_text
+    assert "occurred_in 表示事件实际发生阶段" in system_text
+    assert "announced_in 只表示公布阶段，公布更晚不代表发生更晚" in system_text
+    assert "带 seq 的信息按 seq 判断先后" not in system_text
+    assert len(system_text) < 400
+
+    legacy_projected = project_model_action_context(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=legacy_v8_prompt_v1_model_context_contract(),
+        action_record_seq=639,
+    )
+    legacy_request = build_model_request_payload(
+        legacy_projected,
+        decision=True,
+        model_id="test-model",
+    )
+    legacy_system_text = legacy_request["input"][0]["content"][0]["text"]
+    assert legacy_projected["prompt_template_version"] == 1
+    assert "带 seq 的信息按 seq 判断先后" in legacy_system_text
+    assert "公布更晚不代表发生更晚" not in legacy_system_text
 
 
 def test_legacy_v7_contract_keeps_legacy_projection_shape() -> None:
@@ -1006,7 +1090,7 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 8,
-            "prompt_template_version": 1,
+            "prompt_template_version": 2,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
@@ -1020,6 +1104,7 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
     system_text = payload["input"][0]["content"][0]["text"]
 
     assert "法官事实可信" in system_text
+    assert "公布更晚不代表发生更晚" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
     assert "不得使用未提供的私密信息" in system_text
     assert "public_timeline" not in system_text
