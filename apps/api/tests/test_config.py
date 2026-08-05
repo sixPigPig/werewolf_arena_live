@@ -73,12 +73,12 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_sample_rate == 24000
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
-    assert settings.live_v2_model_first_token_seconds == 20.0
-    assert settings.live_v2_model_attempt_total_seconds == 60.0
-    assert settings.live_v2_model_action_total_seconds == 90.0
-    assert settings.live_v2_model_max_attempts == 2
-    assert settings.live_v2_model_retry_base_delay_seconds == 0.3
-    assert settings.live_v2_model_retry_jitter_seconds == 0.3
+    assert settings.live_v2_model_first_token_seconds == 120.0
+    assert settings.live_v2_model_attempt_total_seconds == 180.0
+    assert settings.live_v2_model_action_total_seconds == 300.0
+    assert settings.live_v2_model_max_attempts == 3
+    assert settings.live_v2_model_retry_base_delay_seconds == 0.5
+    assert settings.live_v2_model_retry_jitter_seconds == 0.25
     assert settings.judge_voice_worker_poll_seconds == 2.0
     assert settings.judge_voice_worker_heartbeat_seconds == 10.0
     assert settings.judge_voice_worker_probe_max_age_seconds == 45.0

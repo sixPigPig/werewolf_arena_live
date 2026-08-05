@@ -30,11 +30,14 @@ from app.v2.god_view_projection import (
 from app.v2.model_client import (
     V2ModelError,
     V2QualityError,
+    _decision_object,
+    _decision_repair_kind,
     _decision_fields,
     _speech_output_instruction,
     _required_speech,
     _sse_data,
     _next_with_cancellation,
+    model_failure_disposition,
 )
 from app.v2.live_runtime import _audience_targets
 from app.v2.protocol import V2LiveProtocolError, audio_frame
@@ -67,8 +70,53 @@ from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
 def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
     policy = V2ModelRetryPolicy()
 
-    assert policy.attempt_total_seconds == 60.0
-    assert policy.action_total_seconds == 90.0
+    assert policy.max_attempts == 3
+    assert policy.attempt_total_seconds == 180.0
+    assert policy.action_total_seconds == 300.0
+
+
+@pytest.mark.parametrize(
+    ("error", "category", "max_attempts", "pausable"),
+    [
+        (V2ModelError("model_empty_stream"), "transport", 3, True),
+        (V2ModelError("model_first_token_timeout"), "timeout", 2, True),
+        (
+            V2QualityError("model_decision_invalid_json", raw_response="not-json"),
+            "machine_format",
+            2,
+            True,
+        ),
+        (
+            V2ModelError("model_provider_credentials_missing"),
+            "provider_configuration",
+            1,
+            False,
+        ),
+    ],
+)
+def test_v2_model_failure_disposition_is_explicit(
+    error: V2ModelError,
+    category: str,
+    max_attempts: int,
+    pausable: bool,
+) -> None:
+    disposition = model_failure_disposition(error)
+
+    assert disposition.category == category
+    assert disposition.max_attempts == max_attempts
+    assert disposition.pausable is pausable
+
+
+def test_v2_decision_parser_repairs_one_extra_trailing_brace() -> None:
+    raw = '{"explode": false}}'
+    contract = {
+        "kind": "boolean",
+        "field": "explode",
+        "speech": {"mode": "required_if_true"},
+    }
+
+    assert _decision_object(raw) == {"explode": False}
+    assert _decision_repair_kind(raw, contract) == "single_trailing_brace_removed"
 
 
 def _identity() -> V2PresentationIdentity:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator
 import asyncio
+from datetime import UTC, datetime
 import hashlib
 import json
 from pathlib import Path
@@ -25,6 +26,7 @@ from app.models.game_session import GameSessionRecord
 from app.models.judge_configuration import JudgeConfigurationRecord
 from app.models.live import LiveRunRecord
 from app.models.model_configuration import ModelConfigurationRecord
+from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.models.user import User
 from app.v2.live_runtime import (
     V2ClientProtocolError,
@@ -61,12 +63,14 @@ from app.v2.models import (
     V2LivePresentation,
     V2KnowledgeFact,
     V2MatchState,
+    V2ModelActionRecovery,
     V2PlayerState,
     V2RoleAssignment,
     V2RoleAssignmentBatch,
     V2VoiceAsset,
 )
 from app.v2.repository import V2ActionRepository, V2RepositoryError
+from app.v2.tts_client import V2DisabledTtsClient
 
 
 PCM_CHUNK = b"\x10\x00" * 240
@@ -110,6 +114,7 @@ class FakeV2ModelClient:
         self.decision_contexts: list[dict[str, Any]] = []
         self.decline_action_types: set[str] = set()
         self.quality_failure_action_types: set[str] = set()
+        self.quality_failures_remaining_by_action: dict[str, int] = {}
         self.unexpected_speech_target: str | None = None
         self.force_speech_action_types: set[str] = set()
         self.speech_by_action_type: dict[str, str] = {}
@@ -214,7 +219,13 @@ class FakeV2ModelClient:
             )
         action_type = action_context["task"]["type"]
         output_contract = action_context["response"]
-        if action_type in self.quality_failure_action_types:
+        quality_failures_remaining = self.quality_failures_remaining_by_action.get(
+            action_type,
+            0,
+        )
+        if quality_failures_remaining > 0:
+            self.quality_failures_remaining_by_action[action_type] = quality_failures_remaining - 1
+        if action_type in self.quality_failure_action_types or quality_failures_remaining > 0:
             boolean_field = output_contract.get("field")
             raise V2QualityError(
                 "model_decision_invalid_speech",
@@ -604,6 +615,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "roles_assigned",
             "ability_runtime_compiled",
         ]
+
         assert events[0].payload == {
             "title": "经典 8 人",
             "start_mode": "first_ready_viewer",
@@ -1020,6 +1032,84 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         }
         assert snapshot["current_presentation"] is None
         assert [item["role"] for item in snapshot["players"]]
+
+
+def _add_library_profiles(session_factory: sessionmaker[Session]) -> None:
+    with session_factory.begin() as db:
+        db.add_all(
+            [
+                VirtualPlayerProfile(
+                    id="profile-1",
+                    display_name="库内阿青",
+                    model_provider="agent_plan",
+                    model="private-model-id",
+                    personality_id="balanced",
+                    personality_text="库内人格一",
+                    appearance_id="default",
+                    strategy_profile="balanced",
+                    display_order=1,
+                    status="published",
+                    published_at=datetime.now(UTC),
+                ),
+                VirtualPlayerProfile(
+                    id="profile-2",
+                    display_name="库内白石",
+                    model_provider="agent_plan",
+                    model="test-model",
+                    personality_id="balanced",
+                    personality_text="库内人格二",
+                    appearance_id="default",
+                    strategy_profile="balanced",
+                    display_order=2,
+                    status="published",
+                    published_at=datetime.now(UTC),
+                ),
+            ]
+        )
+
+
+def test_profile_library_mode_freezes_authoritative_player_models(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    _add_library_profiles(session_factory)
+    request = _lobby_create_request()
+    request["lobby_snapshot"]["model_binding_mode"] = "profile_library"
+    for player in request["lobby_snapshot"]["player_configs"]:
+        player.pop("model_provider")
+        player.pop("model")
+
+    response = client.post("/api/v2/games", json=request)
+
+    assert response.status_code == 201, response.text
+    with session_factory() as db:
+        game = db.get(V2GameRecord, response.json()["game_id"])
+        assert game is not None
+        assert game.rule_snapshot["model_binding_mode"] == "profile_library"
+        assert [
+            (item["profile_id"], item["model_provider"], item["model"])
+            for item in game.players_snapshot
+        ] == [
+            ("profile-1", "agent_plan", "private-model-id"),
+            ("profile-2", "agent_plan", "test-model"),
+        ]
+        assert [item["name"] for item in game.players_snapshot] == ["库内阿青", "库内白石"]
+        assert [item["personality"] for item in game.players_snapshot] == [
+            "库内人格一",
+            "库内人格二",
+        ]
+
+
+def test_profile_library_mode_rejects_submitted_model_override(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    _add_library_profiles(session_factory)
+    request = _lobby_create_request()
+    request["lobby_snapshot"]["model_binding_mode"] = "profile_library"
+    request["lobby_snapshot"]["player_configs"][0]["model"] = "test-model"
+
+    response = client.post("/api/v2/games", json=request)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "v2_player_model_binding_mismatch"
+    assert response.json()["detail"]["profile_id"] == "profile-1"
 
 
 def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
@@ -2264,7 +2354,6 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     model_client = client.app.state.v2_test_model_client
     model_client.decline_action_types.add("ability_witch.heal_decision")
     model_client.decline_action_types.add("werewolf_self_explosion")
-    model_client.decline_action_types.add("exile_vote")
     model_client.unexpected_speech_target = "model-added-irrelevant-target"
     model_client.force_speech_action_types.update({"ability_witch.heal_decision", "exile_vote"})
     request = _advanced_create_request()
@@ -2712,11 +2801,6 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             )
         )
         assert any(
-            event.payload["reason"] == "required_target_missing"
-            and event.payload["normalized_target_player_id"] is not None
-            for event in normalized_targets
-        )
-        assert any(
             event.payload["reason"] == "targetless_action"
             and event.payload["normalized_target_player_id"] is None
             for event in normalized_targets
@@ -2958,6 +3042,181 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
     )
     assert event_detail.status_code == 200, event_detail.text
     assert event_detail.json()["payload"]["request_payload"]
+
+
+def test_tts_disabled_match_uses_text_only_presentations(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    runtime = client.app.state.v2_live_runtime
+    external_tts = client.app.state.v2_test_tts_client
+    runtime._action_engine._tts_client = V2DisabledTtsClient()
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    assert external_tts.call_count == 0
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None and game.status == "awaiting_observation"
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2VoiceAsset)
+                .where(V2VoiceAsset.game_id == identifiers["game_id"])
+            )
+            == 0
+        )
+        presentations = list(
+            db.scalars(
+                select(V2LivePresentation).where(
+                    V2LivePresentation.game_id == identifiers["game_id"]
+                )
+            )
+        )
+        assert presentations
+        assert all(item.state == "closed" and item.voice_asset_id is None for item in presentations)
+        event_types = list(
+            db.scalars(
+                select(V2GameRecordEvent.event_type).where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"]
+                )
+            )
+        )
+        assert "tts_skipped" in event_types
+        assert "tts_stream_started" not in event_types
+
+
+def test_public_speech_format_exhaustion_is_audited_and_skipped(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.quality_failure_action_types.add("day_debate_speech")
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None and game.status == "awaiting_observation"
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == identifiers["game_id"])
+            )
+        )
+        skipped = [
+            event
+            for event in events
+            if event.event_type == "action_skipped_technical"
+            and event.payload.get("action_type") == "day_debate_speech"
+        ]
+        assert skipped
+        skipped_action_ids = {event.payload["action_id"] for event in skipped}
+        assert skipped_action_ids <= {
+            event.payload["action_id"] for event in events if event.event_type == "action_succeeded"
+        }
+        assert not any(event.event_type == "day_runtime_failed" for event in events)
+
+
+def test_optional_boolean_format_exhaustion_uses_false_fallback(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.quality_failure_action_types.add("werewolf_self_explosion")
+    request = _advanced_create_request()
+    request["lobby_snapshot"]["rule_set"]["werewolf_self_explosion_enabled"] = True
+    identifiers = client.post("/api/v2/games", json=request).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == identifiers["game_id"])
+            )
+        )
+        fallbacks = [
+            event
+            for event in events
+            if event.event_type == "technical_fallback_applied"
+            and event.payload.get("action_type") == "werewolf_self_explosion"
+        ]
+        assert fallbacks
+        assert not any(event.event_type == "werewolf_self_exploded" for event in events)
+
+
+def test_required_target_exhaustion_pauses_without_random_vote(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.decline_action_types.add("exile_vote")
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-stop-required-target-pause",
+    )
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "paused_model_error":
+                break
+
+        with session_factory() as db:
+            recovery = db.scalar(
+                select(V2ModelActionRecovery).where(
+                    V2ModelActionRecovery.game_id == identifiers["game_id"],
+                    V2ModelActionRecovery.state == "paused",
+                )
+            )
+            assert recovery is not None
+            assert recovery.action_type == "exile_vote"
+            assert recovery.failure_code == "model_decision_required_target_missing"
+            assert not any(
+                event.event_type == "day_vote_committed"
+                and event.payload.get("action_type") == "exile_vote"
+                and event.payload.get("voter_player_id") == recovery.actor_id
+                for event in db.scalars(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == identifiers["game_id"]
+                    )
+                )
+            )
+
+        stopped = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/stop",
+            json={"reason": "验证必需目标不会随机降级后停止"},
+            headers=headers,
+        )
+        assert stopped.status_code == 202, stopped.text
 
 
 def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
@@ -3208,6 +3467,14 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
         run = db.get(V2GameRun, identifiers["run_id"])
         assert game is not None and game.status == "awaiting_observation"
         assert run is not None and run.status == "awaiting_observation"
+        recovery = db.get(V2ModelActionRecovery, action_id)
+        assert recovery is not None
+        assert recovery.state == "resolved"
+        assert recovery.request_hash
+        assert recovery.request_payload
+        assert recovery.model_context
+        assert recovery.action_snapshot["action_type"]
+        assert recovery.resolved_attempt_id is not None
         events = list(
             db.scalars(
                 select(V2GameRecordEvent)
@@ -3230,6 +3497,11 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
             "model_action_retry_requested",
             "model_action_resumed",
         ]
+        assert any(
+            event.event_type == "model_action_recovery_resolved"
+            and event.payload.get("action_id") == action_id
+            for event in events
+        )
         starts = [event for event in action_events if event.event_type == "model_request_started"]
         assert [event.payload["attempt_no"] for event in starts] == [1, 2, 3]
         assert [event.payload["retry_cycle"] for event in starts] == [1, 1, 2]
@@ -3247,6 +3519,82 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
             }
             for event in action_events
         )
+
+
+def test_durable_model_retry_can_be_accepted_by_another_runtime(v2_context) -> None:
+    client, session_factory, voice_root = v2_context
+    original_runtime = client.app.state.v2_live_runtime
+    model_client = client.app.state.v2_test_model_client
+    tts_client = client.app.state.v2_test_tts_client
+    model_client.split_werewolf_preferences = True
+    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    headers = _operator_control_headers(
+        client,
+        session_factory,
+        idempotency_key="v2-cross-runtime-model-retry",
+    )
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "paused_model_error":
+                break
+
+        with session_factory() as db:
+            recovery = db.scalar(
+                select(V2ModelActionRecovery).where(
+                    V2ModelActionRecovery.game_id == identifiers["game_id"],
+                    V2ModelActionRecovery.state == "paused",
+                )
+            )
+            assert recovery is not None
+            action_id = recovery.action_id
+
+        client.app.state.v2_live_runtime = V2LiveRuntime(
+            session_factory=session_factory,
+            model_client=model_client,
+            tts_client=tts_client,
+            voice_root=voice_root,
+            sample_rate=24000,
+            judge_configuration_provider=(
+                original_runtime._action_engine._judge_configuration_provider
+            ),
+            model_retry_policy=original_runtime._action_engine._model_retry_policy,
+        )
+        retried = client.post(
+            f"/api/v1/admin/v2/games/{identifiers['game_id']}/retry-model-action",
+            json={"reason": "由另一个 API worker 接受持久恢复请求"},
+            headers=headers,
+        )
+        assert retried.status_code == 202, retried.text
+        assert retried.json()["action_id"] == action_id
+
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    client.app.state.v2_live_runtime = original_runtime
+    with session_factory() as db:
+        recovery = db.get(V2ModelActionRecovery, action_id)
+        assert recovery is not None and recovery.state == "resolved"
+        event_types = {
+            event.event_type
+            for event in db.scalars(
+                select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == identifiers["game_id"])
+            )
+        }
+        assert "model_action_retry_requested" in event_types
+        assert "model_action_resumed" in event_types
+        assert "model_action_recovery_resolved" in event_types
 
 
 def test_admin_can_stop_a_game_paused_after_model_attempts_exhausted(
@@ -3302,7 +3650,17 @@ def test_admin_can_stop_a_game_paused_after_model_attempts_exhausted(
             )
         )
         assert "model_action_paused" in event_types
-        assert event_types[-2:] == ["game_stop_requested", "game_canceled"]
+        assert event_types[-3:] == [
+            "game_stop_requested",
+            "model_action_recovery_canceled",
+            "game_canceled",
+        ]
+        recovery = db.scalar(
+            select(V2ModelActionRecovery).where(
+                V2ModelActionRecovery.game_id == identifiers["game_id"]
+            )
+        )
+        assert recovery is not None and recovery.state == "canceled"
         assert "model_action_resumed" not in event_types
         assert "action_failed" not in event_types
 
@@ -3340,7 +3698,7 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
             "werewolf_self_explosion",
         }
     )
-    model_client.quality_failure_action_types.add("sheriff_withdraw")
+    model_client.quality_failures_remaining_by_action["sheriff_withdraw"] = 1
     identifiers = client.post("/api/v2/games", json=_advanced_create_request()).json()
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
@@ -3352,7 +3710,7 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
             if message.get("text") is None:
                 continue
             value = json.loads(message["text"])
-            if value.get("live_state") == "failed":
+            if value.get("live_state") == "awaiting_observation":
                 break
 
     with session_factory() as db:
@@ -3367,6 +3725,8 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
         assert failure is not None
         assert failure.payload["failure_code"] == "model_decision_invalid_speech"
         assert failure.payload["raw_response"] == '{"withdraw":true}'
+        assert failure.payload["failure_category"] == "machine_format"
+        assert failure.payload["terminal"] is False
 
     assert client.post("/api/v1/admin/dev-login").status_code == 200
     detail = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")

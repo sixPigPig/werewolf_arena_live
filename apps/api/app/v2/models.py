@@ -164,6 +164,60 @@ class V2GameControlRequest(Base):
     )
 
 
+class V2ModelActionRecovery(Base):
+    __tablename__ = "v2_model_action_recoveries"
+    __table_args__ = (
+        Index("ix_v2_model_action_recoveries_game_state", "game_id", "state"),
+        Index("ix_v2_model_action_recoveries_state_updated", "state", "updated_at"),
+    )
+
+    action_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    recovery_id: Mapped[str] = mapped_column(String(48), nullable=False, unique=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    action_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_context: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    action_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    failure_code: Mapped[str] = mapped_column(String(120), nullable=False)
+    failure_category: Mapped[str] = mapped_column(String(40), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(nullable=False)
+    retry_cycle: Mapped[int] = mapped_column(nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    control_request_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("v2_game_control_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_attempt_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class V2GodViewAccessGrant(Base):
     __tablename__ = "v2_god_view_access_grants"
 

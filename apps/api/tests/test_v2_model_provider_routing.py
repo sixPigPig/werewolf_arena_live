@@ -582,7 +582,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
 
 @pytest.mark.parametrize(
     ("status_code", "retryable"),
-    [(401, False), (502, True), (503, True), (504, True)],
+    [(401, False), (429, True), (502, True), (503, True), (504, True)],
 )
 def test_only_transient_http_statuses_are_retryable(
     status_code: int,
@@ -610,6 +610,34 @@ def test_only_transient_http_statuses_are_retryable(
     assert caught.value.retryable is retryable
     assert caught.value.failure_stage == "http_response"
     assert caught.value.http_status == status_code
+
+
+def test_rate_limit_preserves_retry_after_delay() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            text="rate limited",
+            headers={"Retry-After": "1.5"},
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_http_429") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_http_429_retry_after",
+                target=target,
+            )
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.retry_after_seconds == 1.5
 
 
 def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -> None:

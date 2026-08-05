@@ -38,6 +38,7 @@ from app.model_catalog.defaults import (
     parameter_values_with_default_max_tokens,
 )
 from app.models.model_configuration import ModelConfigurationRecord
+from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.v2.contracts import (
     AdminV2EventPageResponse,
     AdminV2EventResponse,
@@ -139,6 +140,7 @@ def create_v2_game(
         rule_snapshot = {
             "schema_version": lobby.schema_version,
             "source": "existing_mobile_lobby",
+            "model_binding_mode": lobby.model_binding_mode,
             "rule_set_revision_id": lobby.rule_set_revision_id,
             "seed": lobby.seed,
             "max_rounds": lobby.max_rounds,
@@ -148,9 +150,40 @@ def create_v2_game(
         }
         players_snapshot = []
         for item in lobby.player_configs:
+            player_snapshot = item.model_dump(mode="json", exclude_none=True)
+            if lobby.model_binding_mode == "profile_library":
+                profile = db.get(VirtualPlayerProfile, item.profile_id)
+                if profile is None or profile.status != "published":
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "v2_player_profile_unavailable",
+                            "profile_id": item.profile_id,
+                        },
+                    )
+                submitted_binding = (item.model_provider, item.model)
+                if any(submitted_binding) and submitted_binding != (
+                    profile.model_provider,
+                    profile.model,
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "v2_player_model_binding_mismatch",
+                            "profile_id": item.profile_id,
+                            "submitted_model_provider": item.model_provider,
+                            "submitted_model": item.model,
+                            "library_model_provider": profile.model_provider,
+                            "library_model": profile.model,
+                        },
+                    )
+                player_snapshot.update(_library_player_snapshot(profile))
             model_configuration = db.get(
                 ModelConfigurationRecord,
-                (item.model_provider, item.model),
+                (
+                    player_snapshot["model_provider"],
+                    player_snapshot["model"],
+                ),
             )
             if (
                 model_configuration is None
@@ -159,9 +192,11 @@ def create_v2_game(
             ):
                 raise HTTPException(
                     status_code=422,
-                    detail=(f"Player model is not enabled: {item.model_provider}/{item.model}"),
+                    detail=(
+                        "Player model is not enabled: "
+                        f"{player_snapshot['model_provider']}/{player_snapshot['model']}"
+                    ),
                 )
-            player_snapshot = item.model_dump(mode="json", exclude_none=True)
             player_snapshot["model_parameters"] = parameter_values_with_default_max_tokens(
                 model_configuration.parameter_values,
                 supports_thinking=model_configuration.supports_thinking,
@@ -198,6 +233,30 @@ def create_v2_game(
         god_view_websocket_url=f"/api/v2/god-view/games/{game.game_id}/ws",
         god_view_access_token=god_view_access_token,
     )
+
+
+def _library_player_snapshot(profile: VirtualPlayerProfile) -> dict[str, Any]:
+    return {
+        "profile_id": profile.id,
+        "name": profile.display_name,
+        "model_provider": profile.model_provider,
+        "model": profile.model,
+        "personality_id": profile.personality_id,
+        "personality": profile.personality_text,
+        "appearance_id": profile.appearance_id,
+        "avatar_image_url": profile.avatar_image_url,
+        "avatar_asset_id": profile.avatar_asset_id,
+        "strategy_profile": profile.strategy_profile,
+        "tts_speaker": profile.tts_speaker,
+        "tts_dialect": profile.tts_dialect,
+        "base_delivery_mood": profile.base_delivery_mood,
+        "base_delivery_intensity": profile.base_delivery_intensity,
+        "base_delivery_pace": profile.base_delivery_pace,
+        "base_delivery_instruction": profile.base_delivery_instruction,
+        "voice_enabled": profile.voice_enabled,
+        "voice_config_version": profile.voice_config_version,
+        "tags": list(profile.tags),
+    }
 
 
 @public_router.get(
@@ -885,14 +944,14 @@ async def retry_admin_v2_model_action(
         )
         db.expire_all()
         run = db.get(type(result.run), result.run.run_id)
-        if not resumed or run is None or run.status == "paused_model_error":
+        if not resumed or run is None:
             raise AdminAPIProblem(
                 status_code=503,
                 code="admin_v2_model_action_retry_unavailable",
                 title="V2 model action retry unavailable",
                 detail=(
-                    "The retry request was persisted, but the local paused action "
-                    "could not be resumed."
+                    "The retry request was persisted, but no local or durable paused "
+                    "action could accept it."
                 ),
             )
     _set_admin_headers(request, response)
@@ -1353,6 +1412,16 @@ def _admin_model_requests(
                 failure_code=(
                     failure_payload.get("failure_code")
                     if isinstance(failure_payload.get("failure_code"), str)
+                    else None
+                ),
+                failure_category=(
+                    failure_payload.get("failure_category")
+                    if isinstance(failure_payload.get("failure_category"), str)
+                    else None
+                ),
+                repair_kind=(
+                    response_payload.get("repair_kind")
+                    if isinstance(response_payload.get("repair_kind"), str)
                     else None
                 ),
                 retryable=(

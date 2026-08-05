@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 import unicodedata
 
 import httpx
@@ -14,6 +14,23 @@ from app.model_catalog.defaults import (
     DEFAULT_NON_THINKING_MAX_TOKENS,
     DEFAULT_THINKING_MAX_TOKENS,
 )
+
+
+V2ModelFailureCategory = Literal[
+    "transport",
+    "timeout",
+    "machine_format",
+    "provider_configuration",
+    "internal_invariant",
+]
+
+
+@dataclass(frozen=True)
+class V2FailureDisposition:
+    category: V2ModelFailureCategory
+    retryable: bool
+    pausable: bool
+    max_attempts: int
 
 
 class V2ModelError(RuntimeError):
@@ -30,6 +47,7 @@ class V2ModelError(RuntimeError):
         first_token_seen: bool = False,
         response_headers_seen: bool = False,
         elapsed_ms: int | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -42,12 +60,20 @@ class V2ModelError(RuntimeError):
         self.first_token_seen = first_token_seen
         self.response_headers_seen = response_headers_seen
         self.elapsed_ms = elapsed_ms
+        self.retry_after_seconds = retry_after_seconds
 
 
-class V2QualityError(RuntimeError):
+class V2QualityError(V2ModelError):
     def __init__(self, code: str, *, raw_response: str | None = None) -> None:
-        super().__init__(code)
-        self.code = code
+        super().__init__(
+            code,
+            retryable=code
+            not in {
+                "model_decision_contract_missing",
+                "model_decision_contract_invalid",
+            },
+            failure_stage="machine_format",
+        )
         self.raw_response = raw_response
 
 
@@ -88,7 +114,7 @@ class _ProviderEvent:
     finish_reason: str | None = None
 
 
-_RETRYABLE_HTTP_STATUSES = frozenset({502, 503, 504})
+_RETRYABLE_HTTP_STATUSES = frozenset({429, 502, 503, 504})
 _RETRYABLE_TRANSPORT_ERRORS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -99,6 +125,64 @@ _RETRYABLE_TRANSPORT_ERRORS = (
     httpx.PoolTimeout,
     OSError,
 )
+
+
+def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
+    if isinstance(exc, V2QualityError):
+        recoverable = exc.code not in {
+            "model_decision_contract_missing",
+            "model_decision_contract_invalid",
+        }
+        return V2FailureDisposition(
+            category="machine_format" if recoverable else "internal_invariant",
+            retryable=recoverable,
+            pausable=recoverable,
+            max_attempts=2 if recoverable else 1,
+        )
+    if exc.code in {"model_first_token_timeout", "model_total_timeout"}:
+        return V2FailureDisposition(
+            category="timeout",
+            retryable=True,
+            pausable=True,
+            max_attempts=2,
+        )
+    if exc.code in {
+        "model_transport_failed",
+        "model_empty_stream",
+        "model_invalid_sse",
+        "model_invalid_event",
+        "model_provider_failed",
+    } or (exc.http_status in _RETRYABLE_HTTP_STATUSES):
+        return V2FailureDisposition(
+            category="transport",
+            retryable=True,
+            pausable=True,
+            max_attempts=3,
+        )
+    if exc.code == "model_output_budget_exhausted":
+        return V2FailureDisposition(
+            category="machine_format",
+            retryable=True,
+            pausable=True,
+            max_attempts=2,
+        )
+    if exc.code in {
+        "model_not_configured",
+        "model_provider_not_configured",
+        "model_provider_credentials_missing",
+    } or (exc.http_status is not None and 400 <= exc.http_status < 500):
+        return V2FailureDisposition(
+            category="provider_configuration",
+            retryable=False,
+            pausable=False,
+            max_attempts=1,
+        )
+    return V2FailureDisposition(
+        category="internal_invariant",
+        retryable=exc.retryable,
+        pausable=False,
+        max_attempts=1,
+    )
 
 
 class V2ModelClient:
@@ -286,6 +370,9 @@ class V2ModelClient:
                                 provider_request_id=provider_request_id,
                                 response_headers_seen=True,
                                 elapsed_ms=round((loop.time() - started) * 1000),
+                                retry_after_seconds=_retry_after_seconds(
+                                    response.headers.get("Retry-After")
+                                ),
                             )
                         lines = response.aiter_lines().__aiter__()
                         while True:
@@ -331,6 +418,7 @@ class V2ModelClient:
                             if provider_event.failed:
                                 raise V2ModelError(
                                     "model_provider_failed",
+                                    retryable=True,
                                     failure_stage=(
                                         "first_token" if first_token_at is None else "stream"
                                     ),
@@ -383,13 +471,13 @@ class V2ModelClient:
             ) from exc
         if not text.strip():
             if finish_reason in {"length", "max_output_tokens"}:
-                raise V2ModelError("model_output_budget_exhausted")
+                raise V2ModelError("model_output_budget_exhausted", retryable=True)
             if first_token_at is None:
-                raise V2ModelError("model_empty_stream")
+                raise V2ModelError("model_empty_stream", retryable=True)
             if reasoning_seen:
-                raise V2ModelError("model_empty_stream")
+                raise V2ModelError("model_empty_stream", retryable=True)
         if first_token_at is None:
-            raise V2ModelError("model_empty_stream")
+            raise V2ModelError("model_empty_stream", retryable=True)
         completed = loop.time()
         return (
             text.strip(),
@@ -420,6 +508,16 @@ def _model_timeout_error(
         response_headers_seen=response_headers_seen,
         elapsed_ms=round((asyncio.get_running_loop().time() - started) * 1000),
     )
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return max(0.0, seconds)
 
 
 def _root_exception(exc: BaseException) -> BaseException:
@@ -861,9 +959,9 @@ def _sse_data(line: str) -> dict[str, Any] | None:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise V2ModelError("model_invalid_sse") from exc
+        raise V2ModelError("model_invalid_sse", retryable=True) from exc
     if not isinstance(value, dict):
-        raise V2ModelError("model_invalid_event")
+        raise V2ModelError("model_invalid_event", retryable=True)
     return value
 
 
@@ -879,10 +977,13 @@ def _decision_object(raw: str) -> dict[str, Any]:
         normalized_repaired = _repair_compatibility_key_delimiter(normalized)
         serialized_candidates = (
             candidate,
+            _repair_single_trailing_brace(candidate),
             _repair_structural_smart_quotes(candidate),
             normalized,
+            _repair_single_trailing_brace(normalized),
             _repair_structural_smart_quotes(normalized),
             normalized_repaired,
+            _repair_single_trailing_brace(normalized_repaired),
             _repair_structural_smart_quotes(normalized_repaired),
         )
         for serialized in dict.fromkeys(serialized_candidates):
@@ -894,6 +995,19 @@ def _decision_object(raw: str) -> dict[str, Any]:
                 return value
             raise V2QualityError("model_decision_invalid_shape")
     raise V2QualityError("model_decision_invalid_json")
+
+
+def _repair_single_trailing_brace(value: str) -> str:
+    stripped = value.strip()
+    if not stripped.endswith("}"):
+        return value
+    try:
+        parsed, end = json.JSONDecoder().raw_decode(stripped)
+    except json.JSONDecodeError:
+        return value
+    if isinstance(parsed, dict) and stripped[end:].strip() == "}":
+        return stripped[:end]
+    return value
 
 
 def _repair_compatibility_key_delimiter(value: str) -> str:
@@ -1040,6 +1154,8 @@ def _decision_repair_kind(raw: str, output_contract: Any) -> str | None:
         if _looks_like_structured_speech(stripped):
             return "structured_speech_fragment_recovered"
         return "plain_text_speech_fallback"
+    if _repair_single_trailing_brace(raw) != raw:
+        return "single_trailing_brace_removed"
     if isinstance(value.get("output"), dict) or isinstance(value.get("decision"), dict):
         return "nested_output_object_recovered"
     if {"schema_version", "action_id", "action_type"}.intersection(value):

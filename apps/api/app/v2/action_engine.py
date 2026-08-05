@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import logging
@@ -23,10 +23,12 @@ from app.v2.model_context import (
     sanitize_model_speech,
 )
 from app.v2.model_client import (
+    V2FailureDisposition,
     V2ModelDecision,
     V2ModelError,
     V2ModelTarget,
     V2QualityError,
+    model_failure_disposition,
 )
 from app.v2.model_observation import observe_model_speech
 from app.v2.protocol import (
@@ -174,11 +176,11 @@ class V2ActionResult:
 
 @dataclass(frozen=True)
 class V2ModelRetryPolicy:
-    max_attempts: int = 2
-    attempt_total_seconds: float = 60.0
-    action_total_seconds: float = 90.0
-    base_delay_seconds: float = 0.3
-    jitter_seconds: float = 0.3
+    max_attempts: int = 3
+    attempt_total_seconds: float = 180.0
+    action_total_seconds: float = 300.0
+    base_delay_seconds: float = 0.5
+    jitter_seconds: float = 0.25
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
@@ -234,7 +236,12 @@ class V2ActionEngine:
     ) -> bool:
         async with self._paused_model_actions_lock:
             waiter = self._paused_model_actions.get(game_id)
-            if waiter is None or waiter.action_id != action_id or waiter.requested.is_set():
+            if waiter is None or waiter.action_id != action_id:
+                return self._repository.has_durable_model_action_retry(
+                    game_id=game_id,
+                    action_id=action_id,
+                )
+            if waiter.requested.is_set():
                 return False
             waiter.control_request_id = control_request_id
             waiter.requested.set()
@@ -247,6 +254,7 @@ class V2ActionEngine:
         claim: V2ActionClaim,
         attempt_id: str,
         failure_code: str,
+        recovery: dict[str, Any],
         broadcaster: V2BroadcastPort,
         audience: str,
     ) -> None:
@@ -264,6 +272,7 @@ class V2ActionEngine:
                 claim=claim,
                 attempt_id=attempt_id,
                 failure_code=failure_code,
+                recovery=recovery,
             )
             await broadcaster.broadcast_json(
                 live_state(
@@ -274,7 +283,20 @@ class V2ActionEngine:
                 ),
                 audience="all",
             )
-            await waiter.requested.wait()
+            while not waiter.requested.is_set():
+                self.check_cancellation(claim.game_id)
+                durable_control_request_id = self._repository.pending_model_action_retry(
+                    game_id=claim.game_id,
+                    action_id=claim.action_id,
+                )
+                if durable_control_request_id is not None:
+                    waiter.control_request_id = durable_control_request_id
+                    waiter.requested.set()
+                    break
+                try:
+                    await asyncio.wait_for(waiter.requested.wait(), timeout=0.25)
+                except TimeoutError:
+                    continue
             if waiter.control_request_id is None:
                 raise V2RepositoryError("model retry has no control request")
             self._repository.resume_model_action(
@@ -658,6 +680,10 @@ class V2ActionEngine:
                                             check_cancellation=check_cancellation,
                                         )
                                     )
+                                    _validate_model_target_decision(
+                                        model_decision,
+                                        spec=spec,
+                                    )
                             except TimeoutError as exc:
                                 raise V2ModelError(
                                     "model_total_timeout",
@@ -668,14 +694,24 @@ class V2ActionEngine:
                                     ),
                                 ) from exc
                         except V2ModelError as exc:
+                            disposition = model_failure_disposition(exc)
                             remaining = model_deadline - time.monotonic()
-                            delay_seconds = retry_policy.base_delay_seconds + random.uniform(
-                                0, retry_policy.jitter_seconds
+                            delay_seconds = _model_retry_delay_seconds(
+                                disposition=disposition,
+                                exc=exc,
+                                cycle_attempt_no=cycle_attempt_no,
+                                policy=retry_policy,
+                            )
+                            required_retry_window = (
+                                retry_policy.attempt_total_seconds
+                                if disposition.category == "timeout"
+                                else 0.0
                             )
                             retryable = (
-                                exc.retryable
-                                and cycle_attempt_no < retry_policy.max_attempts
-                                and remaining > delay_seconds
+                                disposition.retryable
+                                and cycle_attempt_no
+                                < min(retry_policy.max_attempts, disposition.max_attempts)
+                                and remaining > delay_seconds + required_retry_window
                             )
                             self._repository.append_event(
                                 game_id=claim.game_id,
@@ -688,6 +724,9 @@ class V2ActionEngine:
                                     retry_cycle=retry_cycle,
                                     cycle_attempt_no=cycle_attempt_no,
                                     exc=exc,
+                                    failure_category=disposition.category,
+                                    retryable=disposition.retryable,
+                                    action_recoverable=disposition.pausable,
                                     terminal=not retryable,
                                     attempt_budget_ms=round(
                                         retry_policy.attempt_total_seconds * 1000
@@ -722,6 +761,11 @@ class V2ActionEngine:
                                         "max_attempts": retry_policy.max_attempts,
                                         "failure_code": exc.code,
                                         "delay_ms": round(delay_seconds * 1000),
+                                        "retry_after_ms": (
+                                            round(exc.retry_after_seconds * 1000)
+                                            if exc.retry_after_seconds is not None
+                                            else None
+                                        ),
                                         "action_remaining_ms": max(
                                             0,
                                             round((model_deadline - time.monotonic()) * 1000),
@@ -733,6 +777,46 @@ class V2ActionEngine:
                                     check_cancellation=check_cancellation,
                                 )
                                 continue
+                            technical_outcome = _technical_exhaustion_outcome(
+                                spec=spec,
+                                exc=exc,
+                                attempt_id=model_attempt_id,
+                            )
+                            if technical_outcome is not None:
+                                technical_decision, event_type = technical_outcome
+                                self._repository.append_event(
+                                    game_id=claim.game_id,
+                                    event_type=event_type,
+                                    payload={
+                                        "action_id": claim.action_id,
+                                        "attempt_id": model_attempt_id,
+                                        "action_type": spec.action_type,
+                                        "failure_code": exc.code,
+                                        "failure_category": disposition.category,
+                                        "raw_response_preserved": isinstance(
+                                            exc,
+                                            V2QualityError,
+                                        )
+                                        and exc.raw_response is not None,
+                                    },
+                                )
+                                self._repository.complete_silent_action(
+                                    claim=claim,
+                                    next_live_state=spec.success_live_state,
+                                    next_phase_state=spec.success_phase_state,
+                                    best_effort=spec.best_effort,
+                                )
+                                if not spec.best_effort and not spec.defer_presentation:
+                                    await broadcaster.broadcast_json(
+                                        live_state(
+                                            game_id=claim.game_id,
+                                            run_id=claim.run_id,
+                                            state=spec.success_live_state,
+                                            reason=event_type,
+                                        ),
+                                        audience=spec.audience,
+                                    )
+                                return V2ActionResult(decision=technical_decision)
                             if (
                                 not spec.best_effort
                                 and not spec.isolated_failure
@@ -742,6 +826,15 @@ class V2ActionEngine:
                                     claim=claim,
                                     attempt_id=model_attempt_id,
                                     failure_code=exc.code,
+                                    recovery=_model_action_recovery_snapshot(
+                                        spec=spec,
+                                        target=model_target,
+                                        request_payload=request_payload,
+                                        model_context=model_context,
+                                        failure_category=disposition.category,
+                                        attempt_no=model_attempt_no,
+                                        retry_cycle=retry_cycle,
+                                    ),
                                     broadcaster=broadcaster,
                                     audience=spec.audience,
                                 )
@@ -855,6 +948,23 @@ class V2ActionEngine:
                         "completed_ms": model_decision.completed_ms,
                     },
                 )
+                if model_decision.repair_kind is not None:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_response_repair_applied",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "repair_kind": model_decision.repair_kind,
+                            "raw_response_preserved": True,
+                        },
+                    )
+                self._repository.resolve_model_action_recovery(
+                    action_id=claim.action_id,
+                    attempt_id=model_attempt_id,
+                    attempt_no=model_attempt_no,
+                    retry_cycle=retry_cycle,
+                )
                 if (
                     spec.decision_contract.speech_mode == "forbidden"
                     and raw_model_speech is not None
@@ -909,31 +1019,23 @@ class V2ActionEngine:
                         normalized_target = None
                         normalization_reason = "targetless_action"
                 elif original_target is not None and resolved_target is None:
-                    normalized_target = (
-                        None
-                        if spec.decision_contract.target_mode == "optional"
-                        else _fallback_target(
-                            action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids or (),
+                    if spec.decision_contract.target_mode == "required":
+                        raise V2RepositoryError(
+                            "required model target became invalid after validation"
                         )
-                    )
+                    normalized_target = None
                     normalization_reason = "target_not_allowed"
                 elif normalized_target is None:
                     if spec.decision_contract.target_mode == "required":
-                        normalized_target = _fallback_target(
-                            action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids or (),
+                        raise V2RepositoryError(
+                            "required model target disappeared after validation"
                         )
-                        normalization_reason = "required_target_missing"
                 elif normalized_target not in (spec.allowed_target_ids or ()):
-                    normalized_target = (
-                        None
-                        if spec.decision_contract.target_mode == "optional"
-                        else _fallback_target(
-                            action_id=claim.action_id,
-                            allowed_target_ids=spec.allowed_target_ids or (),
+                    if spec.decision_contract.target_mode == "required":
+                        raise V2RepositoryError(
+                            "required model target left the frozen candidate set"
                         )
-                    )
+                    normalized_target = None
                     normalization_reason = "target_not_allowed"
                 if normalization_reason is not None:
                     model_decision = replace(
@@ -975,7 +1077,8 @@ class V2ActionEngine:
                 return V2ActionResult(decision=model_decision)
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
-            voice_asset_id = f"v2_voice_{uuid4().hex[:16]}"
+            tts_enabled = bool(getattr(self._tts_client, "enabled", True))
+            voice_asset_id = f"v2_voice_{uuid4().hex[:16]}" if tts_enabled else None
             identity = self._repository.open_presentation(
                 claim=claim,
                 presentation_id=presentation_id,
@@ -999,6 +1102,43 @@ class V2ActionEngine:
                     ),
                     audience=spec.audience,
                 )
+            if not tts_enabled:
+                self._repository.append_event(
+                    game_id=claim.game_id,
+                    event_type="tts_skipped",
+                    payload={
+                        "action_id": claim.action_id,
+                        "reason_code": "tts_disabled",
+                        "delivery_mode": "text_only",
+                    },
+                )
+                self._repository.complete_text_action(
+                    identity=identity,
+                    next_live_state=spec.success_live_state,
+                    next_phase_state=spec.success_phase_state,
+                    best_effort=spec.best_effort,
+                )
+                await broadcaster.broadcast_json(
+                    presentation_closed(
+                        identity,
+                        final_chunk_index=-1,
+                        final_sample_cursor=0,
+                    ),
+                    audience=spec.audience,
+                )
+                await broadcaster.set_current(None, 0, audience=spec.audience)
+                if spec.success_live_state == "awaiting_observation" and not spec.best_effort:
+                    await broadcaster.broadcast_json(
+                        live_state(
+                            game_id=claim.game_id,
+                            run_id=claim.run_id,
+                            state="awaiting_observation",
+                        ),
+                        audience=spec.audience,
+                    )
+                return V2ActionResult(decision=model_decision)
+            if identity.voice_asset_id is None:
+                raise V2RepositoryError("enabled TTS action has no voice asset")
             tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
             self._repository.append_event(
                 game_id=claim.game_id,
@@ -1380,18 +1520,120 @@ def _speech_prefix(text: str, *, max_chars: int) -> str:
     return "".join(accepted)
 
 
-def _fallback_target(*, action_id: str, allowed_target_ids: tuple[str, ...]) -> str:
-    if not allowed_target_ids:
-        raise V2RepositoryError("required decision action has no allowed target")
-    digest = hashlib.sha256(action_id.encode()).digest()
-    return allowed_target_ids[int.from_bytes(digest[:8], "big") % len(allowed_target_ids)]
-
-
 def _can_pause_for_model_failure(exc: V2ModelError) -> bool:
-    return exc.retryable or exc.code in {
-        "model_first_token_timeout",
-        "model_total_timeout",
+    return model_failure_disposition(exc).pausable
+
+
+def _validate_model_target_decision(
+    decision: V2ModelDecision,
+    *,
+    spec: V2SpeechSpec,
+) -> None:
+    contract = spec.decision_contract
+    if contract.kind != "target":
+        return
+    original_target = decision.target_player_id
+    resolved_target = (
+        resolve_model_target(original_target, players=spec.model_players)
+        if spec.model_players
+        else original_target
+    )
+    if resolved_target is not None and resolved_target not in (spec.allowed_target_ids or ()):
+        resolved_target = None
+    if contract.target_mode == "required" and resolved_target is None:
+        raise V2QualityError(
+            "model_decision_required_target_missing",
+            raw_response=decision.raw_response,
+        )
+
+
+def _model_action_recovery_snapshot(
+    *,
+    spec: V2SpeechSpec,
+    target: V2ModelTarget,
+    request_payload: dict[str, Any],
+    model_context: dict[str, Any],
+    failure_category: str,
+    attempt_no: int,
+    retry_cycle: int,
+) -> dict[str, Any]:
+    canonical_request = json.dumps(
+        request_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "action_type": spec.action_type,
+        "actor_id": spec.actor_id,
+        "model_provider": target.provider,
+        "model_id": target.model_id,
+        "request_payload": request_payload,
+        "request_hash": hashlib.sha256(canonical_request.encode()).hexdigest(),
+        "model_context": model_context,
+        "action_snapshot": asdict(spec),
+        "failure_category": failure_category,
+        "attempt_no": attempt_no,
+        "retry_cycle": retry_cycle,
     }
+
+
+_TECHNICAL_SKIP_ACTION_TYPES = frozenset(
+    {
+        "day_debate_speech",
+        "sheriff_campaign_speech",
+        "sheriff_pk_speech",
+        "exile_pk_speech",
+        "exile_last_words",
+        "first_night_last_words",
+    }
+)
+_TECHNICAL_FALSE_FALLBACK_ACTION_TYPES = frozenset(
+    {
+        "sheriff_run",
+        "sheriff_withdraw",
+        "werewolf_self_explosion",
+    }
+)
+
+
+def _technical_exhaustion_outcome(
+    *,
+    spec: V2SpeechSpec,
+    exc: V2ModelError,
+    attempt_id: str,
+) -> tuple[V2ModelDecision, str] | None:
+    if not model_failure_disposition(exc).pausable:
+        return None
+    if spec.action_type in _TECHNICAL_SKIP_ACTION_TYPES and spec.decision_contract.kind == "speech":
+        return (
+            V2ModelDecision(
+                target_player_id=None,
+                speech=None,
+                provider_request_id=attempt_id,
+                first_token_ms=0,
+                completed_ms=exc.elapsed_ms or 0,
+            ),
+            "action_skipped_technical",
+        )
+    if (
+        spec.action_type in _TECHNICAL_FALSE_FALLBACK_ACTION_TYPES
+        and spec.decision_contract.kind == "boolean"
+        and spec.decision_contract.boolean_field is not None
+    ):
+        return (
+            V2ModelDecision(
+                target_player_id=None,
+                speech=None,
+                provider_request_id=attempt_id,
+                first_token_ms=0,
+                completed_ms=exc.elapsed_ms or 0,
+                boolean_field=spec.decision_contract.boolean_field,
+                boolean_value=False,
+            ),
+            "technical_fallback_applied",
+        )
+    return None
 
 
 def _model_failure_payload(
@@ -1403,6 +1645,9 @@ def _model_failure_payload(
     retry_cycle: int,
     cycle_attempt_no: int,
     exc: V2ModelError,
+    failure_category: str,
+    retryable: bool,
+    action_recoverable: bool,
     terminal: bool,
     attempt_budget_ms: int,
     action_budget_ms: int,
@@ -1418,7 +1663,11 @@ def _model_failure_payload(
         "max_attempts": max_attempts,
         "failure_kind": "model",
         "failure_code": exc.code,
-        "retryable": exc.retryable,
+        "failure_category": failure_category,
+        "retryable": retryable,
+        "attempt_terminal": True,
+        "action_recoverable": action_recoverable,
+        "run_terminal": not action_recoverable,
         "terminal": terminal,
         "attempt_budget_ms": attempt_budget_ms,
         "action_budget_ms": action_budget_ms,
@@ -1432,8 +1681,34 @@ def _model_failure_payload(
         "first_token_seen": exc.first_token_seen,
         "response_headers_seen": exc.response_headers_seen,
         "elapsed_ms": exc.elapsed_ms,
+        "retry_after_ms": (
+            round(exc.retry_after_seconds * 1000) if exc.retry_after_seconds is not None else None
+        ),
     }
+    if isinstance(exc, V2QualityError) and exc.raw_response is not None:
+        payload["raw_response"] = exc.raw_response
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _model_retry_delay_seconds(
+    *,
+    disposition: V2FailureDisposition,
+    exc: V2ModelError,
+    cycle_attempt_no: int,
+    policy: V2ModelRetryPolicy,
+) -> float:
+    if disposition.category == "timeout":
+        return 0.0
+    if exc.http_status == 429:
+        base = exc.retry_after_seconds
+        if base is None:
+            base = 2.0 if cycle_attempt_no == 1 else 8.0
+    else:
+        base = min(
+            2.0,
+            policy.base_delay_seconds * (4 ** max(0, cycle_attempt_no - 1)),
+        )
+    return base + random.uniform(0, policy.jitter_seconds)
 
 
 async def _sleep_with_cancellation(

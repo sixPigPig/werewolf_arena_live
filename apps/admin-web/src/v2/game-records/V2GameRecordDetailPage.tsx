@@ -1360,7 +1360,9 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                     {attempt.attempt_id}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    {attempt.failure_code ??
+                    {attempt.failure_category
+                      ? `${attempt.failure_category} · ${attempt.failure_code ?? "失败"}`
+                      : attempt.failure_code ??
                       attempt.provider_request_id ??
                       formatDuration(attempt.completed_ms)}
                   </Typography.Text>
@@ -1402,10 +1404,22 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
       ) : null}
       {request?.failure_code ? (
         <Alert
-          description={request.failure_code}
+          description={
+            request.failure_category
+              ? `${request.failure_category} · ${request.failure_code}`
+              : request.failure_code
+          }
           showIcon
           title={request.failure_kind ?? "模型请求失败"}
           type="error"
+        />
+      ) : null}
+      {request?.repair_kind ? (
+        <Alert
+          description={`原始响应已保留；采用机械修复：${request.repair_kind}`}
+          showIcon
+          title="模型输出已修复"
+          type="info"
         />
       ) : null}
     </div>

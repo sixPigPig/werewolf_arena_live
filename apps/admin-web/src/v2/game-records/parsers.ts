@@ -292,6 +292,12 @@ export function parseV2ModelRequestSummary(
     completed_ms: nullableInteger(record.completed_ms, 0),
     failure_kind: nullableText(record.failure_kind),
     failure_code: nullableText(record.failure_code),
+    ...(record.failure_category === undefined
+      ? {}
+      : { failure_category: nullableText(record.failure_category) }),
+    ...(record.repair_kind === undefined
+      ? {}
+      : { repair_kind: nullableText(record.repair_kind) }),
     retryable:
       record.retryable === undefined ? null : nullableBoolean(record.retryable),
     terminal:

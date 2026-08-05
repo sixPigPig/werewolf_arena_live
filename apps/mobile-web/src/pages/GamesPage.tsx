@@ -487,13 +487,11 @@ export function GamesPage() {
           return;
         }
         const completePlayerConfigs = validatedConfigs.flatMap((config) =>
-          config.profile_id && config.model_provider && config.model
+          config.profile_id
             ? [
                 {
-                  ...config,
+                  seat: config.seat,
                   profile_id: config.profile_id,
-                  model_provider: config.model_provider,
-                  model: config.model,
                 },
               ]
             : [],
@@ -506,6 +504,7 @@ export function GamesPage() {
           title: selectedRuleSet.name,
           lobby_snapshot: {
             schema_version: 1,
+            model_binding_mode: "profile_library",
             rule_set: selectedRuleSet,
             rule_set_revision_id: ruleSetRevisionId,
             seed: seed ? Number(seed) : null,

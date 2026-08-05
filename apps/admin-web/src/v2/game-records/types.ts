@@ -168,6 +168,8 @@ export type V2ModelRequestSummary = {
   completed_ms: number | null;
   failure_kind: string | null;
   failure_code: string | null;
+  failure_category?: string | null;
+  repair_kind?: string | null;
   retryable: boolean | null;
   terminal: boolean | null;
   failure_stage: string | null;

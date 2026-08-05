@@ -63,7 +63,7 @@ from app.v2.service import (
     role_assignment_count,
     server_now,
 )
-from app.v2.tts_client import V2TtsClient
+from app.v2.tts_client import V2DisabledTtsClient, V2TtsClient
 
 
 logger = logging.getLogger(__name__)
@@ -462,15 +462,19 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             first_token_seconds=config.live_v2_model_first_token_seconds,
             total_seconds=config.live_v2_model_attempt_total_seconds,
         ),
-        tts_client=V2TtsClient(
-            enabled=config.live_v2_tts_enabled,
-            api_key=config.live_v2_tts_api_key,
-            resource_id=config.live_v2_tts_resource_id,
-            ws_url=config.live_v2_tts_ws_url,
-            speaker=config.live_v2_tts_judge_speaker,
-            sample_rate=config.live_v2_tts_sample_rate,
-            first_chunk_seconds=config.live_v2_tts_first_chunk_seconds,
-            idle_seconds=config.live_v2_tts_idle_seconds,
+        tts_client=(
+            V2TtsClient(
+                enabled=True,
+                api_key=config.live_v2_tts_api_key,
+                resource_id=config.live_v2_tts_resource_id,
+                ws_url=config.live_v2_tts_ws_url,
+                speaker=config.live_v2_tts_judge_speaker,
+                sample_rate=config.live_v2_tts_sample_rate,
+                first_chunk_seconds=config.live_v2_tts_first_chunk_seconds,
+                idle_seconds=config.live_v2_tts_idle_seconds,
+            )
+            if config.live_v2_tts_enabled
+            else V2DisabledTtsClient()
         ),
         voice_root=Path(config.live_v2_voice_storage_dir),
         sample_rate=config.live_v2_tts_sample_rate,

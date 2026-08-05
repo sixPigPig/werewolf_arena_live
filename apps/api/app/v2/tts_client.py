@@ -69,6 +69,10 @@ class V2TtsClient:
         self._first_chunk_seconds = first_chunk_seconds
         self._idle_seconds = idle_seconds
 
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
     async def synthesize(
         self,
         *,
@@ -203,6 +207,25 @@ class V2TtsClient:
                     await websocket.close()
                 except Exception:
                     pass
+
+
+class V2DisabledTtsClient:
+    @property
+    def enabled(self) -> bool:
+        return False
+
+    async def synthesize(
+        self,
+        *,
+        text: str,
+        attempt_id: str,
+        speaker: str | None = None,
+        dialect: str | None = None,
+        check_cancellation: Callable[[], None] | None = None,
+    ) -> AsyncIterator[bytes]:
+        del text, attempt_id, speaker, dialect, check_cancellation
+        raise V2TtsError("tts_disabled_client_must_not_be_called")
+        yield b""
 
 
 async def _send_event(

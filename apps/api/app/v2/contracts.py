@@ -95,8 +95,8 @@ class V2LobbyPlayerSnapshot(BaseModel):
     seat: int = Field(ge=1, le=24)
     profile_id: str = Field(min_length=1, max_length=80)
     name: str | None = Field(default=None, max_length=80)
-    model_provider: str = Field(min_length=1, max_length=32)
-    model: str = Field(min_length=1, max_length=120)
+    model_provider: str | None = Field(default=None, min_length=1, max_length=32)
+    model: str | None = Field(default=None, min_length=1, max_length=120)
     personality_id: str | None = Field(default=None, max_length=80)
     personality: str | None = Field(default=None, max_length=4000)
     appearance_id: str | None = Field(default=None, max_length=80)
@@ -143,6 +143,7 @@ class V2LobbyCreateSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1]
+    model_binding_mode: Literal["explicit_snapshot", "profile_library"] = "explicit_snapshot"
     rule_set: V2LobbyRuleSnapshot
     rule_set_revision_id: str | None = Field(default=None, max_length=80)
     seed: int | None = None
@@ -160,6 +161,10 @@ class V2LobbyCreateSnapshot(BaseModel):
             raise ValueError("player_configs must cover every rule seat exactly once")
         if len(profile_ids) != len(set(profile_ids)):
             raise ValueError("player_configs must use unique profiles")
+        if self.model_binding_mode == "explicit_snapshot" and any(
+            item.model_provider is None or item.model is None for item in self.player_configs
+        ):
+            raise ValueError("explicit snapshots require player model bindings")
         report = self.lineup_quality_report
         if report.player_count != self.rule_set.player_count or report.configured_count != len(
             self.player_configs
@@ -538,6 +543,8 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     completed_ms: int | None
     failure_kind: str | None
     failure_code: str | None
+    failure_category: str | None
+    repair_kind: str | None
     retryable: bool | None
     terminal: bool | None
     failure_stage: str | None

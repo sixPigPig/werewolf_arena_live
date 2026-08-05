@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -16,6 +17,7 @@ from app.v2.models import (
     V2GameRecordEvent,
     V2GameRun,
     V2LivePresentation,
+    V2ModelActionRecovery,
     V2VoiceAsset,
 )
 from app.v2.model_context_contract import (
@@ -65,7 +67,7 @@ class V2PresentationIdentity:
     presentation_id: str
     speech_id: str
     segment_index: int
-    voice_asset_id: str
+    voice_asset_id: str | None
     storage_key: str
     subtitle_text: str
     activation_id: str | None = None
@@ -220,14 +222,14 @@ class V2ActionRepository:
         claim: V2ActionClaim,
         presentation_id: str,
         speech_id: str,
-        voice_asset_id: str,
+        voice_asset_id: str | None,
         subtitle_text: str,
         sample_rate: int,
         actor_kind: str = "judge",
         actor_id: str = "judge",
         audience: str = "all",
     ) -> V2PresentationIdentity:
-        storage_key = f"{claim.game_id}/{voice_asset_id}.wav"
+        storage_key = f"{claim.game_id}/{voice_asset_id}.wav" if voice_asset_id else ""
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
@@ -270,24 +272,25 @@ class V2ActionRepository:
                 event_type="speech_sealed",
                 payload={"action_id": claim.action_id, "speech_id": speech_id},
             )
-            voice = V2VoiceAsset(
-                voice_asset_id=voice_asset_id,
-                game_id=claim.game_id,
-                run_id=claim.run_id,
-                action_id=claim.action_id,
-                activation_id=claim.activation_id,
-                audience=audience,
-                presentation_id=presentation_id,
-                speech_id=speech_id,
-                segment_index=0,
-                state="writing",
-                storage_key=storage_key,
-                mime_type="audio/wav",
-                sample_rate=sample_rate,
-                channels=1,
-            )
-            db.add(voice)
-            db.flush()
+            if voice_asset_id is not None:
+                voice = V2VoiceAsset(
+                    voice_asset_id=voice_asset_id,
+                    game_id=claim.game_id,
+                    run_id=claim.run_id,
+                    action_id=claim.action_id,
+                    activation_id=claim.activation_id,
+                    audience=audience,
+                    presentation_id=presentation_id,
+                    speech_id=speech_id,
+                    segment_index=0,
+                    state="writing",
+                    storage_key=storage_key,
+                    mime_type="audio/wav",
+                    sample_rate=sample_rate,
+                    channels=1,
+                )
+                db.add(voice)
+                db.flush()
             presentation = V2LivePresentation(
                 game_id=claim.game_id,
                 presentation_seq=presentation_seq,
@@ -332,6 +335,47 @@ class V2ActionRepository:
             actor_id=actor_id,
             audience=audience,
         )
+
+    def complete_text_action(
+        self,
+        *,
+        identity: V2PresentationIdentity,
+        next_live_state: str,
+        next_phase_state: str,
+        best_effort: bool = False,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, identity.game_id)
+            _raise_if_stop_requested(db, game)
+            presentation = db.get(
+                V2LivePresentation,
+                (identity.game_id, identity.presentation_seq),
+            )
+            if presentation is None or presentation.voice_asset_id is not None:
+                raise V2RepositoryError("text action presentation is not closable")
+            if presentation.state != "active":
+                raise V2RepositoryError("text action presentation is not active")
+            if game.phase_id != identity.phase_id:
+                raise V2RepositoryError("action phase changed before text completion")
+            presentation.state = "closed"
+            presentation.closed_at = _now()
+            run = _run(db, identity.run_id)
+            if not best_effort:
+                game.status = next_live_state
+                game.phase_state = next_phase_state
+                run.status = next_live_state
+            _append_event(
+                db,
+                game=game,
+                run_id=identity.run_id,
+                event_type="action_succeeded",
+                payload={
+                    "action_id": identity.action_id,
+                    "presentation_id": identity.presentation_id,
+                    "speech_id": identity.speech_id,
+                    "delivery_mode": "text_only",
+                },
+            )
 
     def mark_finalizing(
         self,
@@ -668,6 +712,7 @@ class V2ActionRepository:
         claim: V2ActionClaim,
         attempt_id: str,
         failure_code: str,
+        recovery: dict[str, Any],
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
@@ -679,6 +724,65 @@ class V2ActionRepository:
                 )
             game.status = "paused_model_error"
             run.status = "paused_model_error"
+            existing = db.get(V2ModelActionRecovery, claim.action_id)
+            if existing is None:
+                existing = V2ModelActionRecovery(
+                    action_id=claim.action_id,
+                    recovery_id=f"v2_recovery_{uuid4().hex[:16]}",
+                    game_id=claim.game_id,
+                    run_id=claim.run_id,
+                    action_type=str(recovery["action_type"]),
+                    actor_id=str(recovery["actor_id"]),
+                    model_provider=str(recovery["model_provider"]),
+                    model_id=str(recovery["model_id"]),
+                    request_payload=dict(recovery["request_payload"]),
+                    request_hash=str(recovery["request_hash"]),
+                    model_context=dict(recovery["model_context"]),
+                    action_snapshot=dict(recovery["action_snapshot"]),
+                    failure_code=failure_code,
+                    failure_category=str(recovery["failure_category"]),
+                    attempt_no=int(recovery["attempt_no"]),
+                    retry_cycle=int(recovery["retry_cycle"]),
+                    state="paused",
+                )
+                db.add(existing)
+            else:
+                if existing.request_hash != recovery["request_hash"]:
+                    raise V2RepositoryError("paused model request hash changed")
+                existing.failure_code = failure_code
+                existing.failure_category = str(recovery["failure_category"])
+                existing.attempt_no = int(recovery["attempt_no"])
+                existing.retry_cycle = int(recovery["retry_cycle"])
+                existing.state = "paused"
+                existing.control_request_id = None
+                existing.lease_owner = None
+                existing.lease_expires_at = None
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_retry_exhausted",
+                payload={
+                    "action_id": claim.action_id,
+                    "attempt_id": attempt_id,
+                    "failure_code": failure_code,
+                    "failure_category": existing.failure_category,
+                    "attempt_no": existing.attempt_no,
+                    "retry_cycle": existing.retry_cycle,
+                },
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_recovery_queued",
+                payload={
+                    "action_id": claim.action_id,
+                    "recovery_id": existing.recovery_id,
+                    "request_hash": existing.request_hash,
+                    "state": existing.state,
+                },
+            )
             _append_event(
                 db,
                 game=game,
@@ -689,8 +793,25 @@ class V2ActionRepository:
                     "attempt_id": attempt_id,
                     "failure_code": failure_code,
                     "reason_code": "model_attempts_exhausted",
+                    "recovery_id": existing.recovery_id,
+                    "request_hash": existing.request_hash,
+                    "failure_category": existing.failure_category,
                 },
             )
+
+    def pending_model_action_retry(self, *, game_id: str, action_id: str) -> str | None:
+        with self._session_factory() as db:
+            recovery = db.get(V2ModelActionRecovery, action_id)
+            if (
+                recovery is None
+                or recovery.game_id != game_id
+                or recovery.state != "retry_requested"
+            ):
+                return None
+            return recovery.control_request_id
+
+    def has_durable_model_action_retry(self, *, game_id: str, action_id: str) -> bool:
+        return self.pending_model_action_retry(game_id=game_id, action_id=action_id) is not None
 
     def resume_model_action(
         self,
@@ -708,6 +829,23 @@ class V2ActionRepository:
                 )
             game.status = "generating"
             run.status = "generating"
+            recovery = db.get(V2ModelActionRecovery, claim.action_id)
+            if recovery is None or recovery.state not in {"retry_requested", "paused"}:
+                raise V2RepositoryError("durable model action retry is not pending")
+            recovery.state = "running"
+            recovery.control_request_id = control_request_id
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_recovery_leased",
+                payload={
+                    "action_id": claim.action_id,
+                    "recovery_id": recovery.recovery_id,
+                    "control_request_id": control_request_id,
+                    "lease_mode": "originating_action_worker",
+                },
+            )
             _append_event(
                 db,
                 game=game,
@@ -716,6 +854,38 @@ class V2ActionRepository:
                 payload={
                     "action_id": claim.action_id,
                     "control_request_id": control_request_id,
+                },
+            )
+
+    def resolve_model_action_recovery(
+        self,
+        *,
+        action_id: str,
+        attempt_id: str,
+        attempt_no: int,
+        retry_cycle: int,
+    ) -> None:
+        with self._session_factory.begin() as db:
+            recovery = db.get(V2ModelActionRecovery, action_id)
+            if recovery is None or recovery.state == "resolved":
+                return
+            recovery.state = "resolved"
+            recovery.resolved_attempt_id = attempt_id
+            recovery.attempt_no = attempt_no
+            recovery.retry_cycle = retry_cycle
+            recovery.resolved_at = _now()
+            game = _locked_game(db, recovery.game_id)
+            _append_event(
+                db,
+                game=game,
+                run_id=recovery.run_id,
+                event_type="model_action_recovery_resolved",
+                payload={
+                    "action_id": action_id,
+                    "recovery_id": recovery.recovery_id,
+                    "attempt_id": attempt_id,
+                    "attempt_no": attempt_no,
+                    "retry_cycle": retry_cycle,
                 },
             )
 
@@ -835,6 +1005,29 @@ class V2ActionRepository:
                 effect.state = "canceled"
                 effect.resolved_at = canceled_at
 
+            active_recoveries = list(
+                db.scalars(
+                    select(V2ModelActionRecovery).where(
+                        V2ModelActionRecovery.game_id == game.game_id,
+                        V2ModelActionRecovery.state.in_(("paused", "retry_requested", "running")),
+                    )
+                )
+            )
+            for recovery in active_recoveries:
+                recovery.state = "canceled"
+                recovery.resolved_at = canceled_at
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="model_action_recovery_canceled",
+                    payload={
+                        "action_id": recovery.action_id,
+                        "recovery_id": recovery.recovery_id,
+                        "reason_code": "operator_interrupted",
+                    },
+                )
+
             game.status = "canceled"
             run.status = "canceled"
             run.completed_at = canceled_at
@@ -850,6 +1043,7 @@ class V2ActionRepository:
                     "canceled_activation_count": len(open_activations),
                     "canceled_window_count": len(open_windows),
                     "canceled_effect_count": len(pending_effects),
+                    "canceled_model_recovery_count": len(active_recoveries),
                 },
             )
             return V2CancellationResult(

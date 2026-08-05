@@ -42,6 +42,7 @@ describe("createV2Game", () => {
       title: "经典 8 人",
       lobby_snapshot: {
         schema_version: 1 as const,
+        model_binding_mode: "profile_library" as const,
         rule_set: {
           id: "classic_8",
           version: "1",
@@ -59,14 +60,10 @@ describe("createV2Game", () => {
           {
             seat: 1,
             profile_id: "profile-1",
-            model_provider: "deepseek",
-            model: "test-model",
           },
           {
             seat: 2,
             profile_id: "profile-2",
-            model_provider: "deepseek",
-            model: "test-model",
           },
         ],
         lineup_quality_report: {
@@ -123,6 +120,7 @@ describe("createV2Game", () => {
         title: "非法响应",
         lobby_snapshot: {
           schema_version: 1,
+          model_binding_mode: "profile_library",
           rule_set: {
             id: "classic_8",
             version: "1",
@@ -137,8 +135,6 @@ describe("createV2Game", () => {
             {
               seat: 1,
               profile_id: "profile-1",
-              model_provider: "deepseek",
-              model: "test-model",
             },
           ],
           lineup_quality_report: {

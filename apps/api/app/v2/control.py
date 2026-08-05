@@ -14,6 +14,7 @@ from app.v2.models import (
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
+    V2ModelActionRecovery,
 )
 
 
@@ -172,10 +173,7 @@ def request_v2_model_action_retry(
         )
     )
     if existing is not None:
-        if (
-            existing.action != "retry_model_action"
-            or existing.request_hash != request_hash
-        ):
+        if existing.action != "retry_model_action" or existing.request_hash != request_hash:
             raise V2GameControlIdempotencyConflict
         game = db.get(V2GameRecord, existing.game_id)
         run = db.get(V2GameRun, existing.run_id)
@@ -190,11 +188,7 @@ def request_v2_model_action_retry(
             replayed=True,
         )
 
-    game = db.scalar(
-        select(V2GameRecord)
-        .where(V2GameRecord.game_id == game_id)
-        .with_for_update()
-    )
+    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2GameControlNotFound
     run = db.get(V2GameRun, game.current_run_id)
@@ -233,6 +227,11 @@ def request_v2_model_action_retry(
         run_id=run.run_id,
     )
     db.add(control)
+    recovery = db.get(V2ModelActionRecovery, action_id)
+    if recovery is None or recovery.state != "paused":
+        raise V2GameModelActionNotPaused
+    recovery.state = "retry_requested"
+    recovery.control_request_id = control.id
     next_seq = game.last_record_seq + 1
     db.add(
         V2GameRecordEvent(
@@ -247,6 +246,8 @@ def request_v2_model_action_retry(
                 "action_id": action_id,
                 "control_request_id": control.id,
                 "reason_code": "operator_retry",
+                "recovery_id": recovery.recovery_id,
+                "request_hash": recovery.request_hash,
             },
         )
     )

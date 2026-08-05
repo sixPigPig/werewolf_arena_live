@@ -779,14 +779,10 @@ describe("GamesPage", () => {
             {
               seat: 1,
               profile_id: expect.any(String),
-              model_provider: "deepseek",
-              model: "test-model",
             },
             {
               seat: 2,
               profile_id: expect.any(String),
-              model_provider: "deepseek",
-              model: "test-model",
             },
           ],
         }),

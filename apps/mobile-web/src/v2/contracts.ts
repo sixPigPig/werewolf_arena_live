@@ -77,8 +77,8 @@ export type V2LobbyPlayerSnapshot = {
   seat: number;
   profile_id: string;
   name?: string | null;
-  model_provider: string;
-  model: string;
+  model_provider?: string;
+  model?: string;
   personality_id?: string;
   personality?: string;
   appearance_id?: string;
@@ -119,6 +119,7 @@ export type V2GameCreateRequest = {
   title: string;
   lobby_snapshot: {
     schema_version: 1;
+    model_binding_mode: "profile_library";
     rule_set: V2LobbyRuleSnapshot;
     rule_set_revision_id: string | null;
     seed: number | null;
