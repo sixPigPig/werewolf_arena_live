@@ -95,6 +95,27 @@ _INVESTIGATION_CAUSALITY_REJECTION = re.compile(
     r"(?:不是|并非|不能|不可能|绝不是).{0,12}(?:因为|基于)|"
     r"(?:发言|警上|上警|刚才|前面).{0,12}(?:无关|没关系)"
 )
+_EXILE_TARGET = re.compile(rf"(?:出|推|放逐|冲)(?:掉|走)?\s*(?P<seat>{_SEAT_NUMBER})号")
+_WRONG_EXILE_WITCH_SUBJECT = re.compile(
+    r"(?:出|推|放逐)错(?:了)?[^。！？!?；;]{0,16}"
+    r"(?:你|他|她)(?:就算|要是|如果|即使)?(?:是|为)?(?:真)?女巫"
+)
+_FUTURE_POISON_USE = re.compile(
+    r"(?:晚上|夜里|当夜)[^。！？!?；;]{0,24}"
+    r"(?:出毒|毒(?:我|他|她|人|谁|掉|死|[1-9]|1[0-9]|2[0-4]))"
+    r"|(?:还能|可以|能|直接|随便|想)[^。！？!?；;]{0,12}"
+    r"毒(?:我|他|她|人|谁|掉|死|[1-9]|1[0-9]|2[0-4])"
+)
+_POISON_RESOURCE = re.compile(r"(?:毒药|有毒|留毒)")
+_NO_LOSS_FROM_POISON = re.compile(
+    r"(?:不亏|亏不了|不算(?:血)?亏|不耽误(?:好人)?轮次|不影响(?:好人)?轮次)"
+)
+_POST_ELIMINATION_ABILITY_REJECTION = re.compile(
+    r"(?:不能|无法|没法|不可能|不能再|没机会|来不及|用不了)"
+    r"[^。！？!?；;]{0,12}(?:毒|毒药)"
+    r"|(?:毒|毒药)[^。！？!?；;]{0,12}"
+    r"(?:不能|无法|没法|不可能|用不了)"
+)
 
 
 def observe_model_speech(
@@ -145,6 +166,12 @@ def _observe_model_speech(
     )
     if vote_observation is not None:
         observations.append(vote_observation)
+    ability_lifecycle_observation = _observe_post_elimination_ability(
+        speech,
+        hard_rules=hard_rules,
+    )
+    if ability_lifecycle_observation is not None:
+        observations.append(ability_lifecycle_observation)
     investigation_observation = _observe_private_action_causality(
         speech,
         model_context=model_context,
@@ -158,6 +185,76 @@ def _observe_model_speech(
         )
     )
     return observations
+
+
+def _observe_post_elimination_ability(
+    speech: str,
+    *,
+    hard_rules: dict[str, Any],
+) -> dict[str, Any] | None:
+    lifecycle = hard_rules.get("ability_lifecycle")
+    if not isinstance(lifecycle, dict):
+        return None
+    if lifecycle.get("active_abilities_require_alive") is not True:
+        return None
+    if lifecycle.get("eliminated_players_can_act_in_later_windows") is not False:
+        return None
+    if _POST_ELIMINATION_ABILITY_REJECTION.search(speech) is not None:
+        return None
+
+    target_seats = tuple(
+        dict.fromkeys(match.group("seat") for match in _EXILE_TARGET.finditer(speech))
+    )
+    if not target_seats:
+        return None
+
+    signals: list[dict[str, str]] = []
+    for seat in target_seats:
+        explicit_subject = re.search(
+            rf"{seat}号\s*(?:你\s*)?"
+            r"(?:就算|要是|如果|即使)?\s*(?:是|为)?\s*(?:真)?女巫",
+            speech,
+        )
+        subject = explicit_subject
+        if subject is None and len(target_seats) == 1:
+            subject = _WRONG_EXILE_WITCH_SUBJECT.search(speech)
+        if subject is None:
+            continue
+        consequence = speech[subject.end() : subject.end() + 160]
+        future_use = _FUTURE_POISON_USE.search(consequence)
+        resource_justifies_exile = (
+            _POISON_RESOURCE.search(consequence) is not None
+            and _NO_LOSS_FROM_POISON.search(consequence) is not None
+        )
+        if future_use is None and not resource_justifies_exile:
+            continue
+        signals.append(
+            {
+                "target_ref": f"seat_{seat}",
+                "ability_id": "witch.poison",
+                "contradiction": "eliminated_player_later_active_ability",
+                "evidence": _evidence(
+                    speech,
+                    start=subject.start(),
+                    end=(
+                        subject.end()
+                        + (future_use.end() if future_use is not None else len(consequence))
+                    ),
+                ),
+            }
+        )
+
+    if not signals:
+        return None
+    return {
+        "code": "post_elimination_ability_contradiction",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "judge_fact",
+        "signals": signals,
+        "effect": "observed_only",
+    }
 
 
 def _observe_private_action_causality(

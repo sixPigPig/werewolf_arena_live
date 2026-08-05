@@ -336,6 +336,15 @@ export function ReadableModelInput({
     request.prompt_projection,
     "open_question_count",
   );
+  const hasKnownEventRetentionAudit =
+    request.prompt_projection !== null &&
+    [
+      "retained_event_refs",
+      "dropped_event_refs",
+      "retention_reasons",
+    ].some((key) => request.prompt_projection?.[key] !== undefined);
+  const hasSectionCharCounts =
+    request.prompt_projection?.section_char_counts !== undefined;
   return (
     <div className="v2-inspector-panel">
       <div className="v2-inspector-actions">
@@ -503,24 +512,30 @@ export function ReadableModelInput({
                   label: "已知事件序号范围",
                   children: recordSeqRange(knownEvents),
                 },
-                {
-                  key: "known-events-budget",
-                  label: "事件选择预算",
-                  children:
-                    knownEvents.budgetChars === null ||
-                    knownEvents.usedChars === null
-                      ? "—"
-                      : (
-                          <Space size={6} wrap>
-                            <Typography.Text>
-                              {knownEvents.usedChars.toLocaleString("zh-CN")} / {knownEvents.budgetChars.toLocaleString("zh-CN")} 字符
-                            </Typography.Text>
-                            {knownEvents.budgetExceededByRequired ? (
-                              <Tag color="warning">必保事件超出预算</Tag>
-                            ) : null}
-                          </Space>
-                        ),
-                },
+                ...(knownEvents.budgetChars !== null ||
+                knownEvents.usedChars !== null
+                  ? [
+                      {
+                        key: "known-events-budget",
+                        label: "事件选择预算",
+                        children:
+                          knownEvents.budgetChars === null ||
+                          knownEvents.usedChars === null ? (
+                            "—"
+                          ) : (
+                            <Space size={6} wrap>
+                              <Typography.Text>
+                                {knownEvents.usedChars.toLocaleString("zh-CN")} /{" "}
+                                {knownEvents.budgetChars.toLocaleString("zh-CN")} 字符
+                              </Typography.Text>
+                              {knownEvents.budgetExceededByRequired ? (
+                                <Tag color="warning">必保事件超出预算</Tag>
+                              ) : null}
+                            </Space>
+                          ),
+                      },
+                    ]
+                  : []),
               ]
             : []),
           ...(publicTimeline
@@ -568,26 +583,37 @@ export function ReadableModelInput({
         ]}
         size="small"
       />
-      {knownEvents && request.prompt_projection ? (
+      {knownEvents &&
+      request.prompt_projection &&
+      (hasKnownEventRetentionAudit || hasSectionCharCounts) ? (
         <Collapse
           items={[
             {
               children: (
                 <ReadableValue
-                  value={{
-                    retained_event_refs:
-                      request.prompt_projection.retained_event_refs ?? [],
-                    dropped_event_refs:
-                      request.prompt_projection.dropped_event_refs ?? [],
-                    retention_reasons:
-                      request.prompt_projection.retention_reasons ?? {},
-                    section_char_counts:
-                      request.prompt_projection.section_char_counts ?? {},
-                  }}
+                  value={
+                    hasKnownEventRetentionAudit
+                      ? {
+                          retained_event_refs:
+                            request.prompt_projection.retained_event_refs ?? [],
+                          dropped_event_refs:
+                            request.prompt_projection.dropped_event_refs ?? [],
+                          retention_reasons:
+                            request.prompt_projection.retention_reasons ?? {},
+                          section_char_counts:
+                            request.prompt_projection.section_char_counts ?? {},
+                        }
+                      : {
+                          section_char_counts:
+                            request.prompt_projection.section_char_counts ?? {},
+                        }
+                  }
                 />
               ),
               key: "known-event-selection-audit",
-              label: "查看事件选择审计",
+              label: hasKnownEventRetentionAudit
+                ? "查看事件选择审计"
+                : "查看上下文结构统计",
             },
           ]}
           size="small"

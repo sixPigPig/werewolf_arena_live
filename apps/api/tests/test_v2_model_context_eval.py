@@ -64,8 +64,8 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
     assert "history" not in system_text
 
 
-def test_t02_history_selection_is_bounded_and_every_drop_is_auditable() -> None:
-    case = _cases()["T02_auditable_history_selection"]
+def test_t02_history_is_lossless_without_a_retention_budget() -> None:
+    case = _cases()["T02_lossless_history"]
     public_history = [
         {
             "source_event_id": index,
@@ -105,9 +105,12 @@ def test_t02_history_selection_is_bounded_and_every_drop_is_auditable() -> None:
     metadata = projection.projection_metadata
 
     assert metadata["known_event_total_count"] == case["history_count"]
-    assert metadata["known_event_count"] < metadata["known_event_total_count"]
-    assert metadata["dropped_event_count"] == len(metadata["dropped_event_refs"])
-    assert set(metadata["retained_event_refs"]).isdisjoint(metadata["dropped_event_refs"])
-    assert set(case["expected_current_round_refs"]) <= set(metadata["retained_event_refs"])
-    assert metadata["retention_reasons"]["36"] == "current_round"
-    assert metadata["serialized_char_count"] <= case["max_serialized_chars"]
+    assert metadata["known_event_count"] == metadata["known_event_total_count"]
+    assert metadata["dropped_event_count"] == 0
+    assert "selection_budget_chars" not in metadata
+    assert "retained_event_refs" not in metadata
+    assert "dropped_event_refs" not in metadata
+    assert "retention_reasons" not in metadata
+    assert [event["event_ref"] for event in projection.context["known_events"]["events"]] == [
+        str(index) for index in range(1, case["history_count"] + 1)
+    ]

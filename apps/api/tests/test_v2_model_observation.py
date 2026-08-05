@@ -58,6 +58,85 @@ def test_unrelated_negation_does_not_hide_a_later_contradiction() -> None:
     assert observations[0]["code"] == "wolf_cardinality_contradiction"
 
 
+@pytest.mark.parametrize(
+    "speech,target_ref",
+    [
+        (
+            "今天全票出3号！3号要是真女巫，晚上直接毒我就好，轮次不亏。",
+            "seat_3",
+        ),
+        (
+            "今天出3号，就算推错了，你真女巫有毒药，也不算血亏。",
+            "seat_3",
+        ),
+        (
+            "全票冲3号，推错了3号真女巫有毒药，也不耽误轮次。",
+            "seat_3",
+        ),
+    ],
+)
+def test_post_elimination_witch_poison_claim_is_observed_without_an_effect(
+    speech: str,
+    target_ref: str,
+) -> None:
+    observations = observe_model_speech(
+        speech,
+        hard_rules={
+            "ability_lifecycle": {
+                "active_abilities_require_alive": True,
+                "eliminated_players_can_act_in_later_windows": False,
+                "death_triggered_exceptions": ["hunter.death_shot"],
+            }
+        },
+    )
+
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation["code"] == "post_elimination_ability_contradiction"
+    assert observation["severity"] == "warning"
+    assert observation["confidence"] == "high"
+    assert observation["authority"] == "judge_fact"
+    assert observation["effect"] == "observed_only"
+    assert observation["signals"][0]["target_ref"] == target_ref
+    assert observation["signals"][0]["ability_id"] == "witch.poison"
+    assert observation["signals"][0]["contradiction"] == ("eliminated_player_later_active_ability")
+    assert "女巫" in observation["signals"][0]["evidence"]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "今天全票出7号，我是真女巫，晚上会毒8号。",
+        "今天出3号；如果她是真女巫，出局后也没法再用毒药。",
+        "今天出3号，她自称女巫，但毒药是否还在不能坐实。",
+    ],
+)
+def test_compatible_witch_poison_claim_is_not_flagged(speech: str) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={
+                "ability_lifecycle": {
+                    "active_abilities_require_alive": True,
+                    "eliminated_players_can_act_in_later_windows": False,
+                    "death_triggered_exceptions": ["hunter.death_shot"],
+                }
+            },
+        )
+        == []
+    )
+
+
+def test_legacy_rules_without_ability_lifecycle_do_not_enable_the_observer() -> None:
+    assert (
+        observe_model_speech(
+            "今天出3号，推错了3号真女巫晚上还能毒我。",
+            hard_rules={},
+        )
+        == []
+    )
+
+
 def test_later_public_speech_cannot_be_the_reason_for_an_earlier_private_investigation() -> None:
     observations = observe_model_speech(
         ("12号预言家，昨晚验6号查杀。我验人逻辑：6号在3号位发言，我选他是因为前几位发言太像模板。"),

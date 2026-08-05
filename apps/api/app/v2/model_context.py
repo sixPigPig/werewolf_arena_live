@@ -11,7 +11,6 @@ from app.v2.discourse_model_view import build_discourse_model_view
 from app.v2.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
-    KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
@@ -22,7 +21,6 @@ from app.v2.model_context_contract import (
 
 
 _PERSONA_TEXT_LIMIT = 600
-_KNOWN_EVENTS_CHAR_BUDGET = 8_000
 
 
 @dataclass(frozen=True)
@@ -82,6 +80,7 @@ def project_model_action_context_with_metadata(
         players=players,
         action_record_seq=action_record_seq,
         prompt_template_version=int(contract["prompt_template_version"]),
+        known_events_schema_version=int(contract["known_events_schema_version"]),
     )
 
 
@@ -181,6 +180,7 @@ def _project_v8_model_action_context_with_metadata(
     players: tuple[V2ModelPlayerReference, ...],
     action_record_seq: int | None,
     prompt_template_version: int,
+    known_events_schema_version: int,
 ) -> V2ProjectedModelContext:
     if not players:
         projected = dict(context)
@@ -253,14 +253,9 @@ def _project_v8_model_action_context_with_metadata(
         private_facts=private_facts,
         task_at_seq=task_at_seq,
         current_round_no=current_round_no,
+        schema_version=known_events_schema_version,
     )
-    selected_events, selection_metadata = _select_known_events(
-        all_known_events,
-        actor_ref=actor_ref,
-        candidate_refs=candidate_refs,
-        current_round_no=current_round_no,
-        char_budget=_KNOWN_EVENTS_CHAR_BUDGET,
-    )
+    selected_events = all_known_events
     state = _model_public_state(source)
     if task_at_seq is not None:
         state["as_of_seq"] = task_at_seq
@@ -272,7 +267,7 @@ def _project_v8_model_action_context_with_metadata(
         "rules": _model_action_rules(source, hard_rules=hard_rules),
         "state": state,
         "known_events": {
-            "schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
+            "schema_version": known_events_schema_version,
             "events": selected_events,
         },
         "persona": _compact_persona(source.get("actor_profile")),
@@ -285,9 +280,7 @@ def _project_v8_model_action_context_with_metadata(
     projection_metadata = _v8_projection_metadata(
         ledger=ledger,
         projected_context=projected_context,
-        all_events=all_known_events,
         selected_events=selected_events,
-        selection_metadata=selection_metadata,
         current_round_no=current_round_no,
     )
     return V2ProjectedModelContext(
@@ -360,6 +353,7 @@ def _model_action_rules(
         "win_condition": hard_rules.get("win_condition"),
         "reveal_policy": hard_rules.get("reveal_policy"),
         "role_reveal_rule": hard_rules.get("role_reveal_rule"),
+        "ability_lifecycle": hard_rules.get("ability_lifecycle"),
         "sheriff": hard_rules.get("sheriff"),
     }
     ability_rule = all_ability_rules.get(ability_id) if ability_id is not None else None
@@ -408,6 +402,7 @@ def _known_events(
     private_facts: list[Any],
     task_at_seq: int | None,
     current_round_no: int,
+    schema_version: int,
 ) -> list[dict[str, Any]]:
     speech_by_ref = {
         str(item.get("source_event_id")): item.get("speech")
@@ -430,7 +425,7 @@ def _known_events(
                 "known_at_seq": record_seq,
             }
         )
-        if item.get("authority") == "player_claim_unverified":
+        if schema_version == 1 and item.get("authority") == "player_claim_unverified":
             item["authority"] = "player_statement"
         if record_seq is None:
             item["sequence_status"] = "legacy_unknown"
@@ -481,71 +476,11 @@ def _private_fact_occurrence(payload: Any, *, current_round_no: int) -> dict[str
     return {"period": "current_action", "round_no": current_round_no}
 
 
-def _select_known_events(
-    events: list[dict[str, Any]],
-    *,
-    actor_ref: str | None,
-    candidate_refs: list[str],
-    current_round_no: int,
-    char_budget: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    required: list[tuple[dict[str, Any], str]] = []
-    optional: list[dict[str, Any]] = []
-    candidate_set = set(candidate_refs)
-    for event in events:
-        occurred_in = event.get("occurred_in")
-        event_round = occurred_in.get("round_no") if isinstance(occurred_in, dict) else None
-        reason: str | None = None
-        if event.get("visibility") != "public":
-            reason = "actor_private"
-        elif event.get("authority") == "judge_fact":
-            reason = "authoritative_fact"
-        elif event_round == current_round_no:
-            reason = "current_round"
-        elif actor_ref is not None and event.get("speaker_ref") == actor_ref:
-            reason = "actor_statement"
-        elif event.get("speaker_ref") in candidate_set:
-            reason = "candidate_statement"
-        if reason is None:
-            optional.append(event)
-        else:
-            required.append((event, reason))
-
-    selected: list[dict[str, Any]] = [event for event, _reason in required]
-    reasons = {str(event.get("event_ref")): reason for event, reason in required}
-    used_chars = sum(_serialized_chars(event) for event in selected)
-    for event in reversed(optional):
-        event_chars = _serialized_chars(event)
-        if used_chars + event_chars > char_budget:
-            continue
-        selected.append(event)
-        used_chars += event_chars
-        reasons[str(event.get("event_ref"))] = "recent_within_budget"
-    selected_refs = {str(event.get("event_ref")) for event in selected}
-    dropped = [
-        str(event.get("event_ref"))
-        for event in events
-        if str(event.get("event_ref")) not in selected_refs
-    ]
-    selected.sort(key=_known_event_sort_key)
-    return selected, {
-        "selection_profile": "v8_action_relevant_bounded",
-        "selection_budget_chars": char_budget,
-        "selection_used_chars": used_chars,
-        "selection_budget_exceeded_by_required": used_chars > char_budget,
-        "retained_event_refs": [str(event.get("event_ref")) for event in selected],
-        "dropped_event_refs": dropped,
-        "retention_reasons": reasons,
-    }
-
-
 def _v8_projection_metadata(
     *,
     ledger: dict[str, Any],
     projected_context: dict[str, Any],
-    all_events: list[dict[str, Any]],
     selected_events: list[dict[str, Any]],
-    selection_metadata: dict[str, Any],
     current_round_no: int,
 ) -> dict[str, Any]:
     statements = ledger.get("statements")
@@ -578,7 +513,7 @@ def _v8_projection_metadata(
         "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": projected_context["prompt_template_version"],
-        "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
+        "known_events_schema_version": projected_context["known_events"]["schema_version"],
         "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
         "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
@@ -596,8 +531,8 @@ def _v8_projection_metadata(
             for question in questions
         ),
         "known_event_count": len(selected_events),
-        "known_event_total_count": len(all_events),
-        "dropped_event_count": len(all_events) - len(selected_events),
+        "known_event_total_count": len(selected_events),
+        "dropped_event_count": 0,
         "known_event_record_seq_min": min(selected_sequences, default=None),
         "known_event_record_seq_max": max(selected_sequences, default=None),
         "current_round_statement_count": len(current_round_statements),
@@ -606,7 +541,6 @@ def _v8_projection_metadata(
             for item in current_round_statements
             if isinstance(item, dict)
         ),
-        **selection_metadata,
     }
 
 
@@ -881,6 +815,7 @@ def _model_hard_rules(value: Any) -> dict[str, Any]:
         "win_condition": contract.get("win_condition"),
         "reveal_policy": contract.get("reveal_policy"),
         "role_reveal_rule": contract.get("role_reveal_rule"),
+        "ability_lifecycle": _without_explanations(contract.get("ability_lifecycle")),
         "sheriff": {
             "enabled": bool(contract.get("sheriff_enabled")),
             "vote_weight": contract.get("sheriff_vote_weight"),
@@ -1119,8 +1054,9 @@ def build_public_rule_contract(
     werewolf_count = sum(item["count"] for item in roles if item["role_key"] == "werewolf")
     sheriff_enabled = bool(rule.get("sheriff_enabled"))
     role_composition = "、".join(f"{item['count']}名{item['role_label']}" for item in roles)
+    role_keys = {item["role_key"] for item in roles}
     night_action_rules = _night_action_rules(
-        role_keys={item["role_key"] for item in roles},
+        role_keys=role_keys,
         werewolf_count=werewolf_count,
         ability_policies=rule.get("ability_policies"),
     )
@@ -1149,6 +1085,11 @@ def build_public_rule_contract(
             if reveal_policy == "hidden"
             else "玩家死亡或被放逐后，法官会按照本局公开身份规则播报其身份。"
         ),
+        "ability_lifecycle": {
+            "active_abilities_require_alive": True,
+            "eliminated_players_can_act_in_later_windows": False,
+            "death_triggered_exceptions": (["hunter.death_shot"] if "hunter" in role_keys else []),
+        },
         "sheriff_enabled": sheriff_enabled,
         "sheriff_vote_weight": (
             float(rule.get("sheriff_vote_weight") or 1) if sheriff_enabled else None

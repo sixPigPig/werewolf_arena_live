@@ -82,18 +82,10 @@
       }
     },
     {
-      "case_id": "T02_auditable_history_selection",
+      "case_id": "T02_lossless_history",
       "history_count": 40,
       "speech_chars": 1800,
-      "current_round_no": 7,
-      "expected_current_round_refs": [
-        "36",
-        "37",
-        "38",
-        "39",
-        "40"
-      ],
-      "max_serialized_chars": 20000
+      "current_round_no": 7
     }
   ]
 }

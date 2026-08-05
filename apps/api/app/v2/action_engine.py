@@ -784,7 +784,9 @@ class V2ActionEngine:
                 )
                 constrained_speech, speech_constraint_reasons = _constrain_model_speech(
                     sanitized_speech,
-                    max_chars=spec.decision_contract.speech_max_chars,
+                    # Character limits remain model-facing guidance. Preserve the
+                    # complete spoken response when a model exceeds that guidance.
+                    max_chars=None,
                     max_sentences=spec.decision_contract.speech_max_sentences,
                 )
                 raw_decision_note = model_decision.decision_note
@@ -1261,11 +1263,7 @@ def _action_context(
 def _action_model_parameters(
     spec: V2SpeechSpec,
 ) -> tuple[dict[str, Any], str]:
-    parameters = dict(spec.model_parameters or {})
-    if spec.decision_contract.kind == "boolean":
-        parameters["thinking"] = "disabled"
-        return parameters, "action_boolean_policy"
-    return parameters, "model_configuration"
+    return dict(spec.model_parameters or {}), "model_configuration"
 
 
 def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:

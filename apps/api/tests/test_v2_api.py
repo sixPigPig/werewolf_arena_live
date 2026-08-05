@@ -614,7 +614,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "model_context_contract": {
                 "model_context_schema_version": 8,
                 "prompt_template_version": 2,
-                "known_events_schema_version": 1,
+                "known_events_schema_version": 2,
                 "ledger_schema_version": 2,
                 "model_view_schema_version": 3,
                 "model_view_selector_version": 1,
@@ -1805,7 +1805,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "state" in context
-        and context["known_events"]["schema_version"] == 1
+        and context["known_events"]["schema_version"] == 2
         and "events" in context["known_events"]
         and "public_timeline" not in context
         and "history" not in context
@@ -2016,8 +2016,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
-    normalized_speech = "甲" * 299 + "。"
-    contradictory_speech = normalized_speech + "我判断1号和2号是双狼，今天先出1号。"
+    contradictory_speech = "甲" * 299 + "。我判断1号和2号是双狼，今天先出1号。"
     model_client.speech_by_action_type["day_debate_speech"] = contradictory_speech
     model_client.decision_note_by_action_type["ability_guard.protect_decision"] = "守" * 130
     request = _six_player_create_request()
@@ -2166,7 +2165,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and event.payload["model_context_schema_version"] == 8
             and event.payload["prompt_template_version"] == 2
             and event.payload["model_view_selector_version"] == 1
-            and event.payload["prompt_projection"]["known_events_schema_version"] == 1
+            and event.payload["prompt_projection"]["known_events_schema_version"] == 2
             and "known_event_count" in event.payload["prompt_projection"]
             and "known_event_total_count" in event.payload["prompt_projection"]
             and "known_event_record_seq_min" in event.payload["prompt_projection"]
@@ -2176,9 +2175,11 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and event.payload["prompt_projection"]["model_view_selector_version"] == 1
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
-            and "dropped_event_count" in event.payload["prompt_projection"]
-            and "retained_event_refs" in event.payload["prompt_projection"]
-            and "dropped_event_refs" in event.payload["prompt_projection"]
+            and event.payload["prompt_projection"]["dropped_event_count"] == 0
+            and "selection_budget_chars" not in event.payload["prompt_projection"]
+            and "retained_event_refs" not in event.payload["prompt_projection"]
+            and "dropped_event_refs" not in event.payload["prompt_projection"]
+            and "retention_reasons" not in event.payload["prompt_projection"]
             and "section_char_counts" in event.payload["prompt_projection"]
             for event in model_request_events
         )
@@ -2222,17 +2223,17 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             presentation.action_id for presentation in adopted_presentations
         } == observed_action_ids
         assert all(
-            presentation.subtitle_text == normalized_speech
+            presentation.subtitle_text == contradictory_speech
             for presentation in adopted_presentations
         )
-        normalized_action_ids = {
+        length_normalized_action_ids = {
             event.payload["action_id"]
             for event in events
             if event.event_type == "model_decision_speech_normalized"
             and event.payload.get("reason") == "speech_constraint"
             and event.payload.get("constraints") == ["max_chars_exceeded"]
         }
-        assert observed_action_ids <= normalized_action_ids
+        assert observed_action_ids.isdisjoint(length_normalized_action_ids)
         note_normalizations = [
             event for event in events if event.event_type == "model_decision_note_normalized"
         ]
@@ -2312,7 +2313,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     assert all(
         context["model_context_schema_version"] == 8
         and context["prompt_template_version"] == 2
-        and context["known_events"]["schema_version"] == 1
+        and context["known_events"]["schema_version"] == 2
         and "source_rules" not in context["known_events"]
         and context["response"]["speech"]
         == {

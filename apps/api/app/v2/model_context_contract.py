@@ -6,7 +6,7 @@ from typing import Any
 MODEL_CONTEXT_SCHEMA_VERSION = 8
 PROMPT_TEMPLATE_VERSION = 2
 MODEL_PROMPT_SCHEMA_VERSION = MODEL_CONTEXT_SCHEMA_VERSION
-KNOWN_EVENTS_SCHEMA_VERSION = 1
+KNOWN_EVENTS_SCHEMA_VERSION = 2
 PUBLIC_TIMELINE_SCHEMA_VERSION = 1
 DISCOURSE_LEDGER_SCHEMA_VERSION = 2
 DISCOURSE_MODEL_VIEW_SCHEMA_VERSION = 3
@@ -46,6 +46,17 @@ def legacy_v8_prompt_v1_model_context_contract() -> dict[str, int]:
     }
 
 
+def legacy_v8_prompt_v2_model_context_contract() -> dict[str, int]:
+    return {
+        "model_context_schema_version": 8,
+        "prompt_template_version": 2,
+        "known_events_schema_version": 1,
+        "ledger_schema_version": 2,
+        "model_view_schema_version": 3,
+        "model_view_selector_version": 1,
+    }
+
+
 def freeze_model_context_contract(
     rule_snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -71,6 +82,7 @@ def supports_model_context_contract(
         _contract_tuple(current_model_context_contract()),
         _contract_tuple(legacy_v7_model_context_contract()),
         _contract_tuple(legacy_v8_prompt_v1_model_context_contract()),
+        _contract_tuple(legacy_v8_prompt_v2_model_context_contract()),
     }
 
 
@@ -83,6 +95,7 @@ def is_v8_model_context_contract(contract: dict[str, Any] | None) -> bool:
     return value in {
         _contract_tuple(current_model_context_contract()),
         _contract_tuple(legacy_v8_prompt_v1_model_context_contract()),
+        _contract_tuple(legacy_v8_prompt_v2_model_context_contract()),
     }
 
 

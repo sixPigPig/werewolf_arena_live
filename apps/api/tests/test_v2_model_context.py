@@ -18,6 +18,7 @@ from app.v2.model_client import build_model_request_payload
 from app.v2.model_context_contract import (
     legacy_v7_model_context_contract,
     legacy_v8_prompt_v1_model_context_contract,
+    legacy_v8_prompt_v2_model_context_contract,
 )
 
 
@@ -181,13 +182,13 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     ]
     assert [item["timeline_index"] for item in public_events] == [1, 2, 3]
     assert public_events[0]["authority"] == "judge_fact"
-    assert public_events[1]["authority"] == "player_statement"
+    assert public_events[1]["authority"] == "player_claim_unverified"
     assert public_events[1]["speaker_ref"] == "seat_2"
     assert public_events[1]["speech"] == "昨晚1号出局，我怀疑4号。"
     assert public_events[1]["event_ref"] == "history_2"
     assert public_events[2]["public_reason"] == "exile"
     assert public_events[2]["role_revealed"] is False
-    assert projected["known_events"]["schema_version"] == 1
+    assert projected["known_events"]["schema_version"] == 2
     assert "history" not in projected
     assert "public_timeline" not in projected
     assert "source_rules" not in serialized
@@ -583,6 +584,43 @@ def test_legacy_v7_contract_keeps_legacy_projection_shape() -> None:
     assert "known_events" not in projected
 
 
+def test_legacy_v8_known_events_v1_keeps_player_statement_authority() -> None:
+    action_context = {
+        "action_type": "day_debate_speech",
+        "self_identity": {
+            "player_id": "system-player-01",
+            "seat": 2,
+            "role_key": "villager",
+            "team": "villagers",
+        },
+        "public_history": [
+            {
+                "source_event_id": 20,
+                "record_seq": 20,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-09",
+                    "speech": "4号自称猎人。",
+                },
+            }
+        ],
+        "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+    }
+
+    projected = project_model_action_context(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=legacy_v8_prompt_v2_model_context_contract(),
+        action_record_seq=21,
+    )
+
+    assert projected["prompt_template_version"] == 2
+    assert projected["known_events"]["schema_version"] == 1
+    assert projected["known_events"]["events"][0]["authority"] == "player_statement"
+
+
 def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> None:
     quiet_detail = "这段只是当时的语气和铺垫。" * 10
     projected = project_model_action_context(
@@ -697,20 +735,19 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     metadata = projection.projection_metadata
     assert metadata["ledger_statement_count"] == 40
     assert metadata["known_event_total_count"] == 40
-    assert metadata["known_event_count"] < 40
-    assert metadata["dropped_event_count"] > 0
-    assert metadata["dropped_event_refs"]
-    assert set(metadata["retained_event_refs"]).isdisjoint(metadata["dropped_event_refs"])
+    assert metadata["known_event_count"] == 40
+    assert metadata["dropped_event_count"] == 0
+    assert "selection_budget_chars" not in metadata
+    assert "retained_event_refs" not in metadata
+    assert "dropped_event_refs" not in metadata
+    assert "retention_reasons" not in metadata
     assert all("speech_truncated" not in item for item in events)
     assert all(len(item["speech"]) > 1_800 for item in events)
-    assert metadata["selection_budget_exceeded_by_required"] is True
-    assert (
-        model_prompt_metadata(
-            projected,
-            projection_metadata=metadata,
-        )["serialized_char_count"]
-        < 20_000
-    )
+    assert [item["event_ref"] for item in events] == [str(index) for index in range(1, 41)]
+    assert model_prompt_metadata(
+        projected,
+        projection_metadata=metadata,
+    )["serialized_char_count"] > 70_000
 
 
 def test_model_context_uses_every_presented_public_player_speech_without_duplicates() -> None:
@@ -872,7 +909,7 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
     ]
     assert events[1]["speech"].startswith("8号上警竞选，底牌预言家，昨晚验6号，查杀。")
     assert events[2]["speech"] == "8号因为6号发言带节奏，所以昨晚验了6号。"
-    assert all(event["authority"] == "player_statement" for event in events)
+    assert all(event["authority"] == "player_claim_unverified" for event in events)
     assert "annotations" not in json.dumps(projected, ensure_ascii=False)
     assert "source_rules" not in json.dumps(projected, ensure_ascii=False)
 
@@ -932,6 +969,11 @@ def test_public_rule_contract_exposes_single_wolf_and_disabled_sheriff() -> None
         "玩家死亡或被放逐后，法官不会公开其身份或阵营；"
         "出局方式、发言和投票结果均不能作为法官已证实其身份的依据。"
     )
+    assert contract["ability_lifecycle"] == {
+        "active_abilities_require_alive": True,
+        "eliminated_players_can_act_in_later_windows": False,
+        "death_triggered_exceptions": [],
+    }
     assert contract["roles"] == [
         {
             "role_key": "werewolf",
@@ -1310,11 +1352,64 @@ def test_model_context_states_single_wolf_rule_without_generic_teammate_prompt()
     )
 
     assert projected["rules"]["werewolf_count"] == 1
+    assert projected["rules"]["ability_lifecycle"] == {
+        "active_abilities_require_alive": True,
+        "eliminated_players_can_act_in_later_windows": False,
+        "death_triggered_exceptions": [],
+    }
     assert "ability_rules" not in projected["rules"]
     assert "current_ability" not in projected["rules"]
     assert projected["self"]["werewolf_coordination"] == {"mode": "solo"}
     assert projected["known_events"]["events"] == []
     assert "狼人队友" not in json.dumps(projected, ensure_ascii=False)
+
+
+def test_public_rule_contract_exposes_hunter_as_a_death_triggered_exception() -> None:
+    contract = build_public_rule_contract(
+        rule={
+            "id": "hunter-lifecycle",
+            "version": "1",
+            "player_count": 3,
+            "roles": [
+                {"role": "狼人", "count": 1, "team": "werewolves"},
+                {"role": "猎人", "count": 1, "team": "villagers"},
+                {"role": "村民", "count": 1, "team": "villagers"},
+            ],
+        },
+        max_rounds=8,
+    )
+
+    assert contract["ability_lifecycle"] == {
+        "active_abilities_require_alive": True,
+        "eliminated_players_can_act_in_later_windows": False,
+        "death_triggered_exceptions": ["hunter.death_shot"],
+    }
+
+
+def test_legacy_public_rule_contract_without_ability_lifecycle_stays_supported() -> None:
+    projected = project_model_action_context(
+        {
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+            "public_rule_contract": {
+                "schema_version": 1,
+                "rule_id": "legacy-rule-contract",
+                "rule_version": "1",
+                "player_count": 3,
+                "roles": [],
+            },
+            "public_history": [],
+        },
+        players=PLAYERS,
+    )
+
+    assert "ability_lifecycle" not in projected["rules"]
 
 
 def test_model_context_separates_reveals_claims_and_vote_snapshot() -> None:

@@ -566,7 +566,7 @@ def test_model_speech_instructions_include_hard_contract_limits() -> None:
     ) == ("speech 必须是准备直接播报的非空自然中文。speech 不得超过300字。speech 只能包含一句话。")
 
 
-def test_boolean_actions_disable_thinking_without_changing_other_parameters() -> None:
+def test_boolean_actions_keep_configured_thinking() -> None:
     parameters, source = _action_model_parameters(
         V2SpeechSpec(
             action_type="werewolf_self_explosion",
@@ -584,8 +584,8 @@ def test_boolean_actions_disable_thinking_without_changing_other_parameters() ->
         )
     )
 
-    assert parameters == {"thinking": "disabled", "max_tokens": 16384}
-    assert source == "action_boolean_policy"
+    assert parameters == {"thinking": "enabled", "max_tokens": 16384}
+    assert source == "model_configuration"
 
 
 def test_non_boolean_actions_keep_configured_thinking() -> None:
