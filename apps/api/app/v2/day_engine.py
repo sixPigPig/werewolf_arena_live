@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 import logging
 from typing import Any
@@ -503,20 +504,22 @@ class V2DayEngine:
         order = await self._speech_order(state=state, broadcaster=broadcaster)
         rounds = max(1, int(state.rule.get("speech_rounds") or 1))
         for speech_round in range(1, rounds + 1):
+            if await self._offer_all_wolves_explosion(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                stage=f"discussion_round_{speech_round}",
+                public_window_context={
+                    "speech_round": speech_round,
+                    "speech_order": order,
+                },
+            ):
+                return True
             for player_id in order:
                 self._actions.check_cancellation(game_id)
                 current = self._repository.snapshot(game_id)
                 player = current.player(player_id)
                 if not player.alive:
                     continue
-                if player.role_key == "werewolf" and await self._offer_self_explosion(
-                    game_id=game_id,
-                    player=player,
-                    broadcaster=broadcaster,
-                    stage=f"discussion_round_{speech_round}",
-                    pre_sheriff=False,
-                ):
-                    return True
                 decision = await self._player_action(
                     game_id=game_id,
                     player=player,
@@ -949,92 +952,117 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
         stage: str,
         pre_sheriff: bool = False,
+        public_window_context: dict[str, Any] | None = None,
     ) -> bool:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         if not bool(state.rule.get("werewolf_self_explosion_enabled")):
             return False
-        for wolf in state.players:
-            self._actions.check_cancellation(game_id)
-            if (
-                wolf.alive
-                and wolf.role_key == "werewolf"
-                and await self._offer_self_explosion(
-                    game_id=game_id,
-                    player=wolf,
-                    broadcaster=broadcaster,
-                    stage=stage,
-                    pre_sheriff=pre_sheriff,
-                )
-            ):
-                return True
-        return False
-
-    async def _offer_self_explosion(
-        self,
-        *,
-        game_id: str,
-        player: V2MatchPlayer,
-        broadcaster: V2BroadcastPort,
-        stage: str,
-        pre_sheriff: bool,
-    ) -> bool:
-        self._actions.check_cancellation(game_id)
-        state = self._repository.snapshot(game_id)
-        if not bool(state.rule.get("werewolf_self_explosion_enabled")):
+        wolves = sorted(
+            (player for player in state.players if player.alive and player.role_key == "werewolf"),
+            key=lambda player: player.seat,
+        )
+        if not wolves:
             return False
         action_effect = _self_explosion_action_effect(
             state=state,
             stage=stage,
             pre_sheriff=pre_sheriff,
         )
-        decision = await self._player_action(
-            game_id=game_id,
-            player=player,
-            broadcaster=broadcaster,
-            action_type="werewolf_self_explosion",
-            objective="决定是否立即自爆。",
-            candidates=[],
-            target_optional=None,
-            audience="god_view",
-            output_kind="private_decision",
-            decision_contract=V2DecisionContract(
-                kind="boolean",
-                boolean_field="explode",
-                speech_mode="forbidden",
-                true_meaning="立即自爆",
-                false_meaning="不自爆",
-            ),
-            extra_context={
-                "public_stage": stage,
-                "current_action_effect": action_effect,
-            },
-        )
-        if not isinstance(decision.boolean_value, bool):
-            raise V2DayRuntimeError("werewolf_self_explosion_invalid_decision")
-        exploded = decision.boolean_value
+        public_cutoff_record_seq = state.last_record_seq
+        batch_id = f"{state.phase_id}:{stage}:{public_cutoff_record_seq}:werewolf_self_explosion"
+
+        async def request_decision(wolf: V2MatchPlayer) -> V2ModelDecision | None:
+            return await self._player_action(
+                game_id=game_id,
+                player=wolf,
+                broadcaster=broadcaster,
+                action_type="werewolf_self_explosion",
+                objective="决定是否立即自爆。",
+                candidates=[],
+                target_optional=None,
+                audience="god_view",
+                output_kind="private_decision",
+                decision_contract=V2DecisionContract(
+                    kind="boolean",
+                    boolean_field="explode",
+                    speech_mode="forbidden",
+                    true_meaning="立即自爆",
+                    false_meaning="不自爆",
+                ),
+                extra_context={
+                    "public_stage": stage,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "current_action_effect": action_effect,
+                    "batch_resolution_policy": "lowest_seat_affirmative",
+                    **(public_window_context or {}),
+                },
+                frozen_state=state,
+                defer_presentation=True,
+                isolated_failure=True,
+                allow_failure=True,
+                batch_id=batch_id,
+            )
+
+        decisions = await asyncio.gather(*(request_decision(wolf) for wolf in wolves))
+        affirmative: list[V2MatchPlayer] = []
+        failed_player_ids: list[str] = []
+        for wolf, decision in zip(wolves, decisions, strict=True):
+            if decision is not None and not isinstance(decision.boolean_value, bool):
+                raise V2DayRuntimeError("werewolf_self_explosion_invalid_decision")
+            if decision is None:
+                failed_player_ids.append(wolf.player_id)
+            elif decision.boolean_value:
+                affirmative.append(wolf)
+
+        selected = affirmative[0] if affirmative else None
+        for wolf, decision in zip(wolves, decisions, strict=True):
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="werewolf_self_explosion_decided",
+                payload={
+                    "round_no": state.round_no,
+                    "player_id": wolf.player_id,
+                    "stage": stage,
+                    "exploded": bool(decision and decision.boolean_value),
+                    "decision_status": "failed" if decision is None else "completed",
+                    "selected_for_resolution": (
+                        selected is not None and wolf.player_id == selected.player_id
+                    ),
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                },
+            )
+
         self._repository.append_event(
             game_id=game_id,
-            event_type="werewolf_self_explosion_decided",
+            event_type="werewolf_self_explosion_batch_resolved",
             payload={
                 "round_no": state.round_no,
-                "player_id": player.player_id,
                 "stage": stage,
-                "exploded": exploded,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
+                "eligible_wolf_ids": [wolf.player_id for wolf in wolves],
+                "failed_player_ids": failed_player_ids,
+                "affirmative_player_ids": [wolf.player_id for wolf in affirmative],
+                "selected_player_id": selected.player_id if selected is not None else None,
+                "selection_policy": "lowest_seat_affirmative",
+                "outcome": "self_explosion" if selected is not None else "continued",
             },
         )
-        if not exploded:
+        if selected is None:
             return False
+
         self._actions.check_cancellation(game_id)
         if pre_sheriff:
             outcome = self._repository.record_pre_sheriff_explosion(
                 game_id=game_id,
-                player_id=player.player_id,
+                player_id=selected.player_id,
             )
         else:
             self._repository.record_day_explosion(
                 game_id=game_id,
-                player_id=player.player_id,
+                player_id=selected.player_id,
                 stage=stage,
             )
             outcome = "day_ended"
@@ -1043,19 +1071,20 @@ class V2DayEngine:
             state=current,
             broadcaster=broadcaster,
             action_type="judge_werewolf_self_explosion",
-            objective=f"公开宣布{player.seat}号发动狼人自爆并立即出局，当天剩余流程中止",
+            objective=f"公开宣布{selected.seat}号发动狼人自爆并立即出局，当天剩余流程中止",
             success_phase_state=current.phase_state,
             context={
-                "player_id": player.player_id,
-                "player_seat": player.seat,
+                "player_id": selected.player_id,
+                "player_seat": selected.seat,
                 "stage": stage,
                 "outcome": outcome,
+                "batch_id": batch_id,
             },
         ):
             raise V2DayRuntimeError("self_explosion_announcement_failed")
         await self._broadcast_death(
             state=current,
-            player_id=player.player_id,
+            player_id=selected.player_id,
             cause="werewolf_self_explosion",
             broadcaster=broadcaster,
         )
@@ -1240,9 +1269,14 @@ class V2DayEngine:
         decision_contract: V2DecisionContract | None = None,
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
-    ) -> V2ModelDecision:
+        frozen_state: V2MatchSnapshot | None = None,
+        defer_presentation: bool = False,
+        isolated_failure: bool = False,
+        allow_failure: bool = False,
+        batch_id: str | None = None,
+    ) -> V2ModelDecision | None:
         self._actions.check_cancellation(game_id)
-        state = self._repository.snapshot(game_id)
+        state = frozen_state or self._repository.snapshot(game_id)
         private_facts = self._repository.private_knowledge(
             game_id=game_id,
             player_id=player.player_id,
@@ -1346,9 +1380,12 @@ class V2DayEngine:
                     ),
                     **(extra_context or {}),
                 },
+                defer_presentation=defer_presentation,
+                isolated_failure=isolated_failure,
+                batch_id=batch_id,
             ),
         )
-        if decision is None:
+        if decision is None and not allow_failure:
             raise V2DayRuntimeError(f"{action_type}_failed")
         return decision
 

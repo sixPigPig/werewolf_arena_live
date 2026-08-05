@@ -365,6 +365,66 @@ class _ScriptedDayActionEngine:
         return True
 
 
+class _ConcurrentSelfExplosionActions:
+    def __init__(
+        self,
+        *,
+        expected_wolves: int,
+        affirmative_actor_ids: set[str],
+    ) -> None:
+        self._expected_wolves = expected_wolves
+        self._affirmative_actor_ids = affirmative_actor_ids
+        self._started = 0
+        self._in_flight = 0
+        self._completed = 0
+        self._all_started = asyncio.Event()
+        self.batch_completed = asyncio.Event()
+        self.max_in_flight = 0
+        self.self_explosion_specs: list[Any] = []
+        self.action_types: list[str] = []
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
+
+    async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision:
+        self.action_types.append(spec.action_type)
+        if spec.action_type != "werewolf_self_explosion":
+            assert self.batch_completed.is_set()
+            return V2ModelDecision(
+                target_player_id=None,
+                speech=f"{spec.actor_id}完成公开发言。",
+                provider_request_id="provider-discussion",
+                first_token_ms=1,
+                completed_ms=2,
+            )
+
+        self.self_explosion_specs.append(spec)
+        assert spec.defer_presentation is True
+        assert spec.isolated_failure is True
+        self._started += 1
+        self._in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        if self._started == self._expected_wolves:
+            self._all_started.set()
+        await asyncio.wait_for(self._all_started.wait(), timeout=1)
+        self._in_flight -= 1
+        self._completed += 1
+        if self._completed == self._expected_wolves:
+            self.batch_completed.set()
+        return V2ModelDecision(
+            target_player_id=None,
+            speech=None,
+            provider_request_id=f"provider-{spec.actor_id}",
+            first_token_ms=1,
+            completed_ms=2,
+            boolean_field="explode",
+            boolean_value=spec.actor_id in self._affirmative_actor_ids,
+        )
+
+    async def run_judge_speech(self, **_kwargs) -> bool:
+        return True
+
+
 class _CollectingBroadcaster:
     def __init__(self) -> None:
         self.messages: list[tuple[str, dict[str, Any]]] = []
@@ -3986,6 +4046,144 @@ def test_complete_match_hunter_shot_chain_resolves_every_new_death(v2_context) -
         final_target_id,
     ]
     assert all(value["cause"] is None for value in public_deaths)
+
+
+def _prepare_day_self_explosion_state(
+    session_factory: sessionmaker[Session],
+    game_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        assert game is not None
+        run = db.get(V2GameRun, game.current_run_id)
+        match = db.get(V2MatchState, game_id)
+        assert run is not None and match is not None
+        frozen_rule = dict(game.rule_snapshot)
+        rule_set = dict(frozen_rule["rule_set"])
+        rule_set.update(
+            {
+                "werewolf_self_explosion_enabled": True,
+                "speech_policy": "sequential",
+                "speech_rounds": 1,
+            }
+        )
+        game.rule_snapshot = {**frozen_rule, "rule_set": rule_set}
+        game.phase_id = "day_1"
+        game.phase_state = "public_discussion_open"
+        game.status = "ready"
+        run.status = "ready"
+        match.round_no = 1
+
+
+def test_self_explosion_batch_is_concurrent_and_resolves_one_wolf(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_self_explosion_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    wolves = sorted(
+        (player for player in before.players if player.role_key == "werewolf"),
+        key=lambda player: player.seat,
+    )
+    assert len(wolves) == 2
+    actions = _ConcurrentSelfExplosionActions(
+        expected_wolves=len(wolves),
+        affirmative_actor_ids={wolf.player_id for wolf in wolves},
+    )
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    exploded = asyncio.run(
+        engine._offer_all_wolves_explosion(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            stage="before_exile_vote",
+        )
+    )
+
+    assert exploded is True
+    assert actions.max_in_flight == len(wolves)
+    assert len({spec.batch_id for spec in actions.self_explosion_specs}) == 1
+    assert {spec.context["public_cutoff_record_seq"] for spec in actions.self_explosion_specs} == {
+        before.last_record_seq
+    }
+    after = repository.snapshot(created["game_id"])
+    assert not after.player(wolves[0].player_id).alive
+    assert all(after.player(wolf.player_id).alive for wolf in wolves[1:])
+
+    with session_factory() as db:
+        decisions = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == created["game_id"],
+                    V2GameRecordEvent.event_type == "werewolf_self_explosion_decided",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        resolution = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == created["game_id"],
+                V2GameRecordEvent.event_type == "werewolf_self_explosion_batch_resolved",
+            )
+        )
+    assert [event.payload["player_id"] for event in decisions] == [
+        wolf.player_id for wolf in wolves
+    ]
+    assert all(event.payload["exploded"] is True for event in decisions)
+    assert [event.payload["selected_for_resolution"] for event in decisions] == [True, False]
+    assert resolution is not None
+    assert resolution.payload["affirmative_player_ids"] == [wolf.player_id for wolf in wolves]
+    assert resolution.payload["selected_player_id"] == wolves[0].player_id
+    assert resolution.payload["selection_policy"] == "lowest_seat_affirmative"
+    assert resolution.payload["public_cutoff_record_seq"] == before.last_record_seq
+
+
+def test_discussion_waits_for_one_round_start_self_explosion_batch(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_self_explosion_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    wolves = [player for player in before.players if player.role_key == "werewolf"]
+    assert len(wolves) == 2
+    actions = _ConcurrentSelfExplosionActions(
+        expected_wolves=len(wolves),
+        affirmative_actor_ids=set(),
+    )
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    exploded = asyncio.run(
+        engine._run_public_discussion(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+        )
+    )
+
+    assert exploded is False
+    assert actions.batch_completed.is_set()
+    assert actions.max_in_flight == len(wolves)
+    assert actions.action_types[: len(wolves)] == ["werewolf_self_explosion"] * len(wolves)
+    assert actions.action_types[len(wolves) :] == ["day_debate_speech"] * len(before.players)
+    assert {spec.context["public_stage"] for spec in actions.self_explosion_specs} == {
+        "discussion_round_1"
+    }
+    assert all(
+        spec.context["speech_round"] == 1
+        and spec.context["speech_order"]
+        == [player.player_id for player in sorted(before.players, key=lambda player: player.seat)]
+        for spec in actions.self_explosion_specs
+    )
+    assert all(
+        spec.context["public_history"] == list(before.public_history)
+        for spec in actions.self_explosion_specs
+    )
 
 
 def test_complete_match_max_rounds_fails_explicitly(v2_context) -> None:

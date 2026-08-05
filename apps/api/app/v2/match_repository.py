@@ -47,6 +47,7 @@ class V2MatchPlayer:
 class V2MatchSnapshot:
     game_id: str
     run_id: str
+    last_record_seq: int
     phase_id: str
     phase_state: str
     round_no: int
@@ -94,6 +95,7 @@ class V2MatchRepository:
             return V2MatchSnapshot(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
+                last_record_seq=game.last_record_seq,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
                 round_no=match.round_no,
