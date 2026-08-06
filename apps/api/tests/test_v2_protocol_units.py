@@ -87,6 +87,15 @@ def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
             True,
         ),
         (
+            V2QualityError(
+                "model_decision_ambiguous_multiple_objects",
+                raw_response='{"target_player_id":"seat_1"}{"target_player_id":"seat_2"}',
+            ),
+            "machine_format",
+            2,
+            True,
+        ),
+        (
             V2ModelError("model_provider_credentials_missing"),
             "provider_configuration",
             1,
@@ -119,6 +128,94 @@ def test_v2_decision_parser_repairs_one_extra_trailing_brace() -> None:
     assert _decision_repair_kind(raw, contract) == "single_trailing_brace_removed"
 
 
+def test_v2_decision_parser_repairs_identical_plain_and_fenced_json() -> None:
+    raw = (
+        '{"target_player_id":"seat_6","decision_note":"首夜优先覆盖中置位。"}'
+        "\n\n```json\n"
+        "{\n"
+        '  "decision_note": "首夜优先覆盖中置位。",\n'
+        '  "target_player_id": "seat_6"\n'
+        "}\n```"
+    )
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+        "decision_note": {"mode": "optional", "max_chars": 120},
+    }
+
+    assert _decision_fields(raw, contract) == ("seat_6", None, None, None)
+    assert _decision_repair_kind(raw, contract) == "duplicate_identical_json_ignored"
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        '{"target_player_id":"seat_5","decision_note":"相同理由。"}',
+        '{"target_player_id":"seat_6","decision_note":"不同理由。"}',
+    ],
+)
+def test_v2_decision_parser_rejects_distinct_valid_json_objects(second: str) -> None:
+    first = '{"target_player_id":"seat_6","decision_note":"相同理由。"}'
+    raw = f"{first}\n```json\n{second}\n```"
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+        "decision_note": {"mode": "optional", "max_chars": 120},
+    }
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_ambiguous_multiple_objects",
+    ):
+        _decision_fields(raw, contract)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        (
+            '{"target_player_id":"seat_6"}\n```json\n'
+            '{"model_context_schema_version":8,"known_events":{"events":[]}}\n```'
+        ),
+        ('{"target_player_id":"seat_6"}\n```json\n{"target_player_id":"seat_6"}\n```\n额外解释'),
+        ('{"target_player_id":"seat_6"}\n```json\n{"target_player_id":"seat_6"}'),
+        ('{"target_player_id":"seat_6"}{"target_player_id":"seat_6"}{"target_player_id":"seat_6"}'),
+    ],
+)
+def test_v2_decision_parser_does_not_repair_unsafe_duplicate_shapes(raw: str) -> None:
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+    }
+
+    with pytest.raises(V2QualityError):
+        _decision_fields(raw, contract)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"speech":"第一句"}{"speech":"第二句"',
+        '{"speech":"第一句"}\n```json\n{"speech":"第一句"',
+        '{"speech":"第一句"}\n```json\n{"speech":"第一句"}\n```\n额外说明',
+        '{"speech":"第一句"}{"speech":"第一句"}{"speech":"第一句"}',
+    ],
+)
+def test_v2_speech_contract_does_not_fragment_recover_unsafe_json_documents(
+    raw: str,
+) -> None:
+    contract = {
+        "kind": "speech",
+        "speech": {"mode": "required"},
+    }
+
+    with pytest.raises(V2QualityError, match="model_decision_invalid_json_document"):
+        _decision_fields(raw, contract)
+
+
 def _identity() -> V2PresentationIdentity:
     return V2PresentationIdentity(
         game_id="v2_game_0000000000000001",
@@ -132,6 +229,7 @@ def _identity() -> V2PresentationIdentity:
         voice_asset_id="v2_voice_0000000000000001",
         storage_key="v2_game_0000000000000001/v2_voice_0000000000000001.wav",
         subtitle_text="欢迎来到这场实时狼人杀对局。",
+        audience="all",
     )
 
 
@@ -331,15 +429,11 @@ def test_decision_fields_keep_only_fundamental_failures() -> None:
         None,
         None,
     )
-    assert _decision_fields(
-        '{"target_player_id":3,"speech":"我投三号。"}',
-        _target_contract(),
-    ) == (
-        None,
-        "我投三号。",
-        None,
-        None,
-    )
+    with pytest.raises(V2QualityError, match="model_decision_invalid_target"):
+        _decision_fields(
+            '{"target_player_id":3,"speech":"我投三号。"}',
+            _target_contract(),
+        )
     with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
         _decision_fields(
             '{"target_player_id":null,"speech":"  "}',
@@ -992,6 +1086,23 @@ def test_voice_recorder_abort_leaves_no_partial_asset(tmp_path: Path) -> None:
     assert not (tmp_path / "game/voice.wav.writing").exists()
     with pytest.raises(V2VoiceRecordingError, match="closed"):
         recorder.append(b"\x01\x00")
+
+
+def test_voice_recorder_discards_only_an_uncommitted_finalized_asset(tmp_path: Path) -> None:
+    recorder = V2VoiceRecorder(
+        root=tmp_path,
+        storage_key="game/uncommitted.wav",
+        sample_rate=24000,
+    )
+    recorder.append(b"\x01\x00")
+    recorder.finalize()
+    final_path = tmp_path / "game/uncommitted.wav"
+    assert final_path.is_file()
+
+    recorder.discard_finalized()
+
+    assert not final_path.exists()
+    assert not (tmp_path / "game/uncommitted.wav.writing").exists()
 
 
 def test_tts_v3_client_frame_layout_matches_event_protocol() -> None:

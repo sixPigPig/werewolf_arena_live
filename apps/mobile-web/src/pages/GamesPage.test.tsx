@@ -60,6 +60,12 @@ const classicRuleSet: RuleSetSummary = {
   version: "test",
   name: "经典 8 人",
   player_count: 2,
+  revision_id: "rule_rev_classic_8",
+  werewolf_attack_policy: {
+    resolution: "plurality_rotating_tiebreak",
+    allow_no_attack: false,
+    allow_wolf_target: false,
+  },
   role_summary: "测试阵容",
   roles: [],
 };
@@ -117,6 +123,7 @@ function buildV2Game() {
     game_id: "v2_game_0123456789abcdef",
     run_id: "v2_run_0123456789abcdef",
     status: "ready" as const,
+    audio_mode: "tts" as const,
     snapshot_url: "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
     websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
     god_view_snapshot_url:
@@ -181,7 +188,7 @@ function buildLineupPreview(
       violations: [],
       ...overrides,
     },
-    rule_set_revision_id: null,
+    rule_set_revision_id: request.expected_rule_revision_id ?? null,
   };
 }
 
@@ -604,7 +611,7 @@ describe("GamesPage", () => {
         name: "选择 12 号座位，当前为 待选择",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("高级设置 · 随机种子 / 8轮")).toBeVisible();
+    expect(screen.getByText("高级设置 · 随机种子 / 8轮 / 语音播报")).toBeVisible();
 
     const styles = readFileSync("src/styles/index.css", "utf8");
     const lobbyContentRegionRule =
@@ -657,7 +664,7 @@ describe("GamesPage", () => {
     const user = userEvent.setup();
     renderGamesPage();
 
-    await user.click(await screen.findByText("高级设置 · 随机种子 / 8轮"));
+    await user.click(await screen.findByText("高级设置 · 随机种子 / 8轮 / 语音播报"));
     expect(await screen.findByLabelText("种子")).toBeVisible();
     expect(screen.getByRole("spinbutton", { name: "最大轮数" })).toBeVisible();
 
@@ -768,10 +775,11 @@ describe("GamesPage", () => {
     await waitFor(() => {
       expect(v2ApiMocks.createV2Game).toHaveBeenCalledWith({
         title: "经典 8 人",
+        audio_mode: "tts",
         lobby_snapshot: expect.objectContaining({
           schema_version: 1,
           rule_set: classicRuleSet,
-          rule_set_revision_id: null,
+          rule_set_revision_id: "rule_rev_classic_8",
           seed: null,
           max_rounds: 8,
           allow_lineup_quality_warnings: false,
@@ -798,6 +806,75 @@ describe("GamesPage", () => {
         "live-v2:god-view:v2_game_0123456789abcdef",
       ),
     ).toBeNull();
+  });
+
+  it("refreshes the rule catalog after a stale revision create conflict", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.listRuleSets
+      .mockReset()
+      .mockResolvedValueOnce({ rule_sets: [classicRuleSet] })
+      .mockResolvedValue({
+        rule_sets: [
+          {
+            ...classicRuleSet,
+            revision_id: "rule_rev_classic_8_new",
+          },
+        ],
+      });
+    v2ApiMocks.createV2Game.mockRejectedValueOnce(
+      Object.assign(new Error("V2 对局创建失败 (409)"), {
+        status: 409,
+        code: "rule_revision_changed",
+      }),
+    );
+    renderGamesPage();
+
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
+
+    expect(
+      await screen.findByText("规则已更新，请确认最新规则后重新发起对局"),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(gameClientMocks.listRuleSets).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("refreshes the rule catalog after a stale revision lineup preview", async () => {
+    const user = userEvent.setup();
+    gameClientMocks.listRuleSets
+      .mockReset()
+      .mockResolvedValueOnce({ rule_sets: [classicRuleSet] })
+      .mockResolvedValue({
+        rule_sets: [
+          {
+            ...classicRuleSet,
+            revision_id: "rule_rev_classic_8_new",
+          },
+        ],
+      });
+    renderGamesPage();
+
+    await user.click(await screen.findByRole("button", { name: "智能补齐" }));
+    await user.click(screen.getByRole("button", { name: "随机补齐" }));
+    expect(await screen.findByText("阵容质量通过")).toBeVisible();
+    gameClientMocks.previewGameLineup.mockRejectedValueOnce(
+      Object.assign(new Error("阵容预览失败 (409)"), {
+        status: 409,
+        code: "rule_revision_changed",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "开始对局" }));
+
+    expect(
+      await screen.findByText("规则已更新，请确认最新规则后重新发起对局"),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(gameClientMocks.listRuleSets).toHaveBeenCalledTimes(2);
+    });
+    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
   });
 
   it("requires a second tap before clearing assigned seats", async () => {
@@ -846,7 +923,7 @@ describe("GamesPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "智能补齐" }));
     await user.click(screen.getByRole("button", { name: "随机补齐" }));
-    await user.click(screen.getByText("高级设置 · 随机种子 / 8轮"));
+    await user.click(screen.getByText("高级设置 · 随机种子 / 8轮 / 语音播报"));
     await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     expect(screen.getByRole("button", { name: "发起中…" })).toBeDisabled();
@@ -936,6 +1013,7 @@ describe("GamesPage", () => {
     await waitFor(() =>
       expect(gameClientMocks.previewGameLineup).toHaveBeenCalledWith(
         expect.objectContaining({
+          expected_rule_revision_id: "rule_rev_classic_8",
           locked_seats: [],
           repair_scope: "unlocked_all",
           lineup_quality_policy_version: 1,

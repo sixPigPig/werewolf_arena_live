@@ -172,6 +172,235 @@ def test_model_client_parses_optional_private_decision_note() -> None:
     assert decision.decision_note == "首夜随机覆盖中置位"
 
 
+def test_model_client_repairs_identical_duplicate_json_once_and_preserves_raw() -> None:
+    raw_response = (
+        '{"target_player_id":"seat_6","decision_note":"首夜随机覆盖中置位"}'
+        "\n\n```json\n"
+        "{\n"
+        '  "decision_note": "首夜随机覆盖中置位",\n'
+        '  "target_player_id": "seat_6"\n'
+        "}\n```"
+    )
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        event = json.dumps(
+            {
+                "type": "response.output_text.delta",
+                "delta": raw_response,
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+    context = {
+        "model_context_schema_version": 8,
+        "prompt_template_version": 3,
+        "response": {
+            "kind": "target",
+            "target_policy": {
+                "mode": "required",
+                "allowed_target_ids": ["seat_6"],
+            },
+            "speech": {"mode": "forbidden"},
+            "decision_note": {"mode": "optional", "max_chars": 120},
+        },
+    }
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=context,
+            attempt_id="v2_model_duplicate_json",
+            target=target,
+        )
+    )
+
+    assert len(requests) == 1
+    assert decision.target_player_id == "seat_6"
+    assert decision.speech is None
+    assert decision.decision_note == "首夜随机覆盖中置位"
+    assert decision.repair_kind == "duplicate_identical_json_ignored"
+    assert decision.raw_response == raw_response
+
+
+def test_model_client_ambiguous_duplicate_json_keeps_exact_raw_response() -> None:
+    raw_response = '{"target_player_id":"seat_6"}\n```json\n{"target_player_id":"seat_5"}\n```'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {
+                "type": "response.output_text.delta",
+                "delta": raw_response,
+            }
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_ambiguous_multiple_objects",
+    ) as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context={
+                    "model_context_schema_version": 8,
+                    "prompt_template_version": 3,
+                    "response": {
+                        "kind": "target",
+                        "target_policy": {
+                            "mode": "required",
+                            "allowed_target_ids": ["seat_5", "seat_6"],
+                        },
+                        "speech": {"mode": "forbidden"},
+                    },
+                },
+                attempt_id="v2_model_ambiguous_duplicate_json",
+                target=target,
+            )
+        )
+
+    assert caught.value.raw_response == raw_response
+
+
+def test_model_client_rejects_non_string_target_in_duplicate_json() -> None:
+    raw_response = '{"target_player_id":1}\n{"target_player_id":null}'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {
+                "type": "response.output_text.delta",
+                "delta": raw_response,
+            }
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    with pytest.raises(V2QualityError, match="model_decision_invalid_target") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context={
+                    "model_context_schema_version": 8,
+                    "prompt_template_version": 3,
+                    "response": {
+                        "kind": "target",
+                        "target_policy": {"mode": "required"},
+                        "speech": {"mode": "forbidden"},
+                    },
+                },
+                attempt_id="v2_model_duplicate_invalid_target",
+                target=target,
+            )
+        )
+
+    assert caught.value.raw_response == raw_response
+
+
+def test_model_client_treats_different_extra_payload_fields_as_ambiguous() -> None:
+    raw_response = (
+        '{"target_player_id":"seat_6","provider_trace":{"choice":1}}\n'
+        '{"target_player_id":"seat_6","provider_trace":{"choice":2}}'
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {
+                "type": "response.output_text.delta",
+                "delta": raw_response,
+            }
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_ambiguous_multiple_objects",
+    ) as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context={
+                    "model_context_schema_version": 8,
+                    "prompt_template_version": 3,
+                    "response": {
+                        "kind": "target",
+                        "target_policy": {"mode": "required"},
+                        "speech": {"mode": "forbidden"},
+                    },
+                },
+                attempt_id="v2_model_duplicate_extra_fields",
+                target=target,
+            )
+        )
+
+    assert caught.value.raw_response == raw_response
+
+
+def test_model_client_rejects_truncated_second_speech_object_without_fragment_fallback() -> None:
+    raw_response = '{"speech":"第一句"}{"speech":"第二句"'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {
+                "type": "response.output_text.delta",
+                "delta": raw_response,
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={"thinking": "disabled", "max_tokens": 512},
+    )
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_invalid_json_document",
+    ) as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context={
+                    "model_context_schema_version": 8,
+                    "prompt_template_version": 3,
+                    "response": {
+                        "kind": "speech",
+                        "speech": {"mode": "required"},
+                    },
+                },
+                attempt_id="v2_model_truncated_second_object",
+                target=target,
+            )
+        )
+
+    assert caught.value.raw_response == raw_response
+
+
 def test_model_client_does_not_timeout_immediately_under_uvloop() -> None:
     uvloop = pytest.importorskip("uvloop")
 

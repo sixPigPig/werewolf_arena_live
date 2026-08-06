@@ -15,6 +15,18 @@ class PublicRuleRole(BaseModel):
     category: str = Field(min_length=1)
 
 
+class PublicWerewolfAttackPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    resolution: Literal[
+        "plurality_rotating_tiebreak",
+        "plurality_seeded_random",
+        "unanimous_no_attack",
+    ]
+    allow_no_attack: bool
+    allow_wolf_target: bool
+
+
 class PublicRuleSetCatalogItem(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -40,6 +52,7 @@ class PublicRuleSetCatalogItem(BaseModel):
     exile_last_words_enabled: bool
     first_night_last_words_enabled: bool
     sheriff_badge_bomb_policy: Literal["none", "double"]
+    werewolf_attack_policy: PublicWerewolfAttackPolicy | None
     revision_id: str = Field(min_length=1, max_length=36)
     revision_no: int = Field(ge=1)
     schema_version: int = Field(ge=1)

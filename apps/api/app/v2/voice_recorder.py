@@ -39,6 +39,7 @@ class V2VoiceRecorder:
         self._sample_count = 0
         self._hash = hashlib.sha256()
         self._closed = False
+        self._finalized = False
         try:
             self._writer = wave.open(str(self._temporary_path), "wb")
             self._writer.setnchannels(channels)
@@ -71,9 +72,10 @@ class V2VoiceRecorder:
             self._writer.close()
             self._closed = True
             os.replace(self._temporary_path, self._final_path)
+            self._finalized = True
             size_bytes = self._final_path.stat().st_size
         except (OSError, wave.Error) as exc:
-            self.abort()
+            self.discard_finalized()
             raise V2VoiceRecordingError("cannot finalize V2 voice asset") from exc
         return V2RecordedVoice(
             sample_count=self._sample_count,
@@ -93,3 +95,14 @@ class V2VoiceRecorder:
             self._temporary_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def discard_finalized(self) -> None:
+        """Remove an uncommitted final file after execution ownership is lost."""
+        self.abort()
+        if not self._finalized:
+            return
+        try:
+            self._final_path.unlink(missing_ok=True)
+        except OSError:
+            return
+        self._finalized = False

@@ -16,12 +16,21 @@ _EXPLICIT_WOLF_PAIR = re.compile(
     r"(?P<second>[1-9]|1[0-9]|2[0-4])号?"
 )
 _SEAT_NUMBER = r"(?:2[0-4]|1[0-9]|[1-9])"
-_VOTER_LIST = (
-    rf"(?<![\d号]){_SEAT_NUMBER}号?"
-    rf"(?:\s*(?:、|，|,|和|与|跟|及)\s*{_SEAT_NUMBER}号?)*"
+_VOTER_SEPARATOR = r"(?:、|，|,|和|与|跟|及)"
+_EXPLICIT_VOTER_LIST = (
+    rf"{_SEAT_NUMBER}号"
+    rf"(?:\s*{_VOTER_SEPARATOR}\s*{_SEAT_NUMBER}号)*"
 )
+_VOTER_LIST = rf"(?<![\d号])(?:{_EXPLICIT_VOTER_LIST}|{_SEAT_NUMBER})(?!\d)"
 _VOTE_PHASE_MARKER = r"(?:警上|警下|第一轮|第二轮|本轮|这轮|刚才|刚刚)?"
 _VOTE_CLAIM_PATTERNS = (
+    re.compile(
+        rf"(?P<voters>{_VOTER_LIST})"
+        rf"\s*{_VOTE_PHASE_MARKER}"
+        r"\s*(?:都|也|还|一起|一致)?\s*"
+        r"(?:跟|随)我\s*(?:出|投)\s*(?:了)?\s*"
+        rf"(?P<target>{_SEAT_NUMBER}|你)号?"
+    ),
     re.compile(
         rf"(?P<voters>{_VOTER_LIST})"
         rf"\s*{_VOTE_PHASE_MARKER}"
@@ -40,6 +49,13 @@ _VOTE_CLAIM_PATTERNS = (
     re.compile(
         rf"(?P<voters>{_VOTER_LIST})\s*(?:的)?票"
         rf"\s*(?:都|也)?\s*(?:投给|给了|在|归)\s*(?P<target>{_SEAT_NUMBER}|你)号?"
+    ),
+    re.compile(
+        rf"(?P<voters>{_VOTER_LIST})"
+        rf"\s*{_VOTE_PHASE_MARKER}"
+        r"\s*(?:都|也|还|一起|分别|一致)?\s*"
+        rf"给\s*(?P<target>{_SEAT_NUMBER}|你)号?"
+        r"(?=\s*(?:[，,。！？!?；;]|$))"
     ),
 )
 _VOTE_CLAIM_REJECTION = re.compile(
@@ -94,6 +110,42 @@ _LATER_PUBLIC_INFORMATION_MARKER = re.compile(r"(?:发言|警上|上警|刚才|�
 _INVESTIGATION_CAUSALITY_REJECTION = re.compile(
     r"(?:不是|并非|不能|不可能|绝不是).{0,12}(?:因为|基于)|"
     r"(?:发言|警上|上警|刚才|前面).{0,12}(?:无关|没关系)"
+)
+_PUBLIC_CAUSALITY_REJECTION = re.compile(r"(?:不是|并非|并不是|不算|不能算|不属于|无关|没关系)")
+_PUBLIC_CAUSALITY_HYPOTHESIS = re.compile(r"(?:如果|假如|要是|若是|倘若|万一)")
+_PUBLIC_CAUSALITY_ATTRIBUTION = re.compile(
+    rf"(?:{_SEAT_NUMBER}号|他|她|有人)[^。！？!?；;]{{0,16}}"
+    r"(?:说|声称|认为|提到|讲|表示)"
+)
+_PUBLIC_REACTION_CLAIM_PATTERNS = (
+    re.compile(
+        rf"(?P<reaction>{_SEAT_NUMBER})号[^。！？!?；;]{{0,24}}"
+        rf"在(?P<trigger>{_SEAT_NUMBER})号[^。！？!?；;]{{0,16}}(?:之前|以前)"
+        r"[^。！？!?；;]{0,24}(?:反咬|咬死|咬|攻击|打|要出|冲)"
+        r"[^。！？!?；;]{0,12}(?P=trigger)号"
+        r"[^。！？!?；;]{0,64}(?:像|是|属于|算)"
+        r"[^。！？!?；;]{0,16}被[^。！？!?；;]{0,8}查杀"
+        r"[^。！？!?；;]{0,6}(?:后|之后)"
+        r"[^。！？!?；;]{0,12}(?:应激|反应|回应|反咬)"
+    ),
+    re.compile(
+        rf"(?P<reaction>{_SEAT_NUMBER})号"
+        rf"(?:(?!{_SEAT_NUMBER}号)[^。！？!?；;]){{0,80}}?"
+        r"(?:回头猛打|猛打|反咬|攻击|咬死|咬|踩|打|回应|要出|冲)"
+        rf"[^。！？!?；;]{{0,12}}(?P<trigger>{_SEAT_NUMBER})号"
+        r"[^。！？!?；;]{0,64}(?:像|是|属于|算)"
+        r"[^。！？!?；;]{0,16}"
+        r"(?:被[^。！？!?；;]{0,8}查杀|听到[^。！？!?；;]{0,8}(?:报验|查杀)|报验)"
+        r"[^。！？!?；;]{0,6}(?:后|之后)"
+        r"[^。！？!?；;]{0,12}(?:应激|反应|回应|反咬)"
+    ),
+    re.compile(
+        rf"(?P<reaction>{_SEAT_NUMBER})号[^。！？!?；;]{{0,24}}"
+        rf"(?:被|听到)(?P<trigger>{_SEAT_NUMBER})号"
+        r"[^。！？!?；;]{0,16}(?:查杀|报验)"
+        r"[^。！？!?；;]{0,6}(?:后|之后)"
+        r"[^。！？!?；;]{0,12}(?:应激|反应|回应|反咬)"
+    ),
 )
 _EXILE_TARGET = re.compile(rf"(?:出|推|放逐|冲)(?:掉|走)?\s*(?P<seat>{_SEAT_NUMBER})号")
 _WRONG_EXILE_WITCH_SUBJECT = re.compile(
@@ -178,6 +230,12 @@ def _observe_model_speech(
     )
     if investigation_observation is not None:
         observations.append(investigation_observation)
+    public_causality_observation = _observe_public_statement_causality(
+        speech,
+        model_context=model_context,
+    )
+    if public_causality_observation is not None:
+        observations.append(public_causality_observation)
     observations.extend(
         _observe_response_opportunity(
             speech,
@@ -381,6 +439,200 @@ def _deduplicate_causality_signals(
             signal.get("private_action_known_at_seq"),
             signal.get("later_public_event_ref"),
             signal.get("evidence"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(signal)
+    return deduplicated
+
+
+def _observe_public_statement_causality(
+    speech: str,
+    *,
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    claims = _public_statement_causality_claims(speech)
+    if not claims or not isinstance(model_context, dict):
+        return None
+    known_events = model_context.get("known_events")
+    events = known_events.get("events") if isinstance(known_events, dict) else None
+    if not isinstance(events, list):
+        return None
+
+    statements: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("kind") != "player_statement":
+            continue
+        if event.get("visibility") not in (None, "public"):
+            continue
+        speaker_ref = _normalized_seat_ref(event.get("speaker_ref"))
+        known_at_seq = _integer_source_value(event.get("known_at_seq", event.get("record_seq")))
+        source_record_seq = _integer_source_value(event.get("record_seq"))
+        event_ref = _scalar_source_value(event.get("event_ref"))
+        statement = event.get("speech")
+        if (
+            speaker_ref is None
+            or known_at_seq is None
+            or event_ref is None
+            or not isinstance(statement, str)
+        ):
+            continue
+        statements.append(
+            {
+                "speaker_ref": speaker_ref,
+                "known_at_seq": known_at_seq,
+                "source_record_seq": source_record_seq,
+                "event_ref": event_ref,
+                "speech": statement,
+            }
+        )
+
+    signals: list[dict[str, Any]] = []
+    for claim in claims:
+        reaction_ref = claim["reaction_ref"]
+        trigger_speaker_ref = claim["trigger_speaker_ref"]
+        reaction_events = [
+            event
+            for event in statements
+            if event["speaker_ref"] == reaction_ref
+            and _statement_reacts_to(
+                event["speech"],
+                target_ref=trigger_speaker_ref,
+            )
+        ]
+        trigger_events = [
+            event
+            for event in statements
+            if event["speaker_ref"] == trigger_speaker_ref
+            and _statement_reports_check_result(
+                event["speech"],
+                target_ref=reaction_ref,
+            )
+        ]
+        if not reaction_events or not trigger_events:
+            continue
+        earliest_trigger_seq = min(event["known_at_seq"] for event in trigger_events)
+        earliest_trigger_events = [
+            event for event in trigger_events if event["known_at_seq"] == earliest_trigger_seq
+        ]
+        if len(earliest_trigger_events) != 1:
+            continue
+        trigger_event = earliest_trigger_events[0]
+        # A report that already existed before a qualifying response makes the
+        # claimed causality possible; a later repeated report must not replace
+        # that original trigger and create a latest/latest false positive.
+        if any(event["known_at_seq"] >= trigger_event["known_at_seq"] for event in reaction_events):
+            continue
+        if len(reaction_events) != 1:
+            continue
+        reaction_event = reaction_events[0]
+        signal = {
+            "reaction_actor_ref": reaction_ref,
+            "trigger_actor_ref": trigger_speaker_ref,
+            "reaction_event_ref": reaction_event["event_ref"],
+            "trigger_event_ref": trigger_event["event_ref"],
+            "reaction_known_at_seq": reaction_event["known_at_seq"],
+            "trigger_known_at_seq": trigger_event["known_at_seq"],
+            "evidence": "claimed_reaction_precedes_claimed_trigger",
+        }
+        if reaction_event["source_record_seq"] is not None:
+            signal["reaction_source_record_seq"] = reaction_event["source_record_seq"]
+        if trigger_event["source_record_seq"] is not None:
+            signal["trigger_source_record_seq"] = trigger_event["source_record_seq"]
+        signals.append(signal)
+
+    signals = _deduplicate_public_causality_signals(signals)
+    if not signals:
+        return None
+    return {
+        "code": "public_event_causality_contradiction",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "event_chronology",
+        "signals": signals,
+        "effect": "observed_only",
+    }
+
+
+def _public_statement_causality_claims(speech: str) -> list[dict[str, str]]:
+    claims: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for sentence_match in re.finditer(r"[^。！？!?；;]+[。！？!?；;]?", speech):
+        sentence = sentence_match.group(0)
+        if (
+            not sentence.strip()
+            or _PUBLIC_CAUSALITY_REJECTION.search(sentence) is not None
+            or _PUBLIC_CAUSALITY_HYPOTHESIS.search(sentence) is not None
+        ):
+            continue
+        for pattern in _PUBLIC_REACTION_CLAIM_PATTERNS:
+            for match in _overlapping_pattern_matches(pattern, sentence):
+                attribution_prefix = sentence[max(0, match.start() - 40) : match.start()]
+                if _PUBLIC_CAUSALITY_ATTRIBUTION.search(attribution_prefix) is not None:
+                    continue
+                reaction_ref = f"seat_{match.group('reaction')}"
+                trigger_speaker_ref = f"seat_{match.group('trigger')}"
+                if reaction_ref == trigger_speaker_ref:
+                    continue
+                evidence = sentence.strip()
+                identity = (reaction_ref, trigger_speaker_ref, evidence)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                claims.append(
+                    {
+                        "reaction_ref": reaction_ref,
+                        "trigger_speaker_ref": trigger_speaker_ref,
+                        "evidence": evidence,
+                    }
+                )
+    return claims
+
+
+def _overlapping_pattern_matches(
+    pattern: re.Pattern[str],
+    value: str,
+) -> list[re.Match[str]]:
+    return [
+        match for start in range(len(value)) if (match := pattern.match(value, start)) is not None
+    ]
+
+
+def _statement_reports_check_result(speech: str, *, target_ref: str) -> bool:
+    target_number = target_ref.removeprefix("seat_")
+    if re.search(r"(?:验|查验|报验|查杀)", speech) is None:
+        return False
+    patterns = (
+        rf"(?:验|查验)(?:了|过)?\s*{re.escape(target_number)}号"
+        rf"[^。！？!?；;]{{0,16}}(?:查杀|(?:是|为|就是)?狼)",
+        rf"(?:报|给)\s*{re.escape(target_number)}号\s*(?:查杀|(?:是|为)?狼)",
+        rf"(?:报|公布)\s*查杀\s*{re.escape(target_number)}号",
+    )
+    return any(re.search(pattern, speech) is not None for pattern in patterns)
+
+
+def _statement_reacts_to(speech: str, *, target_ref: str) -> bool:
+    target_number = re.escape(target_ref.removeprefix("seat_"))
+    patterns = (
+        rf"(?:回头猛打|猛打|反咬|攻击|咬死|咬|踩|打|回应|反驳|质疑|要出|出|冲)"
+        rf"[^。！？!?；;]{{0,12}}{target_number}号",
+        rf"{target_number}号[^。！？!?；;]{{0,16}}(?:是|为|像)"
+        r"[^。！？!?；;]{0,10}(?:狼|悍跳)",
+    )
+    return any(re.search(pattern, speech) is not None for pattern in patterns)
+
+
+def _deduplicate_public_causality_signals(
+    signals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for signal in signals:
+        identity = (
+            signal.get("reaction_event_ref"),
+            signal.get("trigger_event_ref"),
         )
         if identity in seen:
             continue
@@ -647,11 +899,16 @@ def _observe_response_opportunity(
                     "evidence": accusation["evidence"],
                 }
             )
+        prior_ref_field = (
+            "prior_relevant_event_refs"
+            if _uses_projected_v9_discourse(model_context)
+            else "prior_relevant_statement_refs"
+        )
         prior_refs = list(
             dict.fromkeys(
                 ref
                 for question in target_questions
-                for ref in question.get("prior_relevant_statement_refs", [])
+                for ref in question.get(prior_ref_field, [])
                 if isinstance(ref, str)
             )
         )
@@ -659,7 +916,7 @@ def _observe_response_opportunity(
             prior_explanation_signals.append(
                 {
                     "target_ref": target_ref,
-                    "prior_relevant_statement_refs": prior_refs,
+                    prior_ref_field: prior_refs,
                     "question_refs": question_refs,
                     "evidence": accusation["evidence"],
                 }
@@ -739,6 +996,52 @@ def _silence_accusations(speech: str) -> list[dict[str, str]]:
 def _open_question_contexts(
     model_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    if _uses_projected_v9_discourse(model_context):
+        known_events = model_context["known_events"]
+        events = known_events.get("events")
+        questions = known_events.get("questions")
+        relations = known_events.get("relations")
+        if not isinstance(events, list) or not isinstance(questions, list):
+            return []
+        relations = relations if isinstance(relations, list) else []
+        event_refs = {
+            event["event_ref"]
+            for event in events
+            if isinstance(event, dict) and isinstance(event.get("event_ref"), str)
+        }
+        answered_question_ids = {
+            relation["to_question_id"]
+            for relation in relations
+            if isinstance(relation, dict)
+            and relation.get("type") == "answers_question"
+            and relation.get("temporal_order_valid") is True
+            and isinstance(relation.get("to_question_id"), str)
+            and isinstance(relation.get("from_event_ref"), str)
+            and relation["from_event_ref"] in event_refs
+        }
+        projected_questions: list[dict[str, Any]] = []
+        for question in questions:
+            if (
+                not isinstance(question, dict)
+                or question.get("status") != "open"
+                or not isinstance(question.get("addressed_to"), str)
+                or not isinstance(question.get("question_id"), str)
+                or question["question_id"] in answered_question_ids
+                or not isinstance(question.get("source_event_ref"), str)
+                or question["source_event_ref"] not in event_refs
+            ):
+                continue
+            item = dict(question)
+            prior_refs = item.get("prior_relevant_event_refs")
+            if isinstance(prior_refs, list):
+                item["prior_relevant_event_refs"] = [
+                    ref for ref in prior_refs if isinstance(ref, str) and ref in event_refs
+                ]
+            else:
+                item.pop("prior_relevant_event_refs", None)
+            projected_questions.append(item)
+        return projected_questions
+
     history = model_context.get("history")
     if not isinstance(history, dict):
         return []
@@ -754,6 +1057,11 @@ def _open_question_contexts(
     ]
 
 
+def _uses_projected_v9_discourse(model_context: dict[str, Any]) -> bool:
+    known_events = model_context.get("known_events")
+    return isinstance(known_events, dict) and known_events.get("schema_version") == 3
+
+
 def _deduplicate_signals(
     signals: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -764,6 +1072,7 @@ def _deduplicate_signals(
             signal.get("target_ref"),
             signal.get("reply_opportunity"),
             tuple(signal.get("prior_relevant_statement_refs", [])),
+            tuple(signal.get("prior_relevant_event_refs", [])),
             signal.get("evidence"),
         )
         if identity in seen:

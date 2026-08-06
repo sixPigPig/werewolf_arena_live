@@ -53,9 +53,13 @@ from app.rule_sets.errors import (
 )
 from app.rule_sets.repository import get_rule_set_aggregate, list_published_rule_sets
 from app.rule_sets.service import resolve_published_rule_set
+from app.rule_sets.static_catalog import (
+    STATIC_RULE_REVISIONS,
+    resolve_static_rule_set as _shared_resolve_static_rule_set,
+    static_compiled_rule_set_entries,
+)
 from app.rule_sets.snapshots import (
     public_rule_set_catalog_snapshot,
-    resolve_rule_set_snapshot,
 )
 from app.rule_sets.types import CompiledRuleSet
 from app.rule_sets.telemetry import (
@@ -127,13 +131,7 @@ from app.werewolf.replay_playback import (
     private_round_memory_event_ids,
     project_playback_events,
 )
-from app.werewolf.rules import (
-    DEFAULT_RULE_SET_ID,
-    OFFICIAL_RULE_SETS,
-    freeze_rule_set_snapshot,
-    role_summary,
-    rule_set_snapshot,
-)
+from app.werewolf.rules import DEFAULT_RULE_SET_ID, role_summary
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.runner import GameRunError, new_session_id, resume_game, run_game
 from app.werewolf.voice import VoiceUtterance
@@ -153,30 +151,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 RecoverableDatabaseError = (OperationalError, ProgrammingError)
 PLAYER_PROFILE_DATABASE_UNAVAILABLE = "Player profile database unavailable"
-
-_STATIC_RULE_REVISIONS = {
-    "classic_8": (
-        "e9fa678e-9b18-5079-91d2-f74835364fb6",
-        "104d9818faac73536d50d57ca93eb623ca2dc044a4e334c6b72fcdbb0c2f5cef",
-        True,
-    ),
-    "starter_6": (
-        "b607e17e-b86f-5eb0-9dc2-b8df09aa71ab",
-        "d0e67f0238dbb448afa86fd1b5b02ba303861572962b3054d8a3ea0ad913700f",
-        False,
-    ),
-    "social_8": (
-        "2b4a993f-e4e6-5312-b11d-92874851a70a",
-        "25c6780c9e94df7729becf64a01a65e879236ae43c7efb0de03ac87312d1a21b",
-        False,
-    ),
-    "classic_12_seer_witch_hunter_idiot": (
-        "0489f6ac-16fd-5323-96ce-ee256c98cf32",
-        "b81db40986fb3be46e377d68dc3870a0137fe78779c5f0997a5eeeb42a5e396a",
-        False,
-    ),
-}
-
+_STATIC_RULE_REVISIONS = STATIC_RULE_REVISIONS
 
 class CreatePlayerConfigRequest(BaseModel):
     seat: int = Field(ge=1)
@@ -863,36 +838,18 @@ def list_games(store: Annotated[GameRecordStore, Depends(get_replay_store)]) -> 
 
 
 def _catalog_item(snapshot: dict[str, object]) -> PublicRuleSetCatalogItem:
-    return PublicRuleSetCatalogItem.model_validate(
-        {field_name: snapshot[field_name] for field_name in PublicRuleSetCatalogItem.model_fields}
-    )
+    payload = {
+        field_name: snapshot[field_name]
+        for field_name in PublicRuleSetCatalogItem.model_fields
+        if field_name in snapshot
+    }
+    payload["werewolf_attack_policy"] = snapshot.get("werewolf_attack_policy")
+    return PublicRuleSetCatalogItem.model_validate(payload)
 
 
 def _static_rule_set_entries() -> list[tuple[CompiledRuleSet, PublicRuleSetCatalogItem]]:
     entries: list[tuple[CompiledRuleSet, PublicRuleSetCatalogItem]] = []
-    for rule_set in OFFICIAL_RULE_SETS:
-        revision_id, content_hash, is_default = _STATIC_RULE_REVISIONS[rule_set.id]
-        snapshot: dict[str, object] = rule_set_snapshot(rule_set)
-        snapshot.update(
-            {
-                "version": "1",
-                "revision_id": revision_id,
-                "revision_no": 1,
-                "schema_version": 1,
-                "content_hash": content_hash,
-            }
-        )
-        legacy_compiled = resolve_rule_set_snapshot(snapshot)
-        frozen_snapshot = freeze_rule_set_snapshot(legacy_compiled.rule_set)
-        frozen_snapshot.update(
-            {
-                "revision_id": revision_id,
-                "revision_no": 1,
-                "schema_version": 1,
-                "content_hash": content_hash,
-            }
-        )
-        compiled = resolve_rule_set_snapshot(frozen_snapshot)
+    for compiled, is_default in static_compiled_rule_set_entries():
         catalog_snapshot: dict[str, object] = dict(compiled.snapshot)
         catalog_snapshot.update(
             {
@@ -935,24 +892,10 @@ def _resolve_static_rule_set(
     *,
     expected_revision_id: str | None,
 ) -> CompiledRuleSet:
-    entry = next(
-        (
-            (compiled, item)
-            for compiled, item in _static_rule_set_entries()
-            if item.id == rule_set_id
-        ),
-        None,
+    return _shared_resolve_static_rule_set(
+        rule_set_id,
+        expected_revision_id=expected_revision_id,
     )
-    if entry is None:
-        raise RuleSetNotFound(rule_set_id)
-    compiled, item = entry
-    if expected_revision_id is not None and item.revision_id != expected_revision_id:
-        raise RuleRevisionChanged(
-            rule_set_id,
-            expected_revision_id=expected_revision_id,
-            current_revision_id=item.revision_id,
-        )
-    return compiled
 
 
 def _resolve_selected_rule_set(
@@ -1859,9 +1802,7 @@ def _map_playback_voices_to_timeline(
         and isinstance(event.get("source_event_id"), int)
         and isinstance(event.get("id"), int)
     }
-    source_to_timeline = {
-        key: event["id"] for key, event in source_events.items()
-    }
+    source_to_timeline = {key: event["id"] for key, event in source_events.items()}
     mapped: list[dict[str, Any]] = []
     for voice in voices:
         run_id = voice.get("run_id")
@@ -1884,11 +1825,7 @@ def _map_playback_voices_to_timeline(
             last_timeline_id = max(candidates, default=first_timeline_id)
         source_event = source_events.get((run_id, first_source_id), {})
         source_payload = source_event.get("payload")
-        request_id = (
-            source_payload.get("request_id")
-            if isinstance(source_payload, dict)
-            else None
-        )
+        request_id = source_payload.get("request_id") if isinstance(source_payload, dict) else None
         if voice.get("speaker_kind") == "player" and isinstance(request_id, str):
             request_timeline_ids = [
                 event["id"]
@@ -2011,9 +1948,7 @@ def _run_game_in_background(
                 session_id=session_id,
                 event_sink=EventSink(registry, run_id, fence_token=fence_token),
                 player_configs=player_configs,
-                liveness_experience_snapshot=copy.deepcopy(
-                    live_run.liveness_experience_snapshot
-                ),
+                liveness_experience_snapshot=copy.deepcopy(live_run.liveness_experience_snapshot),
             )
     except GameRunCanceled:
         registry.mark_canceled(run_id)

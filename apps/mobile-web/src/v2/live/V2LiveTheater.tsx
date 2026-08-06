@@ -24,7 +24,13 @@ import type {
   V2MatchState,
   V2Presentation,
   V2PublicPlayerSeat,
+  V2RuntimeProjection,
 } from "../contracts";
+import {
+  awaitingObservationLabel,
+  effectiveMatchStatus,
+  effectiveWinner,
+} from "../runtime";
 
 export type V2ConnectionState = "idle" | "connecting" | "connected" | "failed";
 export type V2ViewingMode = "director" | "challenge";
@@ -40,6 +46,7 @@ type V2LiveTheaterProps = {
   gamePhase: V2GamePhase | null;
   liveState: V2LiveState | null;
   matchState: V2MatchState | null;
+  runtimeProjection: V2RuntimeProjection | null;
   onEnter: () => void;
   onViewingModeChange: (mode: V2ViewingMode) => void;
   presentation: V2Presentation | null;
@@ -63,6 +70,7 @@ export function V2LiveTheater({
   gamePhase,
   liveState,
   matchState,
+  runtimeProjection,
   onEnter,
   onViewingModeChange,
   presentation,
@@ -72,7 +80,13 @@ export function V2LiveTheater({
   ruleName,
   viewingMode,
 }: V2LiveTheaterProps) {
-  const tone = stageTone(gamePhase, liveState, error);
+  const tone = stageTone(
+    gamePhase,
+    liveState,
+    matchState,
+    runtimeProjection,
+    error,
+  );
   const activePlayer =
     presentation?.actor.kind === "player"
       ? publicPlayers.find((player) => player.player_id === presentation.actor.id) ?? null
@@ -83,8 +97,20 @@ export function V2LiveTheater({
       : activePlayer?.display_name ?? presentation.actor.id
     : null;
   const { left, right } = splitPlayers(publicPlayers);
-  const terminal = terminalPresentation(liveState, matchState, error);
-  const stageState = connectionLabel(connectionState, liveState);
+  const terminal = terminalPresentation(
+    liveState,
+    gamePhase,
+    matchState,
+    runtimeProjection,
+    error,
+  );
+  const stageState = connectionLabel(
+    connectionState,
+    liveState,
+    gamePhase,
+    matchState,
+    runtimeProjection,
+  );
   const activeIdentity =
     activePlayer === null
       ? null
@@ -181,6 +207,7 @@ export function V2LiveTheater({
             viewingMode === "director" ? activeIdentity?.role ?? null : null
           }
           audioActive={audioActive}
+          audioMode={runtimeProjection?.audio_mode ?? "legacy_unknown"}
           presentation={presentation}
           processLabel={processLabel}
         />
@@ -188,12 +215,24 @@ export function V2LiveTheater({
         {connectionState === "idle" && !terminal ? (
           <div className="mobile-v2-stage-entry">
             <strong>演出正在此刻发生</strong>
-            <p>选择你的观赛规则。入场后只接收当前与未来，不会补播。</p>
+            <p>
+              选择你的观赛规则。入场后只接收当前与未来，不会补播。
+              {runtimeProjection?.audio_mode === "text_only"
+                ? " 本局为纯文本模式，无需音频权限。"
+                : runtimeProjection?.audio_mode === "legacy_unknown"
+                  ? " 旧记录音频模式未知，将仅接收字幕。"
+                : ""}
+            </p>
             <ViewingModePicker
               onChange={onViewingModeChange}
               value={viewingMode}
             />
-            <button className="mobile-v2-stage-button" onClick={onEnter} type="button">
+            <button
+              className="mobile-v2-stage-button"
+              disabled={runtimeProjection === null}
+              onClick={onEnter}
+              type="button"
+            >
               以{viewingMode === "director" ? "导演全知" : "推理挑战"}入场
             </button>
           </div>
@@ -203,7 +242,13 @@ export function V2LiveTheater({
           <div className="mobile-v2-stage-connecting" role="status">
             <Radio aria-hidden="true" />
             <strong>正在接入这一刻</strong>
-            <span>声音解锁后，字幕与 PCM 将从当前 presentation 开始。</span>
+            <span>
+              {runtimeProjection?.audio_mode === "tts"
+                ? "声音解锁后，字幕与 PCM 将从当前 presentation 开始。"
+                : runtimeProjection?.audio_mode === "text_only"
+                  ? "本局为纯文本模式，将从当前 presentation 接收字幕。"
+                  : "旧记录音频模式未知，将仅从当前 presentation 接收字幕。"}
+            </span>
           </div>
         ) : null}
 
@@ -296,6 +341,7 @@ type StageSubtitleProps = {
   actorName: string | null;
   actorRole: string | null;
   audioActive: boolean;
+  audioMode: V2RuntimeProjection["audio_mode"];
   presentation: V2Presentation | null;
   processLabel: string;
 };
@@ -304,6 +350,7 @@ function StageSubtitle({
   actorName,
   actorRole,
   audioActive,
+  audioMode,
   presentation,
   processLabel,
 }: StageSubtitleProps) {
@@ -316,7 +363,17 @@ function StageSubtitle({
         </strong>
         <span className={audioActive ? "is-active" : undefined}>
           <Volume2 aria-hidden="true" />
-          {audioActive ? "正在播放" : presentation ? "等待声音" : "候场"}
+          {audioMode === "tts"
+            ? audioActive
+              ? "正在播放"
+              : presentation
+                ? "等待声音"
+                : "候场"
+            : audioMode === "text_only"
+              ? presentation
+                ? "纯文本播出"
+                : "纯文本模式"
+              : "音频模式未知"}
         </span>
       </div>
       <blockquote>
@@ -518,8 +575,15 @@ function phaseGroup(
 function stageTone(
   phase: V2GamePhase | null,
   liveState: V2LiveState | null,
+  matchState: V2MatchState | null,
+  runtime: V2RuntimeProjection | null,
   error: string | null,
 ): StageTone {
+  if (
+    effectiveMatchStatus(runtime, phase, matchState, liveState) === "completed"
+  ) {
+    return "terminal";
+  }
   if (
     error ||
     liveState === "canceled" ||
@@ -559,9 +623,16 @@ function phaseTitle(
 function connectionLabel(
   connectionState: V2ConnectionState,
   liveState: V2LiveState | null,
+  phase: V2GamePhase | null,
+  matchState: V2MatchState | null,
+  runtime: V2RuntimeProjection | null,
 ): string {
+  const matchStatus = effectiveMatchStatus(runtime, phase, matchState, liveState);
+  if (matchStatus === "completed") return "对局已完成";
   if (liveState === "canceled") return "运营已中断";
-  if (liveState === "awaiting_observation") return "已停播";
+  if (liveState === "awaiting_observation") {
+    return awaitingObservationLabel(runtime);
+  }
   if (liveState === "paused_model_error") return "等待运营恢复";
   if (liveState === "failed") return "演出异常";
   if (connectionState === "idle") return "未入场";
@@ -577,9 +648,20 @@ function connectionLabel(
 
 function terminalPresentation(
   liveState: V2LiveState | null,
+  phase: V2GamePhase | null,
   matchState: V2MatchState | null,
+  runtime: V2RuntimeProjection | null,
   error: string | null,
 ): { kind: "complete" | "paused" | "interrupted" | "failed"; title: string; description: string } | null {
+  const matchStatus = effectiveMatchStatus(runtime, phase, matchState, liveState);
+  const winner = effectiveWinner(runtime, matchState);
+  if (matchStatus === "completed" && winner) {
+    return {
+      kind: "complete",
+      title: winner === "villagers" ? "好人阵营获胜" : "狼人阵营获胜",
+      description: "胜负已经权威结算，本局实时舞台正式落幕。",
+    };
+  }
   if (liveState === "canceled") {
     return {
       kind: "interrupted",
@@ -616,16 +698,12 @@ function terminalPresentation(
     };
   }
   if (liveState !== "awaiting_observation") return null;
-  if (matchState?.winner) {
-    return {
-      kind: "complete",
-      title: matchState.winner === "villagers" ? "好人阵营获胜" : "狼人阵营获胜",
-      description: "胜负已经结算，本局实时舞台正式落幕。",
-    };
-  }
   return {
     kind: "paused",
-    title: "直播已停在当前时刻",
-    description: "已播语音已经保存；这里不会补播已经结束的片段。",
+    title: awaitingObservationLabel(runtime),
+    description:
+      runtime?.execution_state === "owned"
+        ? "比赛尚未形成权威胜负，执行器仍在等待观察或播放确认。"
+        : "比赛尚未形成权威胜负；已播内容已经保存，这里不会补播。",
   };
 }

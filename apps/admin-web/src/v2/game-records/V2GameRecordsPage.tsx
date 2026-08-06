@@ -41,11 +41,21 @@ export default function V2GameRecordsPage() {
       key: "status",
       render: (_, game) => (
         <Flex gap={2} vertical>
-          <Tag color="processing">{game.status}</Tag>
+          <Tag color={matchStatusColor(game.match_status)}>
+            {matchResultLabel(game.match_status, game.winner)}
+          </Tag>
+          <Typography.Text type="secondary">
+            实时流：{game.status} · 执行器：{executionStateLabel(game.execution_state)}
+          </Typography.Text>
           <Typography.Text type="secondary">{game.current_run_id}</Typography.Text>
         </Flex>
       ),
-      title: "状态 / 运行",
+      title: "比赛 / 实时流 / 执行器",
+    },
+    {
+      key: "audio",
+      render: (_, game) => <Tag>{audioModeLabel(game.audio_mode)}</Tag>,
+      title: "音频",
     },
     {
       key: "sequence",
@@ -102,7 +112,7 @@ export default function V2GameRecordsPage() {
             }}
             pagination={false}
             rowKey="game_id"
-            scroll={{ x: 820 }}
+            scroll={{ x: 980 }}
           />
         </Card>
       )}
@@ -126,4 +136,42 @@ function formatDate(input: string) {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(input));
+}
+
+function matchResultLabel(status: string, winner: string | null) {
+  if (status === "completed") {
+    if (winner === "villagers") return "已完成 · 好人胜利";
+    if (winner === "werewolves") return "已完成 · 狼人胜利";
+    return "终局证据不完整";
+  }
+  return {
+    waiting: "等待开始",
+    running: "进行中",
+    failed: "比赛失败",
+    canceled: "比赛已中止",
+  }[status] ?? status;
+}
+
+function matchStatusColor(status: string) {
+  if (status === "completed") return "success";
+  if (status === "running") return "processing";
+  if (status === "failed" || status === "canceled") return "error";
+  return "default";
+}
+
+function executionStateLabel(state: string) {
+  return {
+    unowned: "未持有",
+    owned: "执行中",
+    stale: "失联",
+    stopped: "已停止",
+  }[state] ?? state;
+}
+
+function audioModeLabel(mode: string) {
+  return {
+    tts: "语音播报",
+    text_only: "纯文本",
+    legacy_unknown: "旧记录未知",
+  }[mode] ?? mode;
 }

@@ -10,6 +10,12 @@ from app.v2.first_night_engine import (
     _resolve_werewolf_attack,
 )
 from app.v2.model_client import V2ModelDecision
+from app.v2.model_context import (
+    V2ModelPlayerReference,
+    build_public_rule_contract,
+    project_model_action_context,
+)
+from app.v2.model_context_contract import v9_model_context_contract
 from app.v2.night_repository import (
     V2ActivationRef,
     V2NightPlayer,
@@ -82,6 +88,122 @@ def _state(
         sheriff_badge_state="unassigned",
         players=players,
     )
+
+
+def _v9_werewolf_attack_ability(
+    policy: dict[str, Any],
+    *,
+    living_teammates: list[str] | None = None,
+) -> dict[str, Any]:
+    teammate_ids = living_teammates if living_teammates is not None else ["wolf-2"]
+    players = (
+        V2ModelPlayerReference("wolf-1", 1, "1号"),
+        V2ModelPlayerReference("wolf-2", 2, "2号"),
+        V2ModelPlayerReference("good-3", 3, "3号"),
+        V2ModelPlayerReference("good-4", 4, "4号"),
+    )
+    rule_contract = build_public_rule_contract(
+        rule={
+            "id": "wolf-policy-v9",
+            "version": "1",
+            "player_count": 4,
+            "roles": [
+                {"role": "狼人", "count": 2, "team": "werewolves"},
+                {"role": "村民", "count": 2, "team": "villagers"},
+            ],
+            "ability_policies": {"werewolf_attack": policy},
+        },
+        max_rounds=8,
+    )
+    projected = project_model_action_context(
+        {
+            "round_no": 2,
+            "night_no": 2,
+            "action_type": "ability_werewolf.attack_decision",
+            "ability_id": "werewolf.attack",
+            "self_identity": {
+                "player_id": "wolf-1",
+                "seat": 1,
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+            "private_authoritative_facts": [
+                {
+                    "fact_type": "living_werewolf_teammates",
+                    "payload": teammate_ids,
+                }
+            ],
+            "public_match_state": {
+                "round_no": 2,
+                "alive_player_ids": ["wolf-1", *teammate_ids, "good-3", "good-4"],
+            },
+            "public_rule_contract": rule_contract,
+            "public_history": [],
+            "output_contract": {
+                "kind": "target",
+                "target_policy": {"mode": "optional" if policy["allow_no_attack"] else "required"},
+                "speech": {"mode": "forbidden"},
+            },
+        },
+        players=players,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=50,
+    )
+    return projected["rules"]["current_ability"]
+
+
+def test_v9_derives_unambiguous_semantics_for_all_werewolf_attack_strategies() -> None:
+    expected = {
+        "unanimous_no_attack": {
+            "strategy": "unanimity_required",
+            "on_disagreement": "no_attack",
+        },
+        "plurality_rotating_tiebreak": {
+            "strategy": "plurality",
+            "on_unique_highest": "unique_highest",
+            "on_tie": "explicit_rotating_werewolf_decision",
+        },
+        "plurality_seeded_random": {
+            "strategy": "plurality",
+            "on_unique_highest": "unique_highest",
+            "on_tie": "deterministic_seeded_choice",
+        },
+    }
+    for resolution, team_resolution in expected.items():
+        ability = _v9_werewolf_attack_ability(
+            {
+                "resolution": resolution,
+                "allow_no_attack": False,
+                "allow_wolf_target": False,
+            }
+        )
+        assert ability["team_resolution"] == team_resolution
+        assert ability["individual_ballot"] == {
+            "target_mode": "required",
+            "allow_no_attack": False,
+            "allow_wolf_target": False,
+        }
+
+
+def test_v9_werewolf_attack_single_living_actor_and_optional_ballot_are_explicit() -> None:
+    ability = _v9_werewolf_attack_ability(
+        {
+            "resolution": "plurality_seeded_random",
+            "allow_no_attack": True,
+            "allow_wolf_target": True,
+        },
+        living_teammates=[],
+    )
+
+    assert ability["team_resolution"] == {
+        "strategy": "single_actor_direct",
+        "on_tie": "not_applicable",
+    }
+    assert ability["individual_ballot"] == {
+        "target_mode": "optional",
+        "allow_no_attack": True,
+        "allow_wolf_target": True,
+    }
 
 
 def test_second_round_receives_first_round_and_prior_second_round_speech() -> None:
@@ -465,6 +587,7 @@ class _FakeRepository:
         ability_id: str,
         actor_player_id: str,
         occurrence: int,
+        audience: str,
     ) -> V2ActivationRef:
         self._occurrence = occurrence
         return V2ActivationRef(
@@ -473,6 +596,7 @@ class _FakeRepository:
             ability_id=ability_id,
             actor_player_id=actor_player_id,
             occurrence=occurrence,
+            audience=audience,
         )
 
     def register_activation_knowledge(

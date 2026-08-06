@@ -60,6 +60,22 @@ def test_normalization_accepts_exact_werewolf_attack_policy() -> None:
     assert config.werewolf_allow_wolf_target is False
 
 
+def test_unanimous_no_attack_with_required_individual_ballots_is_legal() -> None:
+    config = normalize_rule_set_config(
+        valid_config(
+            werewolf_attack_policy={
+                "resolution": "unanimous_no_attack",
+                "allow_no_attack": False,
+                "allow_wolf_target": False,
+            }
+        )
+    )
+
+    result = validate_rule_set_config(config)
+    assert result.valid is True
+    assert result.errors == ()
+
+
 @pytest.mark.parametrize(
     ("changes", "code", "path"),
     [

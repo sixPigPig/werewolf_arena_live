@@ -20,8 +20,15 @@ import {
   type V2PublicPlayerSeat,
   type V2PublicRoleAssignmentStatus,
   type V2PublicRuleSnapshot,
+  type V2RuntimeProjection,
 } from "../contracts";
 import { V2PcmPlayer } from "../V2PcmPlayer";
+import {
+  awaitingObservationLabel,
+  effectiveMatchStatus,
+  effectiveWinner,
+  runtimeFromSnapshot,
+} from "../runtime";
 import {
   V2LiveTheater,
   type V2ConnectionState,
@@ -49,6 +56,8 @@ export function LiveV2Page() {
   const [liveState, setLiveState] = useState<V2LiveState | null>(null);
   const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
   const [matchState, setMatchState] = useState<V2MatchState | null>(null);
+  const [runtimeProjection, setRuntimeProjection] =
+    useState<V2RuntimeProjection | null>(null);
   const [presentation, setPresentation] = useState<V2Presentation | null>(null);
   const [viewingMode, setViewingMode] = useState<V2ViewingMode>("director");
   const [publicPlayers, setPublicPlayers] = useState<V2PublicPlayerSeat[]>([]);
@@ -84,6 +93,7 @@ export function LiveV2Page() {
         setGamePhase(snapshot.game_phase);
         setMatchState(snapshot.match_state);
         setLiveState(snapshot.live_state);
+        setRuntimeProjection(runtimeFromSnapshot(snapshot));
         setRosterState("ready");
       })
       .catch((reason) => {
@@ -155,8 +165,9 @@ export function LiveV2Page() {
     setDirectorResolution(null);
     try {
       const enteredMode = viewingMode;
-      const player = new V2PcmPlayer();
-      await player.unlock();
+      const audioEnabled = runtimeProjection?.audio_mode === "tts";
+      const player = audioEnabled ? new V2PcmPlayer() : null;
+      if (player) await player.unlock();
       playerRef.current = player;
       const socket = new WebSocket(
         enteredMode === "director"
@@ -178,6 +189,7 @@ export function LiveV2Page() {
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
               setMatchState(message.match_state);
+              setRuntimeProjection(runtimeFromSnapshot(message));
               setPublicRule(message.rule);
               setDirectorPlayers(message.players);
               setPublicPlayers(message.players.map(toPublicPlayer));
@@ -193,7 +205,7 @@ export function LiveV2Page() {
                 presentationRef.current = null;
                 setPresentation(null);
                 setAudioActive(false);
-                player.stop();
+                player?.stop();
                 socket.close();
                 return;
               }
@@ -203,18 +215,22 @@ export function LiveV2Page() {
               presentationRef.current = currentPresentation;
               setPresentation(currentPresentation);
               if (currentPresentation) {
-                player.begin(currentPresentation);
+                player?.begin(currentPresentation);
               }
               if (!readySent) {
                 socket.send(
                   JSON.stringify({
                     protocol_version: 1,
                     type: "director.ready",
-                    audio: {
-                      encoding: "pcm_s16le",
-                      sample_rate: 24000,
-                      channels: 1,
-                    },
+                    ...(audioEnabled
+                      ? {
+                          audio: {
+                            encoding: "pcm_s16le",
+                            sample_rate: 24000,
+                            channels: 1,
+                          },
+                        }
+                      : {}),
                   }),
                 );
                 readySent = true;
@@ -234,6 +250,7 @@ export function LiveV2Page() {
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
               setMatchState(message.match_state);
+              setRuntimeProjection(runtimeFromSnapshot(message));
               setPublicRule(message.public_rule);
               setPublicPlayers(message.public_players);
               setRoleAssignment(message.public_role_assignment);
@@ -246,7 +263,7 @@ export function LiveV2Page() {
                 presentationRef.current = null;
                 setPresentation(null);
                 setAudioActive(false);
-                player.stop();
+                player?.stop();
                 socket.close();
                 return;
               }
@@ -256,18 +273,22 @@ export function LiveV2Page() {
               presentationRef.current = currentPresentation;
               setPresentation(currentPresentation);
               if (currentPresentation) {
-                player.begin(currentPresentation);
+                player?.begin(currentPresentation);
               }
               if (!readySent) {
                 socket.send(
                   JSON.stringify({
                     protocol_version: 1,
                     type: "client.ready",
-                    audio: {
-                      encoding: "pcm_s16le",
-                      sample_rate: 24000,
-                      channels: 1,
-                    },
+                    ...(audioEnabled
+                      ? {
+                          audio: {
+                            encoding: "pcm_s16le",
+                            sample_rate: 24000,
+                            channels: 1,
+                          },
+                        }
+                      : {}),
                   }),
                 );
                 readySent = true;
@@ -299,14 +320,26 @@ export function LiveV2Page() {
                 presentationRef.current = null;
                 setPresentation(null);
                 setAudioActive(false);
-                player.stop();
+                player?.stop();
+                setRuntimeProjection((current) =>
+                  current
+                    ? { ...current, match_status: "canceled", execution_state: "stopped" }
+                    : current,
+                );
                 socket.close();
                 return;
               }
               if (message.live_state === "failed") {
                 terminalRef.current = true;
                 setAudioActive(false);
-                player.stop();
+                player?.stop();
+                setRuntimeProjection((current) =>
+                  current?.match_status === "completed"
+                    ? current
+                    : current
+                      ? { ...current, match_status: "failed", execution_state: "stopped" }
+                      : current,
+                );
                 setError(message.reason ?? "V2 实时动作失败");
               }
               if (message.live_state === "awaiting_observation") {
@@ -338,6 +371,14 @@ export function LiveV2Page() {
                 sheriff_badge_state: message.sheriff_badge_state,
                 winner: message.winner,
               });
+              setRuntimeProjection((current) =>
+                current
+                  ? {
+                      ...current,
+                      winner: message.winner,
+                    }
+                  : current,
+              );
               return;
             }
             if (message.type === "player.state_changed") {
@@ -390,7 +431,7 @@ export function LiveV2Page() {
               presentationRef.current = current;
               setPresentation(current);
               setAudioActive(false);
-              player.begin(current);
+              player?.begin(current);
               return;
             }
             if (message.type === "speech.segment_committed") {
@@ -415,7 +456,7 @@ export function LiveV2Page() {
             if (message.type === "presentation.failed") {
               terminalRef.current = true;
               setAudioActive(false);
-              player.stop();
+              player?.stop();
               setLiveState("failed");
               setError(`${message.failure_kind}: ${message.failure_code}`);
               return;
@@ -425,10 +466,12 @@ export function LiveV2Page() {
                 presentationRef.current?.presentation_id ===
                 message.presentation_id
               ) {
-                presentationRef.current = null;
-                setPresentation(null);
                 setAudioActive(false);
-                player.stop();
+                player?.stop();
+                presentationRef.current = null;
+                if (audioEnabled) {
+                  setPresentation(null);
+                }
               }
               return;
             }
@@ -436,12 +479,15 @@ export function LiveV2Page() {
           if (!(event.data instanceof ArrayBuffer)) {
             throw new Error("V2 收到未知二进制类型");
           }
+          if (!player) {
+            throw new Error("未确认启用语音的对局收到意外音频帧");
+          }
           player.push(decodeV2AudioFrame(event.data));
           showAudioPulse();
         } catch (reason) {
           terminalRef.current = true;
           setAudioActive(false);
-          player.stop();
+          player?.stop();
           setLiveState("failed");
           setConnectionState("failed");
           setError(reason instanceof Error ? reason.message : "V2 实时协议错误");
@@ -469,10 +515,12 @@ export function LiveV2Page() {
     connectionState,
     liveState,
     gamePhase,
+    matchState,
     nightProgress,
     dayProgress,
     viewingMode,
     directorScene,
+    runtimeProjection,
   );
 
   return (
@@ -494,6 +542,7 @@ export function LiveV2Page() {
         gamePhase={gamePhase}
         liveState={liveState}
         matchState={matchState}
+        runtimeProjection={runtimeProjection}
         directorAbility={directorAbility}
         directorPlayers={directorPlayers}
         directorResolution={directorResolution}
@@ -606,22 +655,38 @@ function liveProcessLabel(
   connectionState: V2ConnectionState,
   liveState: V2LiveState | null,
   phase: V2GamePhase | null,
+  match: V2MatchState | null,
   nightProgress: NightProgress,
   dayProgress: string | null,
   viewingMode: V2ViewingMode,
   directorScene: V2DirectorScene | null,
+  runtime: V2RuntimeProjection | null,
 ): string {
+  const matchStatus = effectiveMatchStatus(runtime, phase, match, liveState);
+  const winner = effectiveWinner(runtime, match);
+  const audioEnabled = runtime?.audio_mode === "tts";
+  if (matchStatus === "completed" && winner) {
+    return winner === "villagers" ? "好人阵营获胜，对局已完成" : "狼人阵营获胜，对局已完成";
+  }
   if (liveState === "canceled") return "本局已由运营中断";
   if (liveState === "failed") return "实时演出已停止";
-  if (liveState === "awaiting_observation") return "本局实时流程已经停播";
+  if (liveState === "awaiting_observation") {
+    return awaitingObservationLabel(runtime);
+  }
   if (liveState === "paused_model_error") {
     return "模型服务暂时异常，当前动作已安全冻结";
   }
   if (connectionState === "idle") return "舞台已就位，等待观众入场";
   if (connectionState === "connecting") return "正在连接当前实时进度";
   if (liveState === "waiting_to_start") return "玩家与规则已冻结，等待开幕";
-  if (liveState === "finalizing") return "本句播完，正在保存同源语音";
-  if (liveState === "broadcasting") return "字幕与 PCM 正在同步播出";
+  if (liveState === "finalizing") {
+    return audioEnabled
+      ? "本句播完，正在保存同源语音"
+      : "字幕展示完成，正在保存实时记录";
+  }
+  if (liveState === "broadcasting") {
+    return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
+  }
   if (liveState === "generating") {
     if (isNightPhase(phase) && viewingMode === "director") {
       return `${directorSceneTitle(directorScene)}正在实时生成`;
@@ -635,7 +700,11 @@ function liveProcessLabel(
   }
   if (isNightPhase(phase)) return nightProgressLabel(nightProgress);
   if (isDayPhase(phase)) return dayProgressLabel(dayProgress);
-  return "声音已解锁，等待下一幕";
+  if (audioEnabled) return "声音已解锁，等待下一幕";
+  if (runtime?.audio_mode === "legacy_unknown") {
+    return "旧记录音频模式未知，仅接收实时字幕";
+  }
+  return "纯文本通道已就绪，等待下一幕";
 }
 
 function directorSceneTitle(scene: V2DirectorScene | null): string {

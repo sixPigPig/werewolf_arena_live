@@ -9,7 +9,11 @@ from app.v2.first_night_engine import V2NightEngine
 from app.v2.match_repository import V2MatchRepository
 from app.v2.night_repository import V2NightRepository
 from app.v2.protocol import game_phase_changed, live_state
-from app.v2.repository import V2ActionRepository, V2RepositoryError
+from app.v2.repository import (
+    V2ActionRepository,
+    V2ExecutionOwnershipLost,
+    V2RepositoryError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,8 @@ class V2LiveFlowEngine:
     ) -> None:
         try:
             opening_state = self._match_repository.snapshot(game_id)
+        except V2ExecutionOwnershipLost:
+            raise
         except V2RepositoryError:
             opening_setup = None
         else:
@@ -85,6 +91,8 @@ class V2LiveFlowEngine:
         self._action_repository.check_cancellation(game_id)
         try:
             transition = self._action_repository.transition_to_first_night(game_id=game_id)
+        except V2ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             logger.warning(
                 "Live V2 phase transition failed",

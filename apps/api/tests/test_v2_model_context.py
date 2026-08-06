@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from types import SimpleNamespace
 
+from app.v2.day_engine import V2DayEngine, speech_order_from_start
 from app.v2.model_context import (
     V2ModelPlayerReference,
     build_actor_information,
@@ -19,6 +22,9 @@ from app.v2.model_context_contract import (
     legacy_v7_model_context_contract,
     legacy_v8_prompt_v1_model_context_contract,
     legacy_v8_prompt_v2_model_context_contract,
+    legacy_v8_prompt_v3_model_context_contract,
+    supports_model_context_contract,
+    v9_model_context_contract,
 )
 
 
@@ -130,8 +136,8 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "沈砚" not in serialized
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
-    assert projected["model_context_schema_version"] == 8
-    assert projected["prompt_template_version"] == 3
+    assert projected["model_context_schema_version"] == 9
+    assert projected["prompt_template_version"] == 1
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
@@ -188,15 +194,17 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert public_events[1]["event_ref"] == "history_2"
     assert public_events[2]["public_reason"] == "exile"
     assert public_events[2]["role_revealed"] is False
-    assert projected["known_events"]["schema_version"] == 2
+    assert projected["known_events"]["schema_version"] == 3
+    assert projected["known_events"]["questions"] == []
+    assert projected["known_events"]["relations"] == []
     assert "history" not in projected
     assert "public_timeline" not in projected
     assert "source_rules" not in serialized
     assert "annotations" not in serialized
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] is None
-    assert metadata["model_context_schema_version"] == 8
-    assert metadata["prompt_template_version"] == 3
+    assert metadata["model_context_schema_version"] == 9
+    assert metadata["prompt_template_version"] == 1
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
@@ -573,6 +581,7 @@ def test_v8_prompt_separates_event_occurrence_from_delayed_announcement() -> Non
     projected = project_model_action_context(
         action_context,
         players=PLAYERS,
+        model_context_contract=legacy_v8_prompt_v3_model_context_contract(),
         action_record_seq=639,
     )
 
@@ -677,6 +686,623 @@ def test_legacy_v8_known_events_v1_keeps_player_statement_authority() -> None:
     assert projected["prompt_template_version"] == 2
     assert projected["known_events"]["schema_version"] == 1
     assert projected["known_events"]["events"][0]["authority"] == "player_statement"
+
+
+def test_legacy_v8_prompt_v3_contract_keeps_frozen_request_shape() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+            "private_authoritative_facts": [
+                {
+                    "fact_type": "living_werewolf_teammates",
+                    "payload": ["system-player-09"],
+                }
+            ],
+            "public_history": [],
+            "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        players=PLAYERS,
+        model_context_contract=legacy_v8_prompt_v3_model_context_contract(),
+        action_record_seq=10,
+    )
+
+    assert projected["model_context_schema_version"] == 8
+    assert projected["prompt_template_version"] == 3
+    assert projected["known_events"]["schema_version"] == 2
+    assert set(projected["known_events"]) == {"schema_version", "events"}
+    assert projected["self"]["werewolf_coordination"] == {
+        "mode": "team",
+        "living_teammate_refs": [],
+    }
+
+
+def test_supported_model_context_contract_set_includes_all_frozen_readers() -> None:
+    for contract in (
+        legacy_v7_model_context_contract(),
+        legacy_v8_prompt_v1_model_context_contract(),
+        legacy_v8_prompt_v2_model_context_contract(),
+        legacy_v8_prompt_v3_model_context_contract(),
+        v9_model_context_contract(),
+    ):
+        assert supports_model_context_contract({"model_context_contract": contract})
+
+    assert not supports_model_context_contract(
+        {
+            "model_context_contract": {
+                "model_context_schema_version": 9,
+                "prompt_template_version": 2,
+            }
+        }
+    )
+
+
+def test_v9_sheriff_speech_order_projects_complete_precomputed_options() -> None:
+    alive = [
+        SimpleNamespace(player_id="system-player-07", seat=1),
+        SimpleNamespace(player_id="system-player-01", seat=2),
+        SimpleNamespace(player_id="system-player-09", seat=4),
+    ]
+    options = [
+        {
+            "target_player_id": candidate_id,
+            "resulting_speech_order": speech_order_from_start(
+                alive,
+                "system-player-01",
+                candidate_id,
+            ),
+            "sheriff_position": len(alive),
+        }
+        for candidate_id in ("system-player-07", "system-player-09")
+    ]
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "action_type": "sheriff_speech_order",
+            "objective": "根据每个候选对应的完整发言顺序，选择本轮起始发言者。",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "v9_action_extension": {
+                "mechanical_effect": {
+                    "action_type": "sheriff_speech_order",
+                    "target_mode": "required",
+                    "selected_target_becomes_first_speaker": True,
+                    "sheriff_speaks_last": True,
+                    "options": options,
+                    "speech_has_gameplay_effect": False,
+                }
+            },
+            "candidates": [
+                {"player_id": "system-player-07", "seat": 1, "display_name": "乔宁"},
+                {"player_id": "system-player-09", "seat": 4, "display_name": "唐梨"},
+            ],
+            "public_history": [],
+            "output_contract": {
+                "kind": "target",
+                "target_policy": {"mode": "required"},
+                "speech": {"mode": "forbidden"},
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=10,
+    )
+
+    effect = projected["task"]["mechanical_effect"]
+    assert effect["options"] == [
+        {
+            "target_player_id": "seat_1",
+            "resulting_speech_order": ["seat_1", "seat_4", "seat_2"],
+            "sheriff_position": 3,
+        },
+        {
+            "target_player_id": "seat_4",
+            "resulting_speech_order": ["seat_4", "seat_1", "seat_2"],
+            "sheriff_position": 3,
+        },
+    ]
+    assert all(
+        option["resulting_speech_order"][-1] == "seat_2"
+        and option["sheriff_position"] == len(option["resulting_speech_order"])
+        for option in effect["options"]
+    )
+
+
+def test_v9_sheriff_engine_reuses_selected_precomputed_order() -> None:
+    class Actions:
+        @staticmethod
+        def check_cancellation(_game_id: str) -> None:
+            return None
+
+    class Repository:
+        private_context: dict[str, object] | None = None
+        event_payload: dict[str, object] | None = None
+
+        def record_private_action_decision(self, **values: object) -> None:
+            self.private_context = values["context"]  # type: ignore[assignment]
+
+        def append_event(self, **values: object) -> None:
+            self.event_payload = values["payload"]  # type: ignore[assignment]
+
+    class Engine(V2DayEngine):
+        call: dict[str, object] | None = None
+
+        async def _player_action(self, **values: object) -> SimpleNamespace:
+            self.call = values
+            return SimpleNamespace(
+                target_player_id="system-player-09",
+                decision_note="从4号开始。",
+            )
+
+    repository = Repository()
+    engine = Engine(repository=repository, action_engine=Actions())  # type: ignore[arg-type]
+    state = SimpleNamespace(
+        game_id="v2_game_sheriff_order",
+        round_no=1,
+        rule={"speech_policy": "sheriff_directed"},
+        sheriff_player_id="system-player-01",
+        model_context_contract=v9_model_context_contract(),
+        players=(
+            SimpleNamespace(player_id="system-player-07", seat=1, alive=True),
+            SimpleNamespace(player_id="system-player-01", seat=2, alive=True),
+            SimpleNamespace(player_id="system-player-09", seat=4, alive=True),
+        ),
+    )
+
+    result = asyncio.run(engine._speech_order(state=state, broadcaster=SimpleNamespace()))
+
+    assert result == ["system-player-09", "system-player-07", "system-player-01"]
+    assert engine.call is not None
+    assert engine.call["objective"] == ("根据每个候选对应的完整发言顺序，选择本轮起始发言者。")
+    extension = engine.call["extra_context"]
+    assert isinstance(extension, dict)
+    options = extension["v9_action_extension"]["mechanical_effect"]["options"]
+    assert options == [
+        {
+            "target_player_id": "system-player-07",
+            "resulting_speech_order": [
+                "system-player-07",
+                "system-player-09",
+                "system-player-01",
+            ],
+            "sheriff_position": 3,
+        },
+        {
+            "target_player_id": "system-player-09",
+            "resulting_speech_order": [
+                "system-player-09",
+                "system-player-07",
+                "system-player-01",
+            ],
+            "sheriff_position": 3,
+        },
+    ]
+    assert repository.private_context is not None
+    assert repository.event_payload is not None
+    assert repository.private_context["speech_order"] is result
+    assert repository.event_payload["order"] is result
+
+
+def test_legacy_v8_sheriff_engine_does_not_add_v9_option_extension() -> None:
+    class Actions:
+        @staticmethod
+        def check_cancellation(_game_id: str) -> None:
+            return None
+
+    class Repository:
+        def record_private_action_decision(self, **_values: object) -> None:
+            return None
+
+        def append_event(self, **_values: object) -> None:
+            return None
+
+    class Engine(V2DayEngine):
+        call: dict[str, object] | None = None
+
+        async def _player_action(self, **values: object) -> SimpleNamespace:
+            self.call = values
+            return SimpleNamespace(
+                target_player_id="system-player-09",
+                decision_note=None,
+            )
+
+    engine = Engine(repository=Repository(), action_engine=Actions())  # type: ignore[arg-type]
+    state = SimpleNamespace(
+        game_id="v2_game_legacy_sheriff_order",
+        round_no=1,
+        rule={"speech_policy": "sheriff_directed"},
+        sheriff_player_id="system-player-01",
+        model_context_contract=legacy_v8_prompt_v3_model_context_contract(),
+        players=(
+            SimpleNamespace(player_id="system-player-07", seat=1, alive=True),
+            SimpleNamespace(player_id="system-player-01", seat=2, alive=True),
+            SimpleNamespace(player_id="system-player-09", seat=4, alive=True),
+        ),
+    )
+
+    asyncio.run(engine._speech_order(state=state, broadcaster=SimpleNamespace()))
+
+    assert engine.call is not None
+    assert engine.call["objective"] == "选择本轮第一位发言者。"
+    assert engine.call["extra_context"] is None
+
+
+def test_v9_projects_current_round_question_relations_with_reference_closure() -> None:
+    action_context = {
+        "round_no": 1,
+        "action_type": "day_debate_speech",
+        "self_identity": {
+            "player_id": "system-player-07",
+            "seat": 1,
+            "role_key": "villager",
+            "team": "villagers",
+        },
+        "speech_order": [
+            "system-player-09",
+            "system-player-07",
+            "system-player-01",
+        ],
+        "public_history": [
+            {
+                "source_event_id": 10,
+                "record_seq": 10,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-01",
+                    "speech": "第一晚我查验4号，因为想先看边角位。",
+                },
+            },
+            {
+                "source_event_id": 20,
+                "record_seq": 20,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-09",
+                    "speech": "2号你首验为什么选4号？",
+                },
+            },
+            {
+                "source_event_id": 30,
+                "record_seq": 30,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-01",
+                    "speech": "回应4号，查验理由就是先看边角位。",
+                },
+            },
+        ],
+        "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+    }
+    projected_before_answer = project_model_action_context_with_metadata(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=25,
+    )
+
+    known_before = projected_before_answer.context["known_events"]
+    assert [event["event_ref"] for event in known_before["events"]] == ["10", "20"]
+    assert known_before["questions"] == [
+        {
+            "question_id": "question_20_1",
+            "source_event_ref": "20",
+            "asked_by": "seat_4",
+            "addressed_to": "seat_2",
+            "asked_at_seq": 20,
+            "topic": "investigation_reason",
+            "status": "open",
+            "reply_opportunity": "awaiting_scheduled_turn",
+            "prior_relevant_event_refs": ["10"],
+        }
+    ]
+    assert known_before["relations"] == []
+    assert projected_before_answer.projection_metadata["question_count"] == 1
+    assert projected_before_answer.projection_metadata["relation_count"] == 0
+    assert projected_before_answer.projection_metadata["dropped_question_count"] == 0
+    assert projected_before_answer.projection_metadata["dropped_relation_count"] == 0
+
+    projected_after_answer = project_model_action_context_with_metadata(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=35,
+    )
+    known_after = projected_after_answer.context["known_events"]
+    assert known_after["questions"][0]["status"] == "answered"
+    assert known_after["relations"] == [
+        {
+            "relation_id": "relation_30_question_20_1",
+            "type": "answers_question",
+            "from_event_ref": "30",
+            "to_question_id": "question_20_1",
+            "temporal_order_valid": True,
+        }
+    ]
+    event_refs = {event["event_ref"] for event in known_after["events"]}
+    assert known_after["questions"][0]["source_event_ref"] in event_refs
+    assert known_after["relations"][0]["from_event_ref"] in event_refs
+    assert projected_after_answer.projection_metadata["question_count"] == len(
+        known_after["questions"]
+    )
+    assert projected_after_answer.projection_metadata["relation_count"] == len(
+        known_after["relations"]
+    )
+    prompt_metadata = model_prompt_metadata(projected_after_answer.context)
+    assert prompt_metadata["question_count"] == len(known_after["questions"])
+    assert prompt_metadata["relation_count"] == len(known_after["relations"])
+
+
+def test_v9_reply_opportunity_covers_all_scheduled_turn_states() -> None:
+    public_history = [
+        {
+            "source_event_id": 20,
+            "record_seq": 20,
+            "event_type": "public_player_speech_presented",
+            "payload": {
+                "round_no": 1,
+                "stage": "day_debate_speech",
+                "player_id": "system-player-09",
+                "speech": "2号你首验为什么选4号？",
+            },
+        }
+    ]
+    cases = (
+        (
+            "system-player-07",
+            ["system-player-09", "system-player-07", "system-player-01"],
+            "awaiting_scheduled_turn",
+        ),
+        (
+            "system-player-01",
+            ["system-player-09", "system-player-07", "system-player-01"],
+            "current_speaker_turn",
+        ),
+        (
+            "system-player-07",
+            ["system-player-01", "system-player-07", "system-player-09"],
+            "scheduled_turn_passed",
+        ),
+        (
+            "system-player-07",
+            ["system-player-09", "system-player-07"],
+            "not_in_current_speech_order",
+        ),
+    )
+    player_by_id = {player.player_id: player for player in PLAYERS}
+    for actor_id, speech_order, expected in cases:
+        actor = player_by_id[actor_id]
+        projected = project_model_action_context(
+            {
+                "round_no": 1,
+                "action_type": "day_debate_speech",
+                "self_identity": {
+                    "player_id": actor.player_id,
+                    "seat": actor.seat,
+                    "role_key": "villager",
+                    "team": "villagers",
+                },
+                "speech_order": speech_order,
+                "public_history": public_history,
+                "output_contract": {
+                    "kind": "speech",
+                    "speech": {"mode": "required"},
+                },
+            },
+            players=PLAYERS,
+            model_context_contract=v9_model_context_contract(),
+            action_record_seq=25,
+        )
+        assert projected["known_events"]["questions"][0]["reply_opportunity"] == expected
+
+
+def test_v9_non_speech_action_omits_reply_opportunity_even_with_an_order() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 1,
+            "action_type": "day_vote",
+            "self_identity": {
+                "player_id": "system-player-07",
+                "seat": 1,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "speech_order": [
+                "system-player-09",
+                "system-player-07",
+                "system-player-01",
+            ],
+            "public_history": [
+                {
+                    "source_event_id": 20,
+                    "record_seq": 20,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-09",
+                        "speech": "2号你首验为什么选4号？",
+                    },
+                }
+            ],
+            "output_contract": {
+                "kind": "target",
+                "target_policy": {"mode": "required"},
+                "speech": {"mode": "forbidden"},
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=25,
+    )
+
+    assert "reply_opportunity" not in projected["known_events"]["questions"][0]
+
+
+def test_v9_uses_one_canonical_current_living_werewolf_teammate_event() -> None:
+    players = tuple(
+        V2ModelPlayerReference(
+            player_id=f"system-player-{seat:02d}",
+            seat=seat,
+            display_name=f"{seat}号玩家",
+        )
+        for seat in (1, 2, 3, 4, 5)
+    )
+    rule_contract = build_public_rule_contract(
+        rule={
+            "id": "v9-wolf-team",
+            "version": "1",
+            "player_count": 5,
+            "roles": [
+                {"role": "狼人", "count": 3, "team": "werewolves"},
+                {"role": "村民", "count": 2, "team": "villagers"},
+            ],
+        },
+        max_rounds=8,
+    )
+    projected = project_model_action_context(
+        {
+            "round_no": 2,
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 1,
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+            "private_authoritative_facts": [
+                {
+                    "knowledge_fact_id": "old-team-fact",
+                    "fact_type": "werewolf_teammates",
+                    "payload": ["system-player-02", "system-player-03"],
+                    "known_at_seq": 5,
+                },
+                {
+                    "fact_type": "living_werewolf_teammates",
+                    "payload": ["system-player-03"],
+                },
+            ],
+            "public_match_state": {
+                "round_no": 2,
+                "alive_player_ids": [
+                    "system-player-01",
+                    "system-player-03",
+                    "system-player-04",
+                    "system-player-05",
+                ],
+                "eliminated_player_ids": ["system-player-02"],
+            },
+            "public_rule_contract": rule_contract,
+            "public_history": [],
+            "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        players=players,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=50,
+    )
+
+    assert projected["self"]["werewolf_coordination"] == {"mode": "team"}
+    teammate_events = [
+        event
+        for event in projected["known_events"]["events"]
+        if event["kind"] in {"werewolf_teammates", "living_werewolf_teammates"}
+    ]
+    assert teammate_events == [
+        {
+            "event_ref": "current_living_werewolf_teammates",
+            "kind": "living_werewolf_teammates",
+            "authority": "judge_fact",
+            "visibility": "actor_private",
+            "known_at_seq": 50,
+            "occurred_in": {"period": "day", "round_no": 2},
+            "data": {"teammate_refs": ["seat_3"]},
+        }
+    ]
+    assert "living_teammate_refs" not in projected["self"]["werewolf_coordination"]
+
+
+def test_v9_single_wolf_and_non_wolf_do_not_receive_teammate_events() -> None:
+    single_wolf_rule = build_public_rule_contract(
+        rule={
+            "id": "v9-single-wolf",
+            "version": "1",
+            "player_count": 3,
+            "roles": [
+                {"role": "狼人", "count": 1, "team": "werewolves"},
+                {"role": "村民", "count": 2, "team": "villagers"},
+            ],
+        },
+        max_rounds=8,
+    )
+    base = {
+        "round_no": 1,
+        "action_type": "day_debate_speech",
+        "private_authoritative_facts": [
+            {
+                "fact_type": "living_werewolf_teammates",
+                "payload": ["system-player-09"],
+            }
+        ],
+        "public_match_state": {
+            "round_no": 1,
+            "alive_player_ids": ["system-player-07", "system-player-01", "system-player-09"],
+        },
+        "public_rule_contract": single_wolf_rule,
+        "public_history": [],
+        "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+    }
+    wolf = project_model_action_context(
+        {
+            **base,
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "werewolf",
+                "team": "werewolves",
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=10,
+    )
+    villager = project_model_action_context(
+        {
+            **base,
+            "self_identity": {
+                "player_id": "system-player-07",
+                "seat": 1,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=10,
+    )
+
+    assert wolf["self"]["werewolf_coordination"] == {"mode": "solo"}
+    assert all(
+        event["kind"] != "living_werewolf_teammates" for event in wolf["known_events"]["events"]
+    )
+    assert "werewolf_coordination" not in villager["self"]
+    assert all(
+        event["kind"] != "living_werewolf_teammates" for event in villager["known_events"]["events"]
+    )
 
 
 def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> None:
@@ -1216,6 +1842,35 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
     assert "history" not in system_text
     assert "source_rules" not in system_text
     assert len(system_text) < 450
+
+
+def test_v9_prompt_explains_compact_question_reference_semantics() -> None:
+    payload = build_model_request_payload(
+        {
+            "model_context_schema_version": 9,
+            "prompt_template_version": 1,
+            "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
+            "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
+            "rules": {"reveal_policy": "hidden"},
+            "state": {"round_no": 1, "as_of_seq": 472},
+            "known_events": {
+                "schema_version": 3,
+                "events": [],
+                "questions": [],
+                "relations": [],
+            },
+            "response": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        decision=True,
+        model_id="test-model",
+    )
+    system_text = payload["input"][0]["content"][0]["text"]
+
+    assert "known_events.questions 和 relations" in system_text
+    assert "尚未轮到发言，不表示拒绝回应" in system_text
+    assert "问题之前已有的相关说明，不是对后来问题的回答" in system_text
+    assert "策略、身份伪装和表达由你自主决定" in system_text
+    assert len(system_text) < 600
 
 
 def test_private_round_memory_prompt_is_explicitly_non_public() -> None:

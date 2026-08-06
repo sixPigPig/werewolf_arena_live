@@ -11,6 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.ability_runtime import ability_snapshot_hash, resolve_first_night
+from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
+from app.v2.event_contract import canonical_event_payload
 from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.models import (
     V2AbilityActivation,
@@ -26,7 +28,12 @@ from app.v2.models import (
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
+from app.v2.repository import (
+    V2ExecutionOwnershipLost,
+    V2GameCanceled,
+    V2PhaseTransition,
+    V2RepositoryError,
+)
 from app.v2.win_conditions import (
     all_hunter_settlement_branches_terminal,
     hunter_settlement_can_change_winner,
@@ -85,6 +92,7 @@ class V2ActivationRef:
     ability_id: str
     actor_player_id: str | None
     occurrence: int
+    audience: str
 
 
 @dataclass(frozen=True)
@@ -96,8 +104,14 @@ class V2NightResolutionRecord:
 
 
 class V2NightRepository:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        enforce_execution_fence: bool = False,
+    ) -> None:
         self._session_factory = session_factory
+        self._enforce_execution_fence = enforce_execution_fence
 
     def latest_record_seq(self, game_id: str) -> int:
         with self._session_factory() as db:
@@ -111,15 +125,17 @@ class V2NightRepository:
         *,
         game_id: str,
         event_type: str,
+        audience: str,
         payload: dict[str, Any],
     ) -> int:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             record_seq = game.last_record_seq + 1
             _append_event(
                 db,
                 game=game,
                 event_type=event_type,
+                audience=audience,
                 payload=payload,
             )
             return record_seq
@@ -135,9 +151,9 @@ class V2NightRepository:
             ability_snapshot_hash(snapshot)
             return snapshot.get("execution_enabled") is True
 
-    def start_night(self, game_id: str) -> V2NightRuntimeState:
+    def start_night(self, game_id: str, *, audience: str) -> V2NightRuntimeState:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             snapshot = game.ability_snapshot or {}
             digest = ability_snapshot_hash(snapshot)
             if snapshot.get("execution_enabled") is not True:
@@ -194,6 +210,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="action_window_opened",
+                audience=audience,
                 payload={
                     "window_id": window.window_id,
                     "window_seq": next_window_seq,
@@ -206,6 +223,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="activation_plan_compiled",
+                audience=audience,
                 payload={"window_id": window.window_id, "plan": plan},
             )
             players = _players(db, game)
@@ -228,8 +246,8 @@ class V2NightRepository:
                 players=players,
             )
 
-    def start_first_night(self, game_id: str) -> V2NightRuntimeState:
-        return self.start_night(game_id)
+    def start_first_night(self, game_id: str, *, audience: str) -> V2NightRuntimeState:
+        return self.start_night(game_id, audience=audience)
 
     def open_activation(
         self,
@@ -238,51 +256,82 @@ class V2NightRepository:
         ability_id: str,
         actor_player_id: str | None,
         occurrence: int,
+        audience: str,
     ) -> V2ActivationRef:
         instance_data = state.instance(ability_id)
         if instance_data is None:
             raise V2RepositoryError(f"ability {ability_id} is not configured")
         activation_id = f"v2_activation_{uuid4().hex[:16]}"
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
-            if game.phase_state not in {"night_running", "dawn_reactions_ready"}:
-                raise V2RepositoryError("ability activation opened outside action window")
-            instance = db.get(V2AbilityInstance, instance_data["ability_instance_id"])
-            if instance is None or instance.game_id != state.game_id:
-                raise V2RepositoryError("ability instance is missing")
-            activation = V2AbilityActivation(
-                activation_id=activation_id,
-                game_id=state.game_id,
-                run_id=state.run_id,
-                window_id=state.window_id,
-                ability_instance_id=instance.ability_instance_id,
-                occurrence=occurrence,
-                actor_player_id=actor_player_id,
-                status="open",
-                knowledge_fact_ids=[],
-                decision={},
-                result={},
-            )
-            db.add(activation)
-            _append_event(
+            game = _locked_game(
                 db,
-                game=game,
-                event_type="ability_activation_opened",
-                payload={
-                    "activation_id": activation_id,
-                    "window_id": state.window_id,
-                    "ability_instance_id": instance.ability_instance_id,
-                    "ability_id": ability_id,
-                    "actor_player_id": actor_player_id,
-                    "occurrence": occurrence,
-                },
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
             )
-        return V2ActivationRef(
+            _row, activation = self._open_activation_locked(
+                db=db,
+                game=game,
+                state=state,
+                instance_data=instance_data,
+                activation_id=activation_id,
+                actor_player_id=actor_player_id,
+                occurrence=occurrence,
+                audience=audience,
+            )
+        return activation
+
+    def _open_activation_locked(
+        self,
+        *,
+        db: Session,
+        game: V2GameRecord,
+        state: V2NightRuntimeState,
+        instance_data: dict[str, Any],
+        activation_id: str,
+        actor_player_id: str | None,
+        occurrence: int,
+        audience: str,
+    ) -> tuple[V2AbilityActivation, V2ActivationRef]:
+        if game.phase_state not in {"night_running", "dawn_reactions_ready"}:
+            raise V2RepositoryError("ability activation opened outside action window")
+        instance = db.get(V2AbilityInstance, instance_data["ability_instance_id"])
+        if instance is None or instance.game_id != state.game_id:
+            raise V2RepositoryError("ability instance is missing")
+        row = V2AbilityActivation(
             activation_id=activation_id,
-            ability_instance_id=instance_data["ability_instance_id"],
-            ability_id=ability_id,
+            game_id=state.game_id,
+            run_id=state.run_id,
+            window_id=state.window_id,
+            ability_instance_id=instance.ability_instance_id,
+            occurrence=occurrence,
+            actor_player_id=actor_player_id,
+            status="open",
+            knowledge_fact_ids=[],
+            decision={},
+            result={},
+        )
+        db.add(row)
+        _append_event(
+            db,
+            game=game,
+            event_type="ability_activation_opened",
+            audience=audience,
+            payload={
+                "activation_id": activation_id,
+                "window_id": state.window_id,
+                "ability_instance_id": instance.ability_instance_id,
+                "ability_id": instance_data["ability_id"],
+                "actor_player_id": actor_player_id,
+                "occurrence": occurrence,
+            },
+        )
+        return row, V2ActivationRef(
+            activation_id=activation_id,
+            ability_instance_id=instance.ability_instance_id,
+            ability_id=str(instance_data["ability_id"]),
             actor_player_id=actor_player_id,
             occurrence=occurrence,
+            audience=audience,
         )
 
     def complete_activation(
@@ -298,7 +347,11 @@ class V2NightRepository:
         ability_state_patch: dict[str, Any] | None = None,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             row = db.get(V2AbilityActivation, activation.activation_id)
             if row is None or row.status != "open":
                 raise V2RepositoryError("ability activation is not open")
@@ -366,9 +419,23 @@ class V2NightRepository:
                         effect_type=effect_type,
                         actor_id=activation.actor_player_id,
                         target_player_id=target_player_id,
-                        payload={},
+                        payload={"transport_audience": activation.audience},
                         state="pending",
                     )
+                )
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="effect_intent_recorded",
+                    audience=activation.audience,
+                    payload={
+                        "action_id": row.action_id,
+                        "activation_id": activation.activation_id,
+                        "effect_intent_id": effect_id,
+                        "effect_type": effect_type,
+                        "actor_player_id": activation.actor_player_id,
+                        "target_player_id": target_player_id,
+                    },
                 )
             row.status = "completed"
             row.decision_id = f"v2_decision_{uuid4().hex[:16]}"
@@ -385,7 +452,9 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="ability_activation_completed",
+                audience=activation.audience,
                 payload={
+                    "action_id": row.action_id,
                     "activation_id": activation.activation_id,
                     "ability_id": activation.ability_id,
                     "decision_id": row.decision_id,
@@ -412,7 +481,11 @@ class V2NightRepository:
         digest = hashlib.sha256(canonical).hexdigest()
         fact_id = f"v2_fact_{uuid4().hex[:16]}"
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             row = db.get(V2AbilityActivation, activation.activation_id)
             if row is None or row.status != "open":
                 raise V2RepositoryError("activation knowledge cannot be registered")
@@ -443,6 +516,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="activation_knowledge_reused",
+                    audience=activation.audience,
                     payload={
                         "activation_id": activation.activation_id,
                         "knowledge_fact_ids": list(existing_ids),
@@ -472,6 +546,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="activation_knowledge_projected",
+                audience=activation.audience,
                 payload={
                     "activation_id": activation.activation_id,
                     "knowledge_fact_ids": [fact_id],
@@ -491,7 +566,11 @@ class V2NightRepository:
         group: str | None = None,
     ) -> bool:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             row = db.get(V2AbilityActivation, activation.activation_id)
             if row is None or row.game_id != state.game_id:
                 raise V2RepositoryError("ability activation is missing")
@@ -509,6 +588,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="ability_activation_canceled",
+                audience=activation.audience,
                 payload={
                     "activation_id": activation.activation_id,
                     "ability_id": activation.ability_id,
@@ -521,6 +601,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="night_parallel_lane_canceled",
+                    audience=activation.audience,
                     payload={
                         "round_no": state.round_no,
                         "window_id": state.window_id,
@@ -536,11 +617,16 @@ class V2NightRepository:
         *,
         state: V2NightRuntimeState,
         reason: str,
+        audience: str,
         batch_id: str | None = None,
         groups: tuple[str, ...] = (),
     ) -> tuple[str, ...]:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             rows = list(
                 db.scalars(
                     select(V2AbilityActivation)
@@ -569,6 +655,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="ability_activation_canceled",
+                    audience=audience,
                     payload={
                         "activation_id": row.activation_id,
                         "ability_id": instance.ability_id if instance is not None else None,
@@ -581,6 +668,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="night_parallel_batch_canceled",
+                    audience=audience,
                     payload={
                         "round_no": state.round_no,
                         "window_id": state.window_id,
@@ -597,18 +685,29 @@ class V2NightRepository:
         state: V2NightRuntimeState,
         ability_id: str,
         reason: str,
+        audience: str,
         occurrence: int = 1,
     ) -> V2ActivationRef:
-        activation = self.open_activation(
-            state=state,
-            ability_id=ability_id,
-            actor_player_id=None,
-            occurrence=occurrence,
-        )
+        instance_data = state.instance(ability_id)
+        if instance_data is None:
+            raise V2RepositoryError(f"ability {ability_id} is not configured")
+        activation_id = f"v2_activation_{uuid4().hex[:16]}"
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
-            row = db.get(V2AbilityActivation, activation.activation_id)
-            assert row is not None
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
+            row, activation = self._open_activation_locked(
+                db=db,
+                game=game,
+                state=state,
+                instance_data=instance_data,
+                activation_id=activation_id,
+                actor_player_id=None,
+                occurrence=occurrence,
+                audience=audience,
+            )
             row.status = "skipped"
             row.skip_reason = reason
             decision_status = (
@@ -622,6 +721,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="ability_activation_skipped",
+                audience=activation.audience,
                 payload={
                     "activation_id": activation.activation_id,
                     "ability_id": ability_id,
@@ -647,7 +747,11 @@ class V2NightRepository:
             poisoned_target=poisoned_target,
         )
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             window = db.get(V2ActionWindow, state.window_id)
             if window is None or window.state != "open" or game.phase_state != "night_running":
                 raise V2RepositoryError("night window is not resolvable")
@@ -664,15 +768,32 @@ class V2NightRepository:
             for effect in effect_rows:
                 effect.state = "resolved"
                 effect.resolved_at = _now()
+                effect_audience = _effect_intent_audience(effect)
+                outcome = _effect_outcome(
+                    effect.effect_type,
+                    effect.target_player_id,
+                    death_by_player,
+                    resolution.attack_prevented_by,
+                )
                 effect.payload = {
                     **(effect.payload or {}),
-                    "outcome": _effect_outcome(
-                        effect.effect_type,
-                        effect.target_player_id,
-                        death_by_player,
-                        resolution.attack_prevented_by,
-                    ),
+                    "outcome": outcome,
                 }
+                activation = db.get(V2AbilityActivation, effect.activation_id)
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="effect_intent_resolved",
+                    audience=effect_audience,
+                    payload={
+                        "action_id": activation.action_id if activation is not None else None,
+                        "activation_id": effect.activation_id,
+                        "effect_intent_id": effect.effect_intent_id,
+                        "effect_type": effect.effect_type,
+                        "target_player_id": effect.target_player_id,
+                        "outcome": outcome,
+                    },
+                )
             for item in resolution.deaths:
                 player_state = db.get(V2PlayerState, (state.game_id, item["player_id"]))
                 if player_state is None or not player_state.alive:
@@ -721,12 +842,14 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="action_window_closed",
+                audience="god_view",
                 payload={"window_id": window.window_id, "result": result},
             )
             _append_event(
                 db,
                 game=game,
                 event_type="night_resolution_committed",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "pending_death_count": len(resolution.deaths),
@@ -736,6 +859,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="game_phase_changed",
+                audience="all",
                 payload=_transition_payload(transition),
             )
         return V2NightResolutionRecord(
@@ -747,7 +871,7 @@ class V2NightRepository:
 
     def ready_dawn_announcement(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if game.phase_state != "sheriff_election_open":
                 raise V2RepositoryError("pre-dawn sheriff election is not complete")
             game.phase_state = "dawn_announcement_ready"
@@ -763,6 +887,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="game_phase_changed",
+                audience="all",
                 payload=_transition_payload(transition),
             )
             return transition
@@ -774,7 +899,7 @@ class V2NightRepository:
         expected_player_ids: tuple[str, ...],
     ) -> tuple[dict[str, str], ...]:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if game.phase_state != "dawn_announcement_ready":
                 raise V2RepositoryError("dawn deaths are not ready to reveal")
             revealed: list[dict[str, str]] = []
@@ -813,6 +938,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="dawn_public_result",
+                audience="all",
                 payload={
                     "round_no": round_no,
                     "dead_player_ids": list(revealed_ids),
@@ -899,7 +1025,11 @@ class V2NightRepository:
         if hunter is None:
             raise V2RepositoryError("hunter response is not configured")
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             if game.phase_id != f"day_{state.round_no}":
                 raise V2RepositoryError("dawn response is not ready")
             if game.phase_state == "dawn_reactions_ready":
@@ -951,6 +1081,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="action_window_opened",
+                    audience="god_view",
                     payload={
                         "window_id": window_id,
                         "window_seq": next_window_seq,
@@ -982,7 +1113,11 @@ class V2NightRepository:
         target_player_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             target = db.get(V2PlayerState, (state.game_id, target_player_id))
             if target is None or not target.alive:
                 raise V2RepositoryError("hunter target is not alive")
@@ -997,6 +1132,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="hunter_response_resolved",
+                audience="all",
                 payload={
                     "round_no": state.round_no,
                     "period": "dawn",
@@ -1013,7 +1149,11 @@ class V2NightRepository:
         hunter_player_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, state.game_id)
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
             if hunter is None:
                 raise V2RepositoryError("hunter state is missing")
@@ -1022,6 +1162,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="hunter_response_resolved",
+                audience="all",
                 payload={
                     "round_no": state.round_no,
                     "period": "dawn",
@@ -1032,7 +1173,7 @@ class V2NightRepository:
 
     def finish_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             round_no = _day_round_no(game.phase_id)
             if game.phase_state not in {
                 "dawn_announced",
@@ -1053,6 +1194,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="action_window_closed",
+                    audience="god_view",
                     payload={
                         "window_id": open_window.window_id,
                         "result": open_window.result,
@@ -1085,6 +1227,7 @@ class V2NightRepository:
                     db,
                     game=game,
                     event_type="game_completed",
+                    audience="all",
                     payload={
                         "winner": winner,
                         "reason": "deterministic_win_condition",
@@ -1103,6 +1246,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="game_phase_changed",
+                audience="all",
                 payload=_transition_payload(transition),
             )
             return transition
@@ -1156,7 +1300,7 @@ class V2NightRepository:
         payload: dict[str, Any],
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             fact_id = f"v2_fact_{uuid4().hex[:16]}"
             db.add(
                 V2KnowledgeFact(
@@ -1173,6 +1317,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="private_knowledge_recorded",
+                audience="god_view",
                 payload={
                     "knowledge_fact_id": fact_id,
                     "owner_scope": "player",
@@ -1271,7 +1416,7 @@ class V2NightRepository:
 
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             run = _run(db, game.current_run_id)
             if run.stop_requested_at is not None:
                 raise V2GameCanceled("V2 game was canceled by an administrator")
@@ -1283,6 +1428,7 @@ class V2NightRepository:
                 db,
                 game=game,
                 event_type="ability_runtime_failed",
+                audience="god_view",
                 payload={"failure_code": failure_code},
             )
             return run.run_id
@@ -1426,10 +1572,20 @@ def _compiled_rule(
     return compiled
 
 
-def _locked_game(db: Session, game_id: str) -> V2GameRecord:
+def _locked_game(
+    db: Session,
+    game_id: str,
+    *,
+    require_fence: bool,
+) -> V2GameRecord:
     game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
+    if require_fence:
+        try:
+            require_v2_run_fence(db, game)
+        except V2RunFenceRejected as exc:
+            raise V2ExecutionOwnershipLost(str(exc)) from exc
     run = _run(db, game.current_run_id)
     if run.stop_requested_at is not None:
         raise V2GameCanceled("V2 game was canceled by an administrator")
@@ -1448,6 +1604,7 @@ def _append_event(
     *,
     game: V2GameRecord,
     event_type: str,
+    audience: str,
     payload: dict[str, Any],
 ) -> None:
     next_seq = game.last_record_seq + 1
@@ -1459,10 +1616,17 @@ def _append_event(
             run_id=game.current_run_id,
             event_type=event_type,
             payload_schema_version=1,
-            payload=payload,
+            payload=canonical_event_payload(payload, audience=audience),
         )
     )
     game.last_record_seq = next_seq
+
+
+def _effect_intent_audience(effect: V2EffectIntent) -> str:
+    audience = (effect.payload or {}).get("transport_audience")
+    if not isinstance(audience, str):
+        raise V2RepositoryError("effect intent has no explicit transport audience")
+    return audience
 
 
 def _transition_payload(transition: V2PhaseTransition) -> dict[str, Any]:

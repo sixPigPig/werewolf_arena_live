@@ -47,6 +47,7 @@ import {
   publicPlayerProfilesQueryKey,
 } from "../lib/player-profile-query-keys";
 import { createV2Game } from "../v2/api";
+import type { V2ConfiguredAudioMode } from "../v2/contracts";
 
 export function GamesPage() {
   const navigate = useNavigate();
@@ -55,7 +56,9 @@ export function GamesPage() {
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
+  const [audioMode, setAudioMode] = useState<V2ConfiguredAudioMode>("tts");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [creationConflictError, setCreationConflictError] = useState<string | null>(null);
   const [shortage, setShortage] = useState(false);
   const [activeSeat, setActiveSeat] = useState(1);
   const [isPlayerPickerOpen, setIsPlayerPickerOpen] = useState(false);
@@ -90,6 +93,11 @@ export function GamesPage() {
       createV2Game(request),
     onSuccess: (game) => {
       navigate(`/v2/games/${game.game_id}/live`);
+    },
+    onError: (error) => {
+      if (isRuleRevisionChangedError(error)) {
+        handleRuleRevisionChanged();
+      }
     },
   });
   const previewLineupMutation = useMutation({
@@ -278,6 +286,7 @@ export function GamesPage() {
     const nextRuleSet = ruleSets.find((ruleSet) => ruleSet.id === ruleSetId);
     setSelectedRuleSetId(ruleSetId);
     setValidationError(null);
+    setCreationConflictError(null);
     setShortage(false);
     clearLineupQuality();
 
@@ -389,6 +398,7 @@ export function GamesPage() {
     previewLineupMutation.mutate(
       {
         rule_set_id: selectedRuleSet.id,
+        expected_rule_revision_id: selectedRuleSet.revision_id ?? null,
         seed: seed ? Number(seed) : null,
         player_configs: normalizePlayerConfigs(
           visiblePlayerConfigs,
@@ -399,7 +409,11 @@ export function GamesPage() {
         lineup_quality_policy_version: 1,
       },
       {
-        onError: () => {
+        onError: (error) => {
+          if (isRuleRevisionChangedError(error)) {
+            handleRuleRevisionChanged();
+            return;
+          }
           setLineupQualityError("阵容质量检查失败，请保留当前阵容后重试。");
         },
         onSuccess: (result) => {
@@ -414,6 +428,14 @@ export function GamesPage() {
         },
       },
     );
+  }
+
+  function handleRuleRevisionChanged() {
+    setCreationConflictError("规则已更新，请确认最新规则后重新发起对局");
+    setLineupQualityReport(null);
+    setLineupQualityError(null);
+    setQualityOverrideConfirmed(false);
+    void ruleSetsQuery.refetch();
   }
 
   function clearLineupQuality() {
@@ -445,6 +467,7 @@ export function GamesPage() {
     if (!selectedRuleSet) {
       return;
     }
+    setCreationConflictError(null);
 
     const parsedMaxRounds = Number(maxRounds);
     if (
@@ -502,6 +525,7 @@ export function GamesPage() {
         }
         createV2GameMutation.mutate({
           title: selectedRuleSet.name,
+          audio_mode: audioMode,
           lobby_snapshot: {
             schema_version: 1,
             model_binding_mode: "profile_library",
@@ -582,11 +606,13 @@ export function GamesPage() {
       ) : null}
 
       <LobbyAdvancedSettings
+        audioMode={audioMode}
         disabled={
           createV2GameMutation.isPending || previewLineupMutation.isPending
         }
         maxRounds={maxRounds}
         maxRoundsError={validationError}
+        onAudioModeChange={setAudioMode}
         onMaxRoundsChange={(value) => {
           setMaxRounds(value);
           setValidationError(null);
@@ -600,7 +626,9 @@ export function GamesPage() {
 
       <LobbyLaunchBar
         error={
-          createV2GameMutation.isError
+          creationConflictError
+            ? creationConflictError
+            : createV2GameMutation.isError
             ? "无法发起对局"
             : lineupQualityError
               ? lineupQualityError
@@ -657,5 +685,17 @@ export function GamesPage() {
         />
       ) : null}
     </main>
+  );
+}
+
+function isRuleRevisionChangedError(
+  error: unknown,
+): error is Error & { status: number; code: string } {
+  return (
+    error instanceof Error &&
+    "status" in error &&
+    error.status === 409 &&
+    "code" in error &&
+    error.code === "rule_revision_changed"
   );
 }

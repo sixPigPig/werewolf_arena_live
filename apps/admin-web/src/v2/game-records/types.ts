@@ -1,3 +1,12 @@
+export type V2AudioMode = "tts" | "text_only" | "legacy_unknown";
+export type V2MatchStatus =
+  | "waiting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+export type V2ExecutionState = "unowned" | "owned" | "stale" | "stopped";
+
 export type V2GameRecordListItem = {
   game_id: string;
   title: string;
@@ -9,6 +18,12 @@ export type V2GameRecordListItem = {
   phase_seq: number;
   phase_id: string;
   phase_state: string;
+  audio_mode: V2AudioMode;
+  match_status: V2MatchStatus;
+  execution_state: V2ExecutionState;
+  winner: "villagers" | "werewolves" | null;
+  completion_reason: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -30,6 +45,10 @@ export type V2GameRun = {
   started_at: string | null;
   completed_at: string | null;
   stop_requested_at: string | null;
+  worker_id: string | null;
+  worker_heartbeat_at: string | null;
+  lease_expires_at: string | null;
+  fence_token: number;
 };
 
 export type V2GameControlResult = {
@@ -216,6 +235,7 @@ export type V2GameRecordSummary = V2GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
   judge_voice_snapshot: Record<string, unknown>;
+  delivery_snapshot: Record<string, unknown> | null;
   ability_snapshot: Record<string, unknown>;
   match_state: Record<string, unknown> | null;
   player_identities: V2PlayerIdentity[];

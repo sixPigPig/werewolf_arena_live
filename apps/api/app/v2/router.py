@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import logging
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -18,7 +20,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,6 +41,9 @@ from app.model_catalog.defaults import (
 )
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
+from app.rule_sets.errors import RuleRevisionChanged, RuleSetNotFound, RuleSetUnavailable
+from app.rule_sets.service import resolve_published_rule_set
+from app.rule_sets.static_catalog import resolve_static_rule_set
 from app.v2.contracts import (
     AdminV2EventPageResponse,
     AdminV2EventResponse,
@@ -64,6 +69,7 @@ from app.v2.contracts import (
     V2GamePhaseResponse,
     V2GodViewIdentitySnapshotResponse,
     V2LiveSnapshotResponse,
+    V2LobbyCreateSnapshot,
     V2MatchStateResponse,
 )
 from app.v2.control import (
@@ -76,14 +82,22 @@ from app.v2.control import (
     request_v2_model_action_retry,
     request_v2_game_stop,
 )
+from app.v2.execution import database_utc_now
+from app.v2.event_contract import (
+    AUDIENCE_CONTRACT_VERSION,
+    V2_EVENT_AUDIENCES,
+    model_event_audience,
+)
 from app.v2.model_client import build_model_request_payload
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
+from app.v2.models import V2GameRun
 from app.v2.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
+from app.v2.runtime_state import project_v2_runtime_state
 from app.v2.service import (
     V2GodViewAccessDenied,
     V2GodViewUnavailable,
@@ -131,22 +145,49 @@ def read_v2_meta(response: Response) -> V2ApiMetaResponse:
 @public_router.post("/games", response_model=V2GameCreateResponse, status_code=201)
 def create_v2_game(
     body: V2GameCreateRequest,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
-) -> V2GameCreateResponse:
+) -> V2GameCreateResponse | JSONResponse:
+    runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+    audio_mode = body.audio_mode or runtime.default_audio_mode
+    if audio_mode == "tts" and not runtime.tts_capability_enabled:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "v2_audio_mode_unavailable",
+                "requested_audio_mode": "tts",
+            },
+        )
+    delivery_snapshot = {
+        "schema_version": 1,
+        "mode": audio_mode,
+        "source": (
+            "explicit_create_request"
+            if body.audio_mode is not None
+            else "legacy_runtime_default"
+        ),
+    }
     lobby = body.lobby_snapshot
     rule_snapshot = None
     players_snapshot = None
     if lobby is not None:
+        frozen_rule_set = lobby.rule_set.model_dump(mode="json", exclude_none=True)
+        frozen_rule_revision_id = lobby.rule_set_revision_id
+        if lobby.model_binding_mode == "profile_library":
+            frozen_rule_set, frozen_rule_revision_id = _resolve_library_rule_snapshot(
+                db,
+                lobby,
+            )
         rule_snapshot = {
             "schema_version": lobby.schema_version,
             "source": "existing_mobile_lobby",
             "model_binding_mode": lobby.model_binding_mode,
-            "rule_set_revision_id": lobby.rule_set_revision_id,
+            "rule_set_revision_id": frozen_rule_revision_id,
             "seed": lobby.seed,
             "max_rounds": lobby.max_rounds,
             "allow_lineup_quality_warnings": lobby.allow_lineup_quality_warnings,
             "lineup_quality_report": lobby.lineup_quality_report.model_dump(mode="json"),
-            "rule_set": lobby.rule_set.model_dump(mode="json", exclude_none=True),
+            "rule_set": frozen_rule_set,
         }
         players_snapshot = []
         for item in lobby.player_configs:
@@ -212,6 +253,7 @@ def create_v2_game(
     game, run, god_view_access_token = create_waiting_game(
         db,
         title=body.title,
+        delivery_snapshot=delivery_snapshot,
         rule_snapshot=rule_snapshot,
         players_snapshot=players_snapshot,
         judge_voice_snapshot=build_judge_voice_snapshot(
@@ -225,6 +267,7 @@ def create_v2_game(
         game_id=game.game_id,
         run_id=run.run_id,
         status=game.status,
+        audio_mode=audio_mode,
         snapshot_url=f"/api/v2/live/games/{game.game_id}/snapshot",
         websocket_url=f"/api/v2/live/games/{game.game_id}/ws",
         director_snapshot_url=f"/api/v2/director/games/{game.game_id}/snapshot",
@@ -233,6 +276,74 @@ def create_v2_game(
         god_view_websocket_url=f"/api/v2/god-view/games/{game.game_id}/ws",
         god_view_access_token=god_view_access_token,
     )
+
+
+def _resolve_library_rule_snapshot(
+    db: Session,
+    lobby: V2LobbyCreateSnapshot,
+) -> tuple[dict[str, Any], str]:
+    expected_revision_id = lobby.rule_set_revision_id
+    assert expected_revision_id is not None
+    try:
+        if settings.rule_set_catalog_source == "static":
+            compiled = resolve_static_rule_set(
+                lobby.rule_set.id,
+                expected_revision_id=expected_revision_id,
+            )
+        else:
+            compiled = resolve_published_rule_set(
+                db,
+                lobby.rule_set.id,
+                expected_revision_id=expected_revision_id,
+                for_update=True,
+            )
+    except RuleRevisionChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rule_revision_changed",
+                "rule_set_id": exc.rule_set_id,
+                "expected_revision_id": exc.expected_revision_id,
+                "current_revision_id": exc.current_revision_id,
+            },
+        ) from exc
+    except (RuleSetNotFound, RuleSetUnavailable) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rule_set_unavailable",
+                "rule_set_id": exc.rule_set_id,
+            },
+        ) from exc
+
+    if compiled.revision_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rule_set_unavailable",
+                "rule_set_id": lobby.rule_set.id,
+            },
+        )
+    submitted_hash = lobby.rule_set.content_hash
+    if submitted_hash is not None and submitted_hash != compiled.content_hash:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "v2_rule_snapshot_mismatch",
+                "rule_set_id": lobby.rule_set.id,
+                "field": "content_hash",
+            },
+        )
+    if lobby.rule_set.player_count != compiled.rule_set.player_count:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "v2_rule_snapshot_mismatch",
+                "rule_set_id": lobby.rule_set.id,
+                "field": "player_count",
+            },
+        )
+    return copy.deepcopy(compiled.snapshot), compiled.revision_id
 
 
 def _library_player_snapshot(profile: VirtualPlayerProfile) -> dict[str, Any]:
@@ -276,13 +387,22 @@ def read_live_snapshot(
         raise HTTPException(status_code=404, detail="V2 game not found") from exc
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
+    match = get_match_state(db, game_id)
+    run = _current_run(db, game)
+    runtime_state = project_v2_runtime_state(
+        game=game,
+        run=run,
+        match=match,
+        now=database_utc_now(db),
+    )
     return V2LiveSnapshotResponse(
         audience="player_public",
         game_id=game.game_id,
         run_id=game.current_run_id,
         live_state=_live_state(game.status),
+        **_runtime_state_fields(runtime_state),
         game_phase=_game_phase(game),
-        match_state=_match_state(get_match_state(db, game_id)),
+        match_state=_match_state(match),
         latest_presentation_seq=game.last_presentation_seq,
         server_time=server_now(),
         public_rule=project_public_rule_snapshot(game.rule_snapshot),
@@ -480,12 +600,21 @@ def read_god_view_identity_snapshot(
 
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
+    match = get_match_state(db, game_id)
+    run = _current_run(db, game)
+    runtime_state = project_v2_runtime_state(
+        game=game,
+        run=run,
+        match=match,
+        now=database_utc_now(db),
+    )
     return V2GodViewIdentitySnapshotResponse(
         game_id=game.game_id,
         run_id=game.current_run_id,
         live_state=_live_state(game.status),
+        **_runtime_state_fields(runtime_state),
         game_phase=_game_phase(game),
-        match_state=_match_state(get_match_state(db, game_id)),
+        match_state=_match_state(match),
         server_time=server_now(),
         rule=project_public_rule_snapshot(game.rule_snapshot),
         players=project_god_view_player_identities(
@@ -509,9 +638,12 @@ def list_admin_v2_games(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> AdminV2GameListResponse:
     records, total = list_games(db, page=page, page_size=page_size)
+    database_now = database_utc_now(db)
     _set_admin_headers(request, response)
     return AdminV2GameListResponse(
-        items=[_admin_game_item(record) for record in records],
+        items=[
+            _admin_game_item(record, db=db, now=database_now) for record in records
+        ],
         pagination=AdminV2Pagination(
             page=page,
             page_size=page_size,
@@ -555,6 +687,7 @@ def read_admin_v2_game(
             detail="The requested V2 game record does not exist.",
         ) from exc
     _set_admin_headers(request, response)
+    database_now = database_utc_now(db)
     player_identities = (
         project_god_view_player_identities(
             players_snapshot=game.players_snapshot,
@@ -565,10 +698,17 @@ def read_admin_v2_game(
         else []
     )
     return AdminV2GameDetailResponse(
-        **_admin_game_item(game).model_dump(),
+        **_admin_game_item(
+            game,
+            db=db,
+            run=next((item for item in runs if item.run_id == game.current_run_id), None),
+            match=match_state,
+            now=database_now,
+        ).model_dump(),
         rule_snapshot=game.rule_snapshot,
         players_snapshot=game.players_snapshot,
         judge_voice_snapshot=game.judge_voice_snapshot,
+        delivery_snapshot=game.delivery_snapshot,
         ability_snapshot=game.ability_snapshot,
         player_identities=player_identities,
         match_state=(
@@ -1094,8 +1234,47 @@ def read_admin_v2_voice_audio(
     )
 
 
-def _admin_game_item(record: object) -> AdminV2GameListItem:
-    return AdminV2GameListItem.model_validate(record, from_attributes=True)
+def _admin_game_item(
+    record: object,
+    *,
+    db: Session,
+    run: V2GameRun | None = None,
+    match: object | None = None,
+    now: datetime,
+) -> AdminV2GameListItem:
+    game = record
+    current_run = run or _current_run(db, game)
+    current_match = match if match is not None else get_match_state(db, game.game_id)
+    runtime_state = project_v2_runtime_state(
+        game=game,
+        run=current_run,
+        match=current_match,
+        now=now,
+    )
+    return AdminV2GameListItem.model_validate(
+        {
+            **game.__dict__,
+            **_runtime_state_fields(runtime_state),
+        }
+    )
+
+
+def _current_run(db: Session, game: object) -> V2GameRun:
+    run = db.get(V2GameRun, game.current_run_id)
+    if run is None:
+        raise V2RecordNotFound(f"missing current run for {game.game_id}")
+    return run
+
+
+def _runtime_state_fields(runtime_state: object) -> dict[str, Any]:
+    return {
+        "audio_mode": runtime_state.audio_mode,
+        "match_status": runtime_state.match_status,
+        "execution_state": runtime_state.execution_state,
+        "winner": runtime_state.winner,
+        "completion_reason": runtime_state.completion_reason,
+        "completed_at": runtime_state.completed_at,
+    }
 
 
 def _admin_voice_asset(asset: object) -> AdminV2VoiceAssetResponse:
@@ -1344,9 +1523,10 @@ def _admin_model_requests(
                 action_type=str(context.get("action_type") or "unknown"),
                 actor_kind=str(actor_kind),
                 actor_id=str(actor_id),
-                audience=str(
-                    payload.get("audience")
-                    or (presentation.audience if presentation is not None else "all")
+                audience=_admin_model_request_audience(
+                    payload=payload,
+                    context=context,
+                    presentation=presentation,
                 ),
                 request_kind=request_kind,
                 model_id=model_id,
@@ -1480,6 +1660,38 @@ def _admin_model_requests(
             )
         )
     return result
+
+
+def _admin_model_request_audience(
+    *,
+    payload: dict[str, Any],
+    context: dict[str, Any],
+    presentation: object | None,
+) -> str:
+    canonical_audience = payload.get("audience")
+    if (
+        payload.get("audience_contract_version") == AUDIENCE_CONTRACT_VERSION
+        and isinstance(canonical_audience, str)
+        and canonical_audience in V2_EVENT_AUDIENCES
+    ):
+        actor_kind = payload.get("actor_kind")
+        return model_event_audience(
+            action_audience=canonical_audience,
+            actor_kind=actor_kind if isinstance(actor_kind, str) else "unknown",
+        )
+    candidates = (
+        getattr(presentation, "audience", None),
+        payload.get("audience"),
+        context.get("audience"),
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, str) and candidate in V2_EVENT_AUDIENCES
+        ),
+        "legacy_unknown",
+    )
 
 
 def _first_int(*values: object) -> int | None:

@@ -399,10 +399,22 @@ export function buildV2HistoricalIdentities(
 }
 
 export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
+  const actionIdByTtsAttempt = new Map<string, string>();
+  for (const event of game.events) {
+    if (event.event_type !== "tts_stream_started") continue;
+    const attemptId = ttsAttemptId(event);
+    const actionId = stringValue(event.payload.action_id);
+    if (attemptId && actionId) actionIdByTtsAttempt.set(attemptId, actionId);
+  }
+
   const eventsByAction = new Map<string, V2GameRecordEvent[]>();
   const actionOpenEvents: V2GameRecordEvent[] = [];
   for (const event of game.events) {
-    const actionId = stringValue(event.payload.action_id);
+    const actionId =
+      stringValue(event.payload.action_id) ??
+      (event.event_type === "tts_stream_completed"
+        ? actionIdByTtsAttempt.get(ttsAttemptId(event) ?? "")
+        : undefined);
     if (actionId) {
       const items = eventsByAction.get(actionId) ?? [];
       items.push(event);
@@ -439,6 +451,9 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
       null;
     const presentation = presentationsByAction.get(actionId) ?? null;
     const voiceAsset = voicesByAction.get(actionId) ?? null;
+    const eventAudience = actionEvents
+      .map((item) => stringValue(item.payload.audience))
+      .find((audience) => audience !== null);
     const failed = actionEvents.find((item) => item.event_type === "action_failed");
     const succeeded = actionEvents.find(
       (item) => item.event_type === "action_succeeded",
@@ -458,7 +473,11 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
       actorKind,
       actorId,
       actorLabel: actorLabel(game, actorKind, actorId),
-      audience: request?.audience ?? presentation?.audience ?? "all",
+      audience:
+        presentation?.audience ??
+        request?.audience ??
+        eventAudience ??
+        "legacy_unknown",
       status: failed
         ? ("failed" as const)
         : succeeded
@@ -506,7 +525,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
       actorKind: "system",
       actorId: "system",
       actorLabel: "系统",
-      audience: "private",
+      audience: stringValue(event.payload.audience) ?? "legacy_unknown",
       status: "succeeded",
       startedAt: event.created_at,
       completedAt: event.created_at,
@@ -932,6 +951,13 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function ttsAttemptId(event: V2GameRecordEvent): string | null {
+  return (
+    stringValue(event.payload.tts_attempt_id) ??
+    stringValue(event.payload.attempt_id)
+  );
 }
 
 function stringValue(value: unknown): string | null {

@@ -8,6 +8,15 @@ export type RoleSpecSummary = {
   category?: string;
 };
 
+export type WerewolfAttackPolicy = {
+  resolution:
+    | "plurality_rotating_tiebreak"
+    | "plurality_seeded_random"
+    | "unanimous_no_attack";
+  allow_no_attack: boolean;
+  allow_wolf_target: boolean;
+};
+
 export type RuleSetSummary = {
   id: string;
   version: string;
@@ -29,6 +38,12 @@ export type RuleSetSummary = {
   rule_tags?: string[];
   exile_last_words_enabled?: boolean;
   first_night_last_words_enabled?: boolean;
+  werewolf_attack_policy?: WerewolfAttackPolicy | null;
+  revision_id?: string;
+  revision_no?: number;
+  schema_version?: number;
+  content_hash?: string;
+  is_default?: boolean;
 };
 
 export type RuleSetsResponse = {

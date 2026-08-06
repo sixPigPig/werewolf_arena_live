@@ -14,8 +14,15 @@ import {
   type V2LiveState,
   type V2Presentation,
   type V2AbilityProgress,
+  type V2RuntimeProjection,
 } from "../contracts";
 import { V2PcmPlayer } from "../V2PcmPlayer";
+import {
+  awaitingObservationLabel,
+  effectiveMatchStatus,
+  effectiveWinner,
+  runtimeFromSnapshot,
+} from "../runtime";
 import {
   godViewAccessTokenFromHash,
   readGodViewAccessToken,
@@ -44,6 +51,8 @@ export function GodViewPage() {
   const [snapshot, setSnapshot] = useState<GodViewSnapshot | null>(null);
   const [liveState, setLiveState] = useState<V2LiveState | null>(null);
   const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
+  const [runtimeProjection, setRuntimeProjection] =
+    useState<V2RuntimeProjection | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [presentation, setPresentation] = useState<V2Presentation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -63,6 +72,7 @@ export function GodViewPage() {
         setSnapshot(value);
         setLiveState(value.live_state);
         setGamePhase(value.game_phase);
+        setRuntimeProjection(runtimeFromSnapshot(value));
         setRunId(value.run_id);
         setLoadState("ready");
       })
@@ -103,8 +113,9 @@ export function GodViewPage() {
     setConnectionState("connecting");
 
     try {
-      const player = new V2PcmPlayer();
-      await player.unlock();
+      const audioEnabled = runtimeProjection?.audio_mode === "tts";
+      const player = audioEnabled ? new V2PcmPlayer() : null;
+      if (player) await player.unlock();
       playerRef.current = player;
       const socket = new WebSocket(resolveV2GodViewWebSocketUrl(gameId), [
         GOD_VIEW_WEBSOCKET_SUBPROTOCOL,
@@ -133,27 +144,32 @@ export function GodViewPage() {
               setSnapshot(message);
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
+              setRuntimeProjection(runtimeFromSnapshot(message));
               if (message.live_state === "canceled") {
                 terminalRef.current = true;
                 presentationRef.current = null;
                 setPresentation(null);
-                player.stop();
+                player?.stop();
                 socket.close();
                 return;
               }
               presentationRef.current = message.current_presentation;
               setPresentation(message.current_presentation);
-              if (message.current_presentation) player.begin(message.current_presentation);
+              if (message.current_presentation) player?.begin(message.current_presentation);
               if (!readySent) {
                 socket.send(
                   JSON.stringify({
                     protocol_version: 1,
                     type: "god_view.ready",
-                    audio: {
-                      encoding: "pcm_s16le",
-                      sample_rate: 24000,
-                      channels: 1,
-                    },
+                    ...(audioEnabled
+                      ? {
+                          audio: {
+                            encoding: "pcm_s16le",
+                            sample_rate: 24000,
+                            channels: 1,
+                          },
+                        }
+                      : {}),
                   }),
                 );
                 readySent = true;
@@ -175,13 +191,25 @@ export function GodViewPage() {
                 terminalRef.current = true;
                 presentationRef.current = null;
                 setPresentation(null);
-                player.stop();
+                player?.stop();
+                setRuntimeProjection((current) =>
+                  current
+                    ? { ...current, match_status: "canceled", execution_state: "stopped" }
+                    : current,
+                );
                 socket.close();
                 return;
               }
               if (message.live_state === "failed") {
                 terminalRef.current = true;
-                player.stop();
+                player?.stop();
+                setRuntimeProjection((current) =>
+                  current?.match_status === "completed"
+                    ? current
+                    : current
+                      ? { ...current, match_status: "failed", execution_state: "stopped" }
+                      : current,
+                );
                 setLiveError(message.reason ?? "V2 上帝视角实时动作失败");
               }
               if (message.live_state === "awaiting_observation") {
@@ -230,6 +258,14 @@ export function GodViewPage() {
                         sheriff_badge_state: message.sheriff_badge_state,
                         winner: message.winner,
                       },
+                    }
+                  : current,
+              );
+              setRuntimeProjection((current) =>
+                current
+                  ? {
+                      ...current,
+                      winner: message.winner,
                     }
                   : current,
               );
@@ -296,7 +332,7 @@ export function GodViewPage() {
               };
               presentationRef.current = current;
               setPresentation(current);
-              player.begin(current);
+              player?.begin(current);
               return;
             }
             if (message.type === "speech.segment_committed") {
@@ -320,16 +356,18 @@ export function GodViewPage() {
             }
             if (message.type === "presentation.failed") {
               terminalRef.current = true;
-              player.stop();
+              player?.stop();
               setLiveState("failed");
               setLiveError(`${message.failure_kind}: ${message.failure_code}`);
               return;
             }
             if (message.type === "presentation.closed") {
               if (presentationRef.current?.presentation_id === message.presentation_id) {
+                player?.stop();
                 presentationRef.current = null;
-                setPresentation(null);
-                player.stop();
+                if (audioEnabled) {
+                  setPresentation(null);
+                }
               }
               return;
             }
@@ -337,10 +375,13 @@ export function GodViewPage() {
           if (!(event.data instanceof ArrayBuffer)) {
             throw new Error("上帝视角收到未知二进制类型");
           }
+          if (!player) {
+            throw new Error("未确认启用语音的对局收到意外音频帧");
+          }
           player.push(decodeV2AudioFrame(event.data));
         } catch (reason) {
           terminalRef.current = true;
-          player.stop();
+          player?.stop();
           setLiveState("failed");
           setConnectionState("failed");
           setLiveError(reason instanceof Error ? reason.message : "V2 上帝视角协议错误");
@@ -362,6 +403,16 @@ export function GodViewPage() {
       setLiveError(reason instanceof Error ? reason.message : "无法启动上帝视角实时观赛");
     }
   }
+
+  const projectedMatchState = snapshot?.match_state ?? null;
+  const matchStatus = effectiveMatchStatus(
+    runtimeProjection,
+    gamePhase,
+    projectedMatchState,
+    liveState,
+  );
+  const winner = effectiveWinner(runtimeProjection, projectedMatchState);
+  const isCompleted = matchStatus === "completed" && winner !== null;
 
   return (
     <main className={`mobile-page mobile-god-view-page${isNightPhase(gamePhase) ? " is-night" : ""}`}>
@@ -395,10 +446,20 @@ export function GodViewPage() {
         </p>
       ) : null}
 
-      {snapshot && connectionState === "idle" && liveState !== "canceled" ? (
+      {snapshot &&
+      connectionState === "idle" &&
+      liveState !== "canceled" &&
+      !isCompleted ? (
         <section className="mobile-god-view-stage">
           <span>全知实时观赛</span>
-          <blockquote>身份已经解封。进入后将实时接收当前法官字幕与语音。</blockquote>
+          <blockquote>
+            身份已经解封。进入后将实时接收当前法官字幕
+            {runtimeProjection?.audio_mode === "tts"
+              ? "与语音。"
+              : runtimeProjection?.audio_mode === "text_only"
+                ? "。本局为纯文本模式。"
+                : "。旧记录音频模式未知，仅接收字幕。"}
+          </blockquote>
           <button
             className="mobile-button mobile-button-primary"
             onClick={() => void enterLive()}
@@ -421,7 +482,14 @@ export function GodViewPage() {
               : playerName(snapshot, presentation.actor.id)}
           </span>
           <blockquote>{presentation.subtitle_text || "正在等待完整句子..."}</blockquote>
-          <p aria-live="polite" role="status">{liveLabel(liveState, gamePhase)}</p>
+          <p aria-live="polite" role="status">
+            {liveLabel(
+              liveState,
+              gamePhase,
+              projectedMatchState,
+              runtimeProjection,
+            )}
+          </p>
           <dl>
             <div><dt>run</dt><dd>{runId}</dd></div>
             <div><dt>action</dt><dd>{presentation.action_id}</dd></div>
@@ -431,8 +499,15 @@ export function GodViewPage() {
         </section>
       ) : connectionState === "connected" &&
         liveState !== "canceled" &&
-        !liveError ? (
-        <p className="mobile-status-banner" role="status">{liveLabel(liveState, gamePhase)}</p>
+        (!liveError || isCompleted) ? (
+        <p className="mobile-status-banner" role="status">
+          {liveLabel(
+            liveState,
+            gamePhase,
+            projectedMatchState,
+            runtimeProjection,
+          )}
+        </p>
       ) : null}
 
       {isNightPhase(gamePhase) ? (
@@ -467,11 +542,11 @@ export function GodViewPage() {
         </section>
       ) : null}
 
-      {liveState === "awaiting_observation" && connectionState !== "idle" ? (
+      {isCompleted || liveState === "awaiting_observation" ? (
         <p className="mobile-status-banner" role="status">
-          {snapshot?.match_state?.winner
-            ? `完整对局已结束：${snapshot.match_state.winner === "villagers" ? "好人阵营" : "狼人阵营"}获胜。`
-            : "当前对局已停止；私密与公开语音均已分别保存。"}
+          {isCompleted
+            ? `完整对局已结束：${winner === "villagers" ? "好人阵营" : "狼人阵营"}获胜。`
+            : `${awaitingObservationLabel(runtimeProjection)}；比赛尚未形成权威胜负。`}
         </p>
       ) : null}
 
@@ -489,7 +564,7 @@ export function GodViewPage() {
         </section>
       ) : null}
 
-      {liveError ? (
+      {liveError && !isCompleted ? (
         <section className="mobile-live-v2-error" role="alert">
           <strong>上帝视角实时观赛失败</strong>
           <p>{liveError}</p>
@@ -537,10 +612,28 @@ export function GodViewPage() {
   );
 }
 
-function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string {
+function liveLabel(
+  state: V2LiveState | null,
+  phase: V2GamePhase | null,
+  match: GodViewSnapshot["match_state"] | null,
+  runtime: V2RuntimeProjection | null,
+): string {
+  const matchStatus = effectiveMatchStatus(runtime, phase, match, state);
+  const winner = effectiveWinner(runtime, match);
+  if (matchStatus === "completed" && winner) {
+    return winner === "villagers"
+      ? "完整对局已结束：好人阵营获胜"
+      : "完整对局已结束：狼人阵营获胜";
+  }
   const isNight = isNightPhase(phase);
+  const audioEnabled = runtime?.audio_mode === "tts";
+  const legacyAudioUnknown = runtime?.audio_mode === "legacy_unknown";
   if (state === "waiting_to_start") return "等待观众点击进入，正式对局尚未开始";
-  if (state === "ready") return "音频已解锁，等待启动实时法官动作...";
+  if (state === "ready") {
+    if (audioEnabled) return "音频已解锁，等待启动实时法官动作...";
+    if (legacyAudioUnknown) return "旧记录音频模式未知，仅接收实时字幕...";
+    return "纯文本通道已就绪，等待启动实时法官动作...";
+  }
   if (state === "generating") {
     if (phase?.phase_state === "night_running") return "夜间私密动作正在实时请求大模型...";
     if (phase?.phase_state === "sheriff_election_ready") return "法官正在实时生成警长竞选开场...";
@@ -551,16 +644,34 @@ function liveLabel(state: V2LiveState | null, phase: V2GamePhase | null): string
       : "法官正在通过大模型实时生成开场播报...";
   }
   if (state === "broadcasting") {
-    if (phase?.phase_state === "night_running") return "夜间私密字幕与语音正在实时播出";
-    if (phase?.phase_state === "sheriff_election_ready") return "警长竞选开场正在实时播报";
-    if (phase?.phase_state === "public_day_ready") return "白天发言开场正在实时播报";
-    if (isDayPhase(phase)) return "白天公开动作正在实时播报";
+    if (phase?.phase_state === "night_running") {
+      return audioEnabled ? "夜间私密字幕与语音正在实时播出" : "夜间私密字幕正在实时展示";
+    }
+    if (phase?.phase_state === "sheriff_election_ready") {
+      return audioEnabled ? "警长竞选开场正在实时播报" : "警长竞选开场字幕正在实时展示";
+    }
+    if (phase?.phase_state === "public_day_ready") {
+      return audioEnabled ? "白天发言开场正在实时播报" : "白天发言开场字幕正在实时展示";
+    }
+    if (isDayPhase(phase)) {
+      return audioEnabled ? "白天公开动作正在实时播报" : "白天公开动作字幕正在实时展示";
+    }
     return isNight
-      ? "法官入夜话术正在向全部观众实时播报"
-      : "法官开场话术正在向全部观众实时播报";
+      ? audioEnabled
+        ? "法官入夜话术正在向全部观众实时播报"
+        : "法官入夜话术正在向全部观众实时展示"
+      : audioEnabled
+        ? "法官开场话术正在向全部观众实时播报"
+        : "法官开场话术正在向全部观众实时展示";
   }
-  if (state === "finalizing") return "播报完成，正在校验并保存同源 V2 语音资产...";
-  if (state === "awaiting_observation") return "完整对局已经结束";
+  if (state === "finalizing") {
+    return audioEnabled
+      ? "播报完成，正在校验并保存同源 V2 语音资产..."
+      : "字幕展示完成，正在保存实时记录...";
+  }
+  if (state === "awaiting_observation") {
+    return awaitingObservationLabel(runtime);
+  }
   if (state === "paused_model_error") return "模型服务暂时异常，当前动作已安全冻结";
   if (state === "canceled") return "本局已由管理员终止";
   if (state === "failed") return "本次实时动作已明确失败";

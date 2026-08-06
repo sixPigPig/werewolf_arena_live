@@ -36,7 +36,7 @@ from app.v2.protocol import (
     night_progress,
     public_dawn_result,
 )
-from app.v2.repository import V2PhaseTransition
+from app.v2.repository import V2ExecutionOwnershipLost, V2PhaseTransition
 
 if TYPE_CHECKING:
     from app.v2.day_engine import V2DayEngine
@@ -123,7 +123,7 @@ class V2NightEngine:
     ) -> V2PhaseTransition | None:
         try:
             self._actions.check_cancellation(game_id)
-            state = self._repository.start_night(game_id)
+            state = self._repository.start_night(game_id, audience="god_view")
             working = _WorkingNight()
             await broadcaster.broadcast_json(
                 night_progress(
@@ -319,6 +319,8 @@ class V2NightEngine:
                     )
                 )
             return final_transition
+        except V2ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             logger.warning(
                 "Live V2 night runtime failed: %s",
@@ -365,6 +367,7 @@ class V2NightEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="night_parallel_batch_started",
+            audience="god_view",
             payload={
                 "round_no": state.round_no,
                 "window_id": state.window_id,
@@ -413,6 +416,7 @@ class V2NightEngine:
                 self._repository.cancel_open_activations(
                     state=state,
                     reason="night_parallel_batch_canceled",
+                    audience="god_view",
                     batch_id=batch.batch_id,
                     groups=groups,
                 )
@@ -438,6 +442,7 @@ class V2NightEngine:
             self._repository.append_event(
                 game_id=state.game_id,
                 event_type="night_parallel_batch_recovery_started",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "window_id": state.window_id,
@@ -462,6 +467,7 @@ class V2NightEngine:
             self._repository.append_event(
                 game_id=state.game_id,
                 event_type="night_parallel_batch_recovery_completed",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "window_id": state.window_id,
@@ -493,6 +499,7 @@ class V2NightEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="night_parallel_batch_resolved",
+            audience="god_view",
             payload={
                 "round_no": state.round_no,
                 "window_id": state.window_id,
@@ -560,6 +567,7 @@ class V2NightEngine:
             self._repository.skip_activation(
                 state=state,
                 ability_id=ability_id,
+                audience="god_view",
                 reason="no_eligible_actor_or_target",
             )
             return
@@ -589,6 +597,7 @@ class V2NightEngine:
                         self._repository.open_activation(
                             state=state,
                             ability_id=ability_id,
+                            audience="god_view",
                             actor_player_id=wolf.player_id,
                             occurrence=occurrence,
                         ),
@@ -718,6 +727,7 @@ class V2NightEngine:
                 activation = self._repository.open_activation(
                     state=state,
                     ability_id=ability_id,
+                    audience="god_view",
                     actor_player_id=wolf.player_id,
                     occurrence=occurrence,
                 )
@@ -792,6 +802,7 @@ class V2NightEngine:
                 tiebreak_activation = self._repository.open_activation(
                     state=state,
                     ability_id=ability_id,
+                    audience="god_view",
                     actor_player_id=tiebreaker.player_id,
                     occurrence=occurrence,
                 )
@@ -888,6 +899,7 @@ class V2NightEngine:
         resolution_activation = self._repository.open_activation(
             state=state,
             ability_id=ability_id,
+            audience="god_view",
             actor_player_id=None,
             occurrence=occurrence,
         )
@@ -1066,6 +1078,7 @@ class V2NightEngine:
         current_activation = activation or self._repository.open_activation(
             state=state,
             ability_id=prepared.ability_id,
+            audience="god_view",
             actor_player_id=prepared.player.player_id,
             occurrence=1,
         )
@@ -1116,6 +1129,7 @@ class V2NightEngine:
             self._repository.skip_activation(
                 state=state,
                 ability_id=prepared.ability_id,
+                audience="god_view",
                 reason=prepared.skip_reason,
             )
             return
@@ -1232,6 +1246,7 @@ class V2NightEngine:
             self._repository.skip_activation(
                 state=state,
                 ability_id=prepared.ability_id,
+                audience="god_view",
                 reason=prepared.skip_reason,
             )
             return
@@ -1320,6 +1335,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id=ability_id,
+                    audience="god_view",
                     reason="owner_not_alive",
                 )
                 await broadcaster.broadcast_json(
@@ -1375,6 +1391,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.heal",
+                    audience="god_view",
                     reason="heal_already_used",
                 )
                 await self._ability_status(state, broadcaster, "witch.heal", witch, "unavailable")
@@ -1382,6 +1399,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.heal",
+                    audience="god_view",
                     reason="no_provisional_attack",
                 )
                 await self._ability_status(state, broadcaster, "witch.heal", witch, "unavailable")
@@ -1389,6 +1407,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.heal",
+                    audience="god_view",
                     reason="self_heal_only_allowed_first_night",
                 )
                 await self._ability_status(state, broadcaster, "witch.heal", witch, "unavailable")
@@ -1396,6 +1415,7 @@ class V2NightEngine:
                 activation = self._repository.open_activation(
                     state=state,
                     ability_id="witch.heal",
+                    audience="god_view",
                     actor_player_id=witch.player_id,
                     occurrence=1,
                 )
@@ -1446,6 +1466,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.poison",
+                    audience="god_view",
                     reason="poison_already_used",
                 )
                 await self._ability_status(state, broadcaster, "witch.poison", witch, "unavailable")
@@ -1453,6 +1474,7 @@ class V2NightEngine:
                 self._repository.skip_activation(
                     state=state,
                     ability_id="witch.poison",
+                    audience="god_view",
                     reason="heal_poison_mutually_exclusive",
                 )
                 await self._ability_status(state, broadcaster, "witch.poison", witch, "unavailable")
@@ -1468,6 +1490,7 @@ class V2NightEngine:
                     self._repository.skip_activation(
                         state=state,
                         ability_id="witch.poison",
+                        audience="god_view",
                         reason="no_eligible_target",
                     )
                     await self._ability_status(
@@ -1477,6 +1500,7 @@ class V2NightEngine:
                     activation = self._repository.open_activation(
                         state=state,
                         ability_id="witch.poison",
+                        audience="god_view",
                         actor_player_id=witch.player_id,
                         occurrence=1,
                     )
@@ -1543,6 +1567,7 @@ class V2NightEngine:
         activation = self._repository.open_activation(
             state=reaction_state,
             ability_id="hunter.death_shot",
+            audience="god_view",
             actor_player_id=hunter_id,
             occurrence=1,
         )

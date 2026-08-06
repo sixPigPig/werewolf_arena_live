@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.knowledge_timeline import player_private_knowledge
+from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
+from app.v2.event_contract import canonical_event_payload
 from app.v2.model_context_contract import frozen_model_context_contract
 from app.v2.models import (
     V2GameRecord,
@@ -20,7 +22,12 @@ from app.v2.models import (
     V2PlayerState,
     V2RoleAssignment,
 )
-from app.v2.repository import V2GameCanceled, V2PhaseTransition, V2RepositoryError
+from app.v2.repository import (
+    V2ExecutionOwnershipLost,
+    V2GameCanceled,
+    V2PhaseTransition,
+    V2RepositoryError,
+)
 from app.v2.win_conditions import (
     hunter_settlement_can_change_winner,
     winner_from_alive_roles,
@@ -76,8 +83,14 @@ class V2ExileResult:
 
 
 class V2MatchRepository:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        enforce_execution_fence: bool = False,
+    ) -> None:
         self._session_factory = session_factory
+        self._enforce_execution_fence = enforce_execution_fence
 
     def snapshot(self, game_id: str) -> V2MatchSnapshot:
         self._ensure_state(game_id)
@@ -134,7 +147,7 @@ class V2MatchRepository:
         if not normalized_note:
             return None
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if match.round_no != round_no or not game.phase_id.startswith("day_"):
@@ -170,6 +183,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="private_knowledge_recorded",
+                audience="god_view",
                 payload={
                     "knowledge_fact_id": fact_id,
                     "owner_scope": "player",
@@ -195,7 +209,7 @@ class V2MatchRepository:
         if not normalized_memory:
             raise V2RepositoryError("private round memory cannot be empty")
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if match.round_no != round_no or not game.phase_id.startswith("day_"):
@@ -222,6 +236,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="private_round_memory_reused",
+                    audience="god_view",
                     payload={
                         "knowledge_fact_id": existing.knowledge_fact_id,
                         "owner_id": player_id,
@@ -254,6 +269,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="private_knowledge_recorded",
+                audience="god_view",
                 payload={
                     "knowledge_fact_id": fact_id,
                     "owner_scope": "player",
@@ -271,16 +287,23 @@ class V2MatchRepository:
         *,
         game_id: str,
         event_type: str,
+        audience: str,
         payload: dict[str, Any],
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
-            _append_event(db, game=game, event_type=event_type, payload=payload)
+            _append_event(
+                db,
+                game=game,
+                event_type=event_type,
+                audience=audience,
+                payload=payload,
+            )
 
     def record_phase_state(self, *, game_id: str, previous_phase_state: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             transition = V2PhaseTransition(
                 game_id=game.game_id,
@@ -294,6 +317,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="game_phase_changed",
+                audience="all",
                 payload={
                     "phase_seq": game.phase_seq,
                     "previous_phase_id": game.phase_id,
@@ -312,7 +336,7 @@ class V2MatchRepository:
         reason: str,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if player_id is not None:
@@ -336,6 +360,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type=event_type,
+                audience="all",
                 payload={
                     "player_id": player_id,
                     "from_player_id": previous_sheriff_id,
@@ -345,7 +370,7 @@ class V2MatchRepository:
 
     def record_pre_sheriff_explosion(self, *, game_id: str, player_id: str) -> str:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             _kill(db, game=game, player_id=player_id, cause="werewolf_self_explosion")
@@ -365,6 +390,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="werewolf_self_exploded",
+                audience="all",
                 payload={
                     "round_no": match.round_no,
                     "player_id": player_id,
@@ -377,7 +403,7 @@ class V2MatchRepository:
 
     def record_day_explosion(self, *, game_id: str, player_id: str, stage: str) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             _kill(db, game=game, player_id=player_id, cause="werewolf_self_explosion")
@@ -385,6 +411,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="werewolf_self_exploded",
+                audience="all",
                 payload={
                     "round_no": match.round_no,
                     "player_id": player_id,
@@ -395,7 +422,7 @@ class V2MatchRepository:
 
     def resolve_exile(self, *, game_id: str, player_id: str) -> V2ExileResult:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             assignment = db.scalar(
@@ -417,6 +444,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="idiot_revealed",
+                    audience="all",
                     payload={
                         "round_no": match.round_no,
                         "player_id": player_id,
@@ -430,6 +458,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="player_exiled",
+                    audience="all",
                     payload={"round_no": match.round_no, "player_id": player_id},
                 )
             return V2ExileResult(
@@ -446,7 +475,7 @@ class V2MatchRepository:
         target_player_id: str | None,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             hunter = db.get(V2PlayerState, (game_id, hunter_id))
@@ -484,6 +513,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="hunter_response_resolved",
+                audience="all",
                 payload={
                     "round_no": match.round_no,
                     "period": "day",
@@ -565,7 +595,7 @@ class V2MatchRepository:
 
     def finish_day(self, *, game_id: str, reason: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             winner = _winner(db, game)
@@ -583,6 +613,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="game_completed",
+                    audience="all",
                     payload={
                         "winner": winner,
                         "reason": "deterministic_win_condition",
@@ -600,6 +631,7 @@ class V2MatchRepository:
                     db,
                     game=game,
                     event_type="match_runtime_failed",
+                    audience="god_view",
                     payload={"reason": "max_rounds_exceeded", "round_no": match.round_no},
                 )
             else:
@@ -620,6 +652,7 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="game_phase_changed",
+                audience="all",
                 payload={
                     "phase_seq": transition.phase_seq,
                     "previous_phase_id": transition.previous_phase_id,
@@ -639,7 +672,7 @@ class V2MatchRepository:
 
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             game.status = "failed"
             game.phase_state = "failed"
@@ -653,13 +686,14 @@ class V2MatchRepository:
                 db,
                 game=game,
                 event_type="day_runtime_failed",
+                audience="god_view",
                 payload={"failure_code": failure_code},
             )
             return run.run_id
 
     def _ensure_state(self, game_id: str) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if db.get(V2MatchState, game_id) is not None:
                 return
             rule = game.rule_snapshot.get("rule_set")
@@ -853,10 +887,20 @@ def _match(db: Session, game: V2GameRecord) -> V2MatchState:
     return match
 
 
-def _locked_game(db: Session, game_id: str) -> V2GameRecord:
+def _locked_game(
+    db: Session,
+    game_id: str,
+    *,
+    require_fence: bool,
+) -> V2GameRecord:
     game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
+    if require_fence:
+        try:
+            require_v2_run_fence(db, game)
+        except V2RunFenceRejected as exc:
+            raise V2ExecutionOwnershipLost(str(exc)) from exc
     return game
 
 
@@ -878,6 +922,7 @@ def _append_event(
     *,
     game: V2GameRecord,
     event_type: str,
+    audience: str,
     payload: dict[str, Any],
 ) -> None:
     next_seq = game.last_record_seq + 1
@@ -889,7 +934,7 @@ def _append_event(
             run_id=game.current_run_id,
             event_type=event_type,
             payload_schema_version=1,
-            payload=payload,
+            payload=canonical_event_payload(payload, audience=audience),
         )
     )
     game.last_record_seq = next_seq

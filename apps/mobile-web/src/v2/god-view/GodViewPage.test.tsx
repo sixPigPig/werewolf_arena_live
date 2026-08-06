@@ -13,6 +13,7 @@ const sourceStart = vi.fn();
 const sourceStop = vi.fn();
 
 class FakeAudioContext {
+  static instances = 0;
   currentTime = 0;
   destination = {} as AudioDestinationNode;
   resume = vi.fn(async () => undefined);
@@ -30,6 +31,10 @@ class FakeAudioContext {
         addEventListener: vi.fn(),
       }) as unknown as AudioBufferSourceNode,
   );
+
+  constructor() {
+    FakeAudioContext.instances += 1;
+  }
 }
 
 class FakeWebSocket {
@@ -67,6 +72,7 @@ class FakeWebSocket {
 beforeEach(() => {
   window.sessionStorage.clear();
   FakeWebSocket.instances = [];
+  FakeAudioContext.instances = 0;
   sourceStart.mockClear();
   sourceStop.mockClear();
 });
@@ -289,12 +295,107 @@ describe("GodViewPage", () => {
     });
 
     expect(await screen.findByText("天黑，请闭眼")).toBeInTheDocument();
-    expect(screen.getByText(/当前对局已停止/)).toBeInTheDocument();
+    expect(screen.getByText(/等待观察\/播放确认；比赛尚未形成权威胜负/)).toBeInTheDocument();
+    act(() => socket.emitJson(liveSnapshot("awaiting_observation", null)));
+    expect((await screen.findAllByText(/实时流程已停止/)).length).toBeGreaterThan(0);
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(screen.getByText("狼人")).toBeInTheDocument();
     expect(screen.getByText("村民")).toBeInTheDocument();
     expect(sourceStart).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["text_only", "legacy_unknown"] as const)(
+    "enters %s God View without AudioContext and retains its last subtitle",
+    async (audioMode) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(identitySnapshot(audioMode)), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderPage(`#access_token=${accessToken}`);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "进入上帝视角实时观赛" }),
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(liveSnapshot("ready", null, audioMode));
+    });
+
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(socket.send.mock.calls[0][0]))).toEqual({
+      protocol_version: 1,
+      type: "god_view.ready",
+    });
+    expect(FakeAudioContext.instances).toBe(0);
+    expect(
+      screen.getByText(
+        audioMode === "text_only"
+          ? /纯文本通道已就绪/
+          : /旧记录音频模式未知，仅接收实时字幕/,
+      ),
+    ).toBeInTheDocument();
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "全知纯文本保留到下一幕。",
+      });
+      socket.emitJson({
+        ...base("presentation.closed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        final_segment_index: 0,
+        final_chunk_index: -1,
+        final_sample_cursor: 0,
+        result: "audio_drained_and_voice_saved",
+      });
+    });
+    expect(await screen.findByText("全知纯文本保留到下一幕。")).toBeVisible();
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: `${actionId}2`,
+        presentation_seq: 2,
+        presentation_id: `${presentationId}2`,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: `${speechId}2`,
+      });
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByText("全知纯文本保留到下一幕。"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(FakeAudioContext.instances).toBe(0);
+    },
+  );
 
   it("does not replay the completed judge sentence after reconnect", async () => {
     vi.stubGlobal(
@@ -320,7 +421,7 @@ describe("GodViewPage", () => {
       socket.emitJson(liveSnapshot("awaiting_observation", null));
     });
 
-    expect(await screen.findByText(/当前对局已停止/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/实时流程已停止/)).length).toBeGreaterThan(0);
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(sourceStart).not.toHaveBeenCalled();
   });
@@ -514,7 +615,11 @@ describe("GodViewPage", () => {
       });
       socket.emitJson(state("awaiting_observation"));
     });
-    expect(await screen.findByText(/完整对局已结束：狼人阵营获胜/)).toBeInTheDocument();
+    expect(screen.queryByText(/完整对局已结束：狼人阵营获胜/)).not.toBeInTheDocument();
+    act(() => socket.emitJson(completedLiveSnapshot("werewolves")));
+    expect(
+      (await screen.findAllByText(/完整对局已结束：狼人阵营获胜/)).length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -526,7 +631,9 @@ function renderPage(hash: string) {
   return render(<RouterProvider router={router} />);
 }
 
-function identitySnapshot() {
+function identitySnapshot(
+  audioMode: "tts" | "text_only" | "legacy_unknown" = "tts",
+) {
   return {
     protocol_version: 1,
     type: "god_view.identity_snapshot",
@@ -535,6 +642,12 @@ function identitySnapshot() {
     game_id: gameId,
     run_id: "v2_run_0123456789abcdef",
     live_state: "waiting_to_start",
+    audio_mode: audioMode,
+    match_status: "waiting",
+    execution_state: "unowned",
+    winner: null,
+    completion_reason: null,
+    completed_at: null,
     game_phase: {
       phase_seq: 1,
       phase_id: "opening",
@@ -590,18 +703,43 @@ function identitySnapshot() {
 function liveSnapshot(
   liveState: string,
   currentPresentation: Record<string, unknown> | null,
+  audioMode: "tts" | "text_only" | "legacy_unknown" = "tts",
 ) {
-  const identity = identitySnapshot();
+  const identity = identitySnapshot(audioMode);
   return {
     ...identity,
     type: "god_view.live_snapshot",
     live_state: liveState,
+    match_status: "running",
+    execution_state: liveState === "awaiting_observation" ? "stopped" : "owned",
     game_phase:
       liveState === "awaiting_observation"
         ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
         : identity.game_phase,
     latest_presentation_seq: currentPresentation ? 1 : 0,
     current_presentation: currentPresentation,
+  };
+}
+
+function completedLiveSnapshot(winner: "villagers" | "werewolves") {
+  const current = liveSnapshot("awaiting_observation", null);
+  return {
+    ...current,
+    match_status: "completed",
+    execution_state: "stopped",
+    winner,
+    completion_reason: "deterministic_win_condition",
+    completed_at: "2026-07-22T12:01:00Z",
+    game_phase: {
+      phase_seq: 7,
+      phase_id: "day_2",
+      phase_state: "game_completed",
+    },
+    match_state: {
+      ...current.match_state,
+      round_no: 2,
+      winner,
+    },
   };
 }
 

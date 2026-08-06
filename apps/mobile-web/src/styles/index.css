@@ -2544,6 +2544,19 @@ textarea {
   font-size: 12px;
 }
 
+.mobile-lobby-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  border: 1px solid rgb(218 179 96 / 24%);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #050910;
+  color: #f4e8d2;
+  font-size: 12px;
+}
+
 .mobile-lobby-advanced {
   border: 1px solid rgb(218 179 96 / 24%);
   border-radius: 8px;
@@ -5565,6 +5578,7 @@ textarea {
 }
 
 .mobile-lobby-field input,
+.mobile-lobby-field select,
 .mobile-profile-search input,
 .mobile-profile-select select {
   font-size: 12px;
@@ -5626,6 +5640,7 @@ textarea {
   .mobile-lobby-advanced p[role="alert"],
   .mobile-lobby-field span,
   .mobile-lobby-field input,
+  .mobile-lobby-field select,
   .mobile-lobby-launch-region > p,
   .mobile-lobby-launch-bar > span,
   .mobile-lobby-launch-button,
@@ -5671,6 +5686,7 @@ textarea {
   .mobile-lobby-advanced summary,
   .mobile-lobby-launch-button,
   .mobile-lobby-field input,
+  .mobile-lobby-field select,
   .mobile-profile-picker .mobile-profile-search input,
   .mobile-profile-select-trigger {
     min-height: 13.75vw;

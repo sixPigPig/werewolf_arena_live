@@ -14,8 +14,12 @@ from app.v2.models import (
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
+    V2MatchState,
     V2ModelActionRecovery,
 )
+from app.v2.event_contract import canonical_event_payload, model_event_audience
+from app.v2.execution import database_utc_now
+from app.v2.runtime_state import project_v2_runtime_state
 
 
 ACTIVE_V2_GAME_STATES = frozenset(
@@ -111,7 +115,16 @@ def request_v2_game_stop(
     run = db.get(V2GameRun, game.current_run_id)
     if run is None:
         raise V2GameControlNotFound
-    if game.status not in ACTIVE_V2_GAME_STATES:
+    stoppable_incomplete_terminal = False
+    if game.status == "awaiting_observation":
+        runtime_state = project_v2_runtime_state(
+            game=game,
+            run=run,
+            match=db.get(V2MatchState, game.game_id),
+            now=database_utc_now(db),
+        )
+        stoppable_incomplete_terminal = runtime_state.match_status == "running"
+    if game.status not in ACTIVE_V2_GAME_STATES and not stoppable_incomplete_terminal:
         raise V2GameControlNotActive
     if run.stop_requested_at is not None:
         raise V2GameStopAlreadyRequested
@@ -137,10 +150,10 @@ def request_v2_game_stop(
             run_id=run.run_id,
             event_type="game_stop_requested",
             payload_schema_version=1,
-            payload={
+            payload=canonical_event_payload({
                 "source": "admin",
                 "reason_code": "operator_interrupted",
-            },
+            }, audience="god_view"),
         )
     )
     game.last_record_seq = next_seq
@@ -241,14 +254,17 @@ def request_v2_model_action_retry(
             run_id=run.run_id,
             event_type="model_action_retry_requested",
             payload_schema_version=1,
-            payload={
-                "source": "admin",
-                "action_id": action_id,
-                "control_request_id": control.id,
-                "reason_code": "operator_retry",
-                "recovery_id": recovery.recovery_id,
-                "request_hash": recovery.request_hash,
-            },
+            payload=canonical_event_payload(
+                {
+                    "source": "admin",
+                    "action_id": action_id,
+                    "control_request_id": control.id,
+                    "reason_code": "operator_retry",
+                    "recovery_id": recovery.recovery_id,
+                    "request_hash": recovery.request_hash,
+                },
+                audience=_model_retry_event_audience(paused, recovery),
+            ),
         )
     )
     game.last_record_seq = next_seq
@@ -281,6 +297,28 @@ def _control_model_action_id(
             action_id = payload.get("action_id")
             return action_id if isinstance(action_id, str) else None
     return None
+
+
+def _event_audience(event: V2GameRecordEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    audience = payload.get("audience")
+    if isinstance(audience, str):
+        return audience
+    # Legacy paused actions predate the event audience contract. Keep the
+    # operator recovery path available while failing closed for delivery.
+    return "god_view"
+
+
+def _model_retry_event_audience(
+    event: V2GameRecordEvent,
+    recovery: V2ModelActionRecovery,
+) -> str:
+    snapshot = recovery.action_snapshot if isinstance(recovery.action_snapshot, dict) else {}
+    actor_kind = snapshot.get("actor_kind")
+    return model_event_audience(
+        action_audience=_event_audience(event),
+        actor_kind=actor_kind if isinstance(actor_kind, str) else "unknown",
+    )
 
 
 def _request_hash(*, action: str, game_id: str, reason: str) -> str:

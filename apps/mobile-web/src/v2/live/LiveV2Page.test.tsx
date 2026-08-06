@@ -16,6 +16,7 @@ const sourceStop = vi.fn();
 const copyToChannel = vi.fn();
 
 class FakeAudioContext {
+  static instances = 0;
   currentTime = 0;
   destination = {} as AudioDestinationNode;
   resume = vi.fn(async () => undefined);
@@ -31,6 +32,10 @@ class FakeAudioContext {
         addEventListener: vi.fn(),
       }) as unknown as AudioBufferSourceNode,
   );
+
+  constructor() {
+    FakeAudioContext.instances += 1;
+  }
 }
 
 class FakeWebSocket {
@@ -65,6 +70,7 @@ class FakeWebSocket {
 beforeEach(() => {
   window.sessionStorage.clear();
   FakeWebSocket.instances = [];
+  FakeAudioContext.instances = 0;
   sourceStart.mockClear();
   sourceStop.mockClear();
   copyToChannel.mockClear();
@@ -179,9 +185,11 @@ describe("LiveV2Page", () => {
   it("defaults to the directed live channel and follows private scenes without exposing diagnostics", async () => {
     renderPage();
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "以导演全知入场" }),
-    );
+    const enterButton = await screen.findByRole("button", {
+      name: "以导演全知入场",
+    });
+    await waitFor(() => expect(enterButton).toBeEnabled());
+    fireEvent.click(enterButton);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     expect(socket.url.endsWith(`/api/v2/director/games/${gameId}/ws`)).toBe(
@@ -350,12 +358,113 @@ describe("LiveV2Page", () => {
     });
 
     expect((await screen.findAllByText("第 1 夜")).length).toBeGreaterThan(0);
-    expect(screen.getByText("直播已停在当前时刻")).toBeInTheDocument();
+    expect(screen.getAllByText("等待观察/播放确认").length).toBeGreaterThan(0);
+    act(() => socket.emitJson(snapshot("awaiting_observation", null)));
+    expect((await screen.findAllByText("实时流程已停止")).length).toBeGreaterThan(0);
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
     expect(sourceStart).toHaveBeenCalledTimes(2);
     expect(copyToChannel).toHaveBeenCalledTimes(2);
     expect(socket.send).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["text_only", "legacy_unknown"] as const)(
+    "keeps %s free of AudioContext, retains text, and advertises no audio capability",
+    async (audioMode) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(snapshot("waiting_to_start", null, audioMode)),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderPage();
+    await enterChallenge();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null, audioMode));
+    });
+
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(socket.send.mock.calls[0][0]))).toEqual({
+      protocol_version: 1,
+      type: "client.ready",
+    });
+    expect(FakeAudioContext.instances).toBe(0);
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "这句纯文本需要保留到下一幕。",
+      });
+      socket.emitJson(state("broadcasting"));
+    });
+    expect(await screen.findByText("这句纯文本需要保留到下一幕。")).toBeVisible();
+    expect(screen.getByText("字幕正在实时展示")).toBeVisible();
+
+    act(() => {
+      socket.emitJson(state("finalizing"));
+      socket.emitJson({
+        ...base("presentation.closed"),
+        action_id: actionId,
+        presentation_seq: 1,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        final_segment_index: 0,
+        final_chunk_index: -1,
+        final_sample_cursor: 0,
+        result: "audio_drained_and_voice_saved",
+      });
+    });
+    expect(screen.getByText("这句纯文本需要保留到下一幕。")).toBeVisible();
+    expect(screen.getByText("字幕展示完成，正在保存实时记录")).toBeVisible();
+    expect(screen.queryByText(/PCM|同源语音|声音已解锁/)).not.toBeInTheDocument();
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: `${actionId}2`,
+        presentation_seq: 2,
+        presentation_id: `${presentationId}2`,
+        phase_id: "opening",
+        actor: { kind: "judge", id: "judge" },
+        speech_id: `${speechId}2`,
+      });
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByText("这句纯文本需要保留到下一幕。"),
+      ).not.toBeInTheDocument(),
+    );
+
+    act(() => socket.emitBinary(audioFrame(0, 0)));
+
+    expect(
+      await screen.findByText("未确认启用语音的对局收到意外音频帧"),
+    ).toBeInTheDocument();
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(FakeAudioContext.instances).toBe(0);
+    },
+  );
 
   it("does not replay a completed sentence after reconnect", async () => {
     renderPage();
@@ -368,9 +477,7 @@ describe("LiveV2Page", () => {
       socket.emitJson(snapshot("awaiting_observation", null));
     });
 
-    expect(
-      await screen.findByText("直播已停在当前时刻"),
-    ).toBeInTheDocument();
+    expect((await screen.findAllByText("实时流程已停止")).length).toBeGreaterThan(0);
     expect(sourceStart).not.toHaveBeenCalled();
     expect(screen.queryByText("欢迎来到这场实时狼人杀对局。")).not.toBeInTheDocument();
   });
@@ -528,9 +635,78 @@ describe("LiveV2Page", () => {
       socket.emitJson(state("awaiting_observation"));
     });
 
+    expect(screen.queryByText("好人阵营获胜")).not.toBeInTheDocument();
+    act(() => socket.emitJson(completedSnapshot("villagers")));
     expect(await screen.findByText("好人阵营获胜")).toBeInTheDocument();
     expect(screen.getByText(/正式落幕/)).toBeInTheDocument();
     expect(document.querySelector(".mobile-v2-theater.is-terminal")).not.toBeNull();
+  });
+
+  it("keeps an authoritative completed result ahead of a later presentation error", async () => {
+    renderPage();
+    await enterChallenge();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("game.phase_changed"),
+        phase_seq: 9,
+        previous_phase_id: "day_2",
+        phase_id: "day_2",
+        phase_state: "game_completed",
+      });
+      socket.emitJson({
+        ...base("match.state_changed"),
+        round_no: 2,
+        sheriff_player_id: null,
+        sheriff_badge_state: "destroyed",
+        winner: "villagers",
+      });
+      socket.emitJson({
+        ...base("presentation.failed"),
+        action_id: actionId,
+        presentation_seq: 9,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        failure_kind: "tts",
+        failure_code: "terminal_tts_unavailable",
+      });
+      socket.emitJson(completedSnapshot("villagers"));
+    });
+
+    expect(await screen.findByText("好人阵营获胜")).toBeInTheDocument();
+    expect(screen.getByText(/权威结算/)).toBeInTheDocument();
+    expect(screen.queryByText(/terminal_tts_unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("does not present completed status without an authoritative winner", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...snapshot("ready", null),
+          match_status: "completed",
+          winner: null,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("阿青")).toBeInTheDocument();
+    expect(screen.queryByText("对局已完成")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Live V2 实时演出舞台" }),
+    ).not.toHaveClass("is-terminal");
   });
 
   it("fails closed if a private death cause reaches the public theater", async () => {
@@ -688,9 +864,9 @@ async function enterChallenge() {
       name: /推理挑战.*自己破局/,
     }),
   );
-  fireEvent.click(
-    screen.getByRole("button", { name: "以推理挑战入场" }),
-  );
+  const enterButton = screen.getByRole("button", { name: "以推理挑战入场" });
+  await waitFor(() => expect(enterButton).toBeEnabled());
+  fireEvent.click(enterButton);
 }
 
 function renderPage() {
@@ -713,6 +889,12 @@ function directorSnapshot(liveState: string) {
     api_version: "v2",
     audience: "spectator_directed",
     live_state: liveState,
+    audio_mode: "tts",
+    match_status: "running",
+    execution_state: liveState === "awaiting_observation" ? "stopped" : "owned",
+    winner: null,
+    completion_reason: null,
+    completed_at: null,
     game_phase: {
       phase_seq: 2,
       phase_id: "first_night",
@@ -776,12 +958,19 @@ function directorSnapshot(liveState: string) {
 function snapshot(
   liveState: string,
   presentation: Record<string, unknown> | null,
+  audioMode: "tts" | "text_only" | "legacy_unknown" = "tts",
 ) {
   return {
     ...base("live.snapshot"),
     api_version: "v2",
     audience: "player_public",
     live_state: liveState,
+    audio_mode: audioMode,
+    match_status: "running",
+    execution_state: liveState === "awaiting_observation" ? "stopped" : "owned",
+    winner: null,
+    completion_reason: null,
+    completed_at: null,
     game_phase:
       liveState === "awaiting_observation"
         ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
@@ -826,6 +1015,28 @@ function snapshot(
     ],
     public_role_assignment: { state: "sealed", assigned_count: 2 },
     current_presentation: presentation,
+  };
+}
+
+function completedSnapshot(winner: "villagers" | "werewolves") {
+  const current = snapshot("awaiting_observation", null);
+  return {
+    ...current,
+    match_status: "completed",
+    execution_state: "stopped",
+    winner,
+    completion_reason: "deterministic_win_condition",
+    completed_at: "2026-07-22T12:01:00Z",
+    game_phase: {
+      phase_seq: 7,
+      phase_id: "day_2",
+      phase_state: "game_completed",
+    },
+    match_state: {
+      ...current.match_state,
+      round_no: 2,
+      winner,
+    },
   };
 }
 

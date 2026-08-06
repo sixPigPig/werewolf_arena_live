@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.v2.model_observation import observe_model_speech
+from app.v2.model_observation import _vote_claims, observe_model_speech
 
 
 @pytest.mark.parametrize(
@@ -224,6 +224,188 @@ def test_explicitly_rejecting_later_speech_as_an_investigation_reason_is_not_fla
     assert observations == []
 
 
+def _public_check_chronology_events() -> list[dict[str, object]]:
+    return [
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "authority": "player_claim_unverified",
+            "speaker_ref": "seat_9",
+            "event_ref": "984",
+            "known_at_seq": 984,
+            "record_seq": 984,
+            "speech": "9号发言。3号倒牌后我认为6号是悍跳，今天先出6号。",
+        },
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "authority": "player_claim_unverified",
+            "speaker_ref": "seat_6",
+            "event_ref": "1014",
+            "known_at_seq": 1014,
+            "record_seq": 1014,
+            "speech": "6号发言。我昨晚验了9号，查杀。9号就是狼。",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        (
+            "4号发言。6号今天敢报9号查杀，而9号正好第一个回头猛打6号，"
+            "这个顺序和力度太像被查杀后的应激。"
+        ),
+        (
+            "11号发言。6号今天报查杀9号，时机确实微妙，但9号恰好在6号"
+            "报验人之前就第一个咬死要出6号，这个顺序更像是被查杀后的应激。"
+        ),
+    ],
+)
+def test_public_statement_cannot_be_a_reaction_to_a_later_check_claim(
+    speech: str,
+) -> None:
+    observations = observe_model_speech(
+        speech,
+        hard_rules={},
+        model_context={
+            "known_events": {"events": _public_check_chronology_events()},
+        },
+    )
+
+    assert observations == [
+        {
+            "code": "public_event_causality_contradiction",
+            "severity": "warning",
+            "confidence": "high",
+            "detector_version": 1,
+            "authority": "event_chronology",
+            "signals": [
+                {
+                    "reaction_actor_ref": "seat_9",
+                    "trigger_actor_ref": "seat_6",
+                    "reaction_event_ref": "984",
+                    "trigger_event_ref": "1014",
+                    "reaction_known_at_seq": 984,
+                    "trigger_known_at_seq": 1014,
+                    "reaction_source_record_seq": 984,
+                    "trigger_source_record_seq": 1014,
+                    "evidence": "claimed_reaction_precedes_claimed_trigger",
+                }
+            ],
+            "effect": "observed_only",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "10号发言。9号先打6号，不是被查杀后的应激。",
+        "如果9号听到6号报查杀后反咬6号，才算被查杀后的应激。",
+        "4号说9号猛打6号像被查杀后的应激，但我只是在复述。",
+    ],
+)
+def test_rejected_hypothetical_or_attributed_public_causality_is_not_flagged(
+    speech: str,
+) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context={
+                "known_events": {"events": _public_check_chronology_events()},
+            },
+        )
+        == []
+    )
+
+
+def test_actual_post_check_statement_prevents_public_causality_warning() -> None:
+    events = _public_check_chronology_events()
+    events.append(
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "speaker_ref": "seat_9",
+            "event_ref": "1020",
+            "known_at_seq": 1020,
+            "speech": "9号回应6号刚才的查杀，我不认可这个验人。",
+        }
+    )
+
+    assert (
+        observe_model_speech(
+            "4号发言。9号猛打6号，这个动作太像被查杀后的应激。",
+            hard_rules={},
+            model_context={"known_events": {"events": events}},
+        )
+        == []
+    )
+
+
+def test_repeated_check_after_a_legal_response_does_not_reorder_the_original_trigger() -> None:
+    events = [
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "speaker_ref": "seat_6",
+            "event_ref": "970",
+            "known_at_seq": 970,
+            "speech": "我昨晚验了9号，查杀。",
+        },
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "speaker_ref": "seat_9",
+            "event_ref": "984",
+            "known_at_seq": 984,
+            "speech": "6号是悍跳，我今天先出6号。",
+        },
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "speaker_ref": "seat_6",
+            "event_ref": "1014",
+            "known_at_seq": 1014,
+            "speech": "我再报查杀9号。",
+        },
+    ]
+
+    assert (
+        observe_model_speech(
+            "9号猛打6号，像被6号查杀后的应激。",
+            hard_rules={},
+            model_context={"known_events": {"events": events}},
+        )
+        == []
+    )
+
+
+def test_public_causality_requires_one_unambiguous_reaction_event() -> None:
+    events = _public_check_chronology_events()
+    events.insert(
+        1,
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "speaker_ref": "seat_9",
+            "event_ref": "990",
+            "known_at_seq": 990,
+            "speech": "我继续打6号，6号还是悍跳。",
+        },
+    )
+
+    assert (
+        observe_model_speech(
+            "9号猛打6号，像被6号查杀后的应激。",
+            hard_rules={},
+            model_context={"known_events": {"events": events}},
+        )
+        == []
+    )
+
+
 def test_multi_wolf_speech_is_not_checked_by_single_wolf_detector() -> None:
     assert (
         observe_model_speech(
@@ -412,6 +594,78 @@ def test_multi_digit_seat_without_suffix_is_not_truncated() -> None:
     conflict = observations[0]["conflicts"][0]
     assert conflict["voter_ref"] == "seat_12"
     assert conflict["claimed_target_ref"] == "seat_10"
+
+
+def test_plain_multi_voter_give_claim_is_preserved() -> None:
+    speech = "2号、5号给10号。"
+
+    assert _vote_claims(speech, model_context=None) == [
+        {
+            "claimed_voter_refs": ["seat_2", "seat_5"],
+            "claimed_target_ref": "seat_10",
+            "evidence": speech,
+        }
+    ]
+
+
+def test_real_vote_sentence_preserves_both_claims_without_inventing_target_as_voter() -> None:
+    speech = "4号、5号、11号跟我出9，1号也投了9。"
+
+    assert _vote_claims(speech, model_context=None) == [
+        {
+            "claimed_voter_refs": ["seat_4", "seat_5", "seat_11"],
+            "claimed_target_ref": "seat_9",
+            "evidence": speech,
+        },
+        {
+            "claimed_voter_refs": ["seat_1"],
+            "claimed_target_ref": "seat_9",
+            "evidence": speech,
+        },
+    ]
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context={
+                "public_timeline": {
+                    "events": [
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_4",
+                            "target_ref": "seat_9",
+                        },
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_5",
+                            "target_ref": "seat_9",
+                        },
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_11",
+                            "target_ref": "seat_9",
+                        },
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_1",
+                            "target_ref": "seat_9",
+                        },
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_9",
+                            "target_ref": "seat_6",
+                        },
+                    ]
+                }
+            },
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(
@@ -646,6 +900,95 @@ def test_unfair_silence_claim_is_observed_when_target_has_not_reached_turn() -> 
     assert observations[0]["signals"][0]["target_ref"] == "seat_5"
     assert observations[0]["signals"][0]["reply_opportunity"] == ("awaiting_scheduled_turn")
     assert observations[1]["signals"][0]["prior_relevant_statement_refs"] == ["437"]
+
+
+def test_v9_silence_observation_uses_only_projected_questions_and_event_refs() -> None:
+    speech = "5号到现在一个字都没解释。"
+    observations = observe_model_speech(
+        speech,
+        hard_rules={},
+        model_context={
+            "task": {
+                "speech_progress": {
+                    "current_speaker_ref": "seat_8",
+                    "remaining_speaker_refs": ["seat_5"],
+                }
+            },
+            "history": {
+                "questions": [
+                    {
+                        "question_id": "unprojected_question",
+                        "status": "open",
+                        "addressed_to": "seat_5",
+                        "reply_opportunity": "scheduled_turn_passed",
+                        "prior_relevant_statement_refs": ["unprojected_event"],
+                    }
+                ]
+            },
+            "known_events": {
+                "schema_version": 3,
+                "events": [
+                    {"event_ref": "437", "kind": "player_statement"},
+                    {"event_ref": "471", "kind": "player_statement"},
+                ],
+                "questions": [
+                    {
+                        "question_id": "question_471_1",
+                        "source_event_ref": "471",
+                        "status": "open",
+                        "addressed_to": "seat_5",
+                        "reply_opportunity": "awaiting_scheduled_turn",
+                        "prior_relevant_event_refs": ["437", "not_projected"],
+                    }
+                ],
+                "relations": [],
+            },
+        },
+    )
+
+    assert [item["code"] for item in observations] == [
+        "premature_silence_accusation",
+        "prior_explanation_denial",
+    ]
+    assert observations[0]["signals"][0]["question_refs"] == ["question_471_1"]
+    assert observations[1]["signals"][0]["prior_relevant_event_refs"] == ["437"]
+    assert "prior_relevant_statement_refs" not in observations[1]["signals"][0]
+
+
+def test_v9_silence_observation_ignores_unprojected_history_questions() -> None:
+    observations = observe_model_speech(
+        "5号始终没有回应。",
+        hard_rules={},
+        model_context={
+            "task": {"speech_progress": {"remaining_speaker_refs": []}},
+            "history": {
+                "questions": [
+                    {
+                        "question_id": "old_question",
+                        "status": "open",
+                        "addressed_to": "seat_5",
+                        "reply_opportunity": "awaiting_scheduled_turn",
+                        "prior_relevant_statement_refs": ["old_event"],
+                    }
+                ]
+            },
+            "known_events": {
+                "schema_version": 3,
+                "events": [{"event_ref": "current_question_source"}],
+                "questions": [
+                    {
+                        "question_id": "current_question",
+                        "source_event_ref": "current_question_source",
+                        "status": "open",
+                        "addressed_to": "seat_6",
+                    }
+                ],
+                "relations": [],
+            },
+        },
+    )
+
+    assert observations == []
 
 
 def test_awaiting_turn_wording_is_not_misclassified_as_a_silence_accusation() -> None:

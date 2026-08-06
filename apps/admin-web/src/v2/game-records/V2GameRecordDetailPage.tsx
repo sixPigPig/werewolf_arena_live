@@ -86,7 +86,10 @@ export default function V2GameRecordDetailPage() {
     queryFn: ({ signal }) => readV2GameRecordSummary(gameId, signal),
     queryKey: v2GameRecordKeys.detail(gameId),
     refetchInterval: (currentQuery) =>
-      liveRefreshInterval(currentQuery.state.data?.status),
+      liveRefreshInterval(
+        currentQuery.state.data?.match_status,
+        currentQuery.state.data?.execution_state,
+      ),
     refetchIntervalInBackground: false,
   });
   const timeline = useIncrementalTimeline(
@@ -519,12 +522,25 @@ function V2GameRecordWorkspace({
             <Tag color={statusColor(game.status)}>
               {statusLabel(game.status)}
             </Tag>
+            <Tag color={matchStatusColor(game.match_status)}>
+              {matchResultLabel(game.match_status, game.winner)}
+            </Tag>
           </Flex>
           <Typography.Paragraph>
             {game.game_id} · {game.current_run_id}
           </Typography.Paragraph>
         </div>
         <section aria-label="对局摘要" className="v2-record-heading-metrics">
+          <SummaryMetric
+            label="对局结果"
+            value={matchResultLabel(game.match_status, game.winner)}
+          />
+          <SummaryMetric label="实时流" value={statusLabel(game.status)} />
+          <SummaryMetric
+            label="执行器"
+            value={executionStateLabel(game.execution_state)}
+          />
+          <SummaryMetric label="音频模式" value={audioModeLabel(game.audio_mode)} />
           <SummaryMetric label="总时长" value={formatDuration(duration)} />
           <SummaryMetric
             label="模型请求"
@@ -592,6 +608,14 @@ function V2GameRecordWorkspace({
           showIcon
           title="模型请求重试已耗尽，对局已安全暂停"
           type="warning"
+        />
+      ) : null}
+      {game.execution_state === "stale" ? (
+        <Alert
+          description="当前版本不会从阶段中途自动接管；可检查 worker 与 lease 后决定是否终止本局。"
+          showIcon
+          title="执行器失联，当前版本不可自动续局"
+          type="error"
         />
       ) : null}
 
@@ -1619,6 +1643,7 @@ function StatusIcon({
 function audienceLabel(audience: string) {
   if (audience === "all" || audience === "public") return "公开";
   if (audience === "god_view") return "上帝视角";
+  if (audience === "legacy_unknown") return "旧记录范围未知";
   return "私密";
 }
 
@@ -1637,6 +1662,45 @@ function statusLabel(status: string) {
     canceled: "已中止",
   };
   return labels[status] ?? status;
+}
+
+function matchResultLabel(status: string, winner: string | null) {
+  if (status === "completed") {
+    if (winner === "villagers") return "已完成 · 好人阵营获胜";
+    if (winner === "werewolves") return "已完成 · 狼人阵营获胜";
+    return "终局证据不完整";
+  }
+  const labels: Record<string, string> = {
+    waiting: "等待开始",
+    running: "进行中",
+    failed: "比赛失败",
+    canceled: "比赛已中止",
+  };
+  return labels[status] ?? status;
+}
+
+function matchStatusColor(status: string) {
+  if (status === "completed") return "success";
+  if (status === "failed" || status === "canceled") return "error";
+  if (status === "running") return "processing";
+  return "default";
+}
+
+function executionStateLabel(state: string) {
+  const labels: Record<string, string> = {
+    unowned: "未持有",
+    owned: "执行中",
+    stale: "执行器失联",
+    stopped: "已停止",
+  };
+  return labels[state] ?? state;
+}
+
+function audioModeLabel(mode: string) {
+  if (mode === "tts") return "语音播报";
+  if (mode === "text_only") return "纯文本";
+  if (mode === "legacy_unknown") return "旧记录模式未知";
+  return mode;
 }
 
 function statusColor(status: string) {

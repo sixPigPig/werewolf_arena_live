@@ -224,7 +224,7 @@ describe("mobile app scaffold", () => {
       styles.match(/(?:^|\n)input,\nselect,\ntextarea\s*{[^}]+}/)?.[0] ?? "";
     const lobbyFieldRule =
       styles.match(
-        /(?:^|\n)\.mobile-lobby-field input,\n\.mobile-profile-search input,\n\.mobile-profile-select select\s*{[^}]+}/,
+        /(?:^|\n)\.mobile-lobby-field input,\n\.mobile-lobby-field select,\n\.mobile-profile-search input,\n\.mobile-profile-select select\s*{[^}]+}/,
       )?.[0] ?? "";
     const formLabelRule =
       styles.match(

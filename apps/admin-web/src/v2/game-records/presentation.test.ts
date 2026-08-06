@@ -4,9 +4,11 @@ import {
   actionLabel,
   buildV2HistoricalIdentities,
   buildV2RoundSummaries,
+  buildV2Timeline,
   phaseLabel,
 } from "@/v2/game-records/presentation";
 import type {
+  V2GameRecordDetail,
   V2GameRecordEvent,
   V2PlayerIdentity,
 } from "@/v2/game-records/types";
@@ -107,6 +109,49 @@ describe("V2 game record presentation", () => {
     expect(phaseLabel("night_2")).toBe("第 2 夜");
     expect(phaseLabel("day_2")).toBe("第 2 天");
     expect(phaseLabel("night_3")).toBe("第 3 夜");
+  });
+
+  it("prefers presentation audience and links legacy TTS completion by attempt id", () => {
+    const actionId = "v2_action_audience";
+    const attemptId = "v2_tts_legacy";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          audience: "public",
+          context: {
+            action_type: "judge_opening_speech",
+            phase_id: "opening",
+            actor: { kind: "judge", id: "judge" },
+          },
+        }),
+        event(2, "tts_stream_started", {
+          action_id: actionId,
+          attempt_id: attemptId,
+          presentation_id: "v2_pres_audience",
+          audience: "god_view",
+        }),
+        event(3, "tts_stream_completed", {
+          tts_attempt_id: attemptId,
+        }),
+      ],
+      model_requests: [{ action_id: actionId, audience: "all" }],
+      presentations: [{ action_id: actionId, audience: "god_view" }],
+      voice_assets: [],
+      player_identities: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      kind: "action",
+      actionId,
+      audience: "god_view",
+    });
+    expect(timeline[0].events.map((item) => item.event_type)).toEqual([
+      "action_opened",
+      "tts_stream_started",
+      "tts_stream_completed",
+    ]);
   });
 
   it("builds deterministic round digests from persisted settlement events", () => {

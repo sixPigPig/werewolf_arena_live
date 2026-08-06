@@ -1257,8 +1257,11 @@ function authorityLabel(item: V2TimelineItem): string {
 function audienceLabel(value: string): string {
   const labels: Record<string, string> = {
     all: "公开",
+    public: "公开",
     god: "上帝视角",
+    god_view: "上帝视角",
     private: "私密",
+    legacy_unknown: "旧记录范围未知",
   };
   return labels[value] ?? value;
 }

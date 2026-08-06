@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Iterable
 import logging
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.v2.model_context import (
     build_public_rule_contract,
     private_authoritative_facts,
 )
+from app.v2.model_context_contract import is_v9_model_context_contract
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -32,7 +34,7 @@ from app.v2.protocol import (
     match_state_changed,
     player_state_changed,
 )
-from app.v2.repository import V2PhaseTransition
+from app.v2.repository import V2ExecutionOwnershipLost, V2PhaseTransition
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,30 @@ _DECISION_NOTE_MAX_CHARS = 80
 
 class V2DayRuntimeError(RuntimeError):
     pass
+
+
+def speech_order_from_start(
+    alive_by_seat: Iterable[V2MatchPlayer],
+    sheriff_player_id: str,
+    start_player_id: str,
+) -> list[str]:
+    alive = sorted(tuple(alive_by_seat), key=lambda item: item.seat)
+    alive_ids = [item.player_id for item in alive]
+    if len(alive) < 2 or sheriff_player_id not in alive_ids:
+        raise V2DayRuntimeError("sheriff_speech_order_invalid_state")
+    sheriff_index = alive_ids.index(sheriff_player_id)
+    left = alive[(sheriff_index - 1) % len(alive)]
+    right = alive[(sheriff_index + 1) % len(alive)]
+    if start_player_id not in {left.player_id, right.player_id}:
+        raise V2DayRuntimeError("sheriff_speech_order_invalid_start")
+    if start_player_id == right.player_id:
+        ordered = alive[sheriff_index + 1 :] + alive[: sheriff_index + 1]
+    else:
+        ordered = list(reversed(alive[:sheriff_index])) + list(reversed(alive[sheriff_index:]))
+    result = [item.player_id for item in ordered]
+    if result[-1] != sheriff_player_id or set(result) != set(alive_ids):
+        raise V2DayRuntimeError("sheriff_speech_order_invalid_result")
+    return result
 
 
 class V2DayEngine:
@@ -240,6 +266,8 @@ class V2DayEngine:
                 reason="day_actions_completed",
                 summarize="summarize" in actions,
             )
+        except V2ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             logger.warning(
                 "Live V2 day runtime failed: %s",
@@ -531,6 +559,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=game_id,
                 event_type=decision_event_type,
+                audience="all",
                 payload={
                     "round_no": state.round_no,
                     "player_id": player.player_id,
@@ -545,6 +574,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=game_id,
             event_type=f"{action_type}_batch_resolved",
+            audience="all",
             payload={
                 "round_no": state.round_no,
                 "action_type": action_type,
@@ -639,12 +669,30 @@ class V2DayEngine:
         right = alive[(sheriff_index + 1) % len(alive)]
         sheriff = alive[sheriff_index]
         candidates = [left] if left.player_id == right.player_id else [left, right]
+        options = [
+            {
+                "target_player_id": candidate.player_id,
+                "resulting_speech_order": speech_order_from_start(
+                    alive,
+                    sheriff.player_id,
+                    candidate.player_id,
+                ),
+                "sheriff_position": len(alive),
+            }
+            for candidate in candidates
+        ]
+        option_by_start = {str(option["target_player_id"]): option for option in options}
+        is_v9 = is_v9_model_context_contract(state.model_context_contract)
         decision = await self._player_action(
             game_id=state.game_id,
             player=sheriff,
             broadcaster=broadcaster,
             action_type="sheriff_speech_order",
-            objective="选择本轮第一位发言者。",
+            objective=(
+                "根据每个候选对应的完整发言顺序，选择本轮起始发言者。"
+                if is_v9
+                else "选择本轮第一位发言者。"
+            ),
             candidates=candidates,
             target_optional=False,
             output_kind="public_decision",
@@ -655,13 +703,29 @@ class V2DayEngine:
                 decision_note_mode="optional",
                 decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
             ),
+            extra_context=(
+                {
+                    "v9_action_extension": {
+                        "mechanical_effect": {
+                            "action_type": "sheriff_speech_order",
+                            "target_mode": "required",
+                            "selected_target_becomes_first_speaker": True,
+                            "sheriff_speaks_last": True,
+                            "options": options,
+                            "speech_has_gameplay_effect": False,
+                        }
+                    }
+                }
+                if is_v9
+                else None
+            ),
         )
         start = decision.target_player_id
-        if start == right.player_id:
-            ordered = alive[sheriff_index + 1 :] + alive[: sheriff_index + 1]
-        else:
-            ordered = list(reversed(alive[:sheriff_index])) + list(reversed(alive[sheriff_index:]))
-        result = [item.player_id for item in ordered]
+        selected_option = option_by_start.get(str(start))
+        if selected_option is None:
+            raise V2DayRuntimeError("sheriff_speech_order_invalid_start")
+        result = selected_option["resulting_speech_order"]
+        assert isinstance(result, list)
         self._repository.record_private_action_decision(
             game_id=state.game_id,
             player_id=sheriff.player_id,
@@ -674,6 +738,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_speech_order_selected",
+            audience="all",
             payload={"round_no": state.round_no, "order": result},
         )
         return result
@@ -1010,6 +1075,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_recovery_started",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "action_type": action_type,
@@ -1029,6 +1095,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_recovery_completed",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "action_type": action_type,
@@ -1059,6 +1126,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_committed",
+                audience="all",
                 payload={
                     "round_no": state.round_no,
                     "action_type": action_type,
@@ -1085,6 +1153,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=game_id,
             event_type="day_vote_resolved",
+            audience="all",
             payload={
                 "round_no": state.round_no,
                 "action_type": action_type,
@@ -1209,6 +1278,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="werewolf_self_explosion_decided",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "player_id": wolf.player_id,
@@ -1226,6 +1296,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=game_id,
             event_type="werewolf_self_explosion_batch_resolved",
+            audience="god_view",
             payload={
                 "round_no": state.round_no,
                 "stage": stage,
@@ -1439,7 +1510,9 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
     ) -> bool:
         prompt_template_version = state.model_context_contract.get("prompt_template_version")
-        if not isinstance(prompt_template_version, int) or prompt_template_version < 3:
+        if not is_v9_model_context_contract(state.model_context_contract) and (
+            not isinstance(prompt_template_version, int) or prompt_template_version < 3
+        ):
             return await self._judge(
                 state=state,
                 broadcaster=broadcaster,
@@ -1459,6 +1532,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_private_memory_batch_started",
+            audience="god_view",
             payload={
                 "round_no": state.round_no,
                 "batch_id": batch_id,
@@ -1509,6 +1583,7 @@ class V2DayEngine:
                 self._repository.append_event(
                     game_id=state.game_id,
                     event_type="day_private_memory_batch_canceled",
+                    audience="god_view",
                     payload={
                         "round_no": state.round_no,
                         "batch_id": batch_id,
@@ -1522,6 +1597,7 @@ class V2DayEngine:
             self._repository.append_event(
                 game_id=state.game_id,
                 event_type="day_private_memory_batch_completed",
+                audience="god_view",
                 payload={
                     "round_no": state.round_no,
                     "batch_id": batch_id,
@@ -1549,6 +1625,7 @@ class V2DayEngine:
                 self._repository.append_event(
                     game_id=state.game_id,
                     event_type="private_round_memory_normalized",
+                    audience="god_view",
                     payload={
                         "round_no": state.round_no,
                         "batch_id": batch_id,
@@ -1578,6 +1655,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_private_memory_batch_completed",
+            audience="god_view",
             payload={
                 "round_no": state.round_no,
                 "batch_id": batch_id,
@@ -1802,6 +1880,7 @@ class V2DayEngine:
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_speech_committed",
+            audience="all",
             payload={
                 "round_no": state.round_no,
                 "stage": stage,

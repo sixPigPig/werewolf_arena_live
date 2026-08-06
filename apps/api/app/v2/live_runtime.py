@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -38,6 +39,7 @@ from app.v2.day_engine import V2DayEngine
 from app.v2.director_projection import project_director_scene
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.first_night_engine import V2NightEngine
+from app.v2.execution import V2RunFence, bind_v2_run_fence, database_utc_now
 from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
 from app.v2.model_context_contract import (
@@ -45,7 +47,7 @@ from app.v2.model_context_contract import (
 )
 from app.v2.night_repository import V2NightRepository
 from app.v2.match_repository import V2MatchRepository
-from app.v2.models import V2GameRecord
+from app.v2.models import V2GameRecord, V2GameRun
 from app.v2.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
@@ -53,7 +55,9 @@ from app.v2.public_projection import (
 )
 from app.v2.protocol import live_state
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
+from app.v2.runtime_state import project_v2_runtime_state
 from app.v2.service import (
+    V2RecordNotFound,
     current_presentation,
     current_action_context,
     get_game,
@@ -63,7 +67,7 @@ from app.v2.service import (
     role_assignment_count,
     server_now,
 )
-from app.v2.tts_client import V2DisabledTtsClient, V2TtsClient
+from app.v2.tts_client import V2TtsClient
 
 
 logger = logging.getLogger(__name__)
@@ -101,13 +105,23 @@ class _GameChannel:
         *,
         game_id: str,
         snapshot_factory: Any,
-        game_starter: Callable[..., bool],
         engine: V2LiveFlowEngine,
+        repository: V2ActionRepository | None = None,
+        game_starter: Callable[..., bool] | None = None,
+        worker_id: str = "v2_test_worker",
+        lease_seconds: float = 15.0,
+        heartbeat_seconds: float = 3.0,
+        tts_capability_enabled: bool = True,
     ) -> None:
         self.game_id = game_id
         self._snapshot_factory = snapshot_factory
-        self._game_starter = game_starter
+        self._repository = repository
+        self._legacy_game_starter = game_starter
         self._engine = engine
+        self._worker_id = worker_id
+        self._lease_seconds = lease_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._tts_capability_enabled = tts_capability_enabled
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, _Subscriber] = {}
         self._task: asyncio.Task[None] | None = None
@@ -135,23 +149,44 @@ class _GameChannel:
             subscriber = self._subscribers.get(subscriber_id)
             if subscriber is None:
                 raise V2ClientProtocolError("unknown_connection")
-            _validate_ready(message, audience=subscriber.audience)
+            before_start = self._snapshot(subscriber.audience)
+            _validate_ready(
+                message,
+                audience=subscriber.audience,
+                audio_required=before_start.get("audio_mode", "tts") == "tts",
+            )
             if subscriber.ready:
                 return
+            if (
+                before_start["live_state"] == "waiting_to_start"
+                and before_start.get("audio_mode") == "tts"
+                and not self._tts_capability_enabled
+            ):
+                raise V2ClientProtocolError("v2_audio_mode_unavailable")
             subscriber.ready = True
-            before_start = self._snapshot(subscriber.audience)
             if before_start["live_state"] == "waiting_to_start":
-                self._game_starter(game_id=self.game_id, audience=subscriber.audience)
+                if self._repository is not None:
+                    claim = self._repository.start_and_claim_execution(
+                        game_id=self.game_id,
+                        audience=subscriber.audience,
+                        worker_id=self._worker_id,
+                        lease_seconds=self._lease_seconds,
+                    )
+                    if claim.status == "owned" and claim.fence is not None:
+                        self._register_owned_task(claim.fence)
+                elif self._legacy_game_starter is not None:
+                    self._legacy_game_starter(
+                        game_id=self.game_id,
+                        audience=subscriber.audience,
+                    )
             snapshot = self._snapshot(subscriber.audience)
             await subscriber.websocket.send_json(snapshot)
-            if snapshot["live_state"] == "ready" and self._task is None:
-                self._task = asyncio.create_task(
-                    self._engine.run(
-                        game_id=self.game_id,
-                        broadcaster=self,
-                    )
-                )
-                self._task.add_done_callback(self._task_done)
+
+    def _register_owned_task(self, fence: V2RunFence) -> None:
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run_owned(fence))
+        self._task.add_done_callback(self._task_done)
 
     async def disconnect(self, subscriber_id: str) -> None:
         async with self._lock:
@@ -238,6 +273,149 @@ class _GameChannel:
     def _task_done(self, task: asyncio.Task[None]) -> None:
         if self._task is task:
             self._task = None
+        with suppress(asyncio.CancelledError):
+            error = task.exception()
+            if error is not None:
+                logger.error(
+                    "Live V2 owned task failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                    extra={"game_id": self.game_id, "worker_id": self._worker_id},
+                )
+
+    async def _run_owned(self, fence: V2RunFence) -> None:
+        if self._repository is None:
+            raise RuntimeError("V2 execution repository is unavailable")
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("V2 engine task is unavailable")
+        lease_lost = asyncio.Event()
+        heartbeat = asyncio.create_task(self._heartbeat(fence, task, lease_lost))
+        release_reason = "completed"
+        try:
+            with bind_v2_run_fence(fence):
+                await self._engine.run(game_id=self.game_id, broadcaster=self)
+                release_reason = self._repository.execution_release_reason(fence=fence)
+        except asyncio.CancelledError:
+            release_reason = "canceled"
+            raise
+        except Exception:
+            release_reason = "failed"
+            raise
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+            if not lease_lost.is_set():
+                loss_reason = "execution_release_rejected"
+                try:
+                    released = self._repository.release_execution(
+                        fence=fence,
+                        reason=release_reason,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Live V2 execution release failed closed",
+                        extra={
+                            "game_id": self.game_id,
+                            "run_id": fence.run_id,
+                            "worker_id": fence.worker_id,
+                            "fence_token": fence.fence_token,
+                        },
+                    )
+                    released = False
+                    loss_reason = "execution_release_storage_error"
+                if released:
+                    await self._broadcast_current_snapshots()
+                else:
+                    try:
+                        self._repository.record_execution_heartbeat_lost(
+                            fence=fence,
+                            reason=loss_reason,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Live V2 execution release loss could not be persisted",
+                            extra={
+                                "game_id": self.game_id,
+                                "run_id": fence.run_id,
+                                "worker_id": fence.worker_id,
+                                "fence_token": fence.fence_token,
+                            },
+                        )
+
+    async def _broadcast_current_snapshots(self) -> None:
+        """Refresh connected clients after runtime-only state changes."""
+        async with self._lock:
+            snapshots: dict[V2Audience, dict[str, Any]] = {}
+            failed: list[str] = []
+            for subscriber_id, subscriber in self._subscribers.items():
+                if not subscriber.ready:
+                    continue
+                try:
+                    snapshot = snapshots.get(subscriber.audience)
+                    if snapshot is None:
+                        snapshot = self._snapshot(subscriber.audience)
+                        snapshots[subscriber.audience] = snapshot
+                    await subscriber.websocket.send_json(snapshot)
+                except Exception:
+                    failed.append(subscriber_id)
+            for subscriber_id in failed:
+                self._subscribers.pop(subscriber_id, None)
+
+    async def _heartbeat(
+        self,
+        fence: V2RunFence,
+        engine_task: asyncio.Task[None],
+        lease_lost: asyncio.Event,
+    ) -> None:
+        if self._repository is None:
+            lease_lost.set()
+            engine_task.cancel()
+            return
+        while True:
+            await asyncio.sleep(self._heartbeat_seconds)
+            try:
+                owned = self._repository.heartbeat_execution(
+                    fence=fence,
+                    lease_seconds=self._lease_seconds,
+                )
+                loss_reason = "fence_or_lease_rejected"
+            except Exception:
+                logger.exception(
+                    "Live V2 execution heartbeat failed closed",
+                    extra={"game_id": self.game_id, "worker_id": self._worker_id},
+                )
+                owned = False
+                loss_reason = "heartbeat_storage_error"
+            if not owned:
+                logger.error(
+                    "Live V2 execution lease lost",
+                    extra={
+                        "game_id": self.game_id,
+                        "run_id": fence.run_id,
+                        "worker_id": fence.worker_id,
+                        "fence_token": fence.fence_token,
+                        "reason": loss_reason,
+                    },
+                )
+                try:
+                    self._repository.record_execution_heartbeat_lost(
+                        fence=fence,
+                        reason=loss_reason,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Live V2 execution heartbeat loss could not be persisted",
+                        extra={
+                            "game_id": self.game_id,
+                            "run_id": fence.run_id,
+                            "worker_id": fence.worker_id,
+                            "fence_token": fence.fence_token,
+                        },
+                    )
+                lease_lost.set()
+                engine_task.cancel()
+                return
 
 
 class V2LiveRuntime:
@@ -246,20 +424,48 @@ class V2LiveRuntime:
         *,
         session_factory: sessionmaker[Session],
         model_client: V2ModelPort,
-        tts_client: V2TtsPort,
+        tts_client: V2TtsPort | None,
         voice_root: Path,
         sample_rate: int,
         judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
         model_retry_policy: V2ModelRetryPolicy = V2ModelRetryPolicy(),
+        tts_client_factory: Callable[[], V2TtsPort] | None = None,
+        tts_capability_enabled: bool | None = None,
+        worker_id: str | None = None,
+        lease_seconds: float = 15.0,
+        heartbeat_seconds: float = 3.0,
     ) -> None:
+        if heartbeat_seconds >= lease_seconds:
+            raise ValueError("V2 heartbeat interval must be shorter than its lease")
         self._session_factory = session_factory
-        self._repository = V2ActionRepository(session_factory)
-        self._night_repository = V2NightRepository(session_factory)
-        self._match_repository = V2MatchRepository(session_factory)
+        self._worker_id = worker_id or f"v2_worker_{uuid4().hex[:20]}"
+        self._lease_seconds = lease_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._tts_capability_enabled = (
+            bool(getattr(tts_client, "enabled", True))
+            if tts_capability_enabled is None
+            else tts_capability_enabled
+        )
+        if tts_client is None and tts_client_factory is None:
+            self._tts_capability_enabled = False
+        self._repository = V2ActionRepository(
+            session_factory,
+            enforce_execution_fence=True,
+        )
+        self._night_repository = V2NightRepository(
+            session_factory,
+            enforce_execution_fence=True,
+        )
+        self._match_repository = V2MatchRepository(
+            session_factory,
+            enforce_execution_fence=True,
+        )
         self._action_engine = V2ActionEngine(
             repository=self._repository,
             model_client=model_client,
             tts_client=tts_client,
+            tts_client_factory=tts_client_factory,
+            tts_capability_enabled=self._tts_capability_enabled,
             voice_root=voice_root,
             sample_rate=sample_rate,
             judge_configuration_provider=judge_configuration_provider,
@@ -284,6 +490,14 @@ class V2LiveRuntime:
         )
         self._channels: dict[str, _GameChannel] = {}
         self._channels_lock = asyncio.Lock()
+
+    @property
+    def tts_capability_enabled(self) -> bool:
+        return self._tts_capability_enabled
+
+    @property
+    def default_audio_mode(self) -> Literal["tts", "text_only"]:
+        return "tts" if self._tts_capability_enabled else "text_only"
 
     async def connect(
         self,
@@ -353,6 +567,23 @@ class V2LiveRuntime:
         with self._session_factory() as db:
             game = get_game(db, game_id)
             match = get_match_state(db, game_id)
+            run = db.get(V2GameRun, game.current_run_id)
+            if run is None:
+                raise V2RecordNotFound(f"missing current run for {game_id}")
+            runtime_state = project_v2_runtime_state(
+                game=game,
+                run=run,
+                match=match,
+                now=database_utc_now(db),
+            )
+            runtime_fields = {
+                "audio_mode": runtime_state.audio_mode,
+                "match_status": runtime_state.match_status,
+                "execution_state": runtime_state.execution_state,
+                "winner": runtime_state.winner,
+                "completion_reason": runtime_state.completion_reason,
+                "completed_at": runtime_state.completed_at,
+            }
             presentation = current_presentation(db, game_id, audience=audience)
             states = player_state_map(db, game_id)
             current = None
@@ -376,6 +607,7 @@ class V2LiveRuntime:
                     game_id=game.game_id,
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
+                    **runtime_fields,
                     game_phase=_game_phase(game),
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
@@ -398,6 +630,7 @@ class V2LiveRuntime:
                     game_id=game.game_id,
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
+                    **runtime_fields,
                     game_phase=_game_phase(game),
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
@@ -416,6 +649,7 @@ class V2LiveRuntime:
                     game_id=game.game_id,
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
+                    **runtime_fields,
                     game_phase=_game_phase(game),
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
@@ -444,8 +678,12 @@ class V2LiveRuntime:
                 channel = _GameChannel(
                     game_id=game_id,
                     snapshot_factory=self.snapshot,
-                    game_starter=self._repository.start_game,
+                    repository=self._repository,
                     engine=self._engine,
+                    worker_id=self._worker_id,
+                    lease_seconds=self._lease_seconds,
+                    heartbeat_seconds=self._heartbeat_seconds,
+                    tts_capability_enabled=self._tts_capability_enabled,
                 )
                 self._channels[game_id] = channel
             return channel
@@ -462,20 +700,24 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             first_token_seconds=config.live_v2_model_first_token_seconds,
             total_seconds=config.live_v2_model_attempt_total_seconds,
         ),
-        tts_client=(
-            V2TtsClient(
-                enabled=True,
-                api_key=config.live_v2_tts_api_key,
-                resource_id=config.live_v2_tts_resource_id,
-                ws_url=config.live_v2_tts_ws_url,
-                speaker=config.live_v2_tts_judge_speaker,
-                sample_rate=config.live_v2_tts_sample_rate,
-                first_chunk_seconds=config.live_v2_tts_first_chunk_seconds,
-                idle_seconds=config.live_v2_tts_idle_seconds,
+        tts_client=None,
+        tts_client_factory=(
+            (
+                lambda: V2TtsClient(
+                    enabled=True,
+                    api_key=config.live_v2_tts_api_key,
+                    resource_id=config.live_v2_tts_resource_id,
+                    ws_url=config.live_v2_tts_ws_url,
+                    speaker=config.live_v2_tts_judge_speaker,
+                    sample_rate=config.live_v2_tts_sample_rate,
+                    first_chunk_seconds=config.live_v2_tts_first_chunk_seconds,
+                    idle_seconds=config.live_v2_tts_idle_seconds,
+                )
             )
             if config.live_v2_tts_enabled
-            else V2DisabledTtsClient()
+            else None
         ),
+        tts_capability_enabled=config.live_v2_tts_enabled,
         voice_root=Path(config.live_v2_voice_storage_dir),
         sample_rate=config.live_v2_tts_sample_rate,
         judge_configuration_provider=lambda game_id: _runtime_judge_configuration(
@@ -489,6 +731,8 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             base_delay_seconds=config.live_v2_model_retry_base_delay_seconds,
             jitter_seconds=config.live_v2_model_retry_jitter_seconds,
         ),
+        lease_seconds=config.live_run_lease_seconds,
+        heartbeat_seconds=config.live_run_heartbeat_seconds,
     )
 
 
@@ -522,7 +766,12 @@ def _runtime_judge_configuration(
         )
 
 
-def _validate_ready(message: dict[str, Any], *, audience: V2Audience) -> None:
+def _validate_ready(
+    message: dict[str, Any],
+    *,
+    audience: V2Audience,
+    audio_required: bool,
+) -> None:
     expected_type = {
         "player_public": "client.ready",
         "spectator_directed": "director.ready",
@@ -531,6 +780,8 @@ def _validate_ready(message: dict[str, Any], *, audience: V2Audience) -> None:
     if message.get("protocol_version") != 1 or message.get("type") != expected_type:
         raise V2ClientProtocolError("invalid_ready_message")
     audio = message.get("audio")
+    if audio is None and not audio_required:
+        return
     if not isinstance(audio, dict):
         raise V2ClientProtocolError("missing_audio_capability")
     expected = {"encoding": "pcm_s16le", "sample_rate": 24000, "channels": 1}

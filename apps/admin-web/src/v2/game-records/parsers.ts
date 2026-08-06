@@ -66,6 +66,8 @@ export function parseV2GameRecordSummary(value: unknown): V2GameRecordSummary {
     rule_snapshot: object(record.rule_snapshot),
     players_snapshot: array(record.players_snapshot).map(object),
     judge_voice_snapshot: object(record.judge_voice_snapshot),
+    delivery_snapshot:
+      record.delivery_snapshot === null ? null : object(record.delivery_snapshot),
     ability_snapshot: object(record.ability_snapshot),
     match_state: record.match_state === null ? null : object(record.match_state),
     player_identities: array(record.player_identities).map(parsePlayerIdentity),
@@ -130,6 +132,21 @@ function parseListItem(value: unknown): V2GameRecordListItem {
     phase_seq: integer(record.phase_seq, 0),
     phase_id: text(record.phase_id),
     phase_state: text(record.phase_state),
+    audio_mode: oneOf(record.audio_mode, ["tts", "text_only", "legacy_unknown"] as const),
+    match_status: oneOf(
+      record.match_status,
+      ["waiting", "running", "completed", "failed", "canceled"] as const,
+    ),
+    execution_state: oneOf(
+      record.execution_state,
+      ["unowned", "owned", "stale", "stopped"] as const,
+    ),
+    winner:
+      record.winner === null
+        ? null
+        : oneOf(record.winner, ["villagers", "werewolves"] as const),
+    completion_reason: nullableText(record.completion_reason),
+    completed_at: nullableDate(record.completed_at),
     created_at: date(record.created_at),
     updated_at: date(record.updated_at),
   };
@@ -144,6 +161,10 @@ function parseRun(value: unknown): V2GameRun {
     started_at: nullableDate(record.started_at),
     completed_at: record.completed_at === null ? null : date(record.completed_at),
     stop_requested_at: nullableDate(record.stop_requested_at),
+    worker_id: nullableText(record.worker_id),
+    worker_heartbeat_at: nullableDate(record.worker_heartbeat_at),
+    lease_expires_at: nullableDate(record.lease_expires_at),
+    fence_token: integer(record.fence_token, 0),
   };
 }
 

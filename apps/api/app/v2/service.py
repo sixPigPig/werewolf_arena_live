@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.v2.ability_runtime import compile_ability_runtime_snapshot
+from app.v2.event_contract import canonical_event_payload
 from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
@@ -59,6 +60,7 @@ def create_waiting_game(
     db: Session,
     *,
     title: str,
+    delivery_snapshot: dict[str, Any],
     rule_snapshot: dict[str, Any] | None = None,
     players_snapshot: list[dict[str, Any]] | None = None,
     judge_voice_snapshot: dict[str, Any] | None = None,
@@ -104,6 +106,7 @@ def create_waiting_game(
         rule_snapshot=frozen_rule_snapshot,
         players_snapshot=players_snapshot or [],
         judge_voice_snapshot=judge_voice_snapshot or {},
+        delivery_snapshot=delivery_snapshot,
         ability_snapshot=ability_snapshot,
         ability_snapshot_hash=(ability_snapshot or {}).get("snapshot_hash"),
     )
@@ -121,15 +124,16 @@ def create_waiting_game(
         run_id=run_id,
         event_type="game_created",
         payload_schema_version=1,
-        payload={
+        payload=canonical_event_payload({
             "title": game.title,
             "start_mode": "first_ready_viewer",
             "creation_source": ("existing_mobile_lobby" if created_from_lobby else "direct_v2"),
             "rule_set_id": frozen_rule_snapshot.get("rule_set", {}).get("id"),
             "player_count": len(players_snapshot or []),
             "judge_voice": judge_voice_snapshot or {},
+            "delivery_snapshot": delivery_snapshot,
             "model_context_contract": frozen_rule_snapshot["model_context_contract"],
-        },
+        }, audience="all"),
     )
     db.add(game)
     db.flush()
@@ -185,11 +189,11 @@ def create_waiting_game(
                 run_id=run_id,
                 event_type="roles_assigned",
                 payload_schema_version=1,
-                payload={
+                payload=canonical_event_payload({
                     "assignment_id": assignment_id,
                     "assigned_count": len(assignment_result.assignments),
                     "visibility": "private_sealed",
-                },
+                }, audience="god_view"),
             )
         )
         db.add_all(
@@ -227,12 +231,12 @@ def create_waiting_game(
                 run_id=run_id,
                 event_type="ability_runtime_compiled",
                 payload_schema_version=1,
-                payload={
+                payload=canonical_event_payload({
                     "ability_snapshot_hash": ability_snapshot["snapshot_hash"],
                     "registry_version": ability_snapshot["registry_version"],
                     "instance_count": len(ability_snapshot["instances"]),
                     "execution_enabled": ability_snapshot["execution_enabled"],
-                },
+                }, audience="god_view"),
             )
         )
     db.commit()

@@ -21,6 +21,12 @@ const item = {
   phase_seq: 2,
   phase_id: "first_night",
   phase_state: "nightfall_announced",
+  audio_mode: "tts",
+  match_status: "running",
+  execution_state: "owned",
+  winner: null,
+  completion_reason: null,
+  completed_at: null,
   created_at: "2026-07-21T10:00:00Z",
   updated_at: "2026-07-21T10:00:00Z",
 };
@@ -37,6 +43,50 @@ describe("V2 game record parsers", () => {
       current_run_id: item.current_run_id,
       last_record_seq: 2,
       last_presentation_seq: 1,
+      audio_mode: "tts",
+      match_status: "running",
+      execution_state: "owned",
+      winner: null,
+    });
+  });
+
+  it("keeps terminal, stale and legacy delivery states explicit", () => {
+    const result = parseV2GameRecordList({
+      items: [
+        {
+          ...item,
+          status: "awaiting_observation",
+          match_status: "completed",
+          execution_state: "stopped",
+          winner: "villagers",
+          completion_reason: "deterministic_win_condition",
+          completed_at: "2026-07-21T10:05:00Z",
+        },
+        {
+          ...item,
+          audio_mode: "legacy_unknown",
+          status: "awaiting_observation",
+          match_status: "running",
+          execution_state: "stale",
+        },
+      ],
+      pagination: { page: 1, page_size: 20, total: 2, pages: 1 },
+    });
+
+    expect(result.items[0]).toMatchObject({
+      status: "awaiting_observation",
+      match_status: "completed",
+      execution_state: "stopped",
+      winner: "villagers",
+      completion_reason: "deterministic_win_condition",
+      completed_at: "2026-07-21T10:05:00Z",
+    });
+    expect(result.items[1]).toMatchObject({
+      audio_mode: "legacy_unknown",
+      status: "awaiting_observation",
+      match_status: "running",
+      execution_state: "stale",
+      winner: null,
     });
   });
 
@@ -51,6 +101,11 @@ describe("V2 game record parsers", () => {
         selected_tts_speaker: "judge-speaker",
         random_tts_speakers: [],
         configuration_version: 1,
+      },
+      delivery_snapshot: {
+        schema_version: 1,
+        mode: "tts",
+        source: "explicit_create_request",
       },
       ability_snapshot: {},
       match_state: null,
@@ -74,6 +129,10 @@ describe("V2 game record parsers", () => {
           started_at: item.created_at,
           completed_at: null,
           stop_requested_at: null,
+          worker_id: "v2-worker-a",
+          worker_heartbeat_at: item.created_at,
+          lease_expires_at: item.updated_at,
+          fence_token: 3,
         },
       ],
       events: [
@@ -227,6 +286,17 @@ describe("V2 game record parsers", () => {
       display_name: "阿青",
       role: "seer",
       alive: true,
+    });
+    expect(result.delivery_snapshot).toEqual({
+      schema_version: 1,
+      mode: "tts",
+      source: "explicit_create_request",
+    });
+    expect(result.runs[0]).toMatchObject({
+      worker_id: "v2-worker-a",
+      worker_heartbeat_at: item.created_at,
+      lease_expires_at: item.updated_at,
+      fence_token: 3,
     });
     expect(modelRequestPage.items[0]).toMatchObject({
       model_id: "doubao-seed-2-0-lite-260215",
@@ -403,9 +473,12 @@ describe("V2 game record parsers", () => {
     const result = parseV2GameRecordSummary({
       ...item,
       status: "waiting_to_start",
+      match_status: "waiting",
+      execution_state: "unowned",
       rule_snapshot: {},
       players_snapshot: [],
       judge_voice_snapshot: {},
+      delivery_snapshot: null,
       ability_snapshot: {},
       match_state: null,
       player_identities: [],
@@ -416,6 +489,10 @@ describe("V2 game record parsers", () => {
         started_at: null,
         completed_at: null,
         stop_requested_at: null,
+        worker_id: null,
+        worker_heartbeat_at: null,
+        lease_expires_at: null,
+        fence_token: 0,
       }],
       events: [],
       model_requests: [],
@@ -430,5 +507,10 @@ describe("V2 game record parsers", () => {
     });
 
     expect(result.runs[0].started_at).toBeNull();
+    expect(result).toMatchObject({
+      match_status: "waiting",
+      execution_state: "unowned",
+      delivery_snapshot: null,
+    });
   });
 });

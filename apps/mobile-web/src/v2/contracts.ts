@@ -9,6 +9,25 @@ export type V2LiveState =
   | "canceled"
   | "failed";
 
+export type V2ConfiguredAudioMode = "tts" | "text_only";
+export type V2AudioMode = V2ConfiguredAudioMode | "legacy_unknown";
+export type V2MatchStatus =
+  | "waiting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+export type V2ExecutionState = "unowned" | "owned" | "stale" | "stopped";
+
+export type V2RuntimeProjection = {
+  audio_mode: V2AudioMode;
+  match_status: V2MatchStatus;
+  execution_state: V2ExecutionState;
+  winner: "villagers" | "werewolves" | null;
+  completion_reason: string | null;
+  completed_at: string | null;
+};
+
 export type V2GamePhase = {
   phase_seq: number;
   phase_id: string;
@@ -66,6 +85,14 @@ export type V2LobbyRuleSnapshot = {
   exile_last_words_enabled?: boolean;
   first_night_last_words_enabled?: boolean;
   sheriff_badge_bomb_policy?: string;
+  werewolf_attack_policy?: {
+    resolution:
+      | "plurality_rotating_tiebreak"
+      | "plurality_seeded_random"
+      | "unanimous_no_attack";
+    allow_no_attack: boolean;
+    allow_wolf_target: boolean;
+  } | null;
   revision_id?: string;
   revision_no?: number;
   schema_version?: number;
@@ -117,6 +144,7 @@ export type V2LobbyQualitySnapshot = {
 
 export type V2GameCreateRequest = {
   title: string;
+  audio_mode: V2ConfiguredAudioMode;
   lobby_snapshot: {
     schema_version: 1;
     model_binding_mode: "profile_library";
@@ -134,6 +162,7 @@ export type V2GameCreateResponse = {
   game_id: string;
   run_id: string;
   status: "waiting_to_start";
+  audio_mode: V2ConfiguredAudioMode;
   snapshot_url: string;
   websocket_url: string;
   director_snapshot_url: string;
@@ -181,7 +210,7 @@ export type V2PublicRoleAssignmentStatus = {
   assigned_count: number;
 };
 
-export type V2LiveSnapshot = {
+export type V2LiveSnapshot = V2RuntimeProjection & {
   protocol_version: 1;
   type: "live.snapshot";
   api_version: "v2";
@@ -230,7 +259,7 @@ export type V2DirectorScene = {
   actor_player_id: string | null;
 };
 
-export type V2DirectorLiveSnapshot = {
+export type V2DirectorLiveSnapshot = V2RuntimeProjection & {
   protocol_version: 1;
   type: "director.live_snapshot";
   api_version: "v2";
@@ -248,7 +277,7 @@ export type V2DirectorLiveSnapshot = {
   current_presentation: V2Presentation | null;
 };
 
-export type V2GodViewIdentitySnapshot = {
+export type V2GodViewIdentitySnapshot = V2RuntimeProjection & {
   protocol_version: 1;
   type: "god_view.identity_snapshot";
   api_version: "v2";
@@ -263,7 +292,7 @@ export type V2GodViewIdentitySnapshot = {
   players: V2GodViewPlayerIdentity[];
 };
 
-export type V2GodViewLiveSnapshot = {
+export type V2GodViewLiveSnapshot = V2RuntimeProjection & {
   protocol_version: 1;
   type: "god_view.live_snapshot";
   api_version: "v2";
@@ -476,6 +505,7 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
     "game_id",
     "run_id",
     "status",
+    "audio_mode",
     "snapshot_url",
     "websocket_url",
     "director_snapshot_url",
@@ -488,6 +518,7 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
     game_id: id(record.game_id, "v2_game_"),
     run_id: id(record.run_id, "v2_run_"),
     status: literal(record.status, ["waiting_to_start"]),
+    audio_mode: literal(record.audio_mode, ["tts", "text_only"]),
     snapshot_url: apiPath(record.snapshot_url),
     websocket_url: apiPath(record.websocket_url),
     director_snapshot_url: apiPath(record.director_snapshot_url),
@@ -523,6 +554,12 @@ export function parseV2GodViewIdentitySnapshotResponse(
     "game_id",
     "run_id",
     "live_state",
+    "audio_mode",
+    "match_status",
+    "execution_state",
+    "winner",
+    "completion_reason",
+    "completed_at",
     "game_phase",
     "match_state",
     "server_time",
@@ -532,16 +569,21 @@ export function parseV2GodViewIdentitySnapshotResponse(
   const rule = record.rule === null ? null : publicRule(record.rule);
   const players = godViewPlayers(record.players);
   if (rule !== null && rule.player_count !== players.length) throw invalid();
+  const parsedLiveState = liveState(record.live_state);
+  const parsedPhase = gamePhase(record.game_phase);
+  const parsedMatchState =
+    record.match_state == null ? null : matchState(record.match_state);
   return {
+    ...runtimeProjection(record, parsedLiveState, parsedPhase, parsedMatchState),
     protocol_version: literal(record.protocol_version, [1] as const),
     type: literal(record.type, ["god_view.identity_snapshot"]),
     api_version: literal(record.api_version, ["v2"]),
     audience: literal(record.audience, ["spectator_god_view"]),
     game_id: id(record.game_id, "v2_game_"),
     run_id: id(record.run_id, "v2_run_"),
-    live_state: liveState(record.live_state),
-    game_phase: gamePhase(record.game_phase),
-    match_state: record.match_state == null ? null : matchState(record.match_state),
+    live_state: parsedLiveState,
+    game_phase: parsedPhase,
+    match_state: parsedMatchState,
     server_time: date(record.server_time),
     rule,
     players,
@@ -567,6 +609,12 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "game_id",
       "run_id",
       "live_state",
+      "audio_mode",
+      "match_status",
+      "execution_state",
+      "winner",
+      "completion_reason",
+      "completed_at",
       "game_phase",
       "match_state",
       "latest_presentation_seq",
@@ -576,15 +624,19 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "public_role_assignment",
       "current_presentation",
     ]);
+    const parsedLiveState = liveState(snapshot.live_state);
+    const parsedPhase = gamePhase(snapshot.game_phase);
+    const parsedMatchState =
+      snapshot.match_state == null ? null : matchState(snapshot.match_state);
     return {
       ...base,
+      ...runtimeProjection(snapshot, parsedLiveState, parsedPhase, parsedMatchState),
       type,
       api_version: literal(snapshot.api_version, ["v2"]),
       audience: literal(snapshot.audience, ["player_public"]),
-      live_state: liveState(snapshot.live_state),
-      game_phase: gamePhase(snapshot.game_phase),
-      match_state:
-        snapshot.match_state == null ? null : matchState(snapshot.match_state),
+      live_state: parsedLiveState,
+      game_phase: parsedPhase,
+      match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       public_rule:
         snapshot.public_rule === null ? null : publicRule(snapshot.public_rule),
@@ -607,6 +659,12 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "game_id",
       "run_id",
       "live_state",
+      "audio_mode",
+      "match_status",
+      "execution_state",
+      "winner",
+      "completion_reason",
+      "completed_at",
       "game_phase",
       "match_state",
       "latest_presentation_seq",
@@ -619,15 +677,19 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
     const rule = snapshot.rule === null ? null : publicRule(snapshot.rule);
     const players = godViewPlayers(snapshot.players);
     if (rule !== null && rule.player_count !== players.length) throw invalid();
+    const parsedLiveState = liveState(snapshot.live_state);
+    const parsedPhase = gamePhase(snapshot.game_phase);
+    const parsedMatchState =
+      snapshot.match_state == null ? null : matchState(snapshot.match_state);
     return {
       ...base,
+      ...runtimeProjection(snapshot, parsedLiveState, parsedPhase, parsedMatchState),
       type,
       api_version: literal(snapshot.api_version, ["v2"]),
       audience: literal(snapshot.audience, ["spectator_directed"]),
-      live_state: liveState(snapshot.live_state),
-      game_phase: gamePhase(snapshot.game_phase),
-      match_state:
-        snapshot.match_state == null ? null : matchState(snapshot.match_state),
+      live_state: parsedLiveState,
+      game_phase: parsedPhase,
+      match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       rule,
       players,
@@ -647,6 +709,12 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       "game_id",
       "run_id",
       "live_state",
+      "audio_mode",
+      "match_status",
+      "execution_state",
+      "winner",
+      "completion_reason",
+      "completed_at",
       "game_phase",
       "match_state",
       "latest_presentation_seq",
@@ -658,15 +726,19 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
     const rule = snapshot.rule === null ? null : publicRule(snapshot.rule);
     const players = godViewPlayers(snapshot.players);
     if (rule !== null && rule.player_count !== players.length) throw invalid();
+    const parsedLiveState = liveState(snapshot.live_state);
+    const parsedPhase = gamePhase(snapshot.game_phase);
+    const parsedMatchState =
+      snapshot.match_state == null ? null : matchState(snapshot.match_state);
     return {
       ...base,
+      ...runtimeProjection(snapshot, parsedLiveState, parsedPhase, parsedMatchState),
       type,
       api_version: literal(snapshot.api_version, ["v2"]),
       audience: literal(snapshot.audience, ["spectator_god_view"]),
-      live_state: liveState(snapshot.live_state),
-      game_phase: gamePhase(snapshot.game_phase),
-      match_state:
-        snapshot.match_state == null ? null : matchState(snapshot.match_state),
+      live_state: parsedLiveState,
+      game_phase: parsedPhase,
+      match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
       rule,
       players,
@@ -826,8 +898,8 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
       presentation_id: text(value.presentation_id),
       speech_id: text(value.speech_id),
       final_segment_index: integer(value.final_segment_index, 0),
-      final_chunk_index: integer(value.final_chunk_index, 0),
-      final_sample_cursor: integer(value.final_sample_cursor, 1),
+      final_chunk_index: integer(value.final_chunk_index, -1),
+      final_sample_cursor: integer(value.final_sample_cursor, 0),
       result: literal(value.result, ["audio_drained_and_voice_saved"]),
     };
   }
@@ -1092,6 +1164,64 @@ function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {
     playerIds.add(player.player_id);
   }
   return players;
+}
+
+function runtimeProjection(
+  record: Record<string, unknown>,
+  currentLiveState: V2LiveState,
+  phase: V2GamePhase,
+  match: V2MatchState | null,
+): V2RuntimeProjection {
+  const audioMode =
+    record.audio_mode === undefined
+      ? "legacy_unknown"
+      : literal(record.audio_mode, ["tts", "text_only", "legacy_unknown"]);
+  const winner =
+    record.winner === undefined
+      ? (match?.winner ?? null)
+      : record.winner === null
+        ? null
+        : literal(record.winner, ["villagers", "werewolves"]);
+  if (winner !== null && match?.winner != null && match.winner !== winner) {
+    throw invalid();
+  }
+  const derivedMatchStatus: V2MatchStatus =
+    phase.phase_state === "game_completed" && winner !== null
+      ? "completed"
+      : currentLiveState === "failed" || phase.phase_state === "failed"
+        ? "failed"
+        : currentLiveState === "canceled"
+          ? "canceled"
+          : currentLiveState === "waiting_to_start"
+            ? "waiting"
+            : "running";
+  const matchStatus =
+    record.match_status === undefined
+      ? derivedMatchStatus
+      : literal(record.match_status, [
+          "waiting",
+          "running",
+          "completed",
+          "failed",
+          "canceled",
+        ]);
+  const executionState =
+    record.execution_state === undefined
+      ? currentLiveState === "failed" ||
+        currentLiveState === "canceled" ||
+        phase.phase_state === "game_completed"
+        ? "stopped"
+        : "unowned"
+      : literal(record.execution_state, ["unowned", "owned", "stale", "stopped"]);
+  return {
+    audio_mode: audioMode,
+    match_status: matchStatus,
+    execution_state: executionState,
+    winner,
+    completion_reason:
+      record.completion_reason == null ? null : text(record.completion_reason),
+    completed_at: record.completed_at == null ? null : date(record.completed_at),
+  };
 }
 
 function liveState(value: unknown): V2LiveState {

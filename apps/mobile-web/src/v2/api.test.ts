@@ -21,6 +21,7 @@ describe("createV2Game", () => {
           game_id: "v2_game_0123456789abcdef",
           run_id: "v2_run_0123456789abcdef",
           status: "waiting_to_start",
+          audio_mode: "text_only",
           snapshot_url:
             "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
           websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
@@ -40,6 +41,7 @@ describe("createV2Game", () => {
     vi.stubGlobal("fetch", fetchMock);
     const request = {
       title: "经典 8 人",
+      audio_mode: "text_only" as const,
       lobby_snapshot: {
         schema_version: 1 as const,
         model_binding_mode: "profile_library" as const,
@@ -84,6 +86,7 @@ describe("createV2Game", () => {
     const result = await createV2Game(request);
 
     expect(result.game_id).toBe("v2_game_0123456789abcdef");
+    expect(result.audio_mode).toBe("text_only");
     expect(result.god_view_access_token).toBe("a".repeat(43));
     expect(result.director_websocket_url).toBe(
       "/api/v2/director/games/v2_game_0123456789abcdef/ws",
@@ -96,6 +99,30 @@ describe("createV2Game", () => {
     expect(new URL(url).pathname).toBe("/api/v2/games");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual(request);
+  });
+
+  it("preserves a stale rule revision conflict for lobby recovery", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: "rule_revision_changed",
+            },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      createV2Game({ title: "过期规则" } as Parameters<typeof createV2Game>[0]),
+    ).rejects.toMatchObject({
+      name: "V2GameCreateError",
+      status: 409,
+      code: "rule_revision_changed",
+    });
   });
 
   it("rejects a non-V2 creation response", async () => {
@@ -118,6 +145,7 @@ describe("createV2Game", () => {
     await expect(
       createV2Game({
         title: "非法响应",
+        audio_mode: "tts",
         lobby_snapshot: {
           schema_version: 1,
           model_binding_mode: "profile_library",

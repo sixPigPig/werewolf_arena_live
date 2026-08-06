@@ -9,6 +9,9 @@ from app.v2.model_context import (
     V2ModelPlayerReference,
     project_model_action_context_with_metadata,
 )
+from app.v2.model_context_contract import (
+    legacy_v8_prompt_v1_model_context_contract,
+)
 
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "v2_model_context_v8_eval.json"
@@ -33,6 +36,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
     projection = project_model_action_context_with_metadata(
         case["context"],
         players=players,
+        model_context_contract=legacy_v8_prompt_v1_model_context_contract(),
         action_record_seq=case["action_record_seq"],
     )
     context = projection.context
@@ -100,6 +104,7 @@ def test_t02_history_is_lossless_without_a_retention_budget() -> None:
             V2ModelPlayerReference("system-player-07", 1, "1号"),
             V2ModelPlayerReference("system-player-01", 2, "2号"),
         ),
+        model_context_contract=legacy_v8_prompt_v1_model_context_contract(),
         action_record_seq=100,
     )
     metadata = projection.projection_metadata

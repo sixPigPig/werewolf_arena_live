@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.judge_configuration import RuntimeJudgeConfiguration
 from app.v2.director_projection import project_director_scene
+from app.v2.event_contract import model_event_audience
 from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
 from app.v2.model_context import (
     V2ModelPlayerReference,
@@ -45,6 +46,7 @@ from app.v2.protocol import (
 from app.v2.repository import (
     V2ActionClaim,
     V2ActionRepository,
+    V2ExecutionOwnershipLost,
     V2PresentationIdentity,
     V2RepositoryError,
 )
@@ -208,7 +210,9 @@ class V2ActionEngine:
         *,
         repository: V2ActionRepository,
         model_client: V2ModelPort,
-        tts_client: V2TtsPort,
+        tts_client: V2TtsPort | None,
+        tts_client_factory: Callable[[], V2TtsPort] | None,
+        tts_capability_enabled: bool,
         voice_root: Path,
         sample_rate: int,
         judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
@@ -217,12 +221,29 @@ class V2ActionEngine:
         self._repository = repository
         self._model_client = model_client
         self._tts_client = tts_client
+        self._tts_client_factory = tts_client_factory
+        self._tts_capability_enabled = tts_capability_enabled
         self._voice_root = voice_root
         self._sample_rate = sample_rate
         self._judge_configuration_provider = judge_configuration_provider
         self._model_retry_policy = model_retry_policy
         self._paused_model_actions: dict[str, _PausedModelActionWaiter] = {}
         self._paused_model_actions_lock = asyncio.Lock()
+
+    def _tts_client_for_claim(self, claim: V2ActionClaim) -> V2TtsPort | None:
+        if claim.audio_mode == "text_only":
+            return None
+        if claim.audio_mode != "tts":
+            raise V2RepositoryError("v2_audio_mode_unknown")
+        if not self._tts_capability_enabled:
+            raise V2RepositoryError("v2_audio_mode_unavailable")
+        if self._tts_client is None:
+            if self._tts_client_factory is None:
+                raise V2RepositoryError("v2_audio_mode_unavailable")
+            self._tts_client = self._tts_client_factory()
+        if not bool(getattr(self._tts_client, "enabled", True)):
+            raise V2RepositoryError("v2_audio_mode_unavailable")
+        return self._tts_client
 
     def check_cancellation(self, game_id: str) -> None:
         self._repository.check_cancellation(game_id)
@@ -333,6 +354,8 @@ class V2ActionEngine:
             return
         try:
             transition = self._repository.transition_to_first_night(game_id=game_id)
+        except V2ExecutionOwnershipLost:
+            raise
         except Exception as exc:
             failure_kind, failure_code = _failure(exc)
             logger.warning(
@@ -460,12 +483,20 @@ class V2ActionEngine:
                 "version": judge_configuration.version,
             }
             context["speech_source"] = "template"
+        model_audience = model_event_audience(
+            action_audience=spec.audience,
+            actor_kind=spec.actor_kind,
+        )
         claim = self._repository.claim_action(
             game_id=game_id,
             action_id=action_id,
             context=context,
             expected_phase_id=spec.phase_id,
             expected_phase_state=spec.required_phase_state,
+            audience=spec.audience,
+            context_audience=(
+                model_audience if spec.actor_kind == "player" else spec.audience
+            ),
             activation_id=spec.activation_id,
             best_effort=spec.best_effort,
             non_blocking=spec.defer_presentation,
@@ -483,6 +514,7 @@ class V2ActionEngine:
         model_attempt_no: int | None = None
         model_request_completed = False
         model_failure_recorded = False
+        tts_attempt_id: str | None = None
         try:
             check_cancellation()
             if not spec.best_effort and not spec.defer_presentation:
@@ -521,6 +553,7 @@ class V2ActionEngine:
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="judge_speech_rendered",
+                    audience=claim.audience,
                     payload={
                         "action_id": claim.action_id,
                         "template_id": rendered.template_id,
@@ -593,6 +626,7 @@ class V2ActionEngine:
                         self._repository.append_event(
                             game_id=claim.game_id,
                             event_type="model_request_started",
+                            audience=model_audience,
                             payload={
                                 "action_id": claim.action_id,
                                 "attempt_id": model_attempt_id,
@@ -634,7 +668,6 @@ class V2ActionEngine:
                                 "judge_configuration_version": None,
                                 "actor_kind": spec.actor_kind,
                                 "actor_id": spec.actor_id,
-                                "audience": spec.audience,
                                 "prompt_schema_version": (
                                     model_context.get("prompt_schema_version")
                                     or model_context.get("model_context_schema_version")
@@ -720,6 +753,7 @@ class V2ActionEngine:
                             self._repository.append_event(
                                 game_id=claim.game_id,
                                 event_type="model_request_failed",
+                                audience=model_audience,
                                 payload=_model_failure_payload(
                                     action_id=claim.action_id,
                                     attempt_id=model_attempt_id,
@@ -754,6 +788,7 @@ class V2ActionEngine:
                                 self._repository.append_event(
                                     game_id=claim.game_id,
                                     event_type="model_retry_scheduled",
+                                    audience=model_audience,
                                     payload={
                                         "action_id": claim.action_id,
                                         "attempt_id": model_attempt_id,
@@ -791,6 +826,7 @@ class V2ActionEngine:
                                 self._repository.append_event(
                                     game_id=claim.game_id,
                                     event_type=event_type,
+                                    audience=claim.audience,
                                     payload={
                                         "action_id": claim.action_id,
                                         "attempt_id": model_attempt_id,
@@ -907,6 +943,7 @@ class V2ActionEngine:
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_first_token_received",
+                    audience=model_audience,
                     payload={
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
@@ -933,6 +970,7 @@ class V2ActionEngine:
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_response_received",
+                    audience=model_audience,
                     payload={
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
@@ -956,6 +994,7 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_response_repair_applied",
+                        audience=model_audience,
                         payload={
                             "action_id": claim.action_id,
                             "attempt_id": model_attempt_id,
@@ -964,7 +1003,7 @@ class V2ActionEngine:
                         },
                     )
                 self._repository.resolve_model_action_recovery(
-                    action_id=claim.action_id,
+                    claim=claim,
                     attempt_id=model_attempt_id,
                     attempt_no=model_attempt_no,
                     retry_cycle=retry_cycle,
@@ -976,6 +1015,7 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_decision_speech_normalized",
+                        audience=model_audience,
                         payload={
                             "action_id": claim.action_id,
                             "attempt_id": model_attempt_id,
@@ -986,6 +1026,7 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_decision_speech_normalized",
+                        audience=model_audience,
                         payload={
                             "action_id": claim.action_id,
                             "attempt_id": model_attempt_id,
@@ -1003,6 +1044,7 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_decision_note_normalized",
+                        audience=model_audience,
                         payload={
                             "action_id": claim.action_id,
                             "attempt_id": model_attempt_id,
@@ -1049,6 +1091,7 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_decision_target_normalized",
+                        audience=model_audience,
                         payload={
                             "action_id": claim.action_id,
                             "original_target_player_ref": (
@@ -1081,8 +1124,8 @@ class V2ActionEngine:
                 return V2ActionResult(decision=model_decision)
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
-            tts_enabled = bool(getattr(self._tts_client, "enabled", True))
-            voice_asset_id = f"v2_voice_{uuid4().hex[:16]}" if tts_enabled else None
+            tts_client = self._tts_client_for_claim(claim)
+            voice_asset_id = f"v2_voice_{uuid4().hex[:16]}" if tts_client else None
             identity = self._repository.open_presentation(
                 claim=claim,
                 presentation_id=presentation_id,
@@ -1092,7 +1135,6 @@ class V2ActionEngine:
                 sample_rate=self._sample_rate,
                 actor_kind=spec.actor_kind,
                 actor_id=spec.actor_id,
-                audience=spec.audience,
             )
             await broadcaster.set_current(identity, 0, audience=spec.audience)
             await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
@@ -1106,13 +1148,16 @@ class V2ActionEngine:
                     ),
                     audience=spec.audience,
                 )
-            if not tts_enabled:
+            if tts_client is None:
                 self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="tts_skipped",
+                    audience=identity.audience,
                     payload={
                         "action_id": claim.action_id,
-                        "reason_code": "tts_disabled",
+                        "presentation_id": identity.presentation_id,
+                        "reason_code": "configured_text_only",
+                        "configured_audio_mode": "text_only",
                         "delivery_mode": "text_only",
                     },
                 )
@@ -1147,9 +1192,12 @@ class V2ActionEngine:
             self._repository.append_event(
                 game_id=claim.game_id,
                 event_type="tts_stream_started",
+                audience=identity.audience,
                 payload={
                     "action_id": claim.action_id,
+                    "presentation_id": identity.presentation_id,
                     "attempt_id": tts_attempt_id,
+                    "tts_attempt_id": tts_attempt_id,
                     "sentence_ms": sentence_ms,
                     "speaker": speaker,
                     "dialect": spec.dialect,
@@ -1168,7 +1216,7 @@ class V2ActionEngine:
             sample_cursor = 0
             chunk_index = 0
             first_chunk = True
-            async for pcm in self._tts_client.synthesize(
+            async for pcm in tts_client.synthesize(
                 text=speech_text,
                 attempt_id=tts_attempt_id,
                 speaker=speaker,
@@ -1188,9 +1236,12 @@ class V2ActionEngine:
                         self._repository.append_event(
                             game_id=claim.game_id,
                             event_type=event_type,
+                            audience=identity.audience,
                             payload={
                                 "action_id": claim.action_id,
+                                "presentation_id": identity.presentation_id,
                                 "attempt_id": tts_attempt_id,
+                                "tts_attempt_id": tts_attempt_id,
                                 "voice_asset_id": identity.voice_asset_id,
                                 "first_chunk_ms": first_chunk_ms,
                             },
@@ -1219,7 +1270,7 @@ class V2ActionEngine:
                 raise V2TtsError("tts_empty_audio")
             check_cancellation()
             self._repository.mark_finalizing(
-                game_id=claim.game_id,
+                identity=identity,
                 tts_attempt_id=tts_attempt_id,
                 sample_count=sample_cursor,
                 best_effort=spec.best_effort,
@@ -1234,16 +1285,19 @@ class V2ActionEngine:
                     audience=spec.audience,
                 )
             recorded = recorder.finalize()
-            recorder = None
             if recorded.sample_count != sample_cursor:
+                recorder.discard_finalized()
+                recorder = None
                 raise V2VoiceRecordingError("recorded sample count differs from broadcast")
             self._repository.mark_voice_ready(
                 identity=identity,
+                tts_attempt_id=tts_attempt_id,
                 sample_count=recorded.sample_count,
                 duration_ms=recorded.duration_ms,
                 pcm_sha256=recorded.pcm_sha256,
                 size_bytes=recorded.size_bytes,
             )
+            recorder = None
             remaining = official_end - time.monotonic()
             while remaining > 0:
                 await asyncio.sleep(min(remaining, 0.1))
@@ -1252,6 +1306,7 @@ class V2ActionEngine:
             check_cancellation()
             self._repository.complete_action(
                 identity=identity,
+                tts_attempt_id=tts_attempt_id,
                 final_chunk_index=chunk_index - 1,
                 final_sample_cursor=sample_cursor,
                 next_live_state=spec.success_live_state,
@@ -1283,11 +1338,15 @@ class V2ActionEngine:
             return V2ActionResult(decision=model_decision)
         except asyncio.CancelledError:
             if recorder is not None:
-                recorder.abort()
+                recorder.discard_finalized()
+            raise
+        except V2ExecutionOwnershipLost:
+            if recorder is not None:
+                recorder.discard_finalized()
             raise
         except Exception as exc:
             if recorder is not None:
-                recorder.abort()
+                recorder.discard_finalized()
             failure_kind, failure_code = _failure(exc)
             if (
                 model_attempt_id is not None
@@ -1310,12 +1369,16 @@ class V2ActionEngine:
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_request_failed",
+                        audience=model_audience,
                         payload=failure_payload,
                     )
                 except Exception:
                     logger.exception("Live V2 could not persist model request failure")
             logger.warning(
-                "Live V2 judge sentence failed",
+                "Live V2 action failed: %s (%s: %s)",
+                failure_code,
+                type(exc).__name__,
+                exc,
                 extra={
                     "game_id": claim.game_id,
                     "action_id": claim.action_id,
@@ -1330,6 +1393,7 @@ class V2ActionEngine:
                     failure_kind=failure_kind,
                     failure_code=failure_code,
                     identity=identity,
+                    tts_attempt_id=tts_attempt_id,
                     best_effort=spec.best_effort,
                 )
             except Exception:
@@ -1351,9 +1415,9 @@ class V2ActionEngine:
                         failure_kind=failure_kind,
                         failure_code=failure_code,
                     ),
-                    audience="all",
+                    audience=identity.audience,
                 )
-                await broadcaster.set_current(None, 0, audience=spec.audience)
+                await broadcaster.set_current(None, 0, audience=identity.audience)
             return None
 
 

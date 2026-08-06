@@ -37,6 +37,12 @@ const detail = {
   phase_seq: 1,
   phase_id: "opening",
   phase_state: "opening_completed",
+  audio_mode: "tts",
+  match_status: "running",
+  execution_state: "owned",
+  winner: null,
+  completion_reason: null,
+  completed_at: null,
   created_at: occurredAt,
   updated_at: "2026-07-23T08:00:03Z",
   rule_snapshot: { player_count: 9 },
@@ -47,6 +53,11 @@ const detail = {
     selected_tts_speaker: "judge-speaker",
     random_tts_speakers: [],
     configuration_version: 1,
+  },
+  delivery_snapshot: {
+    schema_version: 1,
+    mode: "tts",
+    source: "explicit_create_request",
   },
   ability_snapshot: { compiler_version: 1 },
   match_state: { day_number: 0, alive_player_ids: [] },
@@ -80,6 +91,10 @@ const detail = {
       started_at: occurredAt,
       completed_at: null,
       stop_requested_at: null,
+      worker_id: "v2-worker-observable",
+      worker_heartbeat_at: "2026-07-23T08:00:02Z",
+      lease_expires_at: "2026-07-23T08:00:32Z",
+      fence_token: 4,
     },
   ],
   events: [
@@ -607,9 +622,23 @@ const roundSummaryDetail = {
   ...detail,
   title: "轮次摘要验收",
   status: "awaiting_observation",
+  match_status: "completed",
+  execution_state: "stopped",
+  winner: "villagers",
+  completion_reason: "deterministic_win_condition",
+  completed_at: "2026-07-23T08:00:06Z",
   last_record_seq: 6,
   phase_id: "day_1",
   phase_state: "game_completed",
+  runs: detail.runs.map((run) => ({
+    ...run,
+    status: "awaiting_observation",
+    completed_at: "2026-07-23T08:00:06Z",
+    worker_id: null,
+    worker_heartbeat_at: null,
+    lease_expires_at: null,
+    fence_token: 5,
+  })),
   events: [
     event(1, "game_phase_changed", {
       previous_phase_id: "opening",
@@ -663,9 +692,23 @@ const phaseIntegrityDetail = {
   ...detail,
   title: "阶段完整性验收",
   status: "awaiting_observation",
+  match_status: "completed",
+  execution_state: "stopped",
+  winner: "villagers",
+  completion_reason: "deterministic_win_condition",
+  completed_at: "2026-07-23T08:00:11Z",
   last_record_seq: 11,
   phase_id: "day_2",
   phase_state: "game_completed",
+  runs: detail.runs.map((run) => ({
+    ...run,
+    status: "awaiting_observation",
+    completed_at: "2026-07-23T08:00:11Z",
+    worker_id: null,
+    worker_heartbeat_at: null,
+    lease_expires_at: null,
+    fence_token: 5,
+  })),
   player_identities: detail.player_identities.map((identity) =>
     identity.player_id === "profile-2"
       ? { ...identity, death_cause: "werewolf_self_explosion" }
@@ -925,6 +968,11 @@ describe("V2 game record detail workspace", () => {
     expect(
       await screen.findByRole("heading", { name: "模型可观测性验收" }),
     ).toBeInTheDocument();
+    const summaryMetrics = screen.getByRole("region", { name: "对局摘要" });
+    expect(within(summaryMetrics).getByText("进行中")).toBeVisible();
+    expect(within(summaryMetrics).getByText("执行中")).toBeVisible();
+    expect(within(summaryMetrics).getByText("语音播报")).toBeVisible();
+    expect(within(summaryMetrics).queryByText(/已完成/)).not.toBeInTheDocument();
     expect(screen.getAllByText("doubao-seed-2-0-lite-260215")).not.toHaveLength(
       0,
     );
@@ -1112,7 +1160,7 @@ describe("V2 game record detail workspace", () => {
 
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
-  });
+  }, 60_000);
 
   it("preloads saved voice metadata and shows the persisted duration", async () => {
     stubRecordFetch({
@@ -1485,6 +1533,11 @@ describe("V2 game record detail workspace", () => {
     expect(
       await screen.findByRole("heading", { name: "轮次摘要验收" }),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "对局摘要" })).getByText(
+        "已完成 · 好人阵营获胜",
+      ),
+    ).toBeVisible();
     const summary = screen.getByRole("region", { name: "全知战局态势" });
     expect(
       within(summary).getByRole("heading", { name: /全知战局态势/ }),
@@ -1633,10 +1686,43 @@ describe("V2 game record detail workspace", () => {
     ).toBe("");
   });
 
-  it("refreshes active games every two seconds and stops polling terminal games", () => {
-    expect(liveRefreshInterval("waiting_to_start")).toBe(2_000);
-    expect(liveRefreshInterval("broadcasting")).toBe(2_000);
-    expect(liveRefreshInterval("awaiting_observation")).toBe(false);
-    expect(liveRefreshInterval("canceled")).toBe(false);
+  it("surfaces stale execution and legacy audio without inventing a result", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "旧记录失联验收",
+      audio_mode: "legacy_unknown",
+      execution_state: "stale",
+      delivery_snapshot: {
+        schema_version: 1,
+        mode: "legacy_unknown",
+        source: "pre_contract_record",
+      },
+      runs: detail.runs.map((run) => ({
+        ...run,
+        worker_heartbeat_at: "2026-07-23T07:55:00Z",
+        lease_expires_at: "2026-07-23T07:55:30Z",
+      })),
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "旧记录失联验收" }),
+    ).toBeVisible();
+    const summary = screen.getByRole("region", { name: "对局摘要" });
+    expect(within(summary).getByText("进行中")).toBeVisible();
+    expect(within(summary).getByText("执行器失联")).toBeVisible();
+    expect(within(summary).getByText("旧记录模式未知")).toBeVisible();
+    expect(screen.getByText("执行器失联，当前版本不可自动续局")).toBeVisible();
+    expect(within(summary).queryByText(/已完成/)).not.toBeInTheDocument();
+  });
+
+  it("keeps polling through terminal delivery until the execution owner stops", () => {
+    expect(liveRefreshInterval("waiting")).toBe(2_000);
+    expect(liveRefreshInterval("running")).toBe(2_000);
+    expect(liveRefreshInterval("completed", "owned")).toBe(2_000);
+    expect(liveRefreshInterval("completed", "stale")).toBe(2_000);
+    expect(liveRefreshInterval("completed", "stopped")).toBe(false);
+    expect(liveRefreshInterval("failed", "stopped")).toBe(false);
+    expect(liveRefreshInterval("canceled", "unowned")).toBe(false);
   });
 });

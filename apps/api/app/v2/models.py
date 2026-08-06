@@ -3,7 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -51,6 +63,7 @@ class V2GameRecord(Base):
         nullable=False,
         default=dict,
     )
+    delivery_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     ability_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     ability_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -107,6 +120,20 @@ class V2GameRun(Base):
     __tablename__ = "v2_game_runs"
     __table_args__ = (
         UniqueConstraint("game_id", "attempt_no", name="uq_v2_game_runs_game_attempt"),
+        CheckConstraint("fence_token >= 0", name="ck_v2_game_runs_fence_nonnegative"),
+        Index(
+            "ix_v2_game_runs_active_lease",
+            "status",
+            "lease_expires_at",
+            postgresql_where=text(
+                "status IN ('ready', 'generating', 'broadcasting', 'finalizing', "
+                "'paused_model_error', 'awaiting_observation')"
+            ),
+            sqlite_where=text(
+                "status IN ('ready', 'generating', 'broadcasting', 'finalizing', "
+                "'paused_model_error', 'awaiting_observation')"
+            ),
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -124,6 +151,22 @@ class V2GameRun(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    worker_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    fence_token: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
 
 
 class V2GameControlRequest(Base):

@@ -235,10 +235,10 @@ def test_game_profile_config_drops_unmanaged_external_avatar_url() -> None:
                 display_name="旧外链头像玩家",
                 model_provider="deepseek",
                 model="model-a",
-                    avatar_image_url="https://tracker.example/avatar.png",
-                    status="published",
-                    published_at=datetime.now(UTC),
-                    display_order=1,
+                avatar_image_url="https://tracker.example/avatar.png",
+                status="published",
+                published_at=datetime.now(UTC),
+                display_order=1,
             )
         )
         session.commit()
@@ -690,6 +690,7 @@ def test_list_rule_sets_returns_published_database_revisions_default_first() -> 
         "exile_last_words_enabled",
         "first_night_last_words_enabled",
         "sheriff_badge_bomb_policy",
+        "werewolf_attack_policy",
         "revision_id",
         "revision_no",
         "schema_version",
@@ -699,6 +700,7 @@ def test_list_rule_sets_returns_published_database_revisions_default_first() -> 
     assert all(set(item) == expected_fields for item in items)
     assert all(item["version"] == str(item["revision_no"]) for item in items)
     assert all(len(item["content_hash"]) == 64 for item in items)
+    assert all(item["werewolf_attack_policy"] is None for item in items)
     assert items[0]["is_default"] is True
     assert "internal.werewolf.collective_fallback.v1" not in response.text
     assert "狼队集体无有效刀口时" not in response.text
@@ -709,6 +711,52 @@ def test_list_rule_sets_returns_published_database_revisions_default_first() -> 
         "model_group",
         "category",
     }
+
+
+def test_list_rule_sets_preserves_explicit_werewolf_attack_policy() -> None:
+    policy = {
+        "resolution": "plurality_seeded_random",
+        "allow_no_attack": True,
+        "allow_wolf_target": False,
+    }
+    seed = next(item for item in OFFICIAL_RULE_SET_SEEDS if item["id"] == "classic_8")
+    with TestingSessionLocal() as db:
+        db.add(
+            User(
+                id=101,
+                email="catalog-policy@example.test",
+                display_name="Catalog policy publisher",
+                admin_role="super_admin",
+            )
+        )
+        aggregate = update_rule_set_draft(
+            db,
+            "classic_8",
+            config=normalize_rule_set_config({**seed["config"], "werewolf_attack_policy": policy}),
+            display_order=int(seed["display_order"]),
+            expected_rule_set_lock_version=1,
+            expected_revision_lock_version=None,
+            actor_user_id=101,
+        )
+        assert aggregate.draft is not None
+        parent_lock_version = aggregate.record.lock_version
+        revision_lock_version = aggregate.draft.lock_version
+        db.commit()
+        publish_rule_set(
+            db,
+            "classic_8",
+            expected_rule_set_lock_version=parent_lock_version,
+            expected_revision_lock_version=revision_lock_version,
+            reason="Verify public V2 policy transport",
+            actor_user_id=101,
+        )
+        db.commit()
+
+    response = client.get("/api/v1/games/rule-sets")
+
+    assert response.status_code == 200, response.text
+    classic = next(item for item in response.json()["rule_sets"] if item["id"] == "classic_8")
+    assert classic["werewolf_attack_policy"] == policy
 
 
 def test_list_rule_sets_returns_503_without_static_fallback(
@@ -860,27 +908,27 @@ def test_list_model_options_returns_configured_models(monkeypatch: pytest.Monkey
     assert response.status_code == 200
     assert response.json() == {
         "models": [
-                *[
-                    {
-                        "id": model,
-                        "provider": "agent_plan",
-                        "model_id": model,
-                        "label": f"火山方舟 Agent Plan · {model}",
-                    }
-                    for model in ARK_AGENT_PLAN_MODELS
-                ],
+            *[
                 {
-                    "id": "deepseek-test",
-                    "provider": "deepseek",
-                    "model_id": "deepseek-test",
-                    "label": "DeepSeek · deepseek-test",
-                },
-                {
-                    "id": "qwen-test",
-                    "provider": "qwen",
-                    "model_id": "qwen-test",
-                    "label": "Qwen · qwen-test",
-                },
+                    "id": model,
+                    "provider": "agent_plan",
+                    "model_id": model,
+                    "label": f"火山方舟 Agent Plan · {model}",
+                }
+                for model in ARK_AGENT_PLAN_MODELS
+            ],
+            {
+                "id": "deepseek-test",
+                "provider": "deepseek",
+                "model_id": "deepseek-test",
+                "label": "DeepSeek · deepseek-test",
+            },
+            {
+                "id": "qwen-test",
+                "provider": "qwen",
+                "model_id": "qwen-test",
+                "label": "Qwen · qwen-test",
+            },
         ]
     }
 
@@ -2463,9 +2511,9 @@ def test_create_game_run_resolves_profile_configs(
     assert snapshot == {
         "seat": 2,
         "profile_id": "profile-alpha",
-            "name": "覆盖名",
-            "model_provider": "deepseek",
-            "model": "profile-model",
+        "name": "覆盖名",
+        "model_provider": "deepseek",
+        "model": "profile-model",
         "personality_id": "aggressive",
         "personality": expected_personality,
         "appearance_id": "crimson",
@@ -2763,10 +2811,10 @@ def test_resume_game_run_creates_live_run_from_checkpoint(
     assert payload["player_configs"] == [
         {
             "seat": 2,
-                "profile_id": "profile-alpha",
-                "name": "控场位",
-                "model_provider": "deepseek",
-                "model": "profile-model",
+            "profile_id": "profile-alpha",
+            "name": "控场位",
+            "model_provider": "deepseek",
+            "model": "profile-model",
             "personality_id": "cautious",
             "personality": "谨慎控场。",
             "appearance_id": "moonlit",
@@ -4236,9 +4284,7 @@ def test_get_game_playback_returns_persisted_events_and_saved_voices() -> None:
             "audio_format": "pcm",
             "sample_rate": 24000,
             "duration_ms": 123,
-            "subtitle_timings": [
-                {"text": "我不是狼", "start_ms": 0, "end_ms": 1}
-            ],
+            "subtitle_timings": [{"text": "我不是狼", "start_ms": 0, "end_ms": 1}],
         }
     ]
 
@@ -4298,9 +4344,7 @@ def test_god_view_playback_includes_scoped_wolf_chat_voice_only() -> None:
         voice_store.complete_utterance("voice_wolf_chat_api", duration_ms=120)
 
     public_response = client.get(f"/api/v1/games/{session_id}/playback")
-    public_audio = client.get(
-        f"/api/v1/games/{session_id}/playback/voices/voice_wolf_chat_api"
-    )
+    public_audio = client.get(f"/api/v1/games/{session_id}/playback/voices/voice_wolf_chat_api")
     app.dependency_overrides[games_routes.get_current_public_principal] = lambda: object()
     try:
         god_response = client.get(f"/api/v1/games/{session_id}/god-view/playback")
@@ -4315,8 +4359,7 @@ def test_god_view_playback_includes_scoped_wolf_chat_voice_only() -> None:
 
     assert public_response.status_code == 200
     assert not any(
-        voice["utterance_id"] == "voice_wolf_chat_api"
-        for voice in public_response.json()["voices"]
+        voice["utterance_id"] == "voice_wolf_chat_api" for voice in public_response.json()["voices"]
     )
     assert public_audio.status_code == 404
     assert god_response.status_code == 200
@@ -4329,9 +4372,7 @@ def test_god_view_playback_includes_scoped_wolf_chat_voice_only() -> None:
     assert wolf_voice["audience"] == "spectator_god_view"
     assert wolf_voice["subtitle_timings"]
     assert god_audio.status_code == 200
-    assert god_audio.json()["chunks"] == [
-        {"chunk_index": 0, "data": "d29sZi1jaGF0"}
-    ]
+    assert god_audio.json()["chunks"] == [{"chunk_index": 0, "data": "d29sZi1jaGF0"}]
 
 
 def test_playback_player_voice_covers_the_full_streamed_request_cue() -> None:

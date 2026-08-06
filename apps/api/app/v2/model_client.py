@@ -92,6 +92,12 @@ class V2ModelDecision:
 
 
 @dataclass(frozen=True)
+class ParsedDecisionObject:
+    value: dict[str, Any]
+    repair_kind: str | None = None
+
+
+@dataclass(frozen=True)
 class V2ModelTarget:
     provider: str
     model_id: str
@@ -274,15 +280,33 @@ class V2ModelClient:
             check_cancellation=check_cancellation,
         )
         output_contract = _decision_output_contract(action_context)
-        repair_kind = _decision_repair_kind(raw, output_contract)
         try:
+            try:
+                parsed_object = _parse_decision_object(raw, output_contract=output_contract)
+            except V2QualityError as exc:
+                if not _decision_parse_can_fallback(exc):
+                    raise
+                parsed_object = None
+            repair_kind = _decision_repair_kind(
+                raw,
+                output_contract,
+                parsed_object=parsed_object,
+            )
             (
                 target_player_id,
                 normalized_speech,
                 boolean_field,
                 boolean_value,
-            ) = _decision_fields(raw, output_contract)
-            decision_note = _decision_note(raw, output_contract)
+            ) = _decision_fields(
+                raw,
+                output_contract,
+                parsed_object=parsed_object,
+            )
+            decision_note = _decision_note(
+                raw,
+                output_contract,
+                parsed_object=parsed_object,
+            )
         except V2QualityError as exc:
             raise V2QualityError(exc.code, raw_response=raw) from exc
         return V2ModelDecision(
@@ -838,6 +862,25 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
     else:
         raise V2ModelError("model_decision_contract_invalid")
     if (
+        action_context.get("model_context_schema_version") == 9
+        and action_context.get("prompt_template_version") == 1
+    ):
+        system_text = (
+            "你正在扮演一名狼人杀玩家。法官事实可信，玩家发言均为未核实说法；"
+            "authority=actor_memory 是你先前生成的主观轮次记忆，可延续思路但不是法官事实。"
+            "declared_reason 是你当时声明的主观理由，可修正且不是法官事实。"
+            "只能依据当前动作发生前已经对你可见的信息行动；known_at_seq/record_seq "
+            "表示信息何时被记录或获知，occurred_in 表示事件实际发生阶段，"
+            "announced_in 只表示公布阶段，公布更晚不代表发生更晚。"
+            "known_events.questions 和 relations 是对已提供事件的紧凑引用；"
+            "reply_opportunity=awaiting_scheduled_turn 表示被问者尚未轮到发言，不表示拒绝回应。"
+            "prior_relevant_event_refs 表示问题之前已有的相关说明，不是对后来问题的回答。"
+            "策略、身份伪装和表达由你自主决定，不得使用未提供的私密信息。"
+            f"{output_instruction}只能用“N号”称呼玩家，不得生成玩家姓名。"
+        )
+    elif action_context.get("model_context_schema_version") == 9:
+        raise V2ModelError("model_prompt_template_unsupported")
+    elif (
         action_context.get("model_context_schema_version") == 8
         and action_context.get("prompt_template_version") == 3
     ):
@@ -986,27 +1029,37 @@ def _sse_data(line: str) -> dict[str, Any] | None:
 
 
 def _decision_object(raw: str) -> dict[str, Any]:
+    return _parse_decision_object(raw, output_contract=None).value
+
+
+def _parse_decision_object(
+    raw: str,
+    *,
+    output_contract: Any,
+) -> ParsedDecisionObject:
+    duplicate = _duplicate_decision_object(raw, output_contract=output_contract)
+    if duplicate is not None:
+        return duplicate
+    if _has_additional_json_document(raw):
+        raise V2QualityError("model_decision_invalid_json_document")
+    return ParsedDecisionObject(value=_single_decision_object(raw))
+
+
+def _decision_parse_can_fallback(exc: V2QualityError) -> bool:
+    return exc.code in {
+        "model_decision_invalid_json",
+        "model_decision_invalid_shape",
+    }
+
+
+def _single_decision_object(raw: str) -> dict[str, Any]:
     candidates = [raw.strip()]
     start = raw.find("{")
     end = raw.rfind("}")
     if 0 <= start < end:
         candidates.append(raw[start : end + 1])
     for candidate in candidates:
-        delimiter_repaired = _repair_compatibility_key_delimiter(candidate)
-        normalized = _normalize_json_syntax_nfkc(delimiter_repaired)
-        normalized_repaired = _repair_compatibility_key_delimiter(normalized)
-        serialized_candidates = (
-            candidate,
-            _repair_single_trailing_brace(candidate),
-            _repair_structural_smart_quotes(candidate),
-            normalized,
-            _repair_single_trailing_brace(normalized),
-            _repair_structural_smart_quotes(normalized),
-            normalized_repaired,
-            _repair_single_trailing_brace(normalized_repaired),
-            _repair_structural_smart_quotes(normalized_repaired),
-        )
-        for serialized in dict.fromkeys(serialized_candidates):
+        for serialized in _serialized_decision_candidates(candidate):
             try:
                 value = json.loads(serialized)
             except json.JSONDecodeError:
@@ -1015,6 +1068,136 @@ def _decision_object(raw: str) -> dict[str, Any]:
                 return value
             raise V2QualityError("model_decision_invalid_shape")
     raise V2QualityError("model_decision_invalid_json")
+
+
+def _serialized_decision_candidates(value: str) -> tuple[str, ...]:
+    delimiter_repaired = _repair_compatibility_key_delimiter(value)
+    normalized = _normalize_json_syntax_nfkc(delimiter_repaired)
+    normalized_repaired = _repair_compatibility_key_delimiter(normalized)
+    candidates = (
+        value,
+        _repair_single_trailing_brace(value),
+        _repair_structural_smart_quotes(value),
+        normalized,
+        _repair_single_trailing_brace(normalized),
+        _repair_structural_smart_quotes(normalized),
+        normalized_repaired,
+        _repair_single_trailing_brace(normalized_repaired),
+        _repair_structural_smart_quotes(normalized_repaired),
+    )
+    return tuple(dict.fromkeys(candidates))
+
+
+def _duplicate_decision_object(
+    raw: str,
+    *,
+    output_contract: Any,
+) -> ParsedDecisionObject | None:
+    for serialized in _serialized_decision_candidates(raw.strip()):
+        objects = _two_top_level_json_objects(serialized)
+        if objects is None:
+            continue
+        first, second = objects
+        first_semantics = _decision_object_semantics(first, output_contract)
+        second_semantics = _decision_object_semantics(second, output_contract)
+        if first_semantics != second_semantics:
+            raise V2QualityError("model_decision_ambiguous_multiple_objects")
+        return ParsedDecisionObject(
+            value=first,
+            repair_kind="duplicate_identical_json_ignored",
+        )
+    return None
+
+
+def _two_top_level_json_objects(
+    serialized: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    value = serialized.strip()
+    decoder = json.JSONDecoder()
+    try:
+        first, first_end = decoder.raw_decode(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(first, dict):
+        return None
+
+    position = _skip_json_whitespace(value, first_end)
+    fenced = False
+    fence = re.match(r"```(?:json)?[ \t]*(?:\r?\n)", value[position:], flags=re.IGNORECASE)
+    if fence is not None:
+        fenced = True
+        position += fence.end()
+        position = _skip_json_whitespace(value, position)
+    elif position >= len(value) or value[position] != "{":
+        return None
+
+    try:
+        second, second_end = decoder.raw_decode(value, position)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(second, dict):
+        return None
+    position = _skip_json_whitespace(value, second_end)
+    if fenced:
+        if not value.startswith("```", position):
+            return None
+        position = _skip_json_whitespace(value, position + 3)
+    if position != len(value):
+        return None
+    return first, second
+
+
+def _skip_json_whitespace(value: str, position: int) -> int:
+    while position < len(value) and value[position].isspace():
+        position += 1
+    return position
+
+
+def _has_additional_json_document(raw: str) -> bool:
+    stripped = _strip_json_fence(raw)
+    for serialized in _serialized_decision_candidates(stripped):
+        start = serialized.find("{")
+        if start < 0:
+            continue
+        try:
+            first, first_end = json.JSONDecoder().raw_decode(serialized, start)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(first, dict):
+            continue
+        tail = serialized[first_end:].lstrip()
+        if tail.startswith("{"):
+            return True
+        if tail.startswith("```"):
+            prefix = serialized[:start]
+            after_fence = tail[3:].lstrip()
+            if "```" in prefix and not after_fence.startswith(
+                ("{", "```", "json\n", "json\r\n")
+            ):
+                continue
+            return True
+    return False
+
+
+def _decision_object_semantics(
+    value: dict[str, Any],
+    output_contract: Any,
+) -> str:
+    if not isinstance(output_contract, dict):
+        payload = value
+    else:
+        _decision_fields_from_object(
+            value,
+            output_contract,
+        )
+        _decision_note_from_object(value, output_contract)
+        payload = _decision_payload(value, output_contract=output_contract)
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _repair_single_trailing_brace(value: str) -> str:
@@ -1086,9 +1269,14 @@ def _repair_structural_smart_quotes(value: str) -> str:
     return re.sub(r"”(?=\s*[,}])", '"', repaired)
 
 
+_PARSED_OBJECT_UNSET = object()
+
+
 def _decision_fields(
     raw: str,
     output_contract: Any,
+    *,
+    parsed_object: ParsedDecisionObject | None | object = _PARSED_OBJECT_UNSET,
 ) -> tuple[str | None, str | None, str | None, bool | None]:
     if not isinstance(output_contract, dict):
         raise V2QualityError("model_decision_contract_missing")
@@ -1098,11 +1286,14 @@ def _decision_fields(
         if not isinstance(field, str) or not field.strip():
             raise V2QualityError("model_decision_contract_invalid")
         try:
-            value = _decision_payload(
-                _decision_object(raw),
+            value = _parsed_decision_value(
+                raw,
                 output_contract=output_contract,
+                parsed_object=parsed_object,
             )
-        except V2QualityError:
+        except V2QualityError as exc:
+            if not _decision_parse_can_fallback(exc):
+                raise
             boolean_value = _boolean_fragment(raw, field=field)
             if boolean_value is None:
                 raise
@@ -1112,33 +1303,84 @@ def _decision_fields(
                 boolean_value=boolean_value,
             )
         else:
-            boolean_value = value.get(field)
-            if not isinstance(boolean_value, bool):
-                raise V2QualityError("model_decision_invalid_boolean")
-            speech = _speech_field(
-                value.get("speech"),
-                output_contract=output_contract,
-                boolean_value=boolean_value,
+            return _decision_fields_from_object(
+                value,
+                output_contract,
             )
         return None, speech, field, boolean_value
     if kind == "target":
         try:
-            value = _decision_object(raw)
-        except V2QualityError:
+            value = _parsed_decision_value(
+                raw,
+                output_contract=output_contract,
+                parsed_object=parsed_object,
+            )
+        except V2QualityError as exc:
+            if not _decision_parse_can_fallback(exc):
+                raise
             return (
                 _target_fragment(raw),
                 _fallback_speech(raw, output_contract=output_contract),
                 None,
                 None,
             )
-        value = _decision_payload(value, output_contract=output_contract)
-        target_player_id = value.get("target_player_id")
-        if target_player_id is not None and not (
-            isinstance(target_player_id, str) and target_player_id.strip()
-        ):
-            target_player_id = None
+        return _decision_fields_from_object(value, output_contract)
+    if kind == "speech":
+        try:
+            value = _parsed_decision_value(
+                raw,
+                output_contract=output_contract,
+                parsed_object=parsed_object,
+            )
+        except V2QualityError as exc:
+            if not _decision_parse_can_fallback(exc):
+                raise
+            speech = _fallback_speech(raw, output_contract=output_contract)
+        else:
+            return _decision_fields_from_object(value, output_contract)
+        return None, speech, None, None
+    raise V2QualityError("model_decision_contract_invalid")
+
+
+def _parsed_decision_value(
+    raw: str,
+    *,
+    output_contract: dict[str, Any],
+    parsed_object: ParsedDecisionObject | None | object,
+) -> dict[str, Any]:
+    if parsed_object is _PARSED_OBJECT_UNSET:
+        return _parse_decision_object(raw, output_contract=output_contract).value
+    if parsed_object is None:
+        raise V2QualityError("model_decision_invalid_json")
+    assert isinstance(parsed_object, ParsedDecisionObject)
+    return parsed_object.value
+
+
+def _decision_fields_from_object(
+    value: dict[str, Any],
+    output_contract: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, bool | None]:
+    payload = _decision_payload(value, output_contract=output_contract)
+    kind = output_contract.get("kind")
+    if kind == "boolean":
+        field = output_contract.get("field")
+        if not isinstance(field, str) or not field.strip():
+            raise V2QualityError("model_decision_contract_invalid")
+        boolean_value = payload.get(field)
+        if not isinstance(boolean_value, bool):
+            raise V2QualityError("model_decision_invalid_boolean")
         speech = _speech_field(
-            value.get("speech"),
+            payload.get("speech"),
+            output_contract=output_contract,
+            boolean_value=boolean_value,
+        )
+        return None, speech, field, boolean_value
+    if kind == "target":
+        target_player_id = payload.get("target_player_id")
+        if target_player_id is not None and not isinstance(target_player_id, str):
+            raise V2QualityError("model_decision_invalid_target")
+        speech = _speech_field(
+            payload.get("speech"),
             output_contract=output_contract,
         )
         return (
@@ -1148,32 +1390,40 @@ def _decision_fields(
             None,
         )
     if kind == "speech":
-        try:
-            value = _decision_object(raw)
-        except V2QualityError:
-            speech = _fallback_speech(raw, output_contract=output_contract)
-        else:
-            value = _decision_payload(value, output_contract=output_contract)
-            speech = _speech_field(
-                value.get("speech"),
-                output_contract=output_contract,
-            )
+        speech = _speech_field(
+            payload.get("speech"),
+            output_contract=output_contract,
+        )
         return None, speech, None, None
     raise V2QualityError("model_decision_contract_invalid")
 
 
-def _decision_repair_kind(raw: str, output_contract: Any) -> str | None:
+def _decision_repair_kind(
+    raw: str,
+    output_contract: Any,
+    *,
+    parsed_object: ParsedDecisionObject | None | object = _PARSED_OBJECT_UNSET,
+) -> str | None:
     if not isinstance(output_contract, dict):
         return None
     if output_contract.get("kind") not in {"boolean", "speech", "target"}:
         return None
-    try:
-        value = _decision_object(raw)
-    except V2QualityError:
+    if parsed_object is _PARSED_OBJECT_UNSET:
+        try:
+            parsed_object = _parse_decision_object(raw, output_contract=output_contract)
+        except V2QualityError as exc:
+            if not _decision_parse_can_fallback(exc):
+                raise
+            parsed_object = None
+    if parsed_object is None:
         stripped = _strip_json_fence(raw)
         if _looks_like_structured_speech(stripped):
             return "structured_speech_fragment_recovered"
         return "plain_text_speech_fallback"
+    assert isinstance(parsed_object, ParsedDecisionObject)
+    if parsed_object.repair_kind is not None:
+        return parsed_object.repair_kind
+    value = parsed_object.value
     if _repair_single_trailing_brace(raw) != raw:
         return "single_trailing_brace_removed"
     if isinstance(value.get("output"), dict) or isinstance(value.get("decision"), dict):
@@ -1186,7 +1436,12 @@ def _decision_repair_kind(raw: str, output_contract: Any) -> str | None:
     return None
 
 
-def _decision_note(raw: str, output_contract: Any) -> str | None:
+def _decision_note(
+    raw: str,
+    output_contract: Any,
+    *,
+    parsed_object: ParsedDecisionObject | None | object = _PARSED_OBJECT_UNSET,
+) -> str | None:
     if not isinstance(output_contract, dict):
         return None
     note_contract = output_contract.get("decision_note")
@@ -1195,17 +1450,36 @@ def _decision_note(raw: str, output_contract: Any) -> str | None:
     if note_contract.get("mode") != "optional":
         raise V2QualityError("model_decision_contract_invalid")
     try:
-        value = _decision_payload(
-            _decision_object(raw),
+        value = _parsed_decision_value(
+            raw,
             output_contract=output_contract,
-        ).get("decision_note")
-    except V2QualityError:
+            parsed_object=parsed_object,
+        )
+    except V2QualityError as exc:
+        if not _decision_parse_can_fallback(exc):
+            raise
         return None
-    if value is None:
+    return _decision_note_from_object(value, output_contract)
+
+
+def _decision_note_from_object(
+    value: dict[str, Any],
+    output_contract: dict[str, Any],
+) -> str | None:
+    note_contract = output_contract.get("decision_note")
+    if not isinstance(note_contract, dict) or note_contract.get("mode") == "none":
         return None
-    if not isinstance(value, str):
+    if note_contract.get("mode") != "optional":
+        raise V2QualityError("model_decision_contract_invalid")
+    note_value = _decision_payload(
+        value,
+        output_contract=output_contract,
+    ).get("decision_note")
+    if note_value is None:
+        return None
+    if not isinstance(note_value, str):
         raise V2QualityError("model_decision_invalid_note")
-    note = value.strip()
+    note = note_value.strip()
     if not note:
         return None
     return note

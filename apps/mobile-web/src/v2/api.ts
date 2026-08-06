@@ -10,6 +10,21 @@ import {
   type V2LiveSnapshot,
 } from "./contracts";
 
+export class V2GameCreateError extends Error {
+  public readonly status: number;
+  public readonly code: string | null;
+
+  constructor(
+    status: number,
+    code: string | null,
+  ) {
+    super(`V2 对局创建失败 (${status})`);
+    this.name = "V2GameCreateError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 export async function createV2Game(
   request: V2GameCreateRequest,
 ): Promise<V2GameCreateResponse> {
@@ -19,9 +34,25 @@ export async function createV2Game(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`V2 对局创建失败 (${response.status})`);
+    throw new V2GameCreateError(response.status, await responseErrorCode(response));
   }
   return parseV2GameCreateResponse(await response.json());
+}
+
+async function responseErrorCode(response: Response): Promise<string | null> {
+  try {
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const detail = "detail" in payload ? payload.detail : payload;
+    if (!detail || typeof detail !== "object" || !("code" in detail)) {
+      return null;
+    }
+    return typeof detail.code === "string" ? detail.code : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchV2LiveSnapshot(gameId: string): Promise<V2LiveSnapshot> {

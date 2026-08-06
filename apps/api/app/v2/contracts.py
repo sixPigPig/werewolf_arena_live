@@ -17,6 +17,10 @@ V2LiveState = Literal[
     "canceled",
     "failed",
 ]
+V2RequestedAudioMode = Literal["tts", "text_only"]
+V2AudioMode = Literal["tts", "text_only", "legacy_unknown"]
+V2MatchStatus = Literal["waiting", "running", "completed", "failed", "canceled"]
+V2ExecutionState = Literal["unowned", "owned", "stale", "stopped"]
 V2GamePhaseId = str
 V2GamePhaseState = str
 V2DirectorSceneKind = Literal[
@@ -48,6 +52,18 @@ class V2LobbyRoleSnapshot(BaseModel):
     category: str | None = Field(default=None, max_length=40)
 
 
+class V2LobbyWerewolfAttackPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    resolution: Literal[
+        "plurality_rotating_tiebreak",
+        "plurality_seeded_random",
+        "unanimous_no_attack",
+    ]
+    allow_no_attack: bool
+    allow_wolf_target: bool
+
+
 class V2LobbyRuleSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +89,7 @@ class V2LobbyRuleSnapshot(BaseModel):
     exile_last_words_enabled: bool | None = None
     first_night_last_words_enabled: bool | None = None
     sheriff_badge_bomb_policy: str | None = Field(default=None, max_length=80)
+    werewolf_attack_policy: V2LobbyWerewolfAttackPolicy | None = None
     revision_id: str | None = Field(default=None, max_length=80)
     revision_no: int | None = Field(default=None, ge=1)
     schema_version: int | None = Field(default=None, ge=1)
@@ -154,6 +171,17 @@ class V2LobbyCreateSnapshot(BaseModel):
 
     @model_validator(mode="after")
     def validate_complete_lineup(self) -> "V2LobbyCreateSnapshot":
+        if self.model_binding_mode == "profile_library" and (
+            self.rule_set_revision_id is None or self.rule_set.revision_id is None
+        ):
+            raise ValueError(
+                "profile library snapshots require matching rule revision identifiers"
+            )
+        if (
+            self.rule_set.revision_id is not None
+            and self.rule_set_revision_id != self.rule_set.revision_id
+        ):
+            raise ValueError("rule_set_revision_id must match rule_set.revision_id")
         expected_seats = set(range(1, self.rule_set.player_count + 1))
         seats = [item.seat for item in self.player_configs]
         profile_ids = [item.profile_id for item in self.player_configs]
@@ -179,6 +207,7 @@ class V2GameCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(default="Live V2 实时对局", min_length=1, max_length=120)
+    audio_mode: V2RequestedAudioMode | None = None
     lobby_snapshot: V2LobbyCreateSnapshot | None = None
 
     @field_validator("title")
@@ -279,6 +308,12 @@ class V2LiveSnapshotResponse(BaseModel):
     game_id: str
     run_id: str
     live_state: V2LiveState
+    audio_mode: V2AudioMode
+    match_status: V2MatchStatus
+    execution_state: V2ExecutionState
+    winner: Literal["villagers", "werewolves"] | None
+    completion_reason: str | None
+    completed_at: datetime | None
     game_phase: V2GamePhaseResponse
     match_state: V2MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
@@ -322,6 +357,12 @@ class V2DirectorLiveSnapshotResponse(BaseModel):
     game_id: str
     run_id: str
     live_state: V2LiveState
+    audio_mode: V2AudioMode
+    match_status: V2MatchStatus
+    execution_state: V2ExecutionState
+    winner: Literal["villagers", "werewolves"] | None
+    completion_reason: str | None
+    completed_at: datetime | None
     game_phase: V2GamePhaseResponse
     match_state: V2MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
@@ -342,6 +383,12 @@ class V2GodViewIdentitySnapshotResponse(BaseModel):
     game_id: str
     run_id: str
     live_state: V2LiveState
+    audio_mode: V2AudioMode
+    match_status: V2MatchStatus
+    execution_state: V2ExecutionState
+    winner: Literal["villagers", "werewolves"] | None
+    completion_reason: str | None
+    completed_at: datetime | None
     game_phase: V2GamePhaseResponse
     match_state: V2MatchStateResponse | None
     server_time: datetime
@@ -359,6 +406,12 @@ class V2GodViewLiveSnapshotResponse(BaseModel):
     game_id: str
     run_id: str
     live_state: V2LiveState
+    audio_mode: V2AudioMode
+    match_status: V2MatchStatus
+    execution_state: V2ExecutionState
+    winner: Literal["villagers", "werewolves"] | None
+    completion_reason: str | None
+    completed_at: datetime | None
     game_phase: V2GamePhaseResponse
     match_state: V2MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
@@ -374,6 +427,7 @@ class V2GameCreateResponse(BaseModel):
     game_id: str
     run_id: str
     status: Literal["waiting_to_start"]
+    audio_mode: V2RequestedAudioMode
     snapshot_url: str
     websocket_url: str
     director_snapshot_url: str
@@ -394,6 +448,12 @@ class AdminV2GameListItem(BaseModel):
     phase_seq: int
     phase_id: str
     phase_state: str
+    audio_mode: V2AudioMode
+    match_status: V2MatchStatus
+    execution_state: V2ExecutionState
+    winner: Literal["villagers", "werewolves"] | None
+    completion_reason: str | None
+    completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -417,6 +477,10 @@ class AdminV2RunResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     stop_requested_at: datetime | None
+    worker_id: str | None
+    worker_heartbeat_at: datetime | None
+    lease_expires_at: datetime | None
+    fence_token: int = Field(ge=0)
 
 
 class AdminV2GameControlRequest(BaseModel):
@@ -580,6 +644,7 @@ class AdminV2GameDetailResponse(AdminV2GameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
     judge_voice_snapshot: dict[str, Any]
+    delivery_snapshot: dict[str, Any] | None
     ability_snapshot: dict[str, Any]
     match_state: dict[str, Any] | None
     player_identities: list[V2GodViewPlayerIdentityResponse]

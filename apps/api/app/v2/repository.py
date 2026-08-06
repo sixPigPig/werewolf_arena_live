@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -24,10 +24,23 @@ from app.v2.model_context_contract import (
     frozen_model_context_contract,
     supports_current_model_context_contract,
 )
+from app.v2.execution import (
+    V2RunFence,
+    V2RunFenceRejected,
+    current_v2_run_fence,
+    database_utc_now,
+    require_v2_run_fence,
+)
+from app.v2.event_contract import canonical_event_payload, model_event_audience
+from app.v2.runtime_state import V2AudioMode, delivery_audio_mode
 
 
 class V2RepositoryError(RuntimeError):
     pass
+
+
+class V2ExecutionOwnershipLost(V2RepositoryError):
+    """The active runtime no longer owns the fenced game execution."""
 
 
 class V2GameCanceled(asyncio.CancelledError):
@@ -40,11 +53,14 @@ class V2ActionClaim:
     run_id: str
     action_id: str
     phase_id: str
+    audience: str
     activation_id: str | None = None
     best_effort: bool = False
     non_blocking: bool = False
     action_record_seq: int | None = None
     model_context_contract: dict[str, int] | None = None
+    audio_mode: V2AudioMode = "legacy_unknown"
+    run_fence: V2RunFence | None = None
 
 
 @dataclass(frozen=True)
@@ -70,10 +86,11 @@ class V2PresentationIdentity:
     voice_asset_id: str | None
     storage_key: str
     subtitle_text: str
+    audience: str
+    run_fence: V2RunFence | None = None
     activation_id: str | None = None
     actor_kind: str = "judge"
     actor_id: str = "judge"
-    audience: str = "all"
 
 
 @dataclass(frozen=True)
@@ -83,40 +100,253 @@ class V2CancellationResult:
     changed: bool
 
 
-class V2ActionRepository:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
-        self._session_factory = session_factory
+@dataclass(frozen=True)
+class V2ExecutionClaimResult:
+    status: Literal["owned", "already_owned", "not_startable"]
+    run_id: str
+    fence: V2RunFence | None = None
+    owner_hint: str | None = None
+    current_state: str | None = None
 
-    def start_game(self, *, game_id: str, audience: str) -> bool:
-        """Start a newly created game once, when its first viewer is ready."""
+
+class V2ActionRepository:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        enforce_execution_fence: bool = False,
+    ) -> None:
+        self._session_factory = session_factory
+        self._enforce_execution_fence = enforce_execution_fence
+
+    def start_and_claim_execution(
+        self,
+        *,
+        game_id: str,
+        audience: str,
+        worker_id: str,
+        lease_seconds: float,
+    ) -> V2ExecutionClaimResult:
+        """Start a new game and acquire its only execution fence atomically."""
+        if not worker_id or len(worker_id) > 64:
+            raise V2RepositoryError("invalid V2 execution worker id")
+        if lease_seconds <= 0:
+            raise V2RepositoryError("invalid V2 execution lease duration")
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=False)
             _raise_if_stop_requested(db, game)
             if not supports_current_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
             if game.status != "waiting_to_start":
-                return False
+                run = _run(db, game.current_run_id)
+                return V2ExecutionClaimResult(
+                    status=("already_owned" if run.worker_id is not None else "not_startable"),
+                    run_id=run.run_id,
+                    owner_hint=run.worker_id,
+                    current_state=game.status,
+                )
             if game.phase_id != "opening" or game.phase_state != "opening_ready":
                 raise V2RepositoryError("waiting game is not ready for opening")
             run = _run(db, game.current_run_id)
             if run.status != "waiting_to_start" or run.started_at is not None:
                 raise V2RepositoryError("waiting run has already been started")
-            started_at = _now()
+            if run.worker_id is not None or run.lease_expires_at is not None:
+                raise V2RepositoryError("waiting run already has an execution owner")
+            started_at = database_utc_now(db)
+            fence_token = run.fence_token + 1
+            lease_expires_at = started_at + timedelta(seconds=lease_seconds)
             game.status = "ready"
             run.status = "ready"
             run.started_at = started_at
+            run.worker_id = worker_id
+            run.worker_heartbeat_at = started_at
+            run.lease_expires_at = lease_expires_at
+            run.fence_token = fence_token
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="v2_run_execution_claimed",
+                audience="god_view",
+                payload={
+                    "run_id": run.run_id,
+                    "worker_id": worker_id,
+                    "fence_token": fence_token,
+                    "lease_expires_at": lease_expires_at.isoformat(),
+                    "reason": "initial_start",
+                },
+            )
             _append_event(
                 db,
                 game=game,
                 run_id=run.run_id,
                 event_type="game_started",
+                audience="all",
                 payload={
+                    "run_id": run.run_id,
                     "start_mode": "first_ready_viewer",
                     "trigger_audience": audience,
                     "started_at": started_at.isoformat(),
+                    "worker_id": worker_id,
+                    "fence_token": fence_token,
                 },
             )
+            return V2ExecutionClaimResult(
+                status="owned",
+                run_id=run.run_id,
+                fence=V2RunFence(
+                    run_id=run.run_id,
+                    worker_id=worker_id,
+                    fence_token=fence_token,
+                ),
+            )
+
+    def start_game(self, *, game_id: str, audience: str) -> bool:
+        """Compatibility entry point for repository-only tests."""
+        result = self.start_and_claim_execution(
+            game_id=game_id,
+            audience=audience,
+            worker_id=f"v2_compat_{uuid4().hex[:20]}",
+            lease_seconds=30.0,
+        )
+        return result.status == "owned"
+
+    def heartbeat_execution(self, *, fence: V2RunFence, lease_seconds: float) -> bool:
+        if lease_seconds <= 0:
+            raise V2RepositoryError("invalid V2 execution lease duration")
+        with self._session_factory.begin() as db:
+            run = db.scalar(
+                select(V2GameRun)
+                .where(V2GameRun.run_id == fence.run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            heartbeat_at = database_utc_now(db)
+            if (
+                run is None
+                or run.worker_id != fence.worker_id
+                or run.fence_token != fence.fence_token
+                or run.lease_expires_at is None
+                or _as_utc(run.lease_expires_at) <= heartbeat_at
+            ):
+                return False
+            run.worker_heartbeat_at = heartbeat_at
+            run.lease_expires_at = heartbeat_at + timedelta(seconds=lease_seconds)
             return True
+
+    def record_execution_heartbeat_lost(
+        self,
+        *,
+        fence: V2RunFence,
+        reason: str,
+    ) -> bool:
+        """Persist fail-closed ownership loss without clearing the stale owner."""
+        with self._session_factory.begin() as db:
+            game = db.scalar(
+                select(V2GameRecord)
+                .where(V2GameRecord.current_run_id == fence.run_id)
+                .with_for_update()
+            )
+            if game is None:
+                return False
+            run = db.scalar(
+                select(V2GameRun)
+                .where(V2GameRun.run_id == fence.run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if (
+                run is None
+                or run.worker_id != fence.worker_id
+                or run.fence_token != fence.fence_token
+            ):
+                return False
+            observed_at = database_utc_now(db)
+            previous_lease_expires_at = run.lease_expires_at
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="v2_run_execution_heartbeat_lost",
+                audience="god_view",
+                payload={
+                    "run_id": run.run_id,
+                    "worker_id": fence.worker_id,
+                    "fence_token": fence.fence_token,
+                    "reason": reason,
+                    "lease_expires_at": (
+                        previous_lease_expires_at.isoformat()
+                        if previous_lease_expires_at is not None
+                        else None
+                    ),
+                    "observed_at": observed_at.isoformat(),
+                },
+            )
+            run.lease_expires_at = observed_at
+            return True
+
+    def release_execution(self, *, fence: V2RunFence, reason: str) -> bool:
+        with self._session_factory.begin() as db:
+            game = db.scalar(
+                select(V2GameRecord)
+                .where(V2GameRecord.current_run_id == fence.run_id)
+                .with_for_update()
+            )
+            if game is None:
+                return False
+            try:
+                run = require_v2_run_fence(db, game, fence=fence)
+            except V2RunFenceRejected:
+                return False
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="v2_run_execution_released",
+                audience="god_view",
+                payload={
+                    "run_id": run.run_id,
+                    "worker_id": fence.worker_id,
+                    "fence_token": fence.fence_token,
+                    "reason": reason,
+                    "lease_expires_at": run.lease_expires_at.isoformat(),
+                },
+            )
+            run.worker_id = None
+            run.worker_heartbeat_at = None
+            run.lease_expires_at = None
+            return True
+
+    def execution_release_reason(self, *, fence: V2RunFence) -> str:
+        """Resolve the durable terminal reason before releasing an owned run."""
+        with self._session_factory.begin() as db:
+            game = db.scalar(
+                select(V2GameRecord)
+                .where(V2GameRecord.current_run_id == fence.run_id)
+                .with_for_update()
+            )
+            if game is None:
+                raise V2ExecutionOwnershipLost("v2_run_execution_run_changed")
+            run = db.get(V2GameRun, fence.run_id)
+            if (
+                run is not None
+                and game.current_run_id == fence.run_id
+                and (game.status == "canceled" or run.status == "canceled")
+            ):
+                return "canceled"
+            try:
+                run = require_v2_run_fence(db, game, fence=fence)
+            except V2RunFenceRejected as exc:
+                raise V2ExecutionOwnershipLost(str(exc)) from exc
+            if game.status == "canceled" or run.status == "canceled":
+                return "canceled"
+            if (
+                game.status == "failed"
+                or game.phase_state == "failed"
+                or run.status == "failed"
+            ):
+                return "failed"
+            return "completed"
 
     def claim_action(
         self,
@@ -126,12 +356,18 @@ class V2ActionRepository:
         context: dict[str, Any],
         expected_phase_id: str,
         expected_phase_state: str,
+        audience: str,
+        context_audience: str,
         activation_id: str | None = None,
         best_effort: bool = False,
         non_blocking: bool = False,
     ) -> V2ActionClaim | None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(
+                db,
+                game_id,
+                require_fence=self._enforce_execution_fence,
+            )
             _raise_if_stop_requested(db, game)
             if not supports_current_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
@@ -173,6 +409,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=run.run_id,
                 event_type="action_opened",
+                audience=context_audience,
                 payload={
                     "action_id": action_id,
                     "activation_id": activation_id,
@@ -190,11 +427,14 @@ class V2ActionRepository:
                 run_id=run.run_id,
                 action_id=action_id,
                 phase_id=game.phase_id,
+                audience=audience,
                 activation_id=activation_id,
                 best_effort=best_effort,
                 non_blocking=non_blocking,
                 action_record_seq=action_record_seq,
                 model_context_contract=frozen_model_context_contract(game.rule_snapshot),
+                audio_mode=delivery_audio_mode(game.delivery_snapshot),
+                run_fence=current_v2_run_fence(),
             )
 
     def append_event(
@@ -202,16 +442,24 @@ class V2ActionRepository:
         *,
         game_id: str,
         event_type: str,
+        audience: str,
         payload: dict[str, Any],
+        fence: V2RunFence | None = None,
     ) -> int:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(
+                db,
+                game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=fence,
+            )
             _raise_if_stop_requested(db, game)
             event = _append_event(
                 db,
                 game=game,
                 run_id=game.current_run_id,
                 event_type=event_type,
+                audience=audience,
                 payload=payload,
             )
             return event.record_seq
@@ -227,11 +475,16 @@ class V2ActionRepository:
         sample_rate: int,
         actor_kind: str = "judge",
         actor_id: str = "judge",
-        audience: str = "all",
     ) -> V2PresentationIdentity:
+        audience = claim.audience
         storage_key = f"{claim.game_id}/{voice_asset_id}.wav" if voice_asset_id else ""
         with self._session_factory.begin() as db:
-            game = _locked_game(db, claim.game_id)
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             expected_status = "awaiting_observation" if claim.best_effort else "generating"
             if game.status != expected_status:
@@ -242,6 +495,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=claim.run_id,
                 event_type="speech_opened",
+                audience=audience,
                 payload={
                     "action_id": claim.action_id,
                     "activation_id": claim.activation_id,
@@ -255,6 +509,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=claim.run_id,
                 event_type="speech_segment_committed",
+                audience=audience,
                 payload={
                     "action_id": claim.action_id,
                     "activation_id": claim.activation_id,
@@ -270,7 +525,12 @@ class V2ActionRepository:
                 game=game,
                 run_id=claim.run_id,
                 event_type="speech_sealed",
-                payload={"action_id": claim.action_id, "speech_id": speech_id},
+                audience=audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "presentation_id": presentation_id,
+                    "speech_id": speech_id,
+                },
             )
             if voice_asset_id is not None:
                 voice = V2VoiceAsset(
@@ -334,6 +594,7 @@ class V2ActionRepository:
             actor_kind=actor_kind,
             actor_id=actor_id,
             audience=audience,
+            run_fence=claim.run_fence,
         )
 
     def complete_text_action(
@@ -345,7 +606,12 @@ class V2ActionRepository:
         best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, identity.game_id)
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             presentation = db.get(
                 V2LivePresentation,
@@ -368,7 +634,22 @@ class V2ActionRepository:
                 db,
                 game=game,
                 run_id=identity.run_id,
+                event_type="speech_closed",
+                audience=identity.audience,
+                payload={
+                    "action_id": identity.action_id,
+                    "activation_id": identity.activation_id,
+                    "presentation_id": identity.presentation_id,
+                    "speech_id": identity.speech_id,
+                    "delivery_mode": "text_only",
+                },
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=identity.run_id,
                 event_type="action_succeeded",
+                audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
                     "presentation_id": identity.presentation_id,
@@ -380,36 +661,53 @@ class V2ActionRepository:
     def mark_finalizing(
         self,
         *,
-        game_id: str,
+        identity: V2PresentationIdentity,
         tts_attempt_id: str,
         sample_count: int,
         best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             if not best_effort:
                 game.status = "finalizing"
-                _run(db, game.current_run_id).status = "finalizing"
+                _run(db, identity.run_id).status = "finalizing"
             _append_event(
                 db,
                 game=game,
-                run_id=game.current_run_id,
+                run_id=identity.run_id,
                 event_type="tts_stream_completed",
-                payload={"tts_attempt_id": tts_attempt_id, "sample_count": sample_count},
+                audience=identity.audience,
+                payload={
+                    "action_id": identity.action_id,
+                    "presentation_id": identity.presentation_id,
+                    "tts_attempt_id": tts_attempt_id,
+                    "sample_count": sample_count,
+                },
             )
 
     def mark_voice_ready(
         self,
         *,
         identity: V2PresentationIdentity,
+        tts_attempt_id: str,
         sample_count: int,
         duration_ms: int,
         pcm_sha256: str,
         size_bytes: int,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, identity.game_id)
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             voice = db.get(V2VoiceAsset, identity.voice_asset_id)
             if voice is None or voice.state != "writing":
@@ -434,9 +732,12 @@ class V2ActionRepository:
                 game=game,
                 run_id=identity.run_id,
                 event_type="voice_asset_saved",
+                audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
                     "activation_id": identity.activation_id,
+                    "presentation_id": identity.presentation_id,
+                    "tts_attempt_id": tts_attempt_id,
                     "voice_asset_id": identity.voice_asset_id,
                     "sample_count": sample_count,
                     "duration_ms": duration_ms,
@@ -449,6 +750,7 @@ class V2ActionRepository:
         self,
         *,
         identity: V2PresentationIdentity,
+        tts_attempt_id: str,
         final_chunk_index: int,
         final_sample_cursor: int,
         next_live_state: str,
@@ -456,7 +758,12 @@ class V2ActionRepository:
         best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, identity.game_id)
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             presentation = db.get(
                 V2LivePresentation,
@@ -479,10 +786,12 @@ class V2ActionRepository:
                 game=game,
                 run_id=identity.run_id,
                 event_type="audio_drained",
+                audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
                     "activation_id": identity.activation_id,
                     "presentation_id": identity.presentation_id,
+                    "tts_attempt_id": tts_attempt_id,
                     "final_chunk_index": final_chunk_index,
                     "final_sample_cursor": final_sample_cursor,
                 },
@@ -492,11 +801,13 @@ class V2ActionRepository:
                 game=game,
                 run_id=identity.run_id,
                 event_type="speech_closed",
+                audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
                     "activation_id": identity.activation_id,
                     "presentation_id": identity.presentation_id,
                     "speech_id": identity.speech_id,
+                    "tts_attempt_id": tts_attempt_id,
                 },
             )
             _append_event(
@@ -504,8 +815,11 @@ class V2ActionRepository:
                 game=game,
                 run_id=identity.run_id,
                 event_type="action_succeeded",
+                audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
+                    "presentation_id": identity.presentation_id,
+                    "tts_attempt_id": tts_attempt_id,
                     "voice_asset_id": identity.voice_asset_id,
                     "result": "audio_drained_and_voice_saved",
                     "phase_id": identity.phase_id,
@@ -521,7 +835,12 @@ class V2ActionRepository:
         best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, claim.game_id)
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             if claim.non_blocking:
                 if game.status in {"failed", "canceled"}:
@@ -543,6 +862,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=claim.run_id,
                 event_type="action_succeeded",
+                audience=claim.audience,
                 payload={
                     "action_id": claim.action_id,
                     "activation_id": claim.activation_id,
@@ -553,7 +873,7 @@ class V2ActionRepository:
 
     def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             if (
                 game.status != "ready"
@@ -578,6 +898,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=game.current_run_id,
                 event_type="game_phase_changed",
+                audience="all",
                 payload={
                     "phase_seq": transition.phase_seq,
                     "previous_phase_id": transition.previous_phase_id,
@@ -596,7 +917,7 @@ class V2ActionRepository:
         phase_state: str,
     ) -> V2PhaseTransition:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if (
                 game.status != "awaiting_observation"
                 or game.phase_id != phase_id
@@ -616,6 +937,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=game.current_run_id,
                 event_type="game_phase_changed",
+                audience="all",
                 payload={
                     "phase_seq": transition.phase_seq,
                     "previous_phase_id": transition.previous_phase_id,
@@ -634,7 +956,7 @@ class V2ActionRepository:
         failure_code: str,
     ) -> str:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             run = _run(db, game.current_run_id)
             game.status = "failed"
@@ -646,6 +968,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=run.run_id,
                 event_type="game_phase_transition_failed",
+                audience="god_view",
                 payload={
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
@@ -660,10 +983,16 @@ class V2ActionRepository:
         failure_kind: str,
         failure_code: str,
         identity: V2PresentationIdentity | None,
+        tts_attempt_id: str | None = None,
         best_effort: bool = False,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, claim.game_id)
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
             if not best_effort and not claim.non_blocking:
@@ -688,8 +1017,11 @@ class V2ActionRepository:
                         game=game,
                         run_id=claim.run_id,
                         event_type="voice_recording_failed",
+                        audience=identity.audience,
                         payload={
                             "action_id": claim.action_id,
+                            "presentation_id": identity.presentation_id,
+                            "tts_attempt_id": tts_attempt_id,
                             "voice_asset_id": identity.voice_asset_id,
                             "failure_code": failure_code,
                         },
@@ -699,9 +1031,14 @@ class V2ActionRepository:
                 game=game,
                 run_id=claim.run_id,
                 event_type="action_failed",
+                audience=claim.audience,
                 payload={
                     "action_id": claim.action_id,
                     "activation_id": claim.activation_id,
+                    "presentation_id": (
+                        identity.presentation_id if identity is not None else None
+                    ),
+                    "tts_attempt_id": tts_attempt_id,
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
                 },
@@ -719,6 +1056,7 @@ class V2ActionRepository:
                         game=game,
                         run_id=claim.run_id,
                         event_type="ability_activation_action_released",
+                        audience=claim.audience,
                         payload={
                             "activation_id": claim.activation_id,
                             "failed_action_id": claim.action_id,
@@ -736,7 +1074,12 @@ class V2ActionRepository:
         recovery: dict[str, Any],
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, claim.game_id)
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
             if game.status != "generating" or run.status != "generating":
@@ -778,11 +1121,13 @@ class V2ActionRepository:
                 existing.control_request_id = None
                 existing.lease_owner = None
                 existing.lease_expires_at = None
+            recovery_audience = _model_action_recovery_audience(existing)
             _append_event(
                 db,
                 game=game,
                 run_id=run.run_id,
                 event_type="model_action_retry_exhausted",
+                audience=recovery_audience,
                 payload={
                     "action_id": claim.action_id,
                     "attempt_id": attempt_id,
@@ -797,6 +1142,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=run.run_id,
                 event_type="model_action_recovery_queued",
+                audience=recovery_audience,
                 payload={
                     "action_id": claim.action_id,
                     "recovery_id": existing.recovery_id,
@@ -809,6 +1155,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=run.run_id,
                 event_type="model_action_paused",
+                audience=recovery_audience,
                 payload={
                     "action_id": claim.action_id,
                     "attempt_id": attempt_id,
@@ -841,7 +1188,12 @@ class V2ActionRepository:
         control_request_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, claim.game_id)
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
             if game.status != "paused_model_error" or run.status != "paused_model_error":
@@ -855,11 +1207,13 @@ class V2ActionRepository:
                 raise V2RepositoryError("durable model action retry is not pending")
             recovery.state = "running"
             recovery.control_request_id = control_request_id
+            recovery_audience = _model_action_recovery_audience(recovery)
             _append_event(
                 db,
                 game=game,
                 run_id=run.run_id,
                 event_type="model_action_recovery_leased",
+                audience=recovery_audience,
                 payload={
                     "action_id": claim.action_id,
                     "recovery_id": recovery.recovery_id,
@@ -872,6 +1226,7 @@ class V2ActionRepository:
                 game=game,
                 run_id=run.run_id,
                 event_type="model_action_resumed",
+                audience=recovery_audience,
                 payload={
                     "action_id": claim.action_id,
                     "control_request_id": control_request_id,
@@ -881,13 +1236,13 @@ class V2ActionRepository:
     def resolve_model_action_recovery(
         self,
         *,
-        action_id: str,
+        claim: V2ActionClaim,
         attempt_id: str,
         attempt_no: int,
         retry_cycle: int,
     ) -> None:
         with self._session_factory.begin() as db:
-            recovery = db.get(V2ModelActionRecovery, action_id)
+            recovery = db.get(V2ModelActionRecovery, claim.action_id)
             if recovery is None or recovery.state == "resolved":
                 return
             recovery.state = "resolved"
@@ -895,14 +1250,20 @@ class V2ActionRepository:
             recovery.attempt_no = attempt_no
             recovery.retry_cycle = retry_cycle
             recovery.resolved_at = _now()
-            game = _locked_game(db, recovery.game_id)
+            game = _locked_game(
+                db,
+                recovery.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
             _append_event(
                 db,
                 game=game,
                 run_id=recovery.run_id,
                 event_type="model_action_recovery_resolved",
+                audience=_model_action_recovery_audience(recovery),
                 payload={
-                    "action_id": action_id,
+                    "action_id": claim.action_id,
                     "recovery_id": recovery.recovery_id,
                     "attempt_id": attempt_id,
                     "attempt_no": attempt_no,
@@ -915,6 +1276,11 @@ class V2ActionRepository:
             game = db.get(V2GameRecord, game_id)
             if game is None:
                 raise V2RepositoryError(f"unknown game {game_id}")
+            if self._enforce_execution_fence:
+                try:
+                    require_v2_run_fence(db, game, lock=False)
+                except V2RunFenceRejected as exc:
+                    raise V2ExecutionOwnershipLost(str(exc)) from exc
             _raise_if_stop_requested(db, game)
 
     def stop_requested(self, game_id: str) -> bool:
@@ -927,7 +1293,7 @@ class V2ActionRepository:
 
     def cancel_game(self, game_id: str) -> V2CancellationResult:
         with self._session_factory.begin() as db:
-            game = _locked_game(db, game_id)
+            game = _locked_game(db, game_id, require_fence=False)
             run = _run(db, game.current_run_id)
             if run.stop_requested_at is None:
                 raise V2RepositoryError("game cancellation was not requested")
@@ -968,8 +1334,10 @@ class V2ActionRepository:
                             game=game,
                             run_id=run.run_id,
                             event_type="voice_recording_canceled",
+                            audience=presentation.audience,
                             payload={
                                 "action_id": presentation.action_id,
+                                "presentation_id": presentation.presentation_id,
                                 "voice_asset_id": voice.voice_asset_id,
                                 "reason_code": "operator_interrupted",
                             },
@@ -979,6 +1347,7 @@ class V2ActionRepository:
                     game=game,
                     run_id=run.run_id,
                     event_type="speech_interrupted",
+                    audience=presentation.audience,
                     payload={
                         "action_id": presentation.action_id,
                         "presentation_id": presentation.presentation_id,
@@ -1000,6 +1369,18 @@ class V2ActionRepository:
                 activation.skip_reason = "operator_interrupted"
                 activation.closed_at = canceled_at
                 activation.result = {"reason_code": "operator_interrupted"}
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="ability_activation_canceled",
+                    audience=_activation_audience(db, activation),
+                    payload={
+                        "action_id": activation.action_id,
+                        "activation_id": activation.activation_id,
+                        "reason_code": "operator_interrupted",
+                    },
+                )
 
             open_windows = list(
                 db.scalars(
@@ -1025,6 +1406,20 @@ class V2ActionRepository:
             for effect in pending_effects:
                 effect.state = "canceled"
                 effect.resolved_at = canceled_at
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="effect_intent_canceled",
+                    audience=_effect_audience(db, effect),
+                    payload={
+                        "activation_id": effect.activation_id,
+                        "effect_intent_id": effect.effect_intent_id,
+                        "effect_type": effect.effect_type,
+                        "target_player_id": effect.target_player_id,
+                        "reason_code": "operator_interrupted",
+                    },
+                )
 
             active_recoveries = list(
                 db.scalars(
@@ -1042,6 +1437,7 @@ class V2ActionRepository:
                     game=game,
                     run_id=run.run_id,
                     event_type="model_action_recovery_canceled",
+                    audience=_model_action_recovery_audience(recovery),
                     payload={
                         "action_id": recovery.action_id,
                         "recovery_id": recovery.recovery_id,
@@ -1052,11 +1448,18 @@ class V2ActionRepository:
             game.status = "canceled"
             run.status = "canceled"
             run.completed_at = canceled_at
+            invalidated_worker_id = run.worker_id
+            invalidated_fence_token = run.fence_token
+            run.worker_id = None
+            run.worker_heartbeat_at = None
+            run.lease_expires_at = None
+            run.fence_token += 1
             _append_event(
                 db,
                 game=game,
                 run_id=run.run_id,
                 event_type="game_canceled",
+                audience="all",
                 payload={
                     "reason_code": "operator_interrupted",
                     "interrupted_presentation_count": len(interrupted_presentations),
@@ -1065,6 +1468,8 @@ class V2ActionRepository:
                     "canceled_window_count": len(open_windows),
                     "canceled_effect_count": len(pending_effects),
                     "canceled_model_recovery_count": len(active_recoveries),
+                    "invalidated_worker_id": invalidated_worker_id,
+                    "invalidated_fence_token": invalidated_fence_token,
                 },
             )
             return V2CancellationResult(
@@ -1074,11 +1479,28 @@ class V2ActionRepository:
             )
 
 
-def _locked_game(db: Session, game_id: str) -> V2GameRecord:
+def _locked_game(
+    db: Session,
+    game_id: str,
+    *,
+    require_fence: bool,
+    fence: V2RunFence | None = None,
+) -> V2GameRecord:
     game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
     if game is None:
         raise V2RepositoryError(f"unknown game {game_id}")
+    if require_fence:
+        try:
+            require_v2_run_fence(db, game, fence=fence)
+        except V2RunFenceRejected as exc:
+            raise V2ExecutionOwnershipLost(str(exc)) from exc
     return game
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _run(db: Session, run_id: str) -> V2GameRun:
@@ -1100,6 +1522,7 @@ def _append_event(
     game: V2GameRecord,
     run_id: str,
     event_type: str,
+    audience: str,
     payload: dict[str, Any],
 ) -> V2GameRecordEvent:
     next_seq = game.last_record_seq + 1
@@ -1110,11 +1533,72 @@ def _append_event(
         run_id=run_id,
         event_type=event_type,
         payload_schema_version=1,
-        payload=payload,
+        payload=canonical_event_payload(payload, audience=audience),
     )
     db.add(event)
     game.last_record_seq = next_seq
     return event
+
+
+def _action_snapshot_audience(snapshot: dict[str, Any]) -> str:
+    audience = snapshot.get("audience")
+    if isinstance(audience, str):
+        return audience
+    # Follow-up events for pre-contract records must remain operable without
+    # guessing that an unknown historical action was public.
+    return "god_view"
+
+
+def _model_action_recovery_audience(recovery: V2ModelActionRecovery) -> str:
+    snapshot = recovery.action_snapshot if isinstance(recovery.action_snapshot, dict) else {}
+    actor_kind = snapshot.get("actor_kind")
+    return model_event_audience(
+        action_audience=_action_snapshot_audience(snapshot),
+        actor_kind=actor_kind if isinstance(actor_kind, str) else "unknown",
+    )
+
+
+def _activation_audience(db: Session, activation: V2AbilityActivation) -> str:
+    if activation.action_id is not None:
+        action_event = db.scalar(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == activation.game_id,
+                V2GameRecordEvent.event_type == "action_opened",
+                V2GameRecordEvent.payload["action_id"].as_string() == activation.action_id,
+            )
+            .order_by(V2GameRecordEvent.record_seq.desc())
+            .limit(1)
+        )
+        if action_event is not None:
+            audience = (action_event.payload or {}).get("audience")
+            if isinstance(audience, str):
+                return audience
+    activation_event = db.scalar(
+        select(V2GameRecordEvent)
+        .where(
+            V2GameRecordEvent.game_id == activation.game_id,
+            V2GameRecordEvent.event_type == "ability_activation_opened",
+            V2GameRecordEvent.payload["activation_id"].as_string()
+            == activation.activation_id,
+        )
+        .order_by(V2GameRecordEvent.record_seq.desc())
+        .limit(1)
+    )
+    audience = (activation_event.payload or {}).get("audience") if activation_event else None
+    if isinstance(audience, str):
+        return audience
+    return "god_view"
+
+
+def _effect_audience(db: Session, effect: V2EffectIntent) -> str:
+    audience = (effect.payload or {}).get("transport_audience")
+    if isinstance(audience, str):
+        return audience
+    activation = db.get(V2AbilityActivation, effect.activation_id)
+    if activation is None:
+        raise V2RepositoryError("effect intent activation is missing")
+    return _activation_audience(db, activation)
 
 
 def _now() -> datetime:
