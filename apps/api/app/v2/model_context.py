@@ -17,10 +17,22 @@ from app.v2.model_context_contract import (
     is_legacy_v7_model_context_contract,
     is_v8_model_context_contract,
     is_v9_model_context_contract,
+    is_v9_prompt_v2_model_context_contract,
+)
+from app.v2.win_conditions import (
+    build_public_win_condition_contract,
 )
 
 
 _PERSONA_TEXT_LIMIT = 600
+
+_DIRECT_ACTION_ABILITY_IDS = {
+    "guard_protect": "guard.protect",
+    "seer_investigate": "seer.investigate",
+    "witch_heal": "witch.heal",
+    "witch_poison": "witch.poison",
+    "hunter_death_shot": "hunter.death_shot",
+}
 
 
 @dataclass(frozen=True)
@@ -51,12 +63,14 @@ def project_model_action_context(
     players: tuple[V2ModelPlayerReference, ...],
     model_context_contract: dict[str, Any] | None = None,
     action_record_seq: int | None = None,
+    projection_at_seq: int | None = None,
 ) -> dict[str, Any]:
     return project_model_action_context_with_metadata(
         context,
         players=players,
         model_context_contract=model_context_contract,
         action_record_seq=action_record_seq,
+        projection_at_seq=projection_at_seq,
     ).context
 
 
@@ -66,7 +80,12 @@ def project_model_action_context_with_metadata(
     players: tuple[V2ModelPlayerReference, ...],
     model_context_contract: dict[str, Any] | None = None,
     action_record_seq: int | None = None,
+    projection_at_seq: int | None = None,
 ) -> V2ProjectedModelContext:
+    resolved_projection_at_seq = _resolved_projection_at_seq(
+        action_record_seq=action_record_seq,
+        projection_at_seq=projection_at_seq,
+    )
     contract = model_context_contract or current_model_context_contract()
     if is_legacy_v7_model_context_contract(contract):
         return _project_v7_model_action_context_with_metadata(
@@ -77,7 +96,7 @@ def project_model_action_context_with_metadata(
         return _project_v8_model_action_context_with_metadata(
             context,
             players=players,
-            action_record_seq=action_record_seq,
+            projection_at_seq=resolved_projection_at_seq,
             prompt_template_version=int(contract["prompt_template_version"]),
             known_events_schema_version=int(contract["known_events_schema_version"]),
         )
@@ -85,9 +104,11 @@ def project_model_action_context_with_metadata(
         return _project_v9_model_action_context_with_metadata(
             context,
             players=players,
-            action_record_seq=action_record_seq,
+            projection_at_seq=resolved_projection_at_seq,
             prompt_template_version=int(contract["prompt_template_version"]),
             known_events_schema_version=int(contract["known_events_schema_version"]),
+            ledger_schema_version=int(contract["ledger_schema_version"]),
+            include_win_condition_contract=is_v9_prompt_v2_model_context_contract(contract),
         )
     raise ValueError("unsupported_model_context_contract")
 
@@ -186,7 +207,7 @@ def _project_v8_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
-    action_record_seq: int | None,
+    projection_at_seq: int | None,
     prompt_template_version: int,
     known_events_schema_version: int,
 ) -> V2ProjectedModelContext:
@@ -230,7 +251,7 @@ def _project_v8_model_action_context_with_metadata(
             or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
         ]
     task_at_seq = _action_at_seq(
-        action_record_seq,
+        projection_at_seq,
         source=source,
         public_events=public_events,
         private_facts=private_facts,
@@ -308,9 +329,11 @@ def _project_v9_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
-    action_record_seq: int | None,
+    projection_at_seq: int | None,
     prompt_template_version: int,
     known_events_schema_version: int,
+    ledger_schema_version: int,
+    include_win_condition_contract: bool,
 ) -> V2ProjectedModelContext:
     if not players:
         projected = dict(context)
@@ -336,9 +359,12 @@ def _project_v9_model_action_context_with_metadata(
     identity = identity if isinstance(identity, dict) else {}
     actor_ref = identity.get("player_id")
     actor_ref = actor_ref if isinstance(actor_ref, str) else None
-    hard_rules = _model_hard_rules(source.get("public_rule_contract"))
+    hard_rules = _model_hard_rules(
+        source.get("public_rule_contract"),
+        include_win_condition_contract=include_win_condition_contract,
+    )
     task_at_seq = _action_at_seq(
-        action_record_seq,
+        projection_at_seq,
         source=source,
         public_events=public_events,
         private_facts=private_facts,
@@ -357,6 +383,7 @@ def _project_v9_model_action_context_with_metadata(
         visible_statements,
         current_round_no=current_round_no,
         actor_ref=actor_ref,
+        ledger_schema_version=ledger_schema_version,
     )
     model_view, _model_view_metadata = build_discourse_model_view(
         ledger,
@@ -541,13 +568,7 @@ def _model_action_rules(
     ability_id = source.get("ability_id")
     ability_id = ability_id if isinstance(ability_id, str) else None
     if ability_id is None:
-        ability_id = {
-            "guard_protect": "guard.protect",
-            "seer_investigate": "seer.investigate",
-            "witch_heal": "witch.heal",
-            "witch_poison": "witch.poison",
-            "hunter_death_shot": "hunter.death_shot",
-        }.get(action_type)
+        ability_id = _DIRECT_ACTION_ABILITY_IDS.get(action_type)
     all_ability_rules = hard_rules.get("ability_rules")
     all_ability_rules = all_ability_rules if isinstance(all_ability_rules, dict) else {}
     result: dict[str, Any] = {
@@ -557,6 +578,7 @@ def _model_action_rules(
         "role_summary": hard_rules.get("roles"),
         "werewolf_count": hard_rules.get("werewolf_count"),
         "win_condition": hard_rules.get("win_condition"),
+        "win_condition_contract": hard_rules.get("win_condition_contract"),
         "reveal_policy": hard_rules.get("reveal_policy"),
         "role_reveal_rule": hard_rules.get("role_reveal_rule"),
         "ability_lifecycle": hard_rules.get("ability_lifecycle"),
@@ -641,6 +663,30 @@ def _model_action_rules_v9(
     }
     result["current_ability"] = current_ability
     return result
+
+
+def _resolved_projection_at_seq(
+    *,
+    action_record_seq: int | None,
+    projection_at_seq: int | None,
+) -> int | None:
+    if projection_at_seq is None:
+        return action_record_seq
+    if (
+        not isinstance(projection_at_seq, int)
+        or isinstance(projection_at_seq, bool)
+        or projection_at_seq <= 0
+    ):
+        raise ValueError("projection_at_seq must be a positive integer")
+    if (
+        not isinstance(action_record_seq, int)
+        or isinstance(action_record_seq, bool)
+        or action_record_seq <= 0
+    ):
+        raise ValueError("projection_at_seq requires a positive action_record_seq")
+    if projection_at_seq > action_record_seq:
+        raise ValueError("projection_at_seq cannot be later than action_record_seq")
+    return projection_at_seq
 
 
 def _action_at_seq(
@@ -979,7 +1025,9 @@ def _v8_projection_metadata(
         "model_context_schema_version": 8,
         "prompt_template_version": projected_context["prompt_template_version"],
         "known_events_schema_version": projected_context["known_events"]["schema_version"],
-        "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "ledger_schema_version": (
+            _positive_int(ledger.get("ledger_schema_version")) or DISCOURSE_LEDGER_SCHEMA_VERSION
+        ),
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
         "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
         "serialized_char_count": _serialized_chars(projected_context),
@@ -1269,7 +1317,11 @@ def _model_speech_progress(
     }
 
 
-def _model_hard_rules(value: Any) -> dict[str, Any]:
+def _model_hard_rules(
+    value: Any,
+    *,
+    include_win_condition_contract: bool = False,
+) -> dict[str, Any]:
     contract = value if isinstance(value, dict) else {}
     roles = contract.get("roles")
     roles = roles if isinstance(roles, list) else []
@@ -1320,6 +1372,18 @@ def _model_hard_rules(value: Any) -> dict[str, Any]:
         "werewolf_count": werewolf_count,
         "max_rounds": contract.get("max_rounds"),
         "win_condition": contract.get("win_condition"),
+        "win_condition_contract": (
+            build_public_win_condition_contract(
+                contract.get("win_condition"),
+                frozen_role_keys=tuple(
+                    str(item.get("role_key"))
+                    for item in roles
+                    if isinstance(item, dict) and isinstance(item.get("role_key"), str)
+                ),
+            )
+            if include_win_condition_contract
+            else None
+        ),
         "reveal_policy": contract.get("reveal_policy"),
         "role_reveal_rule": contract.get("role_reveal_rule"),
         "ability_lifecycle": _without_explanations(contract.get("ability_lifecycle")),
@@ -1870,9 +1934,17 @@ def _ability_runtime_state(
             resource_status = "consumed" if remaining_uses == 0 else "available"
 
         in_current_action_window = current_ability_id == ability_id
-        can_execute_now = alive and in_current_action_window and resource_status != "consumed"
+        death_reaction_window = (
+            ability.get("timing") == "death_reaction" and in_current_action_window
+        )
+        actor_state_allows_execution = alive or death_reaction_window
+        can_execute_now = (
+            actor_state_allows_execution
+            and in_current_action_window
+            and resource_status != "consumed"
+        )
         unavailable_now_reason: str | None = None
-        if not alive:
+        if not actor_state_allows_execution:
             unavailable_now_reason = "actor_not_alive"
         elif resource_status == "consumed":
             unavailable_now_reason = "resource_consumed"
@@ -1908,7 +1980,7 @@ def _ability_id_for_action(action_type: str | None) -> str | None:
         return action_type[len("ability_") : -len("_decision")]
     if action_type == "werewolf_self_explosion":
         return "werewolf.self_explosion"
-    return None
+    return _DIRECT_ACTION_ABILITY_IDS.get(action_type)
 
 
 def _public_office_capabilities(

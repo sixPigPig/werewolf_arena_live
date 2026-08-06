@@ -174,9 +174,7 @@ class V2LobbyCreateSnapshot(BaseModel):
         if self.model_binding_mode == "profile_library" and (
             self.rule_set_revision_id is None or self.rule_set.revision_id is None
         ):
-            raise ValueError(
-                "profile library snapshots require matching rule revision identifiers"
-            )
+            raise ValueError("profile library snapshots require matching rule revision identifiers")
         if (
             self.rule_set.revision_id is not None
             and self.rule_set_revision_id != self.rule_set.revision_id
@@ -589,6 +587,16 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     actor_kind: str
     actor_id: str
     audience: str
+    stored_audience: str | None
+    effective_audience: str
+    audience_source: Literal[
+        "event_contract",
+        "event_contract_narrowed",
+        "presentation",
+        "legacy_event",
+        "action_context",
+        "legacy_unknown",
+    ]
     request_kind: str
     model_id: str | None
     model_provider: str | None
@@ -617,6 +625,10 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     http_status: int | None
     first_token_seen: bool | None
     response_headers_seen: bool | None
+    response_headers: dict[str, str] | None
+    first_token_kind: str | None
+    first_visible_text_ms: int | None
+    timeout_scope: str | None
     failure_elapsed_ms: int | None
     attempt_budget_ms: int | None
     action_budget_ms: int | None

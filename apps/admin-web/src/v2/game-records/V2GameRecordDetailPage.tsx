@@ -64,6 +64,7 @@ import type {
   V2GameRecordEvent,
   V2GameRecordDetail,
   V2ModelRequest,
+  V2ModelRequestAudienceSource,
   V2ModelRequestSummary,
 } from "@/v2/game-records/types";
 import {
@@ -1230,6 +1231,10 @@ function ModelRequestPayload({
 function InspectorOverview({ item }: { item: V2TimelineItem }) {
   const request = item.modelRequest;
   const template = item.templateRender?.payload;
+  const responseHeaders = request?.response_headers ?? null;
+  const responseHeaderCount = responseHeaders
+    ? Object.keys(responseHeaders).length
+    : 0;
   return (
     <div className="v2-inspector-panel">
       <Descriptions
@@ -1284,14 +1289,42 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                   : "—",
           },
           {
-            key: "privacy",
-            label: "隐私级别",
-            children: audienceLabel(item.audience),
+            key: "stored-audience",
+            label: "存储受众",
+            children: request
+              ? request.stored_audience === null
+                ? "未记录"
+                : audienceDiagnosticLabel(request.stored_audience)
+              : "—",
+          },
+          {
+            key: "effective-audience",
+            label: "生效受众",
+            children: audienceDiagnosticLabel(
+              request?.effective_audience ?? item.audience,
+            ),
+          },
+          {
+            key: "audience-source",
+            label: "判定来源",
+            children: request
+              ? audienceSourceLabel(request.audience_source)
+              : "—",
           },
           {
             key: "first-token",
             label: "首 Token",
             children: formatDuration(request?.first_token_ms ?? null),
+          },
+          {
+            key: "first-token-kind",
+            label: "首 Token 类型",
+            children: firstTokenKindLabel(request?.first_token_kind ?? null),
+          },
+          {
+            key: "first-visible-text",
+            label: "首可见文本",
+            children: formatDuration(request?.first_visible_text_ms ?? null),
           },
           {
             key: "total",
@@ -1322,6 +1355,11 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                 : request.response_headers_seen
                   ? "是"
                   : "否",
+          },
+          {
+            key: "timeout-scope",
+            label: "超时预算范围",
+            children: timeoutScopeLabel(request?.timeout_scope ?? null),
           },
           {
             key: "action-remaining",
@@ -1363,6 +1401,20 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
         ]}
         size="small"
       />
+      {responseHeaders && responseHeaderCount > 0 ? (
+        <section aria-label="模型响应头">
+          <Collapse
+            items={[
+              {
+                children: <pre>{prettyJson(responseHeaders)}</pre>,
+                key: "response-headers",
+                label: `响应头白名单（${responseHeaderCount}）`,
+              },
+            ]}
+            size="small"
+          />
+        </section>
+      ) : null}
       {item.objective ? (
         <section>
           <Typography.Text strong>动作目标</Typography.Text>
@@ -1645,6 +1697,36 @@ function audienceLabel(audience: string) {
   if (audience === "god_view") return "上帝视角";
   if (audience === "legacy_unknown") return "旧记录范围未知";
   return "私密";
+}
+
+function audienceDiagnosticLabel(audience: string) {
+  return `${audienceLabel(audience)}（${audience}）`;
+}
+
+function audienceSourceLabel(source: V2ModelRequestAudienceSource) {
+  const labels: Record<V2ModelRequestAudienceSource, string> = {
+    event_contract: "事件契约",
+    event_contract_narrowed: "事件契约（按执行者收窄）",
+    presentation: "历史播报记录",
+    legacy_event: "旧事件字段",
+    action_context: "动作上下文",
+    legacy_unknown: "旧记录无法判定",
+  };
+  return labels[source];
+}
+
+function firstTokenKindLabel(kind: string | null) {
+  if (kind === null) return "—";
+  if (kind === "reasoning") return "推理（reasoning）";
+  if (kind === "text") return "文本（text）";
+  return kind;
+}
+
+function timeoutScopeLabel(scope: string | null) {
+  if (scope === null) return "—";
+  if (scope === "attempt_budget") return "请求尝试预算（attempt_budget）";
+  if (scope === "action_budget") return "动作总预算（action_budget）";
+  return scope;
 }
 
 function statusLabel(status: string) {

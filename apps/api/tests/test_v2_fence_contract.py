@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.v2.execution import V2RunFence, bind_v2_run_fence
-from app.v2.match_repository import V2MatchRepository
+from app.v2.match_repository import V2DayVoteCommit, V2MatchRepository
 from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
@@ -33,6 +33,7 @@ from app.v2.repository import (
     V2ActionRepository,
     V2ExecutionOwnershipLost,
     V2PresentationIdentity,
+    V2RepositoryError,
 )
 from app.v2.service import create_waiting_game
 
@@ -453,9 +454,7 @@ def test_stale_fence_rejects_pending_night_effect_resolution(
         game = db.get(V2GameRecord, harness.game_id)
         window = db.get(V2ActionWindow, state.window_id)
         player = db.get(V2PlayerState, (harness.game_id, "seat_1"))
-        effect = db.scalar(
-            select(V2EffectIntent).where(V2EffectIntent.game_id == harness.game_id)
-        )
+        effect = db.scalar(select(V2EffectIntent).where(V2EffectIntent.game_id == harness.game_id))
         assert game is not None and window is not None and player is not None
         assert effect is not None
         assert game.last_record_seq == before_seq
@@ -466,6 +465,264 @@ def test_stale_fence_rejects_pending_night_effect_resolution(
         assert effect.state == "pending"
         assert effect.resolved_at is None
         assert "outcome" not in effect.payload
+
+
+def test_hunter_shot_atomically_resolves_its_effect_intent(
+    fence_harness: _FenceHarness,
+) -> None:
+    harness = fence_harness
+    state = _prepare_night_state(harness)
+    _add_alive_players(harness, "seat_2")
+    _add_hunter_ability(harness, state)
+    with bind_v2_run_fence(harness.stale_fence):
+        activation = harness.nights.open_activation(
+            state=state,
+            ability_id="hunter.death_shot",
+            actor_player_id="seat_1",
+            occurrence=1,
+            audience="god_view",
+        )
+        harness.nights.complete_activation(
+            state=state,
+            activation=activation,
+            decision={"target_player_id": "seat_2"},
+            result={"shot_used": True},
+            effect_type="shoot",
+            target_player_id="seat_2",
+        )
+        harness.nights.apply_hunter_shot(
+            state=state,
+            activation_id=activation.activation_id,
+            hunter_player_id="seat_1",
+            target_player_id="seat_2",
+        )
+
+    with harness.session_factory() as db:
+        target = db.get(V2PlayerState, (harness.game_id, "seat_2"))
+        effect = db.scalar(
+            select(V2EffectIntent).where(V2EffectIntent.activation_id == activation.activation_id)
+        )
+        resolved = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == harness.game_id,
+                V2GameRecordEvent.event_type == "effect_intent_resolved",
+            )
+        )
+        assert target is not None and effect is not None and resolved is not None
+        assert target.alive is False
+        assert target.death_cause == "hunter_shot"
+        assert effect.state == "resolved"
+        assert effect.resolved_at is not None
+        assert effect.payload["outcome"] == "killed"
+        assert resolved.payload["activation_id"] == activation.activation_id
+        assert resolved.payload["effect_intent_id"] == effect.effect_intent_id
+        assert resolved.payload["outcome"] == "killed"
+
+
+def test_hunter_shot_replay_is_idempotent_without_duplicate_resolution_events(
+    fence_harness: _FenceHarness,
+) -> None:
+    harness = fence_harness
+    state = _prepare_night_state(harness)
+    _add_alive_players(harness, "seat_2")
+    _add_hunter_ability(harness, state)
+    with bind_v2_run_fence(harness.stale_fence):
+        activation = harness.nights.open_activation(
+            state=state,
+            ability_id="hunter.death_shot",
+            actor_player_id="seat_1",
+            occurrence=1,
+            audience="god_view",
+        )
+        harness.nights.complete_activation(
+            state=state,
+            activation=activation,
+            decision={"target_player_id": "seat_2"},
+            result={"shot_used": True},
+            effect_type="shoot",
+            target_player_id="seat_2",
+        )
+        harness.nights.apply_hunter_shot(
+            state=state,
+            activation_id=activation.activation_id,
+            hunter_player_id="seat_1",
+            target_player_id="seat_2",
+        )
+        before_replay_seq = _last_record_seq(harness)
+        harness.nights.apply_hunter_shot(
+            state=state,
+            activation_id=activation.activation_id,
+            hunter_player_id="seat_1",
+            target_player_id="seat_2",
+        )
+
+    with harness.session_factory() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        hunter = db.get(V2PlayerState, (harness.game_id, "seat_1"))
+        target = db.get(V2PlayerState, (harness.game_id, "seat_2"))
+        effect = db.scalar(
+            select(V2EffectIntent).where(V2EffectIntent.activation_id == activation.activation_id)
+        )
+        assert game is not None and hunter is not None and target is not None
+        assert effect is not None
+        assert game.last_record_seq == before_replay_seq
+        assert target.alive is False
+        assert target.death_cause == "hunter_shot"
+        assert hunter.state["hunter_response_resolved"] is True
+        assert effect.state == "resolved"
+        assert effect.payload["outcome"] == "killed"
+        assert _event_count(db, harness.game_id, "effect_intent_resolved") == 1
+        assert _event_count(db, harness.game_id, "hunter_response_resolved") == 1
+
+
+@pytest.mark.parametrize(
+    ("hunter_player_id", "target_player_id"),
+    [("seat_9", "seat_2"), ("seat_1", "seat_3")],
+)
+def test_resolved_hunter_shot_rejects_mismatched_replay_without_mutation(
+    fence_harness: _FenceHarness,
+    hunter_player_id: str,
+    target_player_id: str,
+) -> None:
+    harness = fence_harness
+    state = _prepare_night_state(harness)
+    _add_alive_players(harness, "seat_2", "seat_3")
+    _add_hunter_ability(harness, state)
+    with bind_v2_run_fence(harness.stale_fence):
+        activation = harness.nights.open_activation(
+            state=state,
+            ability_id="hunter.death_shot",
+            actor_player_id="seat_1",
+            occurrence=1,
+            audience="god_view",
+        )
+        harness.nights.complete_activation(
+            state=state,
+            activation=activation,
+            decision={"target_player_id": "seat_2"},
+            result={"shot_used": True},
+            effect_type="shoot",
+            target_player_id="seat_2",
+        )
+        harness.nights.apply_hunter_shot(
+            state=state,
+            activation_id=activation.activation_id,
+            hunter_player_id="seat_1",
+            target_player_id="seat_2",
+        )
+
+    with harness.session_factory() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        effect = db.scalar(
+            select(V2EffectIntent).where(V2EffectIntent.activation_id == activation.activation_id)
+        )
+        assert game is not None and effect is not None and effect.resolved_at is not None
+        before_seq = game.last_record_seq
+        before_resolved_at = effect.resolved_at
+        before_payload = dict(effect.payload)
+        before_effect_events = _event_count(db, harness.game_id, "effect_intent_resolved")
+        before_hunter_events = _event_count(db, harness.game_id, "hunter_response_resolved")
+
+    with bind_v2_run_fence(harness.stale_fence):
+        with pytest.raises(
+            V2RepositoryError,
+            match="hunter shoot intent does not match resolution",
+        ):
+            harness.nights.apply_hunter_shot(
+                state=state,
+                activation_id=activation.activation_id,
+                hunter_player_id=hunter_player_id,
+                target_player_id=target_player_id,
+            )
+
+    with harness.session_factory() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        hunter = db.get(V2PlayerState, (harness.game_id, "seat_1"))
+        shot_target = db.get(V2PlayerState, (harness.game_id, "seat_2"))
+        other_target = db.get(V2PlayerState, (harness.game_id, "seat_3"))
+        effect = db.scalar(
+            select(V2EffectIntent).where(V2EffectIntent.activation_id == activation.activation_id)
+        )
+        assert game is not None and hunter is not None
+        assert shot_target is not None and other_target is not None and effect is not None
+        assert game.last_record_seq == before_seq
+        assert hunter.state["hunter_response_resolved"] is True
+        assert shot_target.alive is False
+        assert shot_target.death_cause == "hunter_shot"
+        assert other_target.alive is True
+        assert other_target.death_cause is None
+        assert effect.state == "resolved"
+        assert effect.resolved_at == before_resolved_at
+        assert effect.payload == before_payload
+        assert _event_count(db, harness.game_id, "effect_intent_resolved") == before_effect_events
+        assert _event_count(db, harness.game_id, "hunter_response_resolved") == before_hunter_events
+
+
+def test_hunter_shot_rejects_mismatched_activation_without_resolving_any_intent(
+    fence_harness: _FenceHarness,
+) -> None:
+    harness = fence_harness
+    state = _prepare_night_state(harness)
+    _add_alive_players(harness, "seat_2", "seat_3")
+    _add_hunter_ability(harness, state)
+    with bind_v2_run_fence(harness.stale_fence):
+        first = harness.nights.open_activation(
+            state=state,
+            ability_id="hunter.death_shot",
+            actor_player_id="seat_1",
+            occurrence=1,
+            audience="god_view",
+        )
+        harness.nights.complete_activation(
+            state=state,
+            activation=first,
+            decision={"target_player_id": "seat_2"},
+            result={"shot_used": True},
+            effect_type="shoot",
+            target_player_id="seat_2",
+        )
+        second = harness.nights.open_activation(
+            state=state,
+            ability_id="hunter.death_shot",
+            actor_player_id="seat_1",
+            occurrence=2,
+            audience="god_view",
+        )
+        harness.nights.complete_activation(
+            state=state,
+            activation=second,
+            decision={"target_player_id": "seat_3"},
+            result={"shot_used": True},
+            effect_type="shoot",
+            target_player_id="seat_3",
+        )
+        with pytest.raises(
+            V2RepositoryError,
+            match="hunter shoot intent does not match resolution",
+        ):
+            harness.nights.apply_hunter_shot(
+                state=state,
+                activation_id=second.activation_id,
+                hunter_player_id="seat_1",
+                target_player_id="seat_2",
+            )
+
+    with harness.session_factory() as db:
+        effects = list(
+            db.scalars(
+                select(V2EffectIntent)
+                .where(V2EffectIntent.game_id == harness.game_id)
+                .order_by(V2EffectIntent.activation_id)
+            )
+        )
+        targets = [
+            db.get(V2PlayerState, (harness.game_id, player_id))
+            for player_id in ("seat_2", "seat_3")
+        ]
+        assert len(effects) == 2
+        assert all(item.state == "pending" and item.resolved_at is None for item in effects)
+        assert all(item is not None and item.alive for item in targets)
+        assert "effect_intent_resolved" not in _event_types(db, harness.game_id)
 
 
 def test_stale_fence_rejects_match_state_mutation(
@@ -516,6 +773,96 @@ def test_stale_fence_rejects_match_state_mutation(
         assert match.sheriff_player_id is None
         assert match.sheriff_badge_state == "pending"
         assert player.alive is True
+
+
+def test_stale_fence_rejects_atomic_day_vote_batch(
+    fence_harness: _FenceHarness,
+) -> None:
+    harness = fence_harness
+    with harness.session_factory.begin() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        assert game is not None
+        game.phase_id = "day_1"
+        game.phase_state = "day_vote"
+        db.add(
+            V2MatchState(
+                game_id=harness.game_id,
+                round_no=1,
+                sheriff_badge_state="pending",
+            )
+        )
+        for seat in (1, 2):
+            db.add(
+                V2PlayerState(
+                    game_id=harness.game_id,
+                    player_id=f"seat_{seat}",
+                    seat=seat,
+                    alive=True,
+                    state={},
+                )
+            )
+    before_seq = _last_record_seq(harness)
+    batch_id = f"day_1:exile_vote:{before_seq}:vote"
+    harness.rotate_owner()
+
+    with bind_v2_run_fence(harness.stale_fence):
+        with pytest.raises(
+            V2ExecutionOwnershipLost,
+            match="v2_run_execution_lease_lost",
+        ):
+            harness.matches.finalize_day_vote_batch(
+                game_id=harness.game_id,
+                phase_id="day_1",
+                phase_state="day_vote",
+                round_no=1,
+                action_type="exile_vote",
+                batch_id=batch_id,
+                public_cutoff_record_seq=before_seq,
+                expected_voter_ids=("seat_1", "seat_2"),
+                votes=(
+                    V2DayVoteCommit("seat_1", "seat_2", 1.0, "投2号。"),
+                    V2DayVoteCommit("seat_2", "seat_1", 1.0, "投1号。"),
+                ),
+                decision_context={
+                    "vote_round": 1,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": before_seq,
+                },
+                resolution_payload={
+                    "round_no": 1,
+                    "action_type": "exile_vote",
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": before_seq,
+                    "eligible_voter_ids": ["seat_1", "seat_2"],
+                    "ineligible_voter_ids": [],
+                    "candidate_player_ids": ["seat_1", "seat_2"],
+                    "weighted": False,
+                    "sheriff_player_id": None,
+                    "sheriff_vote_weight": None,
+                    "voter_weights": {"seat_1": 1.0, "seat_2": 1.0},
+                    "totals": {"seat_2": 1.0, "seat_1": 1.0},
+                    "leaders": ["seat_1", "seat_2"],
+                    "identity_reveal": "none",
+                },
+            )
+
+    with harness.session_factory() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        assert game is not None
+        assert game.last_record_seq == before_seq
+        assert "day_vote_committed" not in _event_types(db, harness.game_id)
+        assert "day_vote_resolved" not in _event_types(db, harness.game_id)
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(V2KnowledgeFact)
+                .where(
+                    V2KnowledgeFact.game_id == harness.game_id,
+                    V2KnowledgeFact.fact_type == "private_action_decision",
+                )
+            )
+            == 0
+        )
 
 
 def _claim_action(harness: _FenceHarness, *, action_id: str) -> V2ActionClaim:
@@ -623,6 +970,44 @@ def _prepare_night_state(harness: _FenceHarness) -> V2NightRuntimeState:
     )
 
 
+def _add_alive_players(harness: _FenceHarness, *player_ids: str) -> None:
+    with harness.session_factory.begin() as db:
+        for offset, player_id in enumerate(player_ids, start=2):
+            db.add(
+                V2PlayerState(
+                    game_id=harness.game_id,
+                    player_id=player_id,
+                    seat=offset,
+                    alive=True,
+                    state={},
+                )
+            )
+
+
+def _add_hunter_ability(
+    harness: _FenceHarness,
+    state: V2NightRuntimeState,
+) -> None:
+    instance = {
+        "ability_instance_id": "v2_instance_hunter_death_shot",
+        "ability_id": "hunter.death_shot",
+    }
+    state.snapshot["instances"].append(instance)
+    with harness.session_factory.begin() as db:
+        db.add(
+            V2AbilityInstance(
+                ability_instance_id=instance["ability_instance_id"],
+                game_id=harness.game_id,
+                ability_id=instance["ability_id"],
+                ability_version=1,
+                owner_scope="player",
+                owner_id="seat_1",
+                owner_role_key="hunter",
+                state={},
+            )
+        )
+
+
 def _recovery_payload() -> dict[str, object]:
     return {
         "action_type": "fence_contract_action",
@@ -658,18 +1043,25 @@ def _events_for_action(db: Session, game_id: str, action_id: str) -> list[V2Game
 
 def _event_types(db: Session, game_id: str) -> set[str]:
     return set(
-        db.scalars(
-            select(V2GameRecordEvent.event_type).where(
-                V2GameRecordEvent.game_id == game_id
+        db.scalars(select(V2GameRecordEvent.event_type).where(V2GameRecordEvent.game_id == game_id))
+    )
+
+
+def _event_count(db: Session, game_id: str, event_type: str) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.event_type == event_type,
             )
         )
+        or 0
     )
 
 
 def _row_count(db: Session, model: type[object], game_id: str) -> int:
     return int(
-        db.scalar(
-            select(func.count()).select_from(model).where(model.game_id == game_id)
-        )
-        or 0
+        db.scalar(select(func.count()).select_from(model).where(model.game_id == game_id)) or 0
     )

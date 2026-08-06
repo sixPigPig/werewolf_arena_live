@@ -4,7 +4,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Iterable
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from app.v2.action_engine import (
     V2ActionEngine,
@@ -13,6 +13,7 @@ from app.v2.action_engine import (
     V2SpeechSpec,
 )
 from app.v2.match_repository import (
+    V2DayVoteCommit,
     V2ExileResult,
     V2MatchPlayer,
     V2MatchRepository,
@@ -1024,8 +1025,13 @@ class V2DayEngine:
             voter: V2MatchPlayer,
             eligible: list[V2MatchPlayer],
             *,
-            concurrent_initial: bool,
+            stage: Literal[
+                "concurrent_initial",
+                "concurrent_recovery",
+                "sequential_recovery",
+            ],
         ) -> V2ModelDecision | None:
+            isolated = stage != "sequential_recovery"
             return await self._player_action(
                 game_id=game_id,
                 player=voter,
@@ -1046,25 +1052,25 @@ class V2DayEngine:
                 extra_context={
                     **context,
                     "public_cutoff_record_seq": public_cutoff_record_seq,
-                    "vote_batch_stage": (
-                        "concurrent_initial" if concurrent_initial else "sequential_recovery"
-                    ),
+                    "vote_batch_stage": stage,
                 },
                 frozen_state=state,
-                defer_presentation=concurrent_initial,
-                isolated_failure=concurrent_initial,
-                allow_failure=concurrent_initial,
+                projection_at_seq=public_cutoff_record_seq,
+                defer_presentation=isolated,
+                isolated_failure=isolated,
+                allow_failure=isolated,
                 batch_id=batch_id,
             )
 
-        # The fast path isolates each non-blocking request so all voters can
-        # decide at the same frozen public cutoff. Missing required votes then
-        # re-enter the existing blocking action path one at a time, preserving
-        # durable pause/operator-retry semantics without publishing a partial tally.
+        # All non-blocking attempts use the same frozen public cutoff. Initial
+        # failures receive one more isolated concurrent attempt; only voters
+        # still missing after that enter the blocking path one at a time. This
+        # preserves durable pause/operator-retry semantics without publishing
+        # a partial tally.
         decisions = list(
             await asyncio.gather(
                 *(
-                    request_vote(voter, eligible, concurrent_initial=True)
+                    request_vote(voter, eligible, stage="concurrent_initial")
                     for voter, eligible in prepared
                 )
             )
@@ -1084,13 +1090,55 @@ class V2DayEngine:
                     "failed_voter_ids": initial_failed_voter_ids,
                 },
             )
-            for index in failed_indexes:
+
+            concurrent_recovery_decisions = list(
+                await asyncio.gather(
+                    *(
+                        request_vote(
+                            prepared[index][0],
+                            prepared[index][1],
+                            stage="concurrent_recovery",
+                        )
+                        for index in failed_indexes
+                    )
+                )
+            )
+            still_failed_indexes: list[int] = []
+            concurrent_recovered_voter_ids: list[str] = []
+            for index, decision in zip(
+                failed_indexes,
+                concurrent_recovery_decisions,
+                strict=True,
+            ):
+                decisions[index] = decision
+                if decision is None:
+                    still_failed_indexes.append(index)
+                else:
+                    concurrent_recovered_voter_ids.append(prepared[index][0].player_id)
+            still_failed_voter_ids = [
+                prepared[index][0].player_id for index in still_failed_indexes
+            ]
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="day_vote_batch_concurrent_recovery_completed",
+                audience="god_view",
+                payload={
+                    "round_no": state.round_no,
+                    "action_type": action_type,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "recovered_voter_ids": concurrent_recovered_voter_ids,
+                    "still_failed_voter_ids": still_failed_voter_ids,
+                },
+            )
+
+            for index in still_failed_indexes:
                 self._actions.check_cancellation(game_id)
                 voter, eligible = prepared[index]
                 decisions[index] = await request_vote(
                     voter,
                     eligible,
-                    concurrent_initial=False,
+                    stage="sequential_recovery",
                 )
             self._repository.append_event(
                 game_id=game_id,
@@ -1105,86 +1153,82 @@ class V2DayEngine:
                 },
             )
 
-        committed: list[tuple[V2MatchPlayer, str, float, V2ModelDecision]] = []
-        for (voter, _eligible), decision in zip(prepared, decisions, strict=True):
+        committed: list[V2DayVoteCommit] = []
+        for (voter, eligible), decision in zip(prepared, decisions, strict=True):
             if decision is None:
                 raise V2DayRuntimeError(f"{action_type}_vote_batch_incomplete")
             target_id = _required_target(decision)
+            if target_id not in {candidate.player_id for candidate in eligible}:
+                raise V2DayRuntimeError(f"{action_type}_vote_target_invalid")
             weight = (
                 float(state.rule.get("sheriff_vote_weight") or 1)
                 if weighted and voter.player_id == state.sheriff_player_id
                 else 1.0
             )
             totals[target_id] += weight
-            committed.append((voter, target_id, weight, decision))
+            committed.append(
+                V2DayVoteCommit(
+                    voter_player_id=voter.player_id,
+                    target_player_id=target_id,
+                    weight=weight,
+                    decision_note=decision.decision_note,
+                )
+            )
 
         # No vote is made public until every eligible virtual player has
         # completed the same voting batch.  This keeps later model contexts
         # independent from earlier choices while preserving the durable
-        # per-voter audit records once the batch is complete.
-        for voter, target_id, weight, decision in committed:
-            self._repository.append_event(
-                game_id=game_id,
-                event_type="day_vote_committed",
-                audience="all",
-                payload={
-                    "round_no": state.round_no,
-                    "action_type": action_type,
-                    "voter_player_id": voter.player_id,
-                    "target_player_id": target_id,
-                    "weight": weight,
-                    "batch_id": batch_id,
-                    "public_cutoff_record_seq": public_cutoff_record_seq,
-                },
-            )
-            self._repository.record_private_action_decision(
-                game_id=game_id,
-                player_id=voter.player_id,
-                round_no=state.round_no,
-                action_type=action_type,
-                decision={"target_player_id": target_id},
-                decision_note=decision.decision_note,
-                context={
-                    **context,
-                    "batch_id": batch_id,
-                    "public_cutoff_record_seq": public_cutoff_record_seq,
-                },
-            )
-        self._repository.append_event(
-            game_id=game_id,
-            event_type="day_vote_resolved",
-            audience="all",
-            payload={
-                "round_no": state.round_no,
-                "action_type": action_type,
-                "batch_id": batch_id,
-                "public_cutoff_record_seq": public_cutoff_record_seq,
-                "eligible_voter_ids": [item.player_id for item in voters],
-                "ineligible_voter_ids": [
-                    item.player_id
-                    for item in state.players
-                    if item.alive and item.player_id not in {voter.player_id for voter in voters}
-                ],
-                "candidate_player_ids": [item.player_id for item in candidates],
-                "weighted": weighted,
-                "sheriff_player_id": state.sheriff_player_id,
-                "sheriff_vote_weight": (
+        # per-voter audit records once the batch is complete. The repository
+        # finalizes all public votes, private reasons, and the tally in one
+        # transaction so no retry can observe or extend a partial batch.
+        decision_context = {
+            **context,
+            "batch_id": batch_id,
+            "public_cutoff_record_seq": public_cutoff_record_seq,
+        }
+        resolution_payload = {
+            "round_no": state.round_no,
+            "action_type": action_type,
+            "batch_id": batch_id,
+            "public_cutoff_record_seq": public_cutoff_record_seq,
+            "eligible_voter_ids": [item.player_id for item in voters],
+            "ineligible_voter_ids": [
+                item.player_id
+                for item in state.players
+                if item.alive and item.player_id not in {voter.player_id for voter in voters}
+            ],
+            "candidate_player_ids": [item.player_id for item in candidates],
+            "weighted": weighted,
+            "sheriff_player_id": state.sheriff_player_id,
+            "sheriff_vote_weight": (
+                float(state.rule.get("sheriff_vote_weight") or 1)
+                if weighted and state.sheriff_player_id is not None
+                else None
+            ),
+            "voter_weights": {
+                voter.player_id: (
                     float(state.rule.get("sheriff_vote_weight") or 1)
-                    if weighted and state.sheriff_player_id is not None
-                    else None
-                ),
-                "voter_weights": {
-                    voter.player_id: (
-                        float(state.rule.get("sheriff_vote_weight") or 1)
-                        if weighted and voter.player_id == state.sheriff_player_id
-                        else 1.0
-                    )
-                    for voter in voters
-                },
-                "totals": dict(totals),
-                "leaders": _leaders(dict(totals)),
-                "identity_reveal": "none",
+                    if weighted and voter.player_id == state.sheriff_player_id
+                    else 1.0
+                )
+                for voter in voters
             },
+            "totals": dict(totals),
+            "leaders": _leaders(dict(totals)),
+            "identity_reveal": "none",
+        }
+        self._repository.finalize_day_vote_batch(
+            game_id=game_id,
+            phase_id=state.phase_id,
+            phase_state=state.phase_state,
+            round_no=state.round_no,
+            action_type=action_type,
+            batch_id=batch_id,
+            public_cutoff_record_seq=public_cutoff_record_seq,
+            expected_voter_ids=tuple(voter.player_id for voter, _eligible in prepared),
+            votes=tuple(committed),
+            decision_context=decision_context,
+            resolution_payload=resolution_payload,
         )
         return dict(totals)
 
@@ -1749,6 +1793,7 @@ class V2DayEngine:
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
         frozen_state: V2MatchSnapshot | None = None,
+        projection_at_seq: int | None = None,
         defer_presentation: bool = False,
         isolated_failure: bool = False,
         allow_failure: bool = False,
@@ -1756,6 +1801,12 @@ class V2DayEngine:
     ) -> V2ModelDecision | None:
         self._actions.check_cancellation(game_id)
         state = frozen_state or self._repository.snapshot(game_id)
+        if projection_at_seq is not None and (
+            frozen_state is None or projection_at_seq != frozen_state.last_record_seq
+        ):
+            raise V2DayRuntimeError(
+                "projection_at_seq must equal the explicitly frozen state cutoff"
+            )
         private_facts = self._repository.private_knowledge(
             game_id=game_id,
             player_id=player.player_id,
@@ -1862,6 +1913,7 @@ class V2DayEngine:
                 defer_presentation=defer_presentation,
                 isolated_failure=isolated_failure,
                 batch_id=batch_id,
+                projection_at_seq=projection_at_seq,
             ),
         )
         if decision is None and not allow_failure:

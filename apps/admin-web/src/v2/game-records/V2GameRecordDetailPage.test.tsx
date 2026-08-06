@@ -136,7 +136,10 @@ const detail = {
       action_type: "judge_opening_speech",
       actor_kind: "judge",
       actor_id: "judge",
-      audience: "all",
+      audience: "director",
+      stored_audience: "all",
+      effective_audience: "director",
+      audience_source: "event_contract_narrowed",
       request_kind: "speech",
       model_id: "doubao-seed-2-0-lite-260215",
       model_provider: "agent_plan",
@@ -284,6 +287,15 @@ const detail = {
       output_source: "persisted",
       provider_request_id: "provider-request-1",
       first_token_ms: 18,
+      first_token_seen: true,
+      response_headers_seen: true,
+      response_headers: {
+        "x-request-id": "provider-header-1",
+        "x-ratelimit-remaining-requests": "9",
+      },
+      first_token_kind: "reasoning",
+      first_visible_text_ms: 27,
+      timeout_scope: "attempt_budget",
       completed_ms: 311,
       failure_kind: null,
       failure_code: null,
@@ -1035,7 +1047,38 @@ describe("V2 game record detail workspace", () => {
     await user.click(
       screen.getByRole("button", { name: "查看 法官 开场播报" }),
     );
-    expect(await screen.findByRole("dialog")).toBeVisible();
+    const requestDialog = await screen.findByRole("dialog");
+    expect(requestDialog).toBeVisible();
+    expect(within(requestDialog).getByText("存储受众")).toBeVisible();
+    expect(within(requestDialog).getByText("公开（all）")).toBeVisible();
+    expect(within(requestDialog).getByText("生效受众")).toBeVisible();
+    expect(within(requestDialog).getByText("私密（director）")).toBeVisible();
+    expect(within(requestDialog).getByText("判定来源")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("事件契约（按执行者收窄）"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("首 Token 类型")).toBeVisible();
+    expect(within(requestDialog).getByText("推理（reasoning）")).toBeVisible();
+    expect(within(requestDialog).getByText("首可见文本")).toBeVisible();
+    expect(within(requestDialog).getByText("27 ms")).toBeVisible();
+    expect(within(requestDialog).getByText("超时预算范围")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("请求尝试预算（attempt_budget）"),
+    ).toBeVisible();
+    const responseHeaders = within(requestDialog).getByRole("region", {
+      name: "模型响应头",
+    });
+    const responseHeadersToggle = within(responseHeaders)
+      .getByText("响应头白名单（2）")
+      .closest(".ant-collapse-header");
+    expect(responseHeadersToggle).not.toBeNull();
+    await user.click(responseHeadersToggle as HTMLElement);
+    expect(responseHeaders.querySelector("pre")).toHaveTextContent(
+      '"x-request-id": "provider-header-1"',
+    );
+    expect(responseHeaders.querySelector("pre")).toHaveTextContent(
+      '"x-ratelimit-remaining-requests": "9"',
+    );
 
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
@@ -1161,6 +1204,40 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("button", { name: /底层数据/ }));
     expect(await screen.findByText("整局状态 (1)")).toBeVisible();
   }, 60_000);
+
+  it("keeps an unknown legacy request audience visibly unknown", async () => {
+    const user = userEvent.setup();
+    stubRecordFetch({
+      ...detail,
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          audience: "legacy_unknown",
+          stored_audience: null,
+          effective_audience: "legacy_unknown",
+          audience_source: "legacy_unknown",
+        },
+      ],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "模型可观测性验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const requestDialog = await screen.findByRole("dialog");
+
+    expect(within(requestDialog).getByText("未记录")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("旧记录范围未知（legacy_unknown）"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("旧记录无法判定")).toBeVisible();
+    expect(
+      within(requestDialog).queryByText("私密（legacy_unknown）"),
+    ).not.toBeInTheDocument();
+  });
 
   it("preloads saved voice metadata and shows the persisted duration", async () => {
     stubRecordFetch({

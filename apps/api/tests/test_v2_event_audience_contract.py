@@ -99,17 +99,28 @@ def test_legacy_followup_events_fail_closed_without_blocking_operator_paths() ->
         "context_audience",
         "presentation_audience",
         "event_contract_version",
-        "expected",
+        "expected_stored",
+        "expected_effective",
+        "expected_source",
     ),
     [
-        ("all", "all", "all", 1, "player_private"),
-        ("player_private", "all", "all", 1, "player_private"),
-        ("all", "public", "god_view", None, "god_view"),
-        ("director", "god_view", None, None, "director"),
-        (None, "god_view", None, None, "god_view"),
-        (None, None, "public", None, "public"),
-        (" public ", "god_view", None, None, "god_view"),
-        (None, None, None, None, "legacy_unknown"),
+        ("all", "all", "all", 1, "all", "player_private", "event_contract_narrowed"),
+        (
+            "player_private",
+            "all",
+            "all",
+            1,
+            "player_private",
+            "player_private",
+            "event_contract",
+        ),
+        ("all", "public", "god_view", None, "all", "god_view", "presentation"),
+        ("director", "god_view", None, None, "director", "director", "legacy_event"),
+        ("public", "god_view", None, 999, "public", "public", "legacy_event"),
+        (None, "god_view", None, None, None, "god_view", "action_context"),
+        (None, None, "public", None, None, "public", "presentation"),
+        (" public ", "god_view", None, None, " public ", "god_view", "action_context"),
+        (None, None, None, None, None, "legacy_unknown", "legacy_unknown"),
     ],
 )
 def test_admin_model_request_audience_recovers_then_fails_closed(
@@ -117,7 +128,9 @@ def test_admin_model_request_audience_recovers_then_fails_closed(
     context_audience: str | None,
     presentation_audience: str | None,
     event_contract_version: int | None,
-    expected: str,
+    expected_stored: str | None,
+    expected_effective: str,
+    expected_source: str,
 ) -> None:
     action_id = "v2_action_legacy_audience"
     context = {
@@ -172,7 +185,10 @@ def test_admin_model_request_audience_recovers_then_fails_closed(
     result = _admin_model_requests(events, presentations)
 
     assert len(result) == 1
-    assert result[0].audience == expected
+    assert result[0].audience == expected_effective
+    assert result[0].stored_audience == expected_stored
+    assert result[0].effective_audience == expected_effective
+    assert result[0].audience_source == expected_source
 
 
 def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably() -> None:

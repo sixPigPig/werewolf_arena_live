@@ -1109,6 +1109,7 @@ class V2NightRepository:
         self,
         *,
         state: V2NightRuntimeState,
+        activation_id: str,
         hunter_player_id: str,
         target_player_id: str,
     ) -> None:
@@ -1118,16 +1119,71 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
+            activation = db.get(V2AbilityActivation, activation_id)
+            effect = db.scalar(
+                select(V2EffectIntent).where(
+                    V2EffectIntent.game_id == state.game_id,
+                    V2EffectIntent.window_id == state.window_id,
+                    V2EffectIntent.activation_id == activation_id,
+                    V2EffectIntent.effect_type == "shoot",
+                )
+            )
+            if activation is None or effect is None:
+                raise V2RepositoryError("hunter shoot intent is missing")
+            if (
+                activation.game_id != state.game_id
+                or activation.window_id != state.window_id
+                or activation.status != "completed"
+                or activation.actor_player_id != hunter_player_id
+                or effect.actor_id != hunter_player_id
+                or effect.target_player_id != target_player_id
+            ):
+                raise V2RepositoryError("hunter shoot intent does not match resolution")
             target = db.get(V2PlayerState, (state.game_id, target_player_id))
-            if target is None or not target.alive:
-                raise V2RepositoryError("hunter target is not alive")
-            target.alive = False
-            target.death_cause = "hunter_shot"
-            target.death_window_seq = state.window_seq
             hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
             if hunter is None:
                 raise V2RepositoryError("hunter state is missing")
+            if target is None:
+                raise V2RepositoryError("hunter target is missing")
+            hunter_response_resolved = (hunter.state or {}).get("hunter_response_resolved")
+            if effect.state == "resolved":
+                if (
+                    effect.resolved_at is not None
+                    and (effect.payload or {}).get("outcome") == "killed"
+                    and not target.alive
+                    and target.death_cause == "hunter_shot"
+                    and target.death_window_seq == state.window_seq
+                    and hunter_response_resolved is True
+                ):
+                    return
+                raise V2RepositoryError("resolved hunter shoot intent is inconsistent")
+            if effect.state != "pending":
+                raise V2RepositoryError("hunter shoot intent is not pending or resolved")
+            if not target.alive:
+                raise V2RepositoryError("hunter target is not alive")
+            if hunter_response_resolved is True:
+                raise V2RepositoryError("pending hunter shoot intent is inconsistent")
+            target.alive = False
+            target.death_cause = "hunter_shot"
+            target.death_window_seq = state.window_seq
             hunter.state = {**(hunter.state or {}), "hunter_response_resolved": True}
+            effect.state = "resolved"
+            effect.resolved_at = _now()
+            effect.payload = {**(effect.payload or {}), "outcome": "killed"}
+            _append_event(
+                db,
+                game=game,
+                event_type="effect_intent_resolved",
+                audience=_effect_intent_audience(effect),
+                payload={
+                    "action_id": activation.action_id,
+                    "activation_id": activation.activation_id,
+                    "effect_intent_id": effect.effect_intent_id,
+                    "effect_type": effect.effect_type,
+                    "target_player_id": effect.target_player_id,
+                    "outcome": "killed",
+                },
+            )
             _append_event(
                 db,
                 game=game,

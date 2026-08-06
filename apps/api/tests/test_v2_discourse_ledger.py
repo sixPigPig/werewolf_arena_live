@@ -22,6 +22,46 @@ def _statement(
     }
 
 
+def _game_vote_reason_statements() -> list[dict[str, object]]:
+    return [
+        _statement(
+            1226,
+            speaker_ref="seat_8",
+            stage="day_debate_speech",
+            speech="10号，你当时为什么急着归12不归11？",
+        ),
+        _statement(
+            1248,
+            speaker_ref="seat_3",
+            stage="day_debate_speech",
+            speech=(
+                "1号在警徽流里要验，5号警徽票投1扎眼，10号我等会听你解释为什么急着归12不压一轮。"
+            ),
+        ),
+        _statement(
+            1259,
+            speaker_ref="seat_2",
+            stage="day_debate_speech",
+            speech="10号你等会必须解释为什么急着归12、不多压一轮。",
+        ),
+        _statement(
+            1270,
+            speaker_ref="seat_1",
+            stage="day_debate_speech",
+            speech="先回3号：9号警徽流留我，是因为没验过、想后置位补信息，不是查杀。",
+        ),
+        _statement(
+            1281,
+            speaker_ref="seat_10",
+            stage="day_debate_speech",
+            speech=(
+                "我先把话说明白。昨天归12，是根据当时信息判断："
+                "11、12发言几乎同模板，12又急着抗推5号，我作为警长必须给方向。"
+            ),
+        ),
+    ]
+
+
 def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
     ledger = build_public_discourse_ledger(
         [
@@ -231,6 +271,81 @@ def test_ledger_reuses_explicit_addressee_only_for_singular_you_continuation() -
         ("你们觉得呢？", None, "unresolved_target"),
         ("如果有人对跳怎么办？", None, "unresolved_target"),
     ]
+
+
+def test_ledger_v3_uses_nearest_question_target_without_changing_frozen_v2() -> None:
+    statement = _statement(
+        326,
+        speaker_ref="seat_8",
+        speech=(
+            "1号聊得挺稳，说要盯带节奏；6号嘛，说预言家聊不清警徽就替好人接住，"
+            "但我想问一句，你凭什么替好人接？你有判断狼人的专属渠道吗？"
+        ),
+    )
+
+    frozen_v2 = build_public_discourse_ledger(
+        [statement],
+        current_round_no=1,
+        ledger_schema_version=2,
+    )
+    current_v3 = build_public_discourse_ledger(
+        [statement],
+        current_round_no=1,
+        ledger_schema_version=3,
+    )
+
+    assert [question["addressed_to"] for question in frozen_v2["questions"]] == [
+        "seat_1",
+        "seat_1",
+    ]
+    assert [question["addressed_to"] for question in current_v3["questions"]] == [
+        "seat_6",
+        "seat_6",
+    ]
+    assert [question["exact_quote"] for question in current_v3["questions"]] == [
+        "1号聊得挺稳，说要盯带节奏；6号嘛，说预言家聊不清警徽就替好人接住，"
+        "但我想问一句，你凭什么替好人接？",
+        "你有判断狼人的专属渠道吗？",
+    ]
+
+
+def test_ledger_v3_resolves_game_vote_reason_questions_only_with_target_answer() -> None:
+    ledger = build_public_discourse_ledger(
+        _game_vote_reason_statements(),
+        current_round_no=1,
+        ledger_schema_version=3,
+    )
+
+    assert [question["question_id"] for question in ledger["questions"]] == [
+        "question_1226_1",
+        "question_1248_1",
+        "question_1259_1",
+    ]
+    assert {
+        (
+            question["addressed_to"],
+            question["topic"],
+            question["status"],
+            question.get("answer_source_event_id"),
+        )
+        for question in ledger["questions"]
+    } == {("seat_10", "vote_reason", "answered", "1281")}
+    assert len(ledger["relations"]) == 3
+    assert {relation["from_source_event_id"] for relation in ledger["relations"]} == {"1281"}
+    assert all(relation["from_source_event_id"] != "1270" for relation in ledger["relations"])
+
+
+def test_ledger_v2_preserves_frozen_vote_question_projection() -> None:
+    ledger = build_public_discourse_ledger(
+        _game_vote_reason_statements(),
+        current_round_no=1,
+        ledger_schema_version=2,
+    )
+
+    questions = {question["source_event_id"]: question for question in ledger["questions"]}
+    assert questions["1248"]["addressed_to"] == "seat_1"
+    assert questions["1248"]["topic"] == "investigation_reason"
+    assert questions["1248"]["answer_source_event_id"] == "1270"
 
 
 def test_discourse_model_view_treats_day_debate_as_public_speech() -> None:

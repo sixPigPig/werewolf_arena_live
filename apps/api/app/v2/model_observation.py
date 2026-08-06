@@ -23,6 +23,7 @@ _EXPLICIT_VOTER_LIST = (
 )
 _VOTER_LIST = rf"(?<![\d号])(?:{_EXPLICIT_VOTER_LIST}|{_SEAT_NUMBER})(?!\d)"
 _VOTE_PHASE_MARKER = r"(?:警上|警下|第一轮|第二轮|本轮|这轮|刚才|刚刚)?"
+_NUMERIC_VOTE_COUNT = re.compile(r"(?<![\d.])\d+(?:\.\d+)?\s*票")
 _VOTE_CLAIM_PATTERNS = (
     re.compile(
         rf"(?P<voters>{_VOTER_LIST})"
@@ -724,7 +725,7 @@ def _observe_public_vote_facts(
         "code": "public_vote_fact_contradiction",
         "severity": "warning",
         "confidence": "high",
-        "detector_version": 1,
+        "detector_version": 2,
         "authority": "judge_fact",
         "conflicts": conflicts,
         "effect": "observed_only",
@@ -803,8 +804,17 @@ def _vote_claims(
         sentence = sentence_match.group(0)
         if not sentence.strip():
             continue
+        numeric_vote_count_spans = tuple(
+            (match.start(), match.end()) for match in _NUMERIC_VOTE_COUNT.finditer(sentence)
+        )
         for pattern in _VOTE_CLAIM_PATTERNS:
             for match in pattern.finditer(sentence):
+                claim_start, claim_end = match.span()
+                if any(
+                    claim_start < count_end and count_start < claim_end
+                    for count_start, count_end in numeric_vote_count_spans
+                ):
+                    continue
                 if _is_uncertain_or_rejected_vote_claim(
                     sentence,
                     start=match.start(),

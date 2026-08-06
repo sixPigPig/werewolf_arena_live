@@ -27,6 +27,7 @@ from app.v2.model_client import (
     V2FailureDisposition,
     V2ModelDecision,
     V2ModelError,
+    V2ModelProgress,
     V2ModelTarget,
     V2QualityError,
     model_failure_disposition,
@@ -169,6 +170,31 @@ class V2SpeechSpec:
     defer_presentation: bool = False
     isolated_failure: bool = False
     batch_id: str | None = None
+    projection_at_seq: int | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.context, dict) and "projection_at_seq" in self.context:
+            raise ValueError("projection_at_seq must use the dedicated spec field")
+        if self.projection_at_seq is None:
+            return
+        if (
+            not isinstance(self.projection_at_seq, int)
+            or isinstance(self.projection_at_seq, bool)
+            or self.projection_at_seq <= 0
+        ):
+            raise ValueError("projection_at_seq must be a positive integer")
+        if not isinstance(self.batch_id, str) or not self.batch_id.strip():
+            raise ValueError("projection_at_seq requires a batch_id")
+        cutoff = (
+            self.context.get("public_cutoff_record_seq") if isinstance(self.context, dict) else None
+        )
+        if (
+            not isinstance(cutoff, int)
+            or isinstance(cutoff, bool)
+            or cutoff <= 0
+            or cutoff != self.projection_at_seq
+        ):
+            raise ValueError("projection_at_seq must match public_cutoff_record_seq")
 
 
 @dataclass(frozen=True)
@@ -202,6 +228,68 @@ class _PausedModelActionWaiter:
     resumed: asyncio.Event
     control_request_id: str | None = None
     resume_succeeded: bool = False
+
+
+@dataclass
+class _ModelAttemptProgressTrace:
+    provider_request_id: str | None = None
+    response_headers: dict[str, str] | None = None
+    first_token_ms: int | None = None
+    first_token_kind: str | None = None
+    first_visible_text_ms: int | None = None
+    response_headers_recorded: bool = False
+    first_token_recorded: bool = False
+    first_text_recorded: bool = False
+
+    def accept(self, progress: V2ModelProgress) -> tuple[str, dict[str, Any]] | None:
+        self.provider_request_id = progress.provider_request_id
+        if progress.stage == "response_headers":
+            if self.response_headers_recorded:
+                return None
+            self.response_headers_recorded = True
+            self.response_headers = dict(progress.response_headers or {})
+            return (
+                "model_response_headers_received",
+                {
+                    "provider_request_id": progress.provider_request_id,
+                    "response_headers": self.response_headers,
+                    "response_headers_ms": progress.elapsed_ms,
+                },
+            )
+        if progress.stage == "first_token":
+            if self.first_token_recorded:
+                return None
+            self.first_token_recorded = True
+            self.first_token_ms = progress.elapsed_ms
+            self.first_token_kind = progress.token_kind
+            return (
+                "model_first_token_received",
+                {
+                    "provider_request_id": progress.provider_request_id,
+                    "first_token_ms": progress.elapsed_ms,
+                    "first_token_kind": progress.token_kind,
+                },
+            )
+        if progress.stage == "first_text":
+            if self.first_text_recorded:
+                return None
+            self.first_text_recorded = True
+            self.first_visible_text_ms = progress.elapsed_ms
+            return (
+                "model_first_text_delta_received",
+                {
+                    "provider_request_id": progress.provider_request_id,
+                    "first_visible_text_ms": progress.elapsed_ms,
+                },
+            )
+        raise AssertionError(f"unknown model progress stage {progress.stage}")
+
+    def failure_stage(self) -> str:
+        if self.first_token_recorded:
+            return "stream"
+        if self.response_headers_recorded:
+            return "first_token"
+        return "response_headers"
 
 
 class V2ActionEngine:
@@ -494,9 +582,7 @@ class V2ActionEngine:
             expected_phase_id=spec.phase_id,
             expected_phase_state=spec.required_phase_state,
             audience=spec.audience,
-            context_audience=(
-                model_audience if spec.actor_kind == "player" else spec.audience
-            ),
+            context_audience=(model_audience if spec.actor_kind == "player" else spec.audience),
             activation_id=spec.activation_id,
             best_effort=spec.best_effort,
             non_blocking=spec.defer_presentation,
@@ -581,6 +667,7 @@ class V2ActionEngine:
                     players=spec.model_players,
                     model_context_contract=claim.model_context_contract,
                     action_record_seq=claim.action_record_seq,
+                    projection_at_seq=spec.projection_at_seq,
                 )
                 model_context = projected_model_context.context
                 observation_context = projected_model_context.observation_context
@@ -623,6 +710,34 @@ class V2ActionEngine:
                         cycle_attempt_no = cycle_attempt_index + 1
                         model_failure_recorded = False
                         attempt_started_at = time.monotonic()
+                        attempt_progress = _ModelAttemptProgressTrace()
+                        progress_method = getattr(
+                            type(self._model_client),
+                            "generate_action_decision_with_progress",
+                            None,
+                        )
+                        progress_capable = callable(progress_method)
+
+                        def persist_model_progress(
+                            progress: V2ModelProgress,
+                            *,
+                            observed_attempt_id: str = attempt_id,
+                        ) -> None:
+                            observed = attempt_progress.accept(progress)
+                            if observed is None:
+                                return
+                            event_type, progress_payload = observed
+                            self._repository.append_event(
+                                game_id=claim.game_id,
+                                event_type=event_type,
+                                audience=model_audience,
+                                payload={
+                                    "action_id": claim.action_id,
+                                    "attempt_id": observed_attempt_id,
+                                    **progress_payload,
+                                },
+                            )
+
                         self._repository.append_event(
                             game_id=claim.game_id,
                             event_type="model_request_started",
@@ -705,14 +820,24 @@ class V2ActionEngine:
                             )
                             try:
                                 async with asyncio.timeout(request_timeout):
-                                    model_decision = (
-                                        await self._model_client.generate_action_decision(
+                                    if progress_capable:
+                                        model_decision = await progress_method(
+                                            self._model_client,
                                             action_context=model_context,
                                             attempt_id=model_attempt_id,
                                             target=model_target,
                                             check_cancellation=check_cancellation,
+                                            on_progress=persist_model_progress,
                                         )
-                                    )
+                                    else:
+                                        model_decision = (
+                                            await self._model_client.generate_action_decision(
+                                                action_context=model_context,
+                                                attempt_id=model_attempt_id,
+                                                target=model_target,
+                                                check_cancellation=check_cancellation,
+                                            )
+                                        )
                                     _validate_model_target_decision(
                                         model_decision,
                                         spec=spec,
@@ -721,12 +846,31 @@ class V2ActionEngine:
                                 raise V2ModelError(
                                     "model_total_timeout",
                                     retryable=timeout_stage == "attempt_budget",
-                                    failure_stage=timeout_stage,
+                                    failure_stage=(
+                                        attempt_progress.failure_stage()
+                                        if progress_capable
+                                        else timeout_stage
+                                    ),
+                                    provider_request_id=(attempt_progress.provider_request_id),
+                                    first_token_seen=(attempt_progress.first_token_recorded),
+                                    response_headers_seen=(
+                                        attempt_progress.response_headers_recorded
+                                    ),
+                                    response_headers=(attempt_progress.response_headers),
+                                    first_token_ms=attempt_progress.first_token_ms,
+                                    first_token_kind=(attempt_progress.first_token_kind),
+                                    first_visible_text_ms=(attempt_progress.first_visible_text_ms),
+                                    timeout_scope=timeout_stage,
                                     elapsed_ms=round(
                                         (time.monotonic() - attempt_started_at) * 1000
                                     ),
                                 ) from exc
                         except V2ModelError as exc:
+                            _enrich_model_error_from_progress(
+                                exc,
+                                attempt_progress,
+                                progress_capable=progress_capable,
+                            )
                             # Validation errors are raised after the client has
                             # returned a decision object. Never carry that invalid
                             # object across an automatic or operator-triggered retry.
@@ -940,17 +1084,19 @@ class V2ActionEngine:
                     ),
                     decision_note=constrained_decision_note,
                 )
-                self._repository.append_event(
-                    game_id=claim.game_id,
-                    event_type="model_first_token_received",
-                    audience=model_audience,
-                    payload={
-                        "action_id": claim.action_id,
-                        "attempt_id": model_attempt_id,
-                        "provider_request_id": model_decision.provider_request_id,
-                        "first_token_ms": model_decision.first_token_ms,
-                    },
-                )
+                if not attempt_progress.first_token_recorded:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_first_token_received",
+                        audience=model_audience,
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "provider_request_id": model_decision.provider_request_id,
+                            "first_token_ms": model_decision.first_token_ms,
+                            "observation_source": "decision_result_fallback",
+                        },
+                    )
                 parsed_output: dict[str, Any] = {
                     "target_player_ref": (original_target if spec.model_players else None),
                     "target_player_id": resolved_target,
@@ -1463,8 +1609,13 @@ def _action_context(
             "strength": 0,
             "signals": [],
         },
-        **({"batch_id": spec.batch_id} if spec.batch_id is not None else {}),
         **(spec.context or {}),
+        **({"batch_id": spec.batch_id} if spec.batch_id is not None else {}),
+        **(
+            {"projection_at_seq": spec.projection_at_seq}
+            if spec.projection_at_seq is not None
+            else {}
+        ),
     }
 
 
@@ -1748,6 +1899,11 @@ def _model_failure_payload(
         "provider_request_id": exc.provider_request_id,
         "first_token_seen": exc.first_token_seen,
         "response_headers_seen": exc.response_headers_seen,
+        "response_headers": exc.response_headers or None,
+        "first_token_ms": exc.first_token_ms,
+        "first_token_kind": exc.first_token_kind,
+        "first_visible_text_ms": exc.first_visible_text_ms,
+        "timeout_scope": exc.timeout_scope,
         "elapsed_ms": exc.elapsed_ms,
         "retry_after_ms": (
             round(exc.retry_after_seconds * 1000) if exc.retry_after_seconds is not None else None
@@ -1756,6 +1912,27 @@ def _model_failure_payload(
     if isinstance(exc, V2QualityError) and exc.raw_response is not None:
         payload["raw_response"] = exc.raw_response
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _enrich_model_error_from_progress(
+    exc: V2ModelError,
+    progress: _ModelAttemptProgressTrace,
+    *,
+    progress_capable: bool,
+) -> None:
+    if exc.provider_request_id is None and progress.provider_request_id is not None:
+        exc.provider_request_id = progress.provider_request_id
+    if progress.response_headers_recorded:
+        exc.response_headers_seen = True
+        exc.response_headers = dict(progress.response_headers or {})
+    if progress.first_token_recorded:
+        exc.first_token_seen = True
+        exc.first_token_ms = progress.first_token_ms
+        exc.first_token_kind = progress.first_token_kind
+    if progress.first_text_recorded:
+        exc.first_visible_text_ms = progress.first_visible_text_ms
+    if progress_capable and exc.failure_stage is None:
+        exc.failure_stage = progress.failure_stage()
 
 
 def _model_retry_delay_seconds(

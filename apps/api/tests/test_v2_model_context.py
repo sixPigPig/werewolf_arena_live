@@ -25,6 +25,7 @@ from app.v2.model_context_contract import (
     legacy_v8_prompt_v3_model_context_contract,
     supports_model_context_contract,
     v9_model_context_contract,
+    v9_prompt_v2_model_context_contract,
 )
 
 
@@ -137,7 +138,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
     assert projected["model_context_schema_version"] == 9
-    assert projected["prompt_template_version"] == 1
+    assert projected["prompt_template_version"] == 2
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
@@ -204,7 +205,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] is None
     assert metadata["model_context_schema_version"] == 9
-    assert metadata["prompt_template_version"] == 1
+    assert metadata["prompt_template_version"] == 2
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
@@ -730,6 +731,7 @@ def test_supported_model_context_contract_set_includes_all_frozen_readers() -> N
         legacy_v8_prompt_v2_model_context_contract(),
         legacy_v8_prompt_v3_model_context_contract(),
         v9_model_context_contract(),
+        v9_prompt_v2_model_context_contract(),
     ):
         assert supports_model_context_contract({"model_context_contract": contract})
 
@@ -1661,6 +1663,7 @@ def test_public_rule_contract_exposes_single_wolf_and_disabled_sheriff() -> None
         "eliminated_players_can_act_in_later_windows": False,
         "death_triggered_exceptions": [],
     }
+    assert "win_condition_contract" not in contract
     assert contract["roles"] == [
         {
             "role_key": "werewolf",
@@ -1714,6 +1717,100 @@ def test_public_rule_contract_exposes_single_wolf_and_disabled_sheriff() -> None
         "can_repeat_previous_night_target": False,
         "successful_protection_effect": ("若守护目标当夜受到狼人攻击，该目标不会因这次攻击出局。"),
     }
+
+
+def test_v9_prompt_v2_dead_hunter_sees_public_slaughter_boundaries() -> None:
+    rule = {
+        "id": "classic_12",
+        "name": "经典 12 人局",
+        "version": "1",
+        "player_count": 12,
+        "roles": [
+            {"role": "狼人", "count": 4, "team": "werewolves"},
+            {"role": "村民", "count": 4, "team": "villagers"},
+            {"role": "预言家", "count": 1, "team": "villagers"},
+            {"role": "女巫", "count": 1, "team": "villagers"},
+            {"role": "猎人", "count": 1, "team": "villagers"},
+            {"role": "白痴", "count": 1, "team": "villagers"},
+        ],
+        "win_condition": "slaughter_side",
+        "reveal_policy": "hidden",
+        "sheriff_enabled": True,
+    }
+    action_context = {
+        **build_actor_information(
+            player_id="system-player-01",
+            seat=2,
+            role_key="hunter",
+            team="villagers",
+            persona={},
+            alive=False,
+            sheriff_player_id=None,
+            sheriff_badge_state="unassigned",
+            rule=rule,
+            current_action_type="hunter_death_shot",
+        ),
+        "action_type": "hunter_death_shot",
+        "objective": "决定是否发动猎人技能；发动时选择目标。",
+        "round_no": 1,
+        "public_rule_contract": build_public_rule_contract(rule=rule, max_rounds=8),
+        "public_match_state": {
+            "round_no": 1,
+            "alive_player_count": 2,
+            "alive_player_ids": ["system-player-07", "system-player-09"],
+            "eliminated_player_count": 1,
+            "eliminated_player_ids": ["system-player-01"],
+            "identity_information_included": False,
+        },
+        "candidates": [
+            {"player_id": "system-player-07", "seat": 1, "display_name": "乔宁"},
+            {"player_id": "system-player-09", "seat": 4, "display_name": "唐梨"},
+        ],
+        "public_history": [],
+        "output_contract": {
+            "kind": "target",
+            "target_policy": {"mode": "optional"},
+            "speech": {"mode": "forbidden"},
+            "decision_note": {"mode": "optional", "max_chars": 120},
+        },
+    }
+
+    projected_v2 = project_model_action_context_with_metadata(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=v9_prompt_v2_model_context_contract(),
+    )
+    contract = projected_v2.context["rules"]["win_condition_contract"]
+
+    assert "win_condition_contract" not in action_context["public_rule_contract"]
+    assert projected_v2.context["prompt_template_version"] == 2
+    assert projected_v2.projection_metadata["ledger_schema_version"] == 3
+    assert contract["mode"] == "slaughter_side"
+    assert contract["evaluation_order"] == ["villagers", "werewolves"]
+    assert contract["groups"]["living_villagers"] == {"role_keys": ["villager"]}
+    assert contract["groups"]["living_gods"] == {"role_keys": ["seer", "witch", "hunter", "idiot"]}
+    assert [
+        condition["boundary"] for condition in contract["werewolves_victory"]["conditions"]
+    ] == ["slaughter_villagers", "slaughter_gods"]
+    assert contract["post_elimination_resolution"] == {
+        "check": "after_each_elimination_before_next_ordinary_action",
+        "outcome_changing_death_triggers": "resolve_before_final_result",
+    }
+    assert projected_v2.observation_context["hard_rules"]["win_condition_contract"] == contract
+    serialized_contract = json.dumps(contract, ensure_ascii=False)
+    assert "current_role_counts" not in serialized_contract
+    assert "strategy" not in serialized_contract
+    assert "instruction" not in serialized_contract
+
+    projected_v1 = project_model_action_context_with_metadata(
+        action_context,
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+    )
+    assert projected_v1.context["prompt_template_version"] == 1
+    assert projected_v1.projection_metadata["ledger_schema_version"] == 2
+    assert "win_condition_contract" not in projected_v1.context["rules"]
+    assert "win_condition_contract" not in projected_v1.observation_context["hard_rules"]
 
 
 def test_public_match_state_contains_only_public_liveness() -> None:
@@ -1871,6 +1968,36 @@ def test_v9_prompt_explains_compact_question_reference_semantics() -> None:
     assert "问题之前已有的相关说明，不是对后来问题的回答" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
     assert len(system_text) < 600
+
+
+def test_v9_prompt_v2_identifies_the_public_win_condition_contract() -> None:
+    payload = build_model_request_payload(
+        {
+            "model_context_schema_version": 9,
+            "prompt_template_version": 2,
+            "task": {"type": "hunter_death_shot", "goal": "决定是否发动猎人技能。"},
+            "self": {"identity": {"player_id": "seat_2", "role_key": "hunter"}},
+            "rules": {"win_condition_contract": {"mode": "slaughter_side"}},
+            "state": {"round_no": 1, "as_of_seq": 472},
+            "known_events": {
+                "schema_version": 3,
+                "events": [],
+                "questions": [],
+                "relations": [],
+            },
+            "response": {
+                "kind": "target",
+                "target_policy": {"mode": "optional"},
+                "speech": {"mode": "forbidden"},
+            },
+        },
+        decision=True,
+        model_id="test-model",
+    )
+    system_text = payload["input"][0]["content"][0]["text"]
+
+    assert "rules.win_condition_contract 是本局公开胜负机械合同" in system_text
+    assert "evaluation_order 和 post_elimination_resolution" in system_text
 
 
 def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
@@ -2056,6 +2183,109 @@ def test_actor_information_separates_owned_abilities_from_consumed_resources() -
     assert night_runtime["witch.poison"]["remaining_uses"] == 1
     assert night_runtime["witch.poison"]["in_current_action_window"] is True
     assert night_runtime["witch.poison"]["can_execute_now"] is True
+
+
+def _actor_runtime_ability(
+    *,
+    role_key: str,
+    alive: bool,
+    current_action_type: str,
+    private_facts: list[dict[str, object]] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    information = build_actor_information(
+        player_id="system-player-01",
+        seat=2,
+        role_key=role_key,
+        team="villagers",
+        persona={},
+        alive=alive,
+        sheriff_player_id=None,
+        sheriff_badge_state="held",
+        rule={},
+        private_facts=private_facts,
+        current_action_type=current_action_type,
+    )
+    runtime_state = information["ability_runtime_state"]
+    ability = next(
+        item
+        for item in runtime_state["abilities"]
+        if item["ability_id"] == ("hunter.death_shot" if role_key == "hunter" else "witch.poison")
+    )
+    return information, ability
+
+
+def test_dead_hunter_can_execute_in_ability_death_reaction_window() -> None:
+    information, ability = _actor_runtime_ability(
+        role_key="hunter",
+        alive=False,
+        current_action_type="ability_hunter.death_shot_decision",
+    )
+
+    assert information["current_state_restrictions"]["alive"] is False
+    assert information["ability_runtime_state"]["current_action_ability_id"] == "hunter.death_shot"
+    assert ability["in_current_action_window"] is True
+    assert ability["can_execute_now"] is True
+    assert ability["unavailable_now_reason"] is None
+
+
+def test_dead_hunter_can_execute_in_legacy_day_death_reaction_window() -> None:
+    information, ability = _actor_runtime_ability(
+        role_key="hunter",
+        alive=False,
+        current_action_type="hunter_death_shot",
+    )
+
+    assert information["ability_runtime_state"]["current_action_ability_id"] == "hunter.death_shot"
+    assert ability["in_current_action_window"] is True
+    assert ability["can_execute_now"] is True
+    assert ability["unavailable_now_reason"] is None
+
+
+def test_dead_hunter_cannot_execute_outside_death_reaction_window() -> None:
+    _, ability = _actor_runtime_ability(
+        role_key="hunter",
+        alive=False,
+        current_action_type="day_debate_speech",
+    )
+
+    assert ability["in_current_action_window"] is False
+    assert ability["can_execute_now"] is False
+    assert ability["unavailable_now_reason"] == "actor_not_alive"
+
+
+def test_dead_actor_cannot_execute_non_death_reaction_ability() -> None:
+    _, ability = _actor_runtime_ability(
+        role_key="witch",
+        alive=False,
+        current_action_type="ability_witch.poison_decision",
+    )
+
+    assert ability["in_current_action_window"] is True
+    assert ability["can_execute_now"] is False
+    assert ability["unavailable_now_reason"] == "actor_not_alive"
+
+
+def test_consumed_death_reaction_ability_stays_unavailable() -> None:
+    _, ability = _actor_runtime_ability(
+        role_key="hunter",
+        alive=False,
+        current_action_type="ability_hunter.death_shot_decision",
+        private_facts=[
+            {
+                "fact_type": "private_ability_action_committed",
+                "payload": {
+                    "ability_id": "hunter.death_shot",
+                    "result": {"shot_used": True},
+                },
+            }
+        ],
+    )
+
+    assert ability["resource_status"] == "consumed"
+    assert ability["remaining_uses"] == 0
+    assert ability["in_current_action_window"] is True
+    assert ability["can_execute_now"] is False
+    assert ability["unavailable_now_reason"] == "resource_consumed"
 
 
 def test_model_context_states_single_wolf_rule_without_generic_teammate_prompt() -> None:

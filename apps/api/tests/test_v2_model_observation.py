@@ -452,6 +452,7 @@ def test_public_vote_claim_is_compared_with_authoritative_timeline() -> None:
     assert observation["code"] == "public_vote_fact_contradiction"
     assert observation["effect"] == "observed_only"
     assert observation["authority"] == "judge_fact"
+    assert observation["detector_version"] == 2
     assert observation["conflicts"] == [
         {
             "voter_ref": "seat_2",
@@ -594,6 +595,58 @@ def test_multi_digit_seat_without_suffix_is_not_truncated() -> None:
     conflict = observations[0]["conflicts"][0]
     assert conflict["voter_ref"] == "seat_12"
     assert conflict["claimed_target_ref"] == "seat_10"
+
+
+@pytest.mark.parametrize(
+    "speech",
+    ["7票归12。", "7.5票归12。", "7号投了1票给12。"],
+)
+def test_numeric_vote_expression_is_not_parsed_as_a_voter_claim(speech: str) -> None:
+    assert _vote_claims(speech, model_context=None) == []
+
+
+@pytest.mark.parametrize("speech", ["7的票归12。", "7号的票归12。"])
+def test_explicit_voter_possessive_vote_claim_is_preserved(speech: str) -> None:
+
+    assert _vote_claims(speech, model_context=None) == [
+        {
+            "claimed_voter_refs": ["seat_7"],
+            "claimed_target_ref": "seat_12",
+            "evidence": speech,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    ["7票归12。", "7.5票归12。", "7号投了1票给12。"],
+)
+def test_numeric_vote_expression_does_not_emit_vote_fact_contradiction(speech: str) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context={
+                "public_timeline": {
+                    "events": [
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_5",
+                            "target_ref": "seat_10",
+                        },
+                        {
+                            "kind": "day_vote",
+                            "authority": "judge_fact",
+                            "voter_ref": "seat_7",
+                            "target_ref": "seat_10",
+                        },
+                    ]
+                }
+            },
+        )
+        == []
+    )
 
 
 def test_plain_multi_voter_give_claim_is_preserved() -> None:

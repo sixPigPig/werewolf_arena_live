@@ -42,6 +42,9 @@ _DIRECT_QUESTION = re.compile(
     r"(?:我(?:现在|想|要)?问|请.{0,12}回答|"
     r"你.{0,18}(?:谁|什么|怎么|为什么|能不能|是否|哪|几号|号码))"
 )
+_DIRECT_SINGULAR_QUESTION = re.compile(
+    r"你(?!们)[^。！？!?]{0,18}(?:谁|什么|怎么|为什么|为何|能不能|是否|哪|几号|号码)"
+)
 _SINGULAR_ADDRESSEE_CONTINUATION = re.compile(r"^\s*你(?!们)")
 _OTHER_QUESTION_REPORT = re.compile(r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:问|追问)")
 _SECONDARY_REPORT = re.compile(
@@ -56,6 +59,12 @@ _VOTE_TARGET = re.compile(
     r"(?:投|票给|归票(?:给)?|今天出|先出)"
     r"(?P<seat>2[0-9]|1[0-9]|[1-9])号"
 )
+_VOTE_ACTION = re.compile(
+    r"(?:投(?:给)?|票(?:投|给)?|归(?:票)?(?:给)?|出)\s*(?:了)?\s*"
+    r"(?:2[0-9]|1[0-9]|[1-9])号?"
+)
+_VOTE_REASON_QUESTION = re.compile(r"(?:为什么|为何|解释|理由|依据|凭什么)")
+_VOTE_REASON_ANSWER = re.compile(r"(?:因为|根据|出于|理由是|判断|考虑|所以|依据)")
 _ASSESSMENT_TERMS = (
     "怀疑",
     "认下",
@@ -93,6 +102,7 @@ def build_public_discourse_ledger(
     *,
     current_round_no: int,
     actor_ref: str | None = None,
+    ledger_schema_version: int = DISCOURSE_LEDGER_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     del actor_ref
     utterances = _normalize_utterances(statements)
@@ -115,6 +125,7 @@ def build_public_discourse_ledger(
                 sentence=sentence,
                 sentence_index=sentence_index,
                 last_addressed_to=last_addressed_to,
+                ledger_schema_version=ledger_schema_version,
             )
             if question is not None:
                 questions.append(question)
@@ -138,7 +149,7 @@ def build_public_discourse_ledger(
     )
 
     return {
-        "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "ledger_schema_version": ledger_schema_version,
         "source_rules": {
             "judge_facts": "authoritative",
             "player_claims": "unverified_even_when_repeated",
@@ -227,11 +238,13 @@ def _extract_question(
     sentence: str,
     sentence_index: int,
     last_addressed_to: str | None,
+    ledger_schema_version: int,
 ) -> tuple[dict[str, Any] | None, str | None]:
     speaker_ref = str(utterance["speaker_ref"])
-    addressed_to = _addressed_to(
-        sentence,
-        speaker_ref=speaker_ref,
+    addressed_to = (
+        _addressed_to_v3(sentence, speaker_ref=speaker_ref)
+        if ledger_schema_version >= 3
+        else _addressed_to(sentence, speaker_ref=speaker_ref)
     )
     if addressed_to is not None:
         last_addressed_to = addressed_to
@@ -253,6 +266,11 @@ def _extract_question(
         and _SINGULAR_ADDRESSEE_CONTINUATION.search(sentence) is not None
     ):
         target_ref = last_addressed_to
+    topic_source = (
+        _question_focus(sentence, addressed_to=target_ref)
+        if ledger_schema_version >= 3
+        else sentence
+    )
     source_id = str(utterance["source_event_id"])
     question = {
         "question_id": f"question_{source_id}_{sentence_index}",
@@ -264,7 +282,10 @@ def _extract_question(
         "addressed_to": target_ref,
         "asked_in": utterance["occurred_in"],
         "stage": utterance["stage"],
-        "topic": _question_topic(sentence),
+        "topic": _question_topic(
+            topic_source,
+            vote_reason_enabled=ledger_schema_version >= 3,
+        ),
         "exact_quote": sentence,
         "status": "open" if target_ref is not None else "unresolved_target",
         "confirmation_status": "speaker_asked_publicly",
@@ -292,7 +313,47 @@ def _addressed_to(sentence: str, *, speaker_ref: str) -> str | None:
     return explicit[0] if explicit else None
 
 
-def _question_topic(sentence: str) -> str:
+def _addressed_to_v3(sentence: str, *, speaker_ref: str) -> str | None:
+    anchors = list(_DIRECT_SINGULAR_QUESTION.finditer(sentence))
+    if anchors:
+        anchor = anchors[-1].start()
+        preceding = [
+            f"seat_{match.group('seat')}"
+            for match in _ADDRESSED_SEAT.finditer(sentence)
+            if match.end() <= anchor and f"seat_{match.group('seat')}" != speaker_ref
+        ]
+        if preceding:
+            return preceding[-1]
+    return _addressed_to(sentence, speaker_ref=speaker_ref)
+
+
+def _question_focus(sentence: str, *, addressed_to: str | None) -> str:
+    if not isinstance(addressed_to, str) or not addressed_to.startswith("seat_"):
+        return sentence
+    seat = addressed_to.removeprefix("seat_")
+    if not seat.isdigit():
+        return sentence
+    target_matches = [
+        match for match in _ADDRESSED_SEAT.finditer(sentence) if match.group("seat") == seat
+    ]
+    if not target_matches:
+        return sentence
+    anchors = list(_DIRECT_SINGULAR_QUESTION.finditer(sentence))
+    if anchors:
+        anchor = anchors[-1].start()
+        preceding = [match for match in target_matches if match.end() <= anchor]
+        if preceding:
+            return sentence[preceding[-1].start() :]
+    return sentence[target_matches[0].start() :]
+
+
+def _question_topic(sentence: str, *, vote_reason_enabled: bool = False) -> str:
+    if (
+        vote_reason_enabled
+        and _VOTE_ACTION.search(sentence) is not None
+        and _VOTE_REASON_QUESTION.search(sentence) is not None
+    ):
+        return "vote_reason"
     if _INVESTIGATION.search(sentence):
         if any(term in sentence for term in ("为什么", "理由", "心路")):
             return "investigation_reason"
@@ -616,6 +677,11 @@ def speech_matches_question_topic(speech: str, *, topic: str) -> bool:
         )
     if topic in {"investigation_plan", "sheriff_plan"}:
         return _INVESTIGATION.search(speech) is not None or "警徽流" in speech
+    if topic == "vote_reason":
+        return (
+            _VOTE_ACTION.search(speech) is not None
+            and _VOTE_REASON_ANSWER.search(speech) is not None
+        )
     if topic == "vote_stance":
         return False
     return False

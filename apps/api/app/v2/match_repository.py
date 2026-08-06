@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -82,6 +83,14 @@ class V2ExileResult:
     winner_after_exile: str | None
 
 
+@dataclass(frozen=True)
+class V2DayVoteCommit:
+    voter_player_id: str
+    target_player_id: str
+    weight: float
+    decision_note: str | None
+
+
 class V2MatchRepository:
     def __init__(
         self,
@@ -143,8 +152,7 @@ class V2MatchRepository:
         decision_note: str | None,
         context: dict[str, Any] | None = None,
     ) -> str | None:
-        normalized_note = decision_note.strip() if isinstance(decision_note, str) else ""
-        if not normalized_note:
+        if not _normalized_decision_note(decision_note):
             return None
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
@@ -155,45 +163,84 @@ class V2MatchRepository:
             player = db.get(V2PlayerState, (game_id, player_id))
             if player is None or not player.alive:
                 raise V2RepositoryError("private action decision owner must be alive")
-            fact_id = f"v2_fact_{uuid4().hex[:16]}"
-            db.add(
-                V2KnowledgeFact(
-                    knowledge_fact_id=fact_id,
-                    game_id=game_id,
-                    source_activation_id=None,
-                    owner_scope="player",
-                    owner_id=player_id,
-                    fact_type="private_action_decision",
+            return _add_private_action_decision(
+                db,
+                game=game,
+                player_id=player_id,
+                round_no=round_no,
+                action_type=action_type,
+                decision=decision,
+                decision_note=decision_note,
+                context=context,
+            )
+
+    def finalize_day_vote_batch(
+        self,
+        *,
+        game_id: str,
+        phase_id: str,
+        phase_state: str,
+        round_no: int,
+        action_type: str,
+        batch_id: str,
+        public_cutoff_record_seq: int,
+        expected_voter_ids: tuple[str, ...],
+        votes: tuple[V2DayVoteCommit, ...],
+        decision_context: dict[str, Any],
+        resolution_payload: dict[str, Any],
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
+            _raise_if_stop_requested(db, game)
+            match = _match(db, game)
+            _validate_day_vote_batch(
+                db,
+                game=game,
+                match=match,
+                phase_id=phase_id,
+                phase_state=phase_state,
+                round_no=round_no,
+                action_type=action_type,
+                batch_id=batch_id,
+                public_cutoff_record_seq=public_cutoff_record_seq,
+                expected_voter_ids=expected_voter_ids,
+                votes=votes,
+                decision_context=decision_context,
+                resolution_payload=resolution_payload,
+            )
+            for vote in votes:
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="day_vote_committed",
+                    audience="all",
                     payload={
-                        "schema_version": 1,
                         "round_no": round_no,
                         "action_type": action_type,
-                        "decision": {
-                            key: value for key, value in decision.items() if value is not None
-                        },
-                        "declared_reason": {
-                            "text": normalized_note,
-                            "epistemic_status": "actor_declared_reason",
-                        },
-                        **({"context": dict(context)} if context else {}),
+                        "voter_player_id": vote.voter_player_id,
+                        "target_player_id": vote.target_player_id,
+                        "weight": vote.weight,
+                        "batch_id": batch_id,
+                        "public_cutoff_record_seq": public_cutoff_record_seq,
                     },
                 )
-            )
+                _add_private_action_decision(
+                    db,
+                    game=game,
+                    player_id=vote.voter_player_id,
+                    round_no=round_no,
+                    action_type=action_type,
+                    decision={"target_player_id": vote.target_player_id},
+                    decision_note=vote.decision_note,
+                    context=decision_context,
+                )
             _append_event(
                 db,
                 game=game,
-                event_type="private_knowledge_recorded",
-                audience="god_view",
-                payload={
-                    "knowledge_fact_id": fact_id,
-                    "owner_scope": "player",
-                    "owner_id": player_id,
-                    "fact_type": "private_action_decision",
-                    "round_no": round_no,
-                    "action_type": action_type,
-                },
+                event_type="day_vote_resolved",
+                audience="all",
+                payload=resolution_payload,
             )
-            return fact_id
 
     def record_private_round_memory(
         self,
@@ -909,6 +956,194 @@ def _run(db: Session, run_id: str) -> V2GameRun:
     if run is None:
         raise V2RepositoryError(f"unknown run {run_id}")
     return run
+
+
+def _normalized_decision_note(value: str | None) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _add_private_action_decision(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    player_id: str,
+    round_no: int,
+    action_type: str,
+    decision: dict[str, Any],
+    decision_note: str | None,
+    context: dict[str, Any] | None,
+) -> str | None:
+    normalized_note = _normalized_decision_note(decision_note)
+    if not normalized_note:
+        return None
+    fact_id = f"v2_fact_{uuid4().hex[:16]}"
+    db.add(
+        V2KnowledgeFact(
+            knowledge_fact_id=fact_id,
+            game_id=game.game_id,
+            source_activation_id=None,
+            owner_scope="player",
+            owner_id=player_id,
+            fact_type="private_action_decision",
+            payload={
+                "schema_version": 1,
+                "round_no": round_no,
+                "action_type": action_type,
+                "decision": {key: value for key, value in decision.items() if value is not None},
+                "declared_reason": {
+                    "text": normalized_note,
+                    "epistemic_status": "actor_declared_reason",
+                },
+                **({"context": dict(context)} if context else {}),
+            },
+        )
+    )
+    _append_event(
+        db,
+        game=game,
+        event_type="private_knowledge_recorded",
+        audience="god_view",
+        payload={
+            "knowledge_fact_id": fact_id,
+            "owner_scope": "player",
+            "owner_id": player_id,
+            "fact_type": "private_action_decision",
+            "round_no": round_no,
+            "action_type": action_type,
+        },
+    )
+    return fact_id
+
+
+def _validate_day_vote_batch(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    match: V2MatchState,
+    phase_id: str,
+    phase_state: str,
+    round_no: int,
+    action_type: str,
+    batch_id: str,
+    public_cutoff_record_seq: int,
+    expected_voter_ids: tuple[str, ...],
+    votes: tuple[V2DayVoteCommit, ...],
+    decision_context: dict[str, Any],
+    resolution_payload: dict[str, Any],
+) -> None:
+    if (
+        game.phase_id != phase_id
+        or game.phase_state != phase_state
+        or not phase_id.startswith("day_")
+        or match.round_no != round_no
+    ):
+        raise V2RepositoryError("day vote phase changed before batch commit")
+    expected_batch_id = f"{phase_id}:{action_type}:{public_cutoff_record_seq}:vote"
+    if batch_id != expected_batch_id:
+        raise V2RepositoryError("day vote batch identity is invalid")
+    if (
+        not isinstance(public_cutoff_record_seq, int)
+        or isinstance(public_cutoff_record_seq, bool)
+        or public_cutoff_record_seq < 0
+        or public_cutoff_record_seq > game.last_record_seq
+    ):
+        raise V2RepositoryError("day vote public cutoff is invalid")
+    voter_ids = tuple(vote.voter_player_id for vote in votes)
+    if len(set(expected_voter_ids)) != len(expected_voter_ids) or voter_ids != expected_voter_ids:
+        raise V2RepositoryError("day vote batch is incomplete or out of order")
+    if len(set(voter_ids)) != len(voter_ids):
+        raise V2RepositoryError("day vote batch contains duplicate voters")
+    if (
+        decision_context.get("batch_id") != batch_id
+        or decision_context.get("public_cutoff_record_seq") != public_cutoff_record_seq
+    ):
+        raise V2RepositoryError("day vote private decision context is inconsistent")
+    expected_resolution_values = {
+        "round_no": round_no,
+        "action_type": action_type,
+        "batch_id": batch_id,
+        "public_cutoff_record_seq": public_cutoff_record_seq,
+    }
+    if any(
+        resolution_payload.get(key) != value for key, value in expected_resolution_values.items()
+    ):
+        raise V2RepositoryError("day vote resolution payload is inconsistent")
+    eligible_voter_ids = resolution_payload.get("eligible_voter_ids")
+    if (
+        not isinstance(eligible_voter_ids, list)
+        or any(not isinstance(player_id, str) for player_id in eligible_voter_ids)
+        or len(set(eligible_voter_ids)) != len(eligible_voter_ids)
+        or set(eligible_voter_ids) != set(expected_voter_ids)
+    ):
+        raise V2RepositoryError("day vote eligible voter set is inconsistent")
+    candidate_ids = resolution_payload.get("candidate_player_ids")
+    if (
+        not isinstance(candidate_ids, list)
+        or any(not isinstance(player_id, str) for player_id in candidate_ids)
+        or len(set(candidate_ids)) != len(candidate_ids)
+    ):
+        raise V2RepositoryError("day vote candidate set is invalid")
+    candidate_id_set = set(candidate_ids)
+    computed_totals: dict[str, float] = {}
+    computed_weights: dict[str, float] = {}
+    for vote in votes:
+        if vote.target_player_id == vote.voter_player_id or vote.target_player_id not in (
+            candidate_id_set
+        ):
+            raise V2RepositoryError("day vote target is invalid")
+        voter = db.get(V2PlayerState, (game.game_id, vote.voter_player_id))
+        target = db.get(V2PlayerState, (game.game_id, vote.target_player_id))
+        if voter is None or not voter.alive:
+            raise V2RepositoryError("day vote voter must be alive")
+        if target is None or not target.alive:
+            raise V2RepositoryError("day vote target must be alive")
+        weight = float(vote.weight)
+        if not math.isfinite(weight) or weight <= 0:
+            raise V2RepositoryError("day vote weight must be positive")
+        computed_weights[vote.voter_player_id] = weight
+        computed_totals[vote.target_player_id] = (
+            computed_totals.get(vote.target_player_id, 0.0) + weight
+        )
+    if resolution_payload.get("voter_weights") != computed_weights:
+        raise V2RepositoryError("day vote voter weights are inconsistent")
+    if resolution_payload.get("totals") != computed_totals:
+        raise V2RepositoryError("day vote totals are inconsistent")
+    leaders = []
+    if computed_totals:
+        highest = max(computed_totals.values())
+        leaders = sorted(
+            player_id for player_id, total in computed_totals.items() if total == highest
+        )
+    if resolution_payload.get("leaders") != leaders:
+        raise V2RepositoryError("day vote leaders are inconsistent")
+    existing_vote_events = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
+            )
+        )
+    )
+    if any(
+        isinstance(event.payload, dict) and event.payload.get("batch_id") == batch_id
+        for event in existing_vote_events
+    ):
+        raise V2RepositoryError("day vote batch already has durable output")
+    existing_private_decisions = list(
+        db.scalars(
+            select(V2KnowledgeFact).where(
+                V2KnowledgeFact.game_id == game.game_id,
+                V2KnowledgeFact.fact_type == "private_action_decision",
+            )
+        )
+    )
+    if any(
+        isinstance(fact.payload, dict)
+        and isinstance(fact.payload.get("context"), dict)
+        and fact.payload["context"].get("batch_id") == batch_id
+        for fact in existing_private_decisions
+    ):
+        raise V2RepositoryError("day vote batch already has durable private decisions")
 
 
 def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:

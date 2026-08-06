@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_client import V2ModelClient, V2ModelError, V2QualityError
+from app.v2.model_client import (
+    V2ModelClient,
+    V2ModelError,
+    V2ModelProgress,
+    V2QualityError,
+)
 
 
 def _client(
@@ -539,6 +544,81 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["max_tokens"] == 2048
     assert "temperature" not in payload
+
+
+def test_model_progress_reports_headers_reasoning_token_and_first_visible_text() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "x-request-id": "header-request-id",
+                "ratelimit-remaining": "23",
+                "x-ratelimit-remaining-requests": "17",
+                "authorization": "Bearer must-not-persist",
+                "cookie": "provider-session=must-not-persist",
+                "set-cookie": "provider-session=must-not-persist",
+                "www-authenticate": "Bearer must-not-persist",
+                "x-api-key": "must-not-persist",
+                "x-trace-api-key": "must-not-persist",
+                "x-trace-user-email": "must-not-persist@example.test",
+                "x-ratelimit-api-key": "must-not-persist",
+                "ratelimit-custom-secret": "must-not-persist",
+                "x-unlisted-provider-metadata": "must-not-persist",
+            },
+            text=(
+                'data: {"id":"chatcmpl-progress","choices":[{"delta":'
+                '{"reasoning_content":"thinking"}}]}\n\n'
+                'data: {"id":"chatcmpl-progress","choices":[{"delta":'
+                '{"content":"{\\"speech\\":\\"进度响应\\"}"}}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+    progress: list[V2ModelProgress] = []
+
+    decision = asyncio.run(
+        client.generate_action_decision_with_progress(
+            action_context=_action_context(),
+            attempt_id="v2_model_test_progress",
+            target=target,
+            on_progress=progress.append,
+        )
+    )
+
+    assert decision.speech == "进度响应"
+    assert [item.stage for item in progress] == [
+        "response_headers",
+        "first_token",
+        "first_text",
+    ]
+    headers = progress[0].response_headers
+    assert headers is not None
+    assert headers["x-request-id"] == "header-request-id"
+    assert headers["ratelimit-remaining"] == "23"
+    assert headers["x-ratelimit-remaining-requests"] == "17"
+    assert {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "www-authenticate",
+        "x-api-key",
+        "x-trace-api-key",
+        "x-trace-user-email",
+        "x-ratelimit-api-key",
+        "ratelimit-custom-secret",
+        "x-unlisted-provider-metadata",
+    }.isdisjoint(headers)
+    assert progress[1].provider_request_id == "chatcmpl-progress"
+    assert progress[1].token_kind == "reasoning"
+    assert progress[2].provider_request_id == "chatcmpl-progress"
+    assert progress[2].token_kind == "text"
+    assert progress[0].elapsed_ms <= progress[1].elapsed_ms <= progress[2].elapsed_ms
 
 
 def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> None:

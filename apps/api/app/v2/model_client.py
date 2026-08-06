@@ -46,6 +46,11 @@ class V2ModelError(RuntimeError):
         provider_request_id: str | None = None,
         first_token_seen: bool = False,
         response_headers_seen: bool = False,
+        response_headers: dict[str, str] | None = None,
+        first_token_ms: int | None = None,
+        first_token_kind: str | None = None,
+        first_visible_text_ms: int | None = None,
+        timeout_scope: str | None = None,
         elapsed_ms: int | None = None,
         retry_after_seconds: float | None = None,
     ) -> None:
@@ -59,6 +64,11 @@ class V2ModelError(RuntimeError):
         self.provider_request_id = provider_request_id
         self.first_token_seen = first_token_seen
         self.response_headers_seen = response_headers_seen
+        self.response_headers = dict(response_headers or {})
+        self.first_token_ms = first_token_ms
+        self.first_token_kind = first_token_kind
+        self.first_visible_text_ms = first_visible_text_ms
+        self.timeout_scope = timeout_scope
         self.elapsed_ms = elapsed_ms
         self.retry_after_seconds = retry_after_seconds
 
@@ -89,6 +99,19 @@ class V2ModelDecision:
     boolean_field: str | None = None
     boolean_value: bool | None = None
     repair_kind: str | None = None
+
+
+V2ModelProgressStage = Literal["response_headers", "first_token", "first_text"]
+V2ModelTokenKind = Literal["reasoning", "text"]
+
+
+@dataclass(frozen=True)
+class V2ModelProgress:
+    stage: V2ModelProgressStage
+    provider_request_id: str
+    elapsed_ms: int
+    response_headers: dict[str, str] | None = None
+    token_kind: V2ModelTokenKind | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +154,36 @@ _RETRYABLE_TRANSPORT_ERRORS = (
     httpx.PoolTimeout,
     OSError,
 )
+_DIAGNOSTIC_RESPONSE_HEADER_NAMES = frozenset(
+    {
+        "content-type",
+        "date",
+        "ratelimit-limit",
+        "ratelimit-policy",
+        "ratelimit-remaining",
+        "ratelimit-reset",
+        "request-id",
+        "retry-after",
+        "server",
+        "traceparent",
+        "tracestate",
+        "x-envoy-upstream-service-time",
+        "x-ratelimit-limit",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+        "x-request-id",
+        "x-response-time",
+        "x-tt-logid",
+    }
+)
+_MAX_DIAGNOSTIC_RESPONSE_HEADERS = 64
+_MAX_DIAGNOSTIC_RESPONSE_HEADER_VALUE_CHARS = 1_024
 
 
 def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
@@ -271,6 +324,23 @@ class V2ModelClient:
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision:
+        return await self.generate_action_decision_with_progress(
+            action_context=action_context,
+            attempt_id=attempt_id,
+            target=target,
+            check_cancellation=check_cancellation,
+            on_progress=None,
+        )
+
+    async def generate_action_decision_with_progress(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        target: V2ModelTarget,
+        check_cancellation: Callable[[], None] | None = None,
+        on_progress: Callable[[V2ModelProgress], None] | None = None,
+    ) -> V2ModelDecision:
         raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
             action_context=action_context,
             attempt_id=attempt_id,
@@ -278,6 +348,7 @@ class V2ModelClient:
             decision=True,
             target=target,
             check_cancellation=check_cancellation,
+            on_progress=on_progress,
         )
         output_contract = _decision_output_contract(action_context)
         try:
@@ -331,12 +402,14 @@ class V2ModelClient:
         decision: bool,
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None,
+        on_progress: Callable[[V2ModelProgress], None] | None,
     ) -> tuple[str, str, int, int]:
         _check(check_cancellation)
         route = self._routes[target.provider]
         loop = asyncio.get_running_loop()
         started = loop.time()
         first_token_at: float | None = None
+        first_text_at: float | None = None
         response_headers_seen = False
         provider_request_id = attempt_id
         text = ""
@@ -384,6 +457,16 @@ class V2ModelClient:
                             or response.headers.get("x-tt-logid")
                             or attempt_id
                         )
+                        response_headers = _diagnostic_response_headers(response.headers)
+                        if on_progress is not None:
+                            on_progress(
+                                V2ModelProgress(
+                                    stage="response_headers",
+                                    provider_request_id=provider_request_id,
+                                    elapsed_ms=round((loop.time() - started) * 1000),
+                                    response_headers=response_headers,
+                                )
+                            )
                         if response.status_code >= 400:
                             await response.aread()
                             raise V2ModelError(
@@ -458,10 +541,39 @@ class V2ModelClient:
                                 if first_token_at is None:
                                     first_token_at = loop.time()
                                     phase_timeout.reschedule(started + self._total_seconds)
+                                    if on_progress is not None:
+                                        on_progress(
+                                            V2ModelProgress(
+                                                stage="first_token",
+                                                provider_request_id=provider_request_id,
+                                                elapsed_ms=round((first_token_at - started) * 1000),
+                                                token_kind="reasoning",
+                                            )
+                                        )
                             if provider_event.text_delta:
                                 if first_token_at is None:
                                     first_token_at = loop.time()
                                     phase_timeout.reschedule(started + self._total_seconds)
+                                    if on_progress is not None:
+                                        on_progress(
+                                            V2ModelProgress(
+                                                stage="first_token",
+                                                provider_request_id=provider_request_id,
+                                                elapsed_ms=round((first_token_at - started) * 1000),
+                                                token_kind="text",
+                                            )
+                                        )
+                                if first_text_at is None and provider_event.text_delta.strip():
+                                    first_text_at = loop.time()
+                                    if on_progress is not None:
+                                        on_progress(
+                                            V2ModelProgress(
+                                                stage="first_text",
+                                                provider_request_id=provider_request_id,
+                                                elapsed_ms=round((first_text_at - started) * 1000),
+                                                token_kind="text",
+                                            )
+                                        )
                                 text += provider_event.text_delta
         except V2ModelError:
             raise
@@ -542,6 +654,18 @@ def _retry_after_seconds(value: str | None) -> float | None:
     except ValueError:
         return None
     return max(0.0, seconds)
+
+
+def _diagnostic_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    output: dict[str, str] = {}
+    for name, value in headers.multi_items():
+        normalized_name = name.lower()
+        if normalized_name not in _DIAGNOSTIC_RESPONSE_HEADER_NAMES:
+            continue
+        output[normalized_name] = value[:_MAX_DIAGNOSTIC_RESPONSE_HEADER_VALUE_CHARS]
+        if len(output) >= _MAX_DIAGNOSTIC_RESPONSE_HEADERS:
+            break
+    return output
 
 
 def _root_exception(exc: BaseException) -> BaseException:
@@ -861,10 +985,15 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
         )
     else:
         raise V2ModelError("model_decision_contract_invalid")
-    if (
-        action_context.get("model_context_schema_version") == 9
-        and action_context.get("prompt_template_version") == 1
-    ):
+    if action_context.get("model_context_schema_version") == 9 and action_context.get(
+        "prompt_template_version"
+    ) in {1, 2}:
+        win_condition_instruction = (
+            "rules.win_condition_contract 是本局公开胜负机械合同；"
+            "必须按 evaluation_order 和 post_elimination_resolution 理解其边界。"
+            if action_context.get("prompt_template_version") == 2
+            else ""
+        )
         system_text = (
             "你正在扮演一名狼人杀玩家。法官事实可信，玩家发言均为未核实说法；"
             "authority=actor_memory 是你先前生成的主观轮次记忆，可延续思路但不是法官事实。"
@@ -875,6 +1004,7 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
             "known_events.questions 和 relations 是对已提供事件的紧凑引用；"
             "reply_opportunity=awaiting_scheduled_turn 表示被问者尚未轮到发言，不表示拒绝回应。"
             "prior_relevant_event_refs 表示问题之前已有的相关说明，不是对后来问题的回答。"
+            f"{win_condition_instruction}"
             "策略、身份伪装和表达由你自主决定，不得使用未提供的私密信息。"
             f"{output_instruction}只能用“N号”称呼玩家，不得生成玩家姓名。"
         )
@@ -1171,9 +1301,7 @@ def _has_additional_json_document(raw: str) -> bool:
         if tail.startswith("```"):
             prefix = serialized[:start]
             after_fence = tail[3:].lstrip()
-            if "```" in prefix and not after_fence.startswith(
-                ("{", "```", "json\n", "json\r\n")
-            ):
+            if "```" in prefix and not after_fence.startswith(("{", "```", "json\n", "json\r\n")):
                 continue
             return True
     return False

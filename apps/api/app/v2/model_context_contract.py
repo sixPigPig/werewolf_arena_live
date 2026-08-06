@@ -4,11 +4,12 @@ from typing import Any
 
 
 MODEL_CONTEXT_SCHEMA_VERSION = 9
-PROMPT_TEMPLATE_VERSION = 1
+PROMPT_TEMPLATE_VERSION = 2
 MODEL_PROMPT_SCHEMA_VERSION = MODEL_CONTEXT_SCHEMA_VERSION
 KNOWN_EVENTS_SCHEMA_VERSION = 3
 PUBLIC_TIMELINE_SCHEMA_VERSION = 1
 DISCOURSE_LEDGER_SCHEMA_VERSION = 2
+CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION = 3
 DISCOURSE_MODEL_VIEW_SCHEMA_VERSION = 3
 MODEL_VIEW_SELECTOR_VERSION = 1
 
@@ -16,11 +17,15 @@ _CONTRACT_KEY = "model_context_contract"
 
 
 def current_model_context_contract() -> dict[str, int]:
+    return v9_prompt_v2_model_context_contract()
+
+
+def v9_prompt_v2_model_context_contract() -> dict[str, int]:
     return {
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
-        "ledger_schema_version": DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "ledger_schema_version": CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
         "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
     }
@@ -107,6 +112,7 @@ def supports_model_context_contract(
         _contract_tuple(legacy_v8_prompt_v2_model_context_contract()),
         _contract_tuple(legacy_v8_prompt_v3_model_context_contract()),
         _contract_tuple(v9_model_context_contract()),
+        _contract_tuple(v9_prompt_v2_model_context_contract()),
     }
 
 
@@ -124,7 +130,15 @@ def is_v8_model_context_contract(contract: dict[str, Any] | None) -> bool:
 
 
 def is_v9_model_context_contract(contract: dict[str, Any] | None) -> bool:
-    return _contract_tuple(contract) == _contract_tuple(v9_model_context_contract())
+    value = _contract_tuple(contract)
+    return value in {
+        _contract_tuple(v9_model_context_contract()),
+        _contract_tuple(v9_prompt_v2_model_context_contract()),
+    }
+
+
+def is_v9_prompt_v2_model_context_contract(contract: dict[str, Any] | None) -> bool:
+    return _contract_tuple(contract) == _contract_tuple(v9_prompt_v2_model_context_contract())
 
 
 def supports_current_model_context_contract(

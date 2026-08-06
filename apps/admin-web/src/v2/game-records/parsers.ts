@@ -10,6 +10,7 @@ import type {
   V2GameRun,
   V2ModelRequest,
   V2ModelActionRetryResult,
+  V2ModelRequestAudienceSource,
   V2ModelRequestPage,
   V2ModelRequestSummary,
   V2PlayerIdentity,
@@ -234,6 +235,29 @@ export function parseV2ModelRequestSummary(
   value: unknown,
 ): V2ModelRequestSummary {
   const record = object(value);
+  const audience = text(record.audience);
+  const storedAudience =
+    record.stored_audience === undefined
+      ? null
+      : nullableText(record.stored_audience);
+  const effectiveAudience =
+    record.effective_audience === undefined
+      ? audience
+      : text(record.effective_audience);
+  const audienceSource: V2ModelRequestAudienceSource =
+    record.audience_source === undefined
+      ? "legacy_unknown"
+      : oneOf(
+          record.audience_source,
+          [
+            "event_contract",
+            "event_contract_narrowed",
+            "presentation",
+            "legacy_event",
+            "action_context",
+            "legacy_unknown",
+          ] as const,
+        );
   return {
     attempt_id: text(record.attempt_id),
     attempt_no:
@@ -264,7 +288,10 @@ export function parseV2ModelRequestSummary(
     action_type: text(record.action_type),
     actor_kind: text(record.actor_kind),
     actor_id: text(record.actor_id),
-    audience: text(record.audience),
+    audience,
+    stored_audience: storedAudience,
+    effective_audience: effectiveAudience,
+    audience_source: audienceSource,
     request_kind: text(record.request_kind),
     model_id: nullableText(record.model_id),
     model_provider: nullableText(record.model_provider),
@@ -345,6 +372,22 @@ export function parseV2ModelRequestSummary(
       record.response_headers_seen === undefined
         ? null
         : nullableBoolean(record.response_headers_seen),
+    response_headers:
+      record.response_headers === undefined || record.response_headers === null
+        ? null
+        : stringRecord(record.response_headers),
+    first_token_kind:
+      record.first_token_kind === undefined
+        ? null
+        : nullableText(record.first_token_kind),
+    first_visible_text_ms:
+      record.first_visible_text_ms === undefined
+        ? null
+        : nullableInteger(record.first_visible_text_ms, 0),
+    timeout_scope:
+      record.timeout_scope === undefined
+        ? null
+        : nullableText(record.timeout_scope),
     failure_elapsed_ms:
       record.failure_elapsed_ms === undefined
         ? null
@@ -495,6 +538,12 @@ function nullableInteger(value: unknown, minimum: number): number | null {
 
 function nullableText(value: unknown): string | null {
   return value === null ? null : text(value);
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(object(value)).map(([key, item]) => [key, text(item)]),
+  );
 }
 
 function nullableBoolean(value: unknown): boolean | null {

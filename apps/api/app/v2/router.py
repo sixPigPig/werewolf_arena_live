@@ -162,9 +162,7 @@ def create_v2_game(
         "schema_version": 1,
         "mode": audio_mode,
         "source": (
-            "explicit_create_request"
-            if body.audio_mode is not None
-            else "legacy_runtime_default"
+            "explicit_create_request" if body.audio_mode is not None else "legacy_runtime_default"
         ),
     }
     lobby = body.lobby_snapshot
@@ -641,9 +639,7 @@ def list_admin_v2_games(
     database_now = database_utc_now(db)
     _set_admin_headers(request, response)
     return AdminV2GameListResponse(
-        items=[
-            _admin_game_item(record, db=db, now=database_now) for record in records
-        ],
+        items=[_admin_game_item(record, db=db, now=database_now) for record in records],
         pagination=AdminV2Pagination(
             page=page,
             page_size=page_size,
@@ -1359,7 +1355,9 @@ def _admin_model_requests(
         if isinstance(item.action_id, str) and item.action_id
     }
     responses: dict[str, object] = {}
+    response_headers: dict[str, object] = {}
     first_tokens: dict[str, object] = {}
+    first_texts: dict[str, object] = {}
     failures: dict[str, object] = {}
     action_failures: dict[str, object] = {}
     action_successes: dict[str, object] = {}
@@ -1388,8 +1386,12 @@ def _admin_model_requests(
                 action_contexts[action_id] = context
         elif event.event_type == "model_request_started":
             starts.append(event)
+        elif event.event_type == "model_response_headers_received" and isinstance(attempt_id, str):
+            response_headers[attempt_id] = event
         elif event.event_type == "model_first_token_received" and isinstance(attempt_id, str):
             first_tokens[attempt_id] = event
+        elif event.event_type == "model_first_text_delta_received" and isinstance(attempt_id, str):
+            first_texts[attempt_id] = event
         elif event.event_type == "model_response_received" and isinstance(attempt_id, str):
             responses[attempt_id] = event
         elif event.event_type == "model_request_failed" and isinstance(attempt_id, str):
@@ -1419,6 +1421,18 @@ def _admin_model_requests(
         first_payload = (
             first_token.payload
             if first_token is not None and isinstance(first_token.payload, dict)
+            else {}
+        )
+        headers_event = response_headers.get(attempt_id)
+        headers_payload = (
+            headers_event.payload
+            if headers_event is not None and isinstance(headers_event.payload, dict)
+            else {}
+        )
+        first_text = first_texts.get(attempt_id)
+        first_text_payload = (
+            first_text.payload
+            if first_text is not None and isinstance(first_text.payload, dict)
             else {}
         )
         failure = failures.get(attempt_id) or action_failures.get(action_id)
@@ -1487,13 +1501,22 @@ def _admin_model_requests(
             if tts_start is not None and isinstance(tts_start.payload, dict)
             else {}
         )
-        provider_request_id = response_payload.get("provider_request_id") or first_payload.get(
-            "provider_request_id"
+        provider_request_id = (
+            response_payload.get("provider_request_id")
+            or first_payload.get("provider_request_id")
+            or first_text_payload.get("provider_request_id")
+            or headers_payload.get("provider_request_id")
+            or failure_payload.get("provider_request_id")
         )
         passive_observations = (
             response_payload.get("passive_observations")
             if isinstance(response_payload.get("passive_observations"), list)
             else []
+        )
+        stored_audience, effective_audience, audience_source = _admin_model_request_audience(
+            payload=payload,
+            context=context,
+            presentation=presentation,
         )
         result.append(
             AdminV2ModelRequestResponse(
@@ -1523,11 +1546,10 @@ def _admin_model_requests(
                 action_type=str(context.get("action_type") or "unknown"),
                 actor_kind=str(actor_kind),
                 actor_id=str(actor_id),
-                audience=_admin_model_request_audience(
-                    payload=payload,
-                    context=context,
-                    presentation=presentation,
-                ),
+                audience=effective_audience,
+                stored_audience=stored_audience,
+                effective_audience=effective_audience,
+                audience_source=audience_source,
                 request_kind=request_kind,
                 model_id=model_id,
                 model_provider=(
@@ -1629,7 +1651,7 @@ def _admin_model_requests(
                 first_token_seen=(
                     failure_payload.get("first_token_seen")
                     if isinstance(failure_payload.get("first_token_seen"), bool)
-                    else None
+                    else (True if first_token is not None else None)
                 ),
                 response_headers_seen=(
                     failure_payload.get("response_headers_seen")
@@ -1637,6 +1659,33 @@ def _admin_model_requests(
                         failure_payload.get("response_headers_seen"),
                         bool,
                     )
+                    else (True if headers_event is not None else None)
+                ),
+                response_headers=(
+                    headers_payload.get("response_headers")
+                    if isinstance(headers_payload.get("response_headers"), dict)
+                    else (
+                        failure_payload.get("response_headers")
+                        if isinstance(failure_payload.get("response_headers"), dict)
+                        else None
+                    )
+                ),
+                first_token_kind=(
+                    first_payload.get("first_token_kind")
+                    if isinstance(first_payload.get("first_token_kind"), str)
+                    else (
+                        failure_payload.get("first_token_kind")
+                        if isinstance(failure_payload.get("first_token_kind"), str)
+                        else None
+                    )
+                ),
+                first_visible_text_ms=_first_int(
+                    first_text_payload.get("first_visible_text_ms"),
+                    failure_payload.get("first_visible_text_ms"),
+                ),
+                timeout_scope=(
+                    failure_payload.get("timeout_scope")
+                    if isinstance(failure_payload.get("timeout_scope"), str)
                     else None
                 ),
                 failure_elapsed_ms=_first_int(failure_payload.get("elapsed_ms")),
@@ -1667,31 +1716,46 @@ def _admin_model_request_audience(
     payload: dict[str, Any],
     context: dict[str, Any],
     presentation: object | None,
-) -> str:
-    canonical_audience = payload.get("audience")
+) -> tuple[
+    str | None,
+    str,
+    Literal[
+        "event_contract",
+        "event_contract_narrowed",
+        "presentation",
+        "legacy_event",
+        "action_context",
+        "legacy_unknown",
+    ],
+]:
+    raw_stored_audience = payload.get("audience")
+    stored_audience = raw_stored_audience if isinstance(raw_stored_audience, str) else None
     if (
         payload.get("audience_contract_version") == AUDIENCE_CONTRACT_VERSION
-        and isinstance(canonical_audience, str)
-        and canonical_audience in V2_EVENT_AUDIENCES
+        and isinstance(stored_audience, str)
+        and stored_audience in V2_EVENT_AUDIENCES
     ):
         actor_kind = payload.get("actor_kind")
-        return model_event_audience(
-            action_audience=canonical_audience,
+        effective_audience = model_event_audience(
+            action_audience=stored_audience,
             actor_kind=actor_kind if isinstance(actor_kind, str) else "unknown",
         )
-    candidates = (
-        getattr(presentation, "audience", None),
-        payload.get("audience"),
-        context.get("audience"),
+        source: Literal["event_contract", "event_contract_narrowed"] = (
+            "event_contract" if effective_audience == stored_audience else "event_contract_narrowed"
+        )
+        return stored_audience, effective_audience, source
+    candidates: tuple[
+        tuple[object, Literal["presentation", "legacy_event", "action_context"]],
+        ...,
+    ] = (
+        (getattr(presentation, "audience", None), "presentation"),
+        (raw_stored_audience, "legacy_event"),
+        (context.get("audience"), "action_context"),
     )
-    return next(
-        (
-            candidate
-            for candidate in candidates
-            if isinstance(candidate, str) and candidate in V2_EVENT_AUDIENCES
-        ),
-        "legacy_unknown",
-    )
+    for candidate, source in candidates:
+        if isinstance(candidate, str) and candidate in V2_EVENT_AUDIENCES:
+            return stored_audience, candidate, source
+    return stored_audience, "legacy_unknown", "legacy_unknown"
 
 
 def _first_int(*values: object) -> int | None:

@@ -153,6 +153,14 @@ export type V2PromptProjection = Record<string, unknown> & {
   public_timeline_kind_counts?: Record<string, number>;
 };
 
+export type V2ModelRequestAudienceSource =
+  | "event_contract"
+  | "event_contract_narrowed"
+  | "presentation"
+  | "legacy_event"
+  | "action_context"
+  | "legacy_unknown";
+
 export type V2ModelRequestSummary = {
   attempt_id: string;
   attempt_no: number;
@@ -169,6 +177,9 @@ export type V2ModelRequestSummary = {
   actor_kind: string;
   actor_id: string;
   audience: string;
+  stored_audience: string | null;
+  effective_audience: string;
+  audience_source: V2ModelRequestAudienceSource;
   request_kind: string;
   model_id: string | null;
   model_provider: string | null;
@@ -197,6 +208,10 @@ export type V2ModelRequestSummary = {
   http_status: number | null;
   first_token_seen: boolean | null;
   response_headers_seen: boolean | null;
+  response_headers: Record<string, string> | null;
+  first_token_kind: string | null;
+  first_visible_text_ms: number | null;
+  timeout_scope: string | null;
   failure_elapsed_ms: number | null;
   attempt_budget_ms: number | null;
   action_budget_ms: number | null;

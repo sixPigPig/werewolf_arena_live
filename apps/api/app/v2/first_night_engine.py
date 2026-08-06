@@ -1603,6 +1603,7 @@ class V2NightEngine:
             )
             self._repository.apply_hunter_shot(
                 state=reaction_state,
+                activation_id=activation.activation_id,
                 hunter_player_id=hunter_id,
                 target_player_id=target.player_id,
             )
