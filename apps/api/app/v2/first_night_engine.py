@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _PARALLEL_NIGHT_GROUPS = ("werewolves", "guard", "seer")
+_DECISION_NOTE_MAX_CHARS = 80
 
 
 class V2NightError(RuntimeError):
@@ -569,12 +570,12 @@ class V2NightEngine:
             objective=(
                 "唤醒本局唯一狼人并请其选择袭击目标"
                 if len(wolves) == 1
-                else "唤醒狼人团队；先分别提出建议，再共享完整私聊并进行最终投票"
+                else "唤醒狼人团队；先分别盲选刀口，出现分歧后再进行狼人私聊归票"
             ),
             context={"ability_id": ability_id, "werewolf_attack_policy": policy},
         )
         occurrence = 0
-        first_round: list[dict[str, Any]] = []
+        blind_choices: list[dict[str, Any]] = []
         proposal_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision | None]] = []
 
         if len(wolves) > 1:
@@ -604,17 +605,25 @@ class V2NightEngine:
                     activation=activation,
                     player=wolf,
                     candidates=candidates,
-                    objective="提交本夜初步袭击选择。",
+                    objective="独立盲选本夜初步袭击目标，并用 decision_note 记录一句简短理由。",
                     knowledge={
                         "werewolf_teammates": [
                             item.player_id for item in wolves if item.player_id != wolf.player_id
                         ],
                         "coordination": "parallel_preference_probe",
                         "decision_stage": "preference_probe",
-                        "proposal_visibility": "buffered_until_disagreement",
+                        "proposal_visibility": "targets_shared_only_after_disagreement",
+                        "decision_note_visibility": "actor_only",
                         "werewolf_attack_policy": policy,
                     },
                     optional=allow_no_attack,
+                    decision_contract=V2DecisionContract(
+                        kind="target",
+                        target_mode="optional" if allow_no_attack else "required",
+                        speech_mode="forbidden",
+                        decision_note_mode="optional",
+                        decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
+                    ),
                     defer_presentation=True,
                     isolated_failure=True,
                     allow_failure=True,
@@ -630,13 +639,12 @@ class V2NightEngine:
                 for (wolf, activation), decision in zip(prepared, decisions, strict=True)
             ]
             for wolf, _activation, decision in proposal_items:
-                first_round.append(
+                blind_choices.append(
                     {
                         "player_id": wolf.player_id,
                         "target_player_id": (
                             decision.target_player_id if decision is not None else None
                         ),
-                        "speech": decision.speech if decision is not None else "",
                         "status": "completed" if decision is not None else "failed",
                     }
                 )
@@ -664,7 +672,7 @@ class V2NightEngine:
                     "target_player_id": (
                         decision.target_player_id if decision is not None else None
                     ),
-                    "speech": decision.speech if decision is not None else "",
+                    "decision_note": decision.decision_note if decision is not None else None,
                 },
                 result={
                     "adopted": complete_unanimous_proposal,
@@ -685,79 +693,6 @@ class V2NightEngine:
                 audience="god_view",
             )
 
-        if len(wolves) > 1 and not complete_unanimous_proposal:
-            for wolf, activation, decision in proposal_items:
-                if decision is None or not decision.speech:
-                    continue
-                occurrence += 1
-                speech_activation = self._repository.open_activation(
-                    state=state,
-                    ability_id=ability_id,
-                    actor_player_id=wolf.player_id,
-                    occurrence=occurrence,
-                )
-                presented = await self._actions.present_player_decision(
-                    game_id=state.game_id,
-                    broadcaster=broadcaster,
-                    spec=V2SpeechSpec(
-                        action_type="ability_werewolf.attack_preference_speech",
-                        phase_id=state.phase_id,
-                        required_phase_state="night_running",
-                        objective="刀口出现分歧，向狼人团队依次播报第一轮缓冲意见",
-                        success_live_state="ready",
-                        success_phase_state="night_running",
-                        actor_kind="player",
-                        actor_id=wolf.player_id,
-                        audience="god_view",
-                        speaker=wolf.tts_speaker,
-                        dialect=wolf.tts_dialect,
-                        model_provider=wolf.model_provider,
-                        model_id=wolf.model_id,
-                        model_parameters=wolf.model_parameters,
-                        activation_id=speech_activation.activation_id,
-                        output_kind="decision_and_speech",
-                        decision_contract=V2DecisionContract(
-                            kind="target",
-                            target_mode=(
-                                "optional" if decision.target_player_id is None else "required"
-                            ),
-                            speech_mode="required",
-                            speech_max_sentences=1,
-                        ),
-                        allowed_target_ids=tuple(item.player_id for item in candidates),
-                        model_players=tuple(
-                            V2ModelPlayerReference(
-                                player_id=item.player_id,
-                                seat=item.seat,
-                                display_name=item.display_name,
-                            )
-                            for item in state.players
-                        ),
-                        context={
-                            "ability_id": ability_id,
-                            "source_activation_id": activation.activation_id,
-                            "decision_stage": "preference_probe_speech",
-                            "target_player_id": decision.target_player_id,
-                        },
-                    ),
-                    decision=decision,
-                )
-                if not presented:
-                    raise V2NightError("werewolf_preference_speech_failed")
-                self._repository.complete_activation(
-                    state=state,
-                    activation=speech_activation,
-                    decision={
-                        "decision_stage": "preference_probe_speech",
-                        "target_player_id": decision.target_player_id,
-                        "speech": decision.speech,
-                    },
-                    result={
-                        "shared_after_disagreement": True,
-                        "source_activation_id": activation.activation_id,
-                    },
-                )
-
         second_round: list[dict[str, Any]] = []
         final_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision]] = []
         if complete_unanimous_proposal:
@@ -766,9 +701,9 @@ class V2NightEngine:
             resolution = _WerewolfAttackResolution(
                 target_player_id=unanimous.target_player_id,
                 reason=(
-                    "discussion_unanimous_no_attack"
+                    "blind_choice_unanimous_no_attack"
                     if unanimous.target_player_id is None
-                    else "discussion_unanimous"
+                    else "blind_choice_unanimous"
                 ),
             )
             votes = [
@@ -776,7 +711,7 @@ class V2NightEngine:
                 for wolf, _activation, decision in proposal_items
                 if decision is not None
             ]
-            resolution_stage = "discussion_consensus"
+            resolution_stage = "blind_choice_consensus"
         else:
             for position, wolf in enumerate(wolves, start=1):
                 occurrence += 1
@@ -792,7 +727,14 @@ class V2NightEngine:
                     activation=activation,
                     player=wolf,
                     candidates=candidates,
-                    objective="提交本夜最终袭击选择。",
+                    objective=(
+                        "提交本夜最终袭击选择。"
+                        if len(wolves) == 1
+                        else (
+                            "刀口出现分歧；查看全体狼人的盲选刀口和你自己的盲选理由，"
+                            "重新选择刀口，并在狼人私聊中用一句话说明理由。"
+                        )
+                    ),
                     knowledge=(
                         {
                             "living_werewolf_teammates": [],
@@ -809,7 +751,8 @@ class V2NightEngine:
                             ],
                             "coordination": "sequential_shared_discussion",
                             "decision_stage": "sequential_final_vote",
-                            "werewolf_first_round": [dict(item) for item in first_round],
+                            "werewolf_first_round": [dict(item) for item in blind_choices],
+                            "blind_choice_reason_visibility": "own_declared_reason_only",
                             "werewolf_second_round_so_far": [dict(item) for item in second_round],
                             "speaking_order": [item.player_id for item in wolves],
                             "speaking_position": position,
@@ -869,7 +812,7 @@ class V2NightEngine:
                         ],
                         "coordination": "explicit_rotating_tiebreak",
                         "decision_stage": "tiebreak",
-                        "werewolf_first_round": [dict(item) for item in first_round],
+                        "werewolf_first_round": [dict(item) for item in blind_choices],
                         "werewolf_second_round": [dict(item) for item in second_round],
                         "werewolf_final_votes": [
                             {
@@ -1724,6 +1667,7 @@ class V2NightEngine:
         batch_id: str | None = None,
         batch: _NightParallelBatch | None = None,
         batch_stage: str | None = None,
+        decision_contract: V2DecisionContract | None = None,
     ) -> V2ModelDecision | None:
         knowledge_fact_ids, knowledge_hash = self._repository.register_activation_knowledge(
             state=state,
@@ -1742,6 +1686,16 @@ class V2NightEngine:
         }
         action_type = f"ability_{activation.ability_id}_decision"
         is_dawn_reaction = activation.ability_id == "hunter.death_shot"
+        resolved_decision_contract = decision_contract or V2DecisionContract(
+            kind="target",
+            target_mode="optional" if optional else "required",
+            speech_mode=("required" if activation.ability_id == "werewolf.attack" else "forbidden"),
+            speech_max_sentences=(1 if activation.ability_id == "werewolf.attack" else None),
+            decision_note_mode=(
+                "none" if activation.ability_id == "werewolf.attack" else "optional"
+            ),
+            decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
+        )
         decision = await self._actions.run_player_decision(
             game_id=state.game_id,
             broadcaster=broadcaster,
@@ -1767,23 +1721,10 @@ class V2NightEngine:
                 activation_id=activation.activation_id,
                 output_kind=(
                     "decision_and_speech"
-                    if activation.ability_id == "werewolf.attack"
+                    if resolved_decision_contract.speech_mode != "forbidden"
                     else "private_decision"
                 ),
-                decision_contract=V2DecisionContract(
-                    kind="target",
-                    target_mode="optional" if optional else "required",
-                    speech_mode=(
-                        "required" if activation.ability_id == "werewolf.attack" else "forbidden"
-                    ),
-                    speech_max_sentences=(
-                        1 if activation.ability_id == "werewolf.attack" else None
-                    ),
-                    decision_note_mode=(
-                        "none" if activation.ability_id == "werewolf.attack" else "optional"
-                    ),
-                    decision_note_max_chars=80,
-                ),
+                decision_contract=resolved_decision_contract,
                 allowed_target_ids=tuple(item.player_id for item in candidates),
                 model_players=tuple(
                     V2ModelPlayerReference(

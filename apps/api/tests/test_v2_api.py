@@ -300,7 +300,10 @@ class FakeV2ModelClient:
         decision_note = (
             self.decision_note_by_action_type.get(
                 action_type,
-                f"在{action_type}动作发生时选择当前目标。",
+                (
+                    f"{action_context['self']['identity']['player_id']}在"
+                    f"{action_type}动作发生时选择当前目标。"
+                ),
             )
             if output_contract.get("decision_note", {}).get("mode") == "optional"
             else None
@@ -2213,6 +2216,9 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
             fact.get("fact_type") == "decision_stage" and fact.get("payload") == "preference_probe"
             for fact in _private_known_facts(context)
         )
+        and context["response"]["speech"]["mode"] == "forbidden"
+        and context["response"]["decision_note"]
+        == {"type": "string", "mode": "optional", "max_chars": 80}
         and all(
             fact.get("fact_type") not in {"werewolf_first_round", "werewolf_second_round_so_far"}
             for fact in _private_known_facts(context)
@@ -2252,9 +2258,36 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert all(
             item["player_id"].startswith("seat_")
             and item["target_player_id"].startswith("seat_")
-            and item["speech"]
+            and item["status"] == "completed"
+            and "speech" not in item
+            and "decision_note" not in item
             for item in first_round
         )
+        own_blind_decisions = [
+            fact["payload"]
+            for fact in private_facts
+            if fact.get("fact_type") == "private_ability_action_committed"
+            and fact.get("payload", {}).get("ability_id") == "werewolf.attack"
+            and fact.get("payload", {}).get("night_no") == context["task"]["night_no"]
+            and fact.get("payload", {}).get("decision", {}).get("decision_stage")
+            == "preference_probe"
+        ]
+        assert len(own_blind_decisions) == 1
+        assert own_blind_decisions[0]["declared_reason"] == {
+            "text": (
+                f"{context['self']['identity']['player_id']}在"
+                "ability_werewolf.attack_decision动作发生时选择当前目标。"
+            ),
+            "epistemic_status": "actor_declared_reason",
+        }
+        assert "decision_note" not in own_blind_decisions[0]["decision"]
+        assert context["response"]["speech"] == {
+            "type": "string",
+            "mode": "required",
+            "min_length": 1,
+            "max_sentences": 1,
+        }
+        assert "decision_note" not in context["response"]
         assert len(second_round_so_far) == speaking_position - 1
         first_round_by_night.setdefault(
             context["task"]["night_no"],
@@ -3270,21 +3303,45 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         ]
         assert ability_contexts
         assert all(context["response"]["kind"] == "target" for context in ability_contexts)
-        assert all(
-            context["response"]["speech"]["mode"]
-            == (
-                "required"
-                if context["task"]["type"] == "ability_werewolf.attack_decision"
-                else "forbidden"
-            )
+        blind_wolf_contexts = [
+            context
             for context in ability_contexts
+            if context["task"]["type"] == "ability_werewolf.attack_decision"
+            and any(
+                fact.get("fact_type") == "decision_stage"
+                and fact.get("payload") == "preference_probe"
+                for fact in _private_known_facts(context)
+            )
+        ]
+        speaking_wolf_contexts = [
+            context
+            for context in ability_contexts
+            if context["task"]["type"] == "ability_werewolf.attack_decision"
+            and context not in blind_wolf_contexts
+        ]
+        non_wolf_ability_contexts = [
+            context
+            for context in ability_contexts
+            if context["task"]["type"] != "ability_werewolf.attack_decision"
+        ]
+        assert blind_wolf_contexts
+        assert all(
+            context["response"]["speech"]["mode"] == "forbidden"
+            and context["response"]["decision_note"]
+            == {"type": "string", "mode": "optional", "max_chars": 80}
+            for context in blind_wolf_contexts
         )
         assert all(
-            "decision_note" not in context["response"]
-            if context["task"]["type"] == "ability_werewolf.attack_decision"
-            else context["response"]["decision_note"]
+            context["response"]["speech"]["mode"] == "required"
+            and context["response"]["speech"]["max_sentences"] == 1
+            and "decision_note" not in context["response"]
+            for context in speaking_wolf_contexts
+        )
+        assert all(
+            context["response"]["speech"]["mode"] == "forbidden"
+            and context["response"]["decision_note"]
             == {"type": "string", "mode": "optional", "max_chars": 80}
-            for context in ability_contexts
+            for context in non_wolf_ability_contexts
         )
         instances = {
             item.ability_instance_id: item.ability_id

@@ -34,13 +34,19 @@ def _player(player_id: str, seat: int, role_key: str) -> V2NightPlayer:
     )
 
 
-def _decision(target_player_id: str | None, speech: str) -> V2ModelDecision:
+def _decision(
+    target_player_id: str | None,
+    speech: str | None,
+    *,
+    decision_note: str | None = None,
+) -> V2ModelDecision:
     return V2ModelDecision(
         target_player_id=target_player_id,
         speech=speech,
         provider_request_id="request",
         first_token_ms=1,
         completed_ms=2,
+        decision_note=decision_note,
     )
 
 
@@ -124,8 +130,8 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
     repository = _FakeRepository()
     actions = _FakeActions(
         [
-            _decision("good-3", "我建议刀3号，因为他发言最稳。"),
-            _decision("good-4", "我倾向刀4号，降低神职风险。"),
+            _decision("good-3", None, decision_note="3号发言最稳，可能藏身份。"),
+            _decision("good-4", None, decision_note="4号神职风险更高。"),
             _decision("good-3", "看完队友意见，我最终投3号。"),
             _decision("good-3", "综合讨论，我也归票3号。"),
         ]
@@ -140,12 +146,31 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
     asyncio.run(engine._run_werewolves(state, _FakeBroadcaster(), working))
 
     assert working.attack_target == "good-3"
-    assert all(spec.decision_contract.speech_max_sentences == 1 for spec in actions.specs)
+    blind_specs = actions.specs[:2]
+    discussion_specs = actions.specs[2:]
+    assert all(
+        spec.output_kind == "private_decision"
+        and spec.decision_contract.speech_mode == "forbidden"
+        and spec.decision_contract.decision_note_mode == "optional"
+        and spec.decision_contract.decision_note_max_chars == 80
+        for spec in blind_specs
+    )
+    assert all(
+        spec.output_kind == "decision_and_speech"
+        and spec.decision_contract.speech_mode == "required"
+        and spec.decision_contract.speech_max_sentences == 1
+        and spec.decision_contract.decision_note_mode == "none"
+        for spec in discussion_specs
+    )
     assert {spec.objective for spec in actions.specs} == {
-        "提交本夜初步袭击选择。",
-        "提交本夜最终袭击选择。",
+        "独立盲选本夜初步袭击目标，并用 decision_note 记录一句简短理由。",
+        (
+            "刀口出现分歧；查看全体狼人的盲选刀口和你自己的盲选理由，"
+            "重新选择刀口，并在狼人私聊中用一句话说明理由。"
+        ),
     }
-    assert all("一句话" not in spec.objective for spec in actions.specs)
+    assert all("一句话" not in spec.objective for spec in blind_specs)
+    assert all("一句话" in spec.objective for spec in discussion_specs)
     assert actions.specs[0].defer_presentation is True
     assert actions.specs[1].defer_presentation is True
     assert actions.specs[0].batch_id == actions.specs[1].batch_id
@@ -160,17 +185,17 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
             {
                 "player_id": "wolf-1",
                 "target_player_id": "good-3",
-                "speech": "我建议刀3号，因为他发言最稳。",
                 "status": "completed",
             },
             {
                 "player_id": "wolf-2",
                 "target_player_id": "good-4",
-                "speech": "我倾向刀4号，降低神职风险。",
                 "status": "completed",
             },
         ]
     )
+    assert first_final["blind_choice_reason_visibility"] == "own_declared_reason_only"
+    assert second_final["blind_choice_reason_visibility"] == "own_declared_reason_only"
     assert first_final["werewolf_second_round_so_far"] == []
     assert second_final["werewolf_second_round_so_far"] == [
         {
@@ -180,10 +205,17 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
             "speaking_position": 1,
         }
     ]
-    assert [decision.speech for decision in actions.presented] == [
-        "我建议刀3号，因为他发言最稳。",
-        "我倾向刀4号，降低神职风险。",
+    assert actions.presented == []
+    blind_completions = [
+        item
+        for item in repository.completions
+        if item["decision"]["decision_stage"] == "preference_probe"
     ]
+    assert [item["decision"]["decision_note"] for item in blind_completions] == [
+        "3号发言最稳，可能藏身份。",
+        "4号神职风险更高。",
+    ]
+    assert all("speech" not in item["decision"] for item in blind_completions)
     final_completions = [
         item
         for item in repository.completions
@@ -244,7 +276,8 @@ def test_parallel_unanimous_preference_skips_second_round_and_forms_attack() -> 
         for item in repository.completions
         if item["decision"]["decision_stage"] == "team_resolution"
     )
-    assert resolution["result"]["resolution_reason"] == "discussion_unanimous"
+    assert resolution["result"]["resolution_reason"] == "blind_choice_unanimous"
+    assert resolution["decision"]["resolution_stage"] == "blind_choice_consensus"
     assert resolution["effect_type"] == "attack"
 
 
@@ -265,8 +298,8 @@ def test_tied_second_round_requests_explicit_rotating_tiebreak() -> None:
     repository = _FakeRepository()
     actions = _FakeActions(
         [
-            _decision("good-3", "我先提议3号。"),
-            _decision("good-4", "我先提议4号。"),
+            _decision("good-3", None, decision_note="盲选3号。"),
+            _decision("good-4", None, decision_note="盲选4号。"),
             _decision("good-3", "我最终投3号。"),
             _decision("good-4", "我最终投4号。"),
             _decision("good-4", "我归票4号。"),
@@ -508,7 +541,8 @@ class _ConcurrentPreferenceActions:
         self._in_flight -= 1
         return _decision(
             self._target_player_id,
-            f"{spec.actor_id}缓冲同一刀口。",
+            None,
+            decision_note=f"{spec.actor_id}盲选同一刀口。",
         )
 
     async def present_player_decision(self, **kwargs: Any) -> bool:
