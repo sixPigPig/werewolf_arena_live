@@ -305,6 +305,12 @@ class V2NightRepository:
             knowledge_ids: list[str] = []
             durable_knowledge = list(knowledge)
             if activation.actor_player_id is not None:
+                decision_note = decision.get("decision_note")
+                committed_decision = {
+                    key: value
+                    for key, value in decision.items()
+                    if key not in {"speech", "decision_note"}
+                }
                 durable_knowledge.append(
                     (
                         "player",
@@ -314,9 +320,17 @@ class V2NightRepository:
                             "payload": {
                                 "ability_id": activation.ability_id,
                                 "night_no": state.round_no,
-                                "decision": {
-                                    key: value for key, value in decision.items() if key != "speech"
-                                },
+                                "decision": committed_decision,
+                                **(
+                                    {
+                                        "declared_reason": {
+                                            "text": decision_note,
+                                            "epistemic_status": "actor_declared_reason",
+                                        }
+                                    }
+                                    if isinstance(decision_note, str) and decision_note.strip()
+                                    else {}
+                                ),
                                 "result": dict(result),
                                 "resolution_scope": (
                                     "法官已接受本次私有动作；这里只记录动作决定与资源使用，"

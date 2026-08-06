@@ -104,7 +104,12 @@ def _occurred_in(fact_type: str, payload: dict[str, Any]) -> dict[str, Any] | No
     if round_no is not None:
         period = (
             "day"
-            if fact_type in {"private_ability_action_committed", "private_round_memory"}
+            if fact_type
+            in {
+                "private_ability_action_committed",
+                "private_action_decision",
+                "private_round_memory",
+            }
             else "unknown"
         )
         return {"period": period, "round_no": round_no}

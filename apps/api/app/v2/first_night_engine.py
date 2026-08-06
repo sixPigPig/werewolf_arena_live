@@ -665,7 +665,6 @@ class V2NightEngine:
                         decision.target_player_id if decision is not None else None
                     ),
                     "speech": decision.speech if decision is not None else "",
-                    "decision_note": decision.speech if decision is not None else None,
                 },
                 result={
                     "adopted": complete_unanimous_proposal,
@@ -903,7 +902,6 @@ class V2NightEngine:
                         "decision_stage": "tiebreak",
                         "target_player_id": tiebreak_decision.target_player_id,
                         "speech": tiebreak_decision.speech,
-                        "decision_note": tiebreak_decision.speech,
                     },
                     result={
                         "adopted": True,
@@ -921,7 +919,6 @@ class V2NightEngine:
                     "decision_stage": "sequential_final_vote",
                     "target_player_id": decision.target_player_id,
                     "speech": decision.speech,
-                    "decision_note": decision.speech,
                 },
                 result={
                     "adopted": decision.target_player_id == resolution.target_player_id,
@@ -1785,6 +1782,7 @@ class V2NightEngine:
                     decision_note_mode=(
                         "none" if activation.ability_id == "werewolf.attack" else "optional"
                     ),
+                    decision_note_max_chars=80,
                 ),
                 allowed_target_ids=tuple(item.player_id for item in candidates),
                 model_players=tuple(

@@ -119,6 +119,68 @@ class V2MatchRepository:
                 player_id=player_id,
             )
 
+    def record_private_action_decision(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        round_no: int,
+        action_type: str,
+        decision: dict[str, Any],
+        decision_note: str | None,
+        context: dict[str, Any] | None = None,
+    ) -> str | None:
+        normalized_note = decision_note.strip() if isinstance(decision_note, str) else ""
+        if not normalized_note:
+            return None
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
+            match = _match(db, game)
+            if match.round_no != round_no or not game.phase_id.startswith("day_"):
+                raise V2RepositoryError("private action decision phase changed before commit")
+            player = db.get(V2PlayerState, (game_id, player_id))
+            if player is None or not player.alive:
+                raise V2RepositoryError("private action decision owner must be alive")
+            fact_id = f"v2_fact_{uuid4().hex[:16]}"
+            db.add(
+                V2KnowledgeFact(
+                    knowledge_fact_id=fact_id,
+                    game_id=game_id,
+                    source_activation_id=None,
+                    owner_scope="player",
+                    owner_id=player_id,
+                    fact_type="private_action_decision",
+                    payload={
+                        "schema_version": 1,
+                        "round_no": round_no,
+                        "action_type": action_type,
+                        "decision": {
+                            key: value for key, value in decision.items() if value is not None
+                        },
+                        "declared_reason": {
+                            "text": normalized_note,
+                            "epistemic_status": "actor_declared_reason",
+                        },
+                        **({"context": dict(context)} if context else {}),
+                    },
+                )
+            )
+            _append_event(
+                db,
+                game=game,
+                event_type="private_knowledge_recorded",
+                payload={
+                    "knowledge_fact_id": fact_id,
+                    "owner_scope": "player",
+                    "owner_id": player_id,
+                    "fact_type": "private_action_decision",
+                    "round_no": round_no,
+                    "action_type": action_type,
+                },
+            )
+            return fact_id
+
     def record_private_round_memory(
         self,
         *,

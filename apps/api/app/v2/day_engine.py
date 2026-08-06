@@ -66,6 +66,7 @@ _PUBLIC_SPEECH_MAX_CHARS = {
     "exile_last_words": 200,
 }
 _PRIVATE_ROUND_MEMORY_MAX_CHARS = 400
+_DECISION_NOTE_MAX_CHARS = 80
 
 
 class V2DayRuntimeError(RuntimeError):
@@ -498,6 +499,8 @@ class V2DayEngine:
                     kind="boolean",
                     boolean_field=boolean_field,
                     speech_mode="forbidden",
+                    decision_note_mode="optional",
+                    decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
                     true_meaning=true_meaning,
                     false_meaning=false_meaning,
                 ),
@@ -556,6 +559,21 @@ class V2DayEngine:
                 "commit_order": "seat_ascending",
             },
         )
+        for player, decision in zip(ordered, decisions, strict=True):
+            if decision is None:
+                continue
+            self._repository.record_private_action_decision(
+                game_id=game_id,
+                player_id=player.player_id,
+                round_no=state.round_no,
+                action_type=action_type,
+                decision={boolean_field: resolved[player.player_id]},
+                decision_note=decision.decision_note,
+                context={
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                },
+            )
         return resolved
 
     async def _run_public_discussion(
@@ -634,6 +652,8 @@ class V2DayEngine:
                 kind="target",
                 target_mode="required",
                 speech_mode="forbidden",
+                decision_note_mode="optional",
+                decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
             ),
         )
         start = decision.target_player_id
@@ -642,6 +662,15 @@ class V2DayEngine:
         else:
             ordered = list(reversed(alive[:sheriff_index])) + list(reversed(alive[sheriff_index:]))
         result = [item.player_id for item in ordered]
+        self._repository.record_private_action_decision(
+            game_id=state.game_id,
+            player_id=sheriff.player_id,
+            round_no=state.round_no,
+            action_type="sheriff_speech_order",
+            decision={"target_player_id": start},
+            decision_note=decision.decision_note,
+            context={"speech_order": result},
+        )
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_speech_order_selected",
@@ -810,6 +839,8 @@ class V2DayEngine:
                     kind="target",
                     target_mode="optional",
                     speech_mode="forbidden",
+                    decision_note_mode="optional",
+                    decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
                 ),
                 audience="god_view",
             )
@@ -869,6 +900,8 @@ class V2DayEngine:
                 kind="target",
                 target_mode="optional",
                 speech_mode="forbidden",
+                decision_note_mode="optional",
+                decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
             ),
         )
         target_id = decision.target_player_id
@@ -941,6 +974,8 @@ class V2DayEngine:
                     kind="target",
                     target_mode="required",
                     speech_mode="forbidden",
+                    decision_note_mode="optional",
+                    decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
                 ),
                 audience="god_view",
                 extra_context={
@@ -1003,7 +1038,7 @@ class V2DayEngine:
                 },
             )
 
-        committed: list[tuple[V2MatchPlayer, str, float]] = []
+        committed: list[tuple[V2MatchPlayer, str, float, V2ModelDecision]] = []
         for (voter, _eligible), decision in zip(prepared, decisions, strict=True):
             if decision is None:
                 raise V2DayRuntimeError(f"{action_type}_vote_batch_incomplete")
@@ -1014,13 +1049,13 @@ class V2DayEngine:
                 else 1.0
             )
             totals[target_id] += weight
-            committed.append((voter, target_id, weight))
+            committed.append((voter, target_id, weight, decision))
 
         # No vote is made public until every eligible virtual player has
         # completed the same voting batch.  This keeps later model contexts
         # independent from earlier choices while preserving the durable
         # per-voter audit records once the batch is complete.
-        for voter, target_id, weight in committed:
+        for voter, target_id, weight, decision in committed:
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_committed",
@@ -1030,6 +1065,19 @@ class V2DayEngine:
                     "voter_player_id": voter.player_id,
                     "target_player_id": target_id,
                     "weight": weight,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                },
+            )
+            self._repository.record_private_action_decision(
+                game_id=game_id,
+                player_id=voter.player_id,
+                round_no=state.round_no,
+                action_type=action_type,
+                decision={"target_player_id": target_id},
+                decision_note=decision.decision_note,
+                context={
+                    **context,
                     "batch_id": batch_id,
                     "public_cutoff_record_seq": public_cutoff_record_seq,
                 },
@@ -1126,6 +1174,8 @@ class V2DayEngine:
                     kind="boolean",
                     boolean_field="explode",
                     speech_mode="forbidden",
+                    decision_note_mode="optional",
+                    decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
                     true_meaning="立即自爆",
                     false_meaning="不自爆",
                 ),
@@ -1189,6 +1239,23 @@ class V2DayEngine:
                 "outcome": "self_explosion" if selected is not None else "continued",
             },
         )
+        for wolf, decision in zip(wolves, decisions, strict=True):
+            if decision is None or (selected is not None and wolf.player_id == selected.player_id):
+                continue
+            self._repository.record_private_action_decision(
+                game_id=game_id,
+                player_id=wolf.player_id,
+                round_no=state.round_no,
+                action_type="werewolf_self_explosion",
+                decision={"explode": bool(decision.boolean_value)},
+                decision_note=decision.decision_note,
+                context={
+                    "stage": stage,
+                    "selected_for_resolution": False,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                },
+            )
         if selected is None:
             return False
 

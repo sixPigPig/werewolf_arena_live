@@ -379,12 +379,15 @@ class _ScriptedDayActionEngine:
 
     async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision:
         self.player_actions.append(spec.actor_id)
+        assert spec.decision_contract.decision_note_mode == "optional"
+        assert spec.decision_contract.decision_note_max_chars == 80
         return V2ModelDecision(
             target_player_id=self.targets[spec.actor_id],
             speech="我决定发动技能。",
             provider_request_id="provider-scripted-decision",
             first_token_ms=1,
             completed_ms=2,
+            decision_note="这个终局理由只保留在动作审计中。",
         )
 
     async def run_judge_speech(self, *, spec, **_kwargs) -> bool:
@@ -446,6 +449,7 @@ class _ConcurrentSelfExplosionActions:
             completed_ms=2,
             boolean_field="explode",
             boolean_value=spec.actor_id in self._affirmative_actor_ids,
+            decision_note=f"{spec.actor_id}在当前阶段的自爆判断。",
         )
 
     async def run_judge_speech(self, **_kwargs) -> bool:
@@ -2420,7 +2424,8 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         assert any(
             item.fact_type == "private_ability_action_committed"
             and item.payload.get("ability_id") == "seer.investigate"
-            and item.payload.get("decision", {}).get("decision_note")
+            and item.payload.get("declared_reason", {}).get("epistemic_status")
+            == "actor_declared_reason"
             for item in facts
         )
         assert all(
@@ -2684,6 +2689,11 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         and event.get("data", {}).get("ability_id") == "seer.investigate"
     ]
     assert committed_investigations
+    assert all(
+        "last_committed_action" not in ability
+        for context in seer_day_contexts
+        for ability in context["self"]["ability_runtime_state"]["abilities"]
+    )
     invalid_investigations = [
         {
             "task_at_seq": context["task"]["at_seq"],
@@ -2696,7 +2706,8 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and event["known_at_seq"] < context["task"]["at_seq"]
             and event["occurred_in"].get("period") == "night"
             and event["occurred_in"].get("round_no", 0) > 0
-            and event["data"]["decision"]["decision_note"]
+            and "decision_note" not in event["data"]["decision"]
+            and event["data"]["declared_reason"]["epistemic_status"] == "actor_declared_reason"
         )
     ]
     assert not invalid_investigations, invalid_investigations
@@ -2806,7 +2817,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         assert all(
             event.payload["constraints"] == ["max_chars_exceeded"]
             and event.payload["original_chars"] == 130
-            and event.payload["normalized_chars"] == 120
+            and event.payload["normalized_chars"] == 80
             for event in note_normalizations
         )
         guard_responses = [
@@ -2817,7 +2828,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert guard_responses
         assert all(
-            event.payload["parsed_output"]["decision_note"] == "守" * 120
+            event.payload["parsed_output"]["decision_note"] == "守" * 80
             for event in guard_responses
         )
 
@@ -2949,6 +2960,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             context["response"]["kind"] == "boolean"
             and context["response"]["field"] == "run_for_sheriff"
             and context["response"]["speech"]["mode"] == "forbidden"
+            and context["response"]["decision_note"]
+            == {"type": "string", "mode": "optional", "max_chars": 80}
             for context in sheriff_run_contexts
         )
         withdraw_contexts = [
@@ -2967,6 +2980,11 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
                 "speech": {
                     "type": "string",
                     "mode": "forbidden",
+                },
+                "decision_note": {
+                    "type": "string",
+                    "mode": "optional",
+                    "max_chars": 80,
                 },
                 "field": "withdraw",
                 "required_fields": ["withdraw"],
@@ -3044,6 +3062,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         assert all(
             event.payload["context"]["output_contract"]["speech"]["mode"] == "forbidden"
             and event.payload["context"]["output_contract"]["presentation_kind"] == "private_vote"
+            and event.payload["context"]["output_contract"]["decision_note"]
+            == {"type": "string", "mode": "optional", "max_chars": 80}
             for event in vote_openings
         )
         vote_action_ids = {event.payload["context"]["action_id"] for event in vote_openings}
@@ -3163,6 +3183,27 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             isinstance(item.payload.get("night_no"), int) and "attacked_player_id" in item.payload
             for item in witch_observations
         )
+        private_action_decisions = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == game.game_id,
+                    V2KnowledgeFact.fact_type == "private_action_decision",
+                )
+            )
+        )
+        assert private_action_decisions
+        assert {item.payload["action_type"] for item in private_action_decisions} >= {
+            "sheriff_run",
+            "sheriff_withdraw",
+            "werewolf_self_explosion",
+            "exile_vote",
+        }
+        assert all(
+            item.owner_scope == "player"
+            and item.payload["declared_reason"]["epistemic_status"] == "actor_declared_reason"
+            and item.payload["declared_reason"]["text"]
+            for item in private_action_decisions
+        )
 
         completion_events = [
             event for event in action_events if event.event_type == "game_completed"
@@ -3204,6 +3245,8 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             context["response"]["kind"] == "boolean"
             and context["response"]["field"] == "explode"
             and context["response"]["speech"]["mode"] == "forbidden"
+            and context["response"]["decision_note"]
+            == {"type": "string", "mode": "optional", "max_chars": 80}
             and context["task"]["mechanical_effect"]["target_mode"] == "none"
             and context["task"]["mechanical_effect"]["if_executed"]["actor_eliminated"] is True
             and context["task"]["mechanical_effect"]["if_executed"]["target_allowed"] is False
@@ -3234,6 +3277,13 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
                 if context["task"]["type"] == "ability_werewolf.attack_decision"
                 else "forbidden"
             )
+            for context in ability_contexts
+        )
+        assert all(
+            "decision_note" not in context["response"]
+            if context["task"]["type"] == "ability_werewolf.attack_decision"
+            else context["response"]["decision_note"]
+            == {"type": "string", "mode": "optional", "max_chars": 80}
             for context in ability_contexts
         )
         instances = {
@@ -4540,6 +4590,45 @@ def _prepare_day_state(
         match.round_no = 1
 
 
+def test_private_action_decision_is_owner_only_and_never_public(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    state = repository.snapshot(created["game_id"])
+    first, second = sorted(state.players, key=lambda player: player.seat)[:2]
+
+    fact_id = repository.record_private_action_decision(
+        game_id=created["game_id"],
+        player_id=first.player_id,
+        round_no=state.round_no,
+        action_type="exile_vote",
+        decision={"target_player_id": second.player_id},
+        decision_note="当前票型下先投2号，后续可按新信息修正。",
+        context={"vote_round": 1},
+    )
+
+    assert fact_id is not None
+    first_knowledge = repository.private_knowledge(
+        game_id=created["game_id"], player_id=first.player_id
+    )
+    second_knowledge = repository.private_knowledge(
+        game_id=created["game_id"], player_id=second.player_id
+    )
+    fact = next(item for item in first_knowledge if item["knowledge_fact_id"] == fact_id)
+    assert fact["fact_type"] == "private_action_decision"
+    assert fact["payload"]["decision"] == {"target_player_id": second.player_id}
+    assert fact["payload"]["declared_reason"] == {
+        "text": "当前票型下先投2号，后续可按新信息修正。",
+        "epistemic_status": "actor_declared_reason",
+    }
+    assert all(item["knowledge_fact_id"] != fact_id for item in second_knowledge)
+    assert all(
+        fact["payload"]["declared_reason"]["text"] not in json.dumps(item, ensure_ascii=False)
+        for item in repository.snapshot(created["game_id"]).public_history
+    )
+
+
 def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_order(
     v2_context,
 ) -> None:
@@ -4793,6 +4882,14 @@ def test_self_explosion_batch_is_concurrent_and_resolves_one_wolf(v2_context) ->
                 V2GameRecordEvent.event_type == "werewolf_self_explosion_batch_resolved",
             )
         )
+        private_decisions = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_action_decision",
+                )
+            )
+        )
     assert [event.payload["player_id"] for event in decisions] == [
         wolf.player_id for wolf in wolves
     ]
@@ -4803,6 +4900,11 @@ def test_self_explosion_batch_is_concurrent_and_resolves_one_wolf(v2_context) ->
     assert resolution.payload["selected_player_id"] == wolves[0].player_id
     assert resolution.payload["selection_policy"] == "lowest_seat_affirmative"
     assert resolution.payload["public_cutoff_record_seq"] == before.last_record_seq
+    assert {item.owner_id for item in private_decisions} == {wolves[1].player_id}
+    assert private_decisions[0].payload["decision"] == {"explode": True}
+    assert private_decisions[0].payload["declared_reason"]["epistemic_status"] == (
+        "actor_declared_reason"
+    )
 
 
 def test_discussion_waits_for_one_round_start_self_explosion_batch(v2_context) -> None:

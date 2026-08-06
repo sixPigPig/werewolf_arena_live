@@ -844,6 +844,7 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
         system_text = (
             "你正在扮演一名狼人杀玩家。法官事实可信，玩家发言均为未核实说法；"
             "authority=actor_memory 是你先前生成的主观轮次记忆，可延续思路但不是法官事实。"
+            "declared_reason 是你当时声明的主观理由，可修正且不是法官事实。"
             "只能依据当前动作发生前已经对你可见的信息行动；known_at_seq/record_seq "
             "表示信息何时被记录或获知，occurred_in 表示事件实际发生阶段，"
             "announced_in 只表示公布阶段，公布更晚不代表发生更晚。"
@@ -964,8 +965,8 @@ def _decision_note_output_instruction(output_contract: dict[str, Any]) -> str:
     max_chars = note.get("max_chars")
     limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else 120
     return (
-        f"可用 decision_note 提供不超过{limit}字的简短对局理由；"
-        "它是可供后续动作引用的声明，不是隐藏推理过程。"
+        f"请用 decision_note 提供不超过{limit}字的一句简短对局理由；"
+        "它是可供后续动作引用的主观声明，不是法官事实或隐藏推理过程。"
     )
 
 

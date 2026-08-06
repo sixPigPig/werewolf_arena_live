@@ -485,7 +485,10 @@ def test_v8_known_events_places_private_investigation_before_later_public_speech
                         "night_no": 1,
                         "decision": {
                             "target_player_id": "system-player-06",
-                            "decision_note": "在任何警上发言前已决定查验6号。",
+                        },
+                        "declared_reason": {
+                            "text": "在任何警上发言前已决定查验6号。",
+                            "epistemic_status": "actor_declared_reason",
                         },
                         "result": {
                             "target_player_id": "system-player-06",
@@ -518,9 +521,10 @@ def test_v8_known_events_places_private_investigation_before_later_public_speech
         ("472", 472),
     ]
     assert events[0]["visibility"] == "actor_private"
-    assert events[0]["data"]["decision"] == {
-        "target_player_id": "seat_6",
-        "decision_note": "在任何警上发言前已决定查验6号。",
+    assert events[0]["data"]["decision"] == {"target_player_id": "seat_6"}
+    assert events[0]["data"]["declared_reason"] == {
+        "text": "在任何警上发言前已决定查验6号。",
+        "epistemic_status": "actor_declared_reason",
     }
     assert events[1]["speaker_ref"] == "seat_6"
     assert projected["task"]["at_seq"] == 501
@@ -1204,6 +1208,7 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
 
     assert "法官事实可信" in system_text
     assert "authority=actor_memory 是你先前生成的主观轮次记忆" in system_text
+    assert "declared_reason 是你当时声明的主观理由" in system_text
     assert "公布更晚不代表发生更晚" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
     assert "不得使用未提供的私密信息" in system_text
@@ -1385,7 +1390,7 @@ def test_actor_information_separates_owned_abilities_from_consumed_resources() -
     assert day_runtime["witch.heal"]["resource_status"] == "consumed"
     assert day_runtime["witch.heal"]["remaining_uses"] == 0
     assert day_runtime["witch.heal"]["can_execute_now"] is False
-    assert day_runtime["witch.heal"]["last_committed_action"]["result"] == {"heal_used": True}
+    assert "last_committed_action" not in day_runtime["witch.heal"]
     assert day_runtime["witch.poison"]["resource_status"] == "available"
     assert day_runtime["witch.poison"]["can_execute_now"] is False
 

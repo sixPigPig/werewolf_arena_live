@@ -1381,12 +1381,10 @@ def _ability_runtime_state(
             "can_execute_now": can_execute_now,
             "unavailable_now_reason": unavailable_now_reason,
         }
-        if last_commit is not None:
-            runtime_ability["last_committed_action"] = dict(last_commit)
         runtime_abilities.append(runtime_ability)
 
     return {
-        "source": "private_role_assignment_action_history_and_current_window",
+        "source": "private_role_assignment_resource_history_and_current_window",
         "current_action_ability_id": current_ability_id,
         "abilities": runtime_abilities,
         "instruction": (
