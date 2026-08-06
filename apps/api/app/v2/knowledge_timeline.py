@@ -78,6 +78,9 @@ def player_private_knowledge(
                 "fact_type": row.fact_type,
                 "payload": payload,
                 **(
+                    {"authority": "actor_memory"} if row.fact_type == "private_round_memory" else {}
+                ),
+                **(
                     {
                         "source_event_id": event.event_id,
                         "source_event_type": event.event_type,
@@ -99,7 +102,11 @@ def _occurred_in(fact_type: str, payload: dict[str, Any]) -> dict[str, Any] | No
         return {"period": "night", "round_no": night_no}
     round_no = _positive_int(payload.get("round_no"))
     if round_no is not None:
-        period = "day" if fact_type == "private_ability_action_committed" else "unknown"
+        period = (
+            "day"
+            if fact_type in {"private_ability_action_committed", "private_round_memory"}
+            else "unknown"
+        )
         return {"period": period, "round_no": round_no}
     return None
 

@@ -451,7 +451,7 @@ def _known_events(
         item = {
             "event_ref": (fact_id if isinstance(fact_id, str) else f"current_private_fact_{index}"),
             "kind": fact.get("fact_type") or "private_judge_fact",
-            "authority": "judge_fact",
+            "authority": fact.get("authority") or "judge_fact",
             "visibility": "actor_private",
             "source_activation_id": fact.get("source_activation_id"),
             "record_seq": record_seq,

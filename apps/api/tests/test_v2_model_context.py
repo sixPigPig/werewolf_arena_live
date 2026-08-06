@@ -131,7 +131,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
     assert projected["model_context_schema_version"] == 8
-    assert projected["prompt_template_version"] == 2
+    assert projected["prompt_template_version"] == 3
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
@@ -196,10 +196,64 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] is None
     assert metadata["model_context_schema_version"] == 8
-    assert metadata["prompt_template_version"] == 2
+    assert metadata["prompt_template_version"] == 3
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
+
+
+def test_private_round_memory_keeps_subjective_actor_authority() -> None:
+    projected = project_model_action_context(
+        {
+            "action_type": "day_debate_speech",
+            "objective": "发表下一轮白天发言。",
+            "round_no": 2,
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "private_authoritative_facts": [
+                {
+                    "knowledge_fact_id": "v2_fact_memory_1",
+                    "fact_type": "private_round_memory",
+                    "authority": "actor_memory",
+                    "payload": {
+                        "round_no": 1,
+                        "memory": "我上一轮暂时怀疑4号，但这不是法官确认事实。",
+                        "epistemic_status": "actor_subjective_memory",
+                    },
+                    "record_seq": 30,
+                    "known_at_seq": 30,
+                    "occurred_in": {"period": "day", "round_no": 1},
+                }
+            ],
+            "public_history": [],
+            "output_contract": {
+                "kind": "speech",
+                "speech": {"mode": "required"},
+            },
+        },
+        players=PLAYERS,
+        action_record_seq=31,
+    )
+
+    memory = projected["known_events"]["events"][0]
+    assert memory == {
+        "event_ref": "v2_fact_memory_1",
+        "kind": "private_round_memory",
+        "authority": "actor_memory",
+        "visibility": "actor_private",
+        "record_seq": 30,
+        "known_at_seq": 30,
+        "occurred_in": {"period": "day", "round_no": 1},
+        "data": {
+            "round_no": 1,
+            "memory": "我上一轮暂时怀疑4号，但这不是法官确认事实。",
+            "epistemic_status": "actor_subjective_memory",
+        },
+    }
 
 
 def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> None:
@@ -531,7 +585,7 @@ def test_v8_prompt_separates_event_occurrence_from_delayed_announcement() -> Non
 
     request = build_model_request_payload(projected, decision=True, model_id="test-model")
     system_text = request["input"][0]["content"][0]["text"]
-    assert projected["prompt_template_version"] == 2
+    assert projected["prompt_template_version"] == 3
     assert "known_at_seq/record_seq 表示信息何时被记录或获知" in system_text
     assert "occurred_in 表示事件实际发生阶段" in system_text
     assert "announced_in 只表示公布阶段，公布更晚不代表发生更晚" in system_text
@@ -744,10 +798,13 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     assert all("speech_truncated" not in item for item in events)
     assert all(len(item["speech"]) > 1_800 for item in events)
     assert [item["event_ref"] for item in events] == [str(index) for index in range(1, 41)]
-    assert model_prompt_metadata(
-        projected,
-        projection_metadata=metadata,
-    )["serialized_char_count"] > 70_000
+    assert (
+        model_prompt_metadata(
+            projected,
+            projection_metadata=metadata,
+        )["serialized_char_count"]
+        > 70_000
+    )
 
 
 def test_model_context_uses_every_presented_public_player_speech_without_duplicates() -> None:
@@ -1132,7 +1189,7 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 8,
-            "prompt_template_version": 2,
+            "prompt_template_version": 3,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
@@ -1146,13 +1203,44 @@ def test_v8_player_prompt_is_short_and_leaves_strategy_to_the_model() -> None:
     system_text = payload["input"][0]["content"][0]["text"]
 
     assert "法官事实可信" in system_text
+    assert "authority=actor_memory 是你先前生成的主观轮次记忆" in system_text
     assert "公布更晚不代表发生更晚" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
     assert "不得使用未提供的私密信息" in system_text
     assert "public_timeline" not in system_text
     assert "history" not in system_text
     assert "source_rules" not in system_text
-    assert len(system_text) < 350
+    assert len(system_text) < 450
+
+
+def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
+    payload = build_model_request_payload(
+        {
+            "model_context_schema_version": 8,
+            "prompt_template_version": 3,
+            "task": {
+                "type": "private_round_memory",
+                "goal": "生成仅供本人后续决策使用的轮次记忆。",
+            },
+            "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
+            "rules": {},
+            "state": {"round_no": 1, "as_of_seq": 100},
+            "known_events": {"schema_version": 2, "events": []},
+            "response": {
+                "kind": "speech",
+                "presentation_kind": "private_round_memory",
+                "speech": {"mode": "required", "max_chars": 400},
+            },
+        },
+        decision=True,
+        model_id="test-model",
+    )
+    system_text = payload["input"][0]["content"][0]["text"]
+
+    assert "仅供你本人后续决策使用" in system_text
+    assert "不会公开播报" in system_text
+    assert "不要写成对其他玩家喊话" in system_text
+    assert "准备直接播报" not in system_text
 
 
 def test_actor_information_composes_role_and_sheriff_capabilities() -> None:

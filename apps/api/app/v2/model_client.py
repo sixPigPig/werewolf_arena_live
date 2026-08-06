@@ -839,6 +839,19 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
         raise V2ModelError("model_decision_contract_invalid")
     if (
         action_context.get("model_context_schema_version") == 8
+        and action_context.get("prompt_template_version") == 3
+    ):
+        system_text = (
+            "你正在扮演一名狼人杀玩家。法官事实可信，玩家发言均为未核实说法；"
+            "authority=actor_memory 是你先前生成的主观轮次记忆，可延续思路但不是法官事实。"
+            "只能依据当前动作发生前已经对你可见的信息行动；known_at_seq/record_seq "
+            "表示信息何时被记录或获知，occurred_in 表示事件实际发生阶段，"
+            "announced_in 只表示公布阶段，公布更晚不代表发生更晚。"
+            "策略、身份伪装和表达由你自主决定，不得使用未提供的私密信息。"
+            f"{output_instruction}只能用“N号”称呼玩家，不得生成玩家姓名。"
+        )
+    elif (
+        action_context.get("model_context_schema_version") == 8
         and action_context.get("prompt_template_version") == 2
     ):
         system_text = (
@@ -909,7 +922,13 @@ def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
     speech = output_contract.get("speech")
     speech = speech if isinstance(speech, dict) else {}
     mode = speech.get("mode")
-    if mode == "required":
+    private_memory = output_contract.get("presentation_kind") == "private_round_memory"
+    if mode == "required" and private_memory:
+        instruction = (
+            "speech 必须是仅供你本人后续决策使用的非空中文轮次记忆，"
+            "不会公开播报，不要写成对其他玩家喊话。"
+        )
+    elif mode == "required":
         instruction = "speech 必须是准备直接播报的非空自然中文。"
     elif mode == "optional":
         instruction = "speech 可省略或为 null；若提供，必须是可直接播报的非空自然中文。"

@@ -65,6 +65,7 @@ _PUBLIC_SPEECH_MAX_CHARS = {
     "exile_pk_speech": 300,
     "exile_last_words": 200,
 }
+_PRIVATE_ROUND_MEMORY_MAX_CHARS = 400
 
 
 class V2DayRuntimeError(RuntimeError):
@@ -309,41 +310,25 @@ class V2DayEngine:
     ) -> None:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
-        alive = [player for player in state.players if player.alive]
-        candidates: list[V2MatchPlayer] = []
-        for player in alive:
-            self._actions.check_cancellation(game_id)
-            decision = await self._player_action(
-                game_id=game_id,
-                player=player,
-                broadcaster=broadcaster,
-                action_type="sheriff_run",
-                objective="决定是否竞选警长。",
-                candidates=[],
-                target_optional=None,
-                output_kind="public_decision",
-                decision_contract=V2DecisionContract(
-                    kind="boolean",
-                    boolean_field="run_for_sheriff",
-                    speech_mode="forbidden",
-                    true_meaning="竞选警长",
-                    false_meaning="不竞选警长",
-                ),
-            )
-            if not isinstance(decision.boolean_value, bool):
-                raise V2DayRuntimeError("sheriff_run_invalid_decision")
-            is_running = decision.boolean_value
-            self._repository.append_event(
-                game_id=game_id,
-                event_type="sheriff_run_decided",
-                payload={
-                    "round_no": state.round_no,
-                    "player_id": player.player_id,
-                    "is_running": is_running,
-                },
-            )
-            if is_running:
-                candidates.append(player)
+        alive = sorted(
+            (player for player in state.players if player.alive),
+            key=lambda player: player.seat,
+        )
+        sheriff_run = await self._collect_boolean_decisions(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            state=state,
+            players=alive,
+            action_type="sheriff_run",
+            objective="决定是否竞选警长。",
+            output_kind="public_decision",
+            boolean_field="run_for_sheriff",
+            true_meaning="竞选警长",
+            false_meaning="不竞选警长",
+            decision_event_type="sheriff_run_decided",
+            decision_payload_field="is_running",
+        )
+        candidates = [player for player in alive if sheriff_run[player.player_id]]
 
         original_candidates = tuple(candidates)
         original_off_sheriff = [
@@ -373,40 +358,26 @@ class V2DayEngine:
             )
             self._record_speech(state, candidate, decision, "sheriff_campaign")
 
-        remaining: list[V2MatchPlayer] = []
-        for candidate in candidates:
-            self._actions.check_cancellation(game_id)
-            decision = await self._player_action(
-                game_id=game_id,
-                player=candidate,
-                broadcaster=broadcaster,
-                action_type="sheriff_withdraw",
-                objective="决定是否退水。",
-                candidates=[],
-                target_optional=None,
-                output_kind="sheriff_withdraw_decision",
-                decision_contract=V2DecisionContract(
-                    kind="boolean",
-                    boolean_field="withdraw",
-                    speech_mode="forbidden",
-                    true_meaning="退水",
-                    false_meaning="不退水",
-                ),
-            )
-            if not isinstance(decision.boolean_value, bool):
-                raise V2DayRuntimeError("sheriff_withdraw_invalid_decision")
-            withdrew = decision.boolean_value
-            self._repository.append_event(
-                game_id=game_id,
-                event_type="sheriff_withdraw_decided",
-                payload={
-                    "round_no": state.round_no,
-                    "player_id": candidate.player_id,
-                    "withdrew": withdrew,
-                },
-            )
-            if not withdrew:
-                remaining.append(candidate)
+        # Every candidate has now heard the same complete campaign transcript.
+        # Freeze that public boundary before collecting any private withdrawal.
+        withdraw_state = self._repository.snapshot(game_id)
+        sheriff_withdraw = await self._collect_boolean_decisions(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            state=withdraw_state,
+            players=candidates,
+            action_type="sheriff_withdraw",
+            objective="决定是否退水。",
+            output_kind="sheriff_withdraw_decision",
+            boolean_field="withdraw",
+            true_meaning="退水",
+            false_meaning="不退水",
+            decision_event_type="sheriff_withdraw_decided",
+            decision_payload_field="withdrew",
+        )
+        remaining = [
+            candidate for candidate in candidates if not sheriff_withdraw[candidate.player_id]
+        ]
 
         if not remaining:
             await self._destroy_badge(
@@ -492,6 +463,100 @@ class V2DayEngine:
             broadcaster=broadcaster,
             reason="sheriff_runoff_unique_leader",
         )
+
+    async def _collect_boolean_decisions(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        state: V2MatchSnapshot,
+        players: list[V2MatchPlayer],
+        action_type: str,
+        objective: str,
+        output_kind: str,
+        boolean_field: str,
+        true_meaning: str,
+        false_meaning: str,
+        decision_event_type: str,
+        decision_payload_field: str,
+    ) -> dict[str, bool]:
+        ordered = sorted(players, key=lambda player: player.seat)
+        public_cutoff_record_seq = state.last_record_seq
+        batch_id = f"{state.phase_id}:{action_type}:{public_cutoff_record_seq}:boolean"
+
+        async def request_decision(player: V2MatchPlayer) -> V2ModelDecision | None:
+            return await self._player_action(
+                game_id=game_id,
+                player=player,
+                broadcaster=broadcaster,
+                action_type=action_type,
+                objective=objective,
+                candidates=[],
+                target_optional=None,
+                output_kind=output_kind,
+                decision_contract=V2DecisionContract(
+                    kind="boolean",
+                    boolean_field=boolean_field,
+                    speech_mode="forbidden",
+                    true_meaning=true_meaning,
+                    false_meaning=false_meaning,
+                ),
+                extra_context={
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "boolean_batch_stage": "concurrent_initial",
+                },
+                frozen_state=state,
+                defer_presentation=True,
+                isolated_failure=True,
+                allow_failure=True,
+                batch_id=batch_id,
+            )
+
+        decisions = await asyncio.gather(*(request_decision(player) for player in ordered))
+        resolved: dict[str, bool] = {}
+        failed_player_ids: list[str] = []
+        for player, decision in zip(ordered, decisions, strict=True):
+            if decision is not None and not isinstance(decision.boolean_value, bool):
+                raise V2DayRuntimeError(f"{action_type}_invalid_decision")
+            if decision is None:
+                failed_player_ids.append(player.player_id)
+            resolved[player.player_id] = bool(decision and decision.boolean_value)
+
+        # Keep settlement deterministic and invisible to peers until every
+        # participant has completed the same frozen decision batch.
+        for player in ordered:
+            self._repository.append_event(
+                game_id=game_id,
+                event_type=decision_event_type,
+                payload={
+                    "round_no": state.round_no,
+                    "player_id": player.player_id,
+                    decision_payload_field: resolved[player.player_id],
+                    "decision_status": (
+                        "failed" if player.player_id in failed_player_ids else "completed"
+                    ),
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                },
+            )
+        self._repository.append_event(
+            game_id=game_id,
+            event_type=f"{action_type}_batch_resolved",
+            payload={
+                "round_no": state.round_no,
+                "action_type": action_type,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
+                "eligible_player_ids": [player.player_id for player in ordered],
+                "failed_player_ids": failed_player_ids,
+                "affirmative_player_ids": [
+                    player.player_id for player in ordered if resolved[player.player_id]
+                ],
+                "failure_policy": "false",
+                "commit_order": "seat_ascending",
+            },
+        )
+        return resolved
 
     async def _run_public_discussion(
         self,
@@ -849,13 +914,21 @@ class V2DayEngine:
         self._actions.check_cancellation(game_id)
         totals: dict[str, float] = defaultdict(float)
         state = self._repository.snapshot(game_id)
-        committed: list[tuple[V2MatchPlayer, str, float]] = []
-        for voter in voters:
-            self._actions.check_cancellation(game_id)
+        public_cutoff_record_seq = state.last_record_seq
+        batch_id = f"{state.phase_id}:{action_type}:{public_cutoff_record_seq}:vote"
+        prepared: list[tuple[V2MatchPlayer, list[V2MatchPlayer]]] = []
+        for voter in sorted(voters, key=lambda item: item.seat):
             eligible = [item for item in candidates if item.player_id != voter.player_id]
-            if not eligible:
-                continue
-            decision = await self._player_action(
+            if eligible:
+                prepared.append((voter, eligible))
+
+        async def request_vote(
+            voter: V2MatchPlayer,
+            eligible: list[V2MatchPlayer],
+            *,
+            concurrent_initial: bool,
+        ) -> V2ModelDecision | None:
+            return await self._player_action(
                 game_id=game_id,
                 player=voter,
                 broadcaster=broadcaster,
@@ -870,8 +943,70 @@ class V2DayEngine:
                     speech_mode="forbidden",
                 ),
                 audience="god_view",
-                extra_context=context,
+                extra_context={
+                    **context,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "vote_batch_stage": (
+                        "concurrent_initial" if concurrent_initial else "sequential_recovery"
+                    ),
+                },
+                frozen_state=state,
+                defer_presentation=concurrent_initial,
+                isolated_failure=concurrent_initial,
+                allow_failure=concurrent_initial,
+                batch_id=batch_id,
             )
+
+        # The fast path isolates each non-blocking request so all voters can
+        # decide at the same frozen public cutoff. Missing required votes then
+        # re-enter the existing blocking action path one at a time, preserving
+        # durable pause/operator-retry semantics without publishing a partial tally.
+        decisions = list(
+            await asyncio.gather(
+                *(
+                    request_vote(voter, eligible, concurrent_initial=True)
+                    for voter, eligible in prepared
+                )
+            )
+        )
+        failed_indexes = [index for index, decision in enumerate(decisions) if decision is None]
+        initial_failed_voter_ids = [prepared[index][0].player_id for index in failed_indexes]
+        if failed_indexes:
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="day_vote_batch_recovery_started",
+                payload={
+                    "round_no": state.round_no,
+                    "action_type": action_type,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "failed_voter_ids": initial_failed_voter_ids,
+                },
+            )
+            for index in failed_indexes:
+                self._actions.check_cancellation(game_id)
+                voter, eligible = prepared[index]
+                decisions[index] = await request_vote(
+                    voter,
+                    eligible,
+                    concurrent_initial=False,
+                )
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="day_vote_batch_recovery_completed",
+                payload={
+                    "round_no": state.round_no,
+                    "action_type": action_type,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "recovered_voter_ids": initial_failed_voter_ids,
+                },
+            )
+
+        committed: list[tuple[V2MatchPlayer, str, float]] = []
+        for (voter, _eligible), decision in zip(prepared, decisions, strict=True):
+            if decision is None:
+                raise V2DayRuntimeError(f"{action_type}_vote_batch_incomplete")
             target_id = _required_target(decision)
             weight = (
                 float(state.rule.get("sheriff_vote_weight") or 1)
@@ -895,6 +1030,8 @@ class V2DayEngine:
                     "voter_player_id": voter.player_id,
                     "target_player_id": target_id,
                     "weight": weight,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
                 },
             )
         self._repository.append_event(
@@ -903,6 +1040,8 @@ class V2DayEngine:
             payload={
                 "round_no": state.round_no,
                 "action_type": action_type,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
                 "eligible_voter_ids": [item.player_id for item in voters],
                 "ineligible_voter_ids": [
                     item.player_id
@@ -1197,13 +1336,9 @@ class V2DayEngine:
             )
             return transition
         if summarize:
-            if not await self._judge(
+            if not await self._run_day_summary_and_private_memories(
                 state=state,
                 broadcaster=broadcaster,
-                action_type="judge_day_summary",
-                objective=f"播报第{state.round_no}天流程结束并即将入夜",
-                success_phase_state=state.phase_state,
-                context={},
             ):
                 raise V2DayRuntimeError("day_summary_failed")
         self._actions.check_cancellation(game_id)
@@ -1229,6 +1364,205 @@ class V2DayEngine:
                 )
             )
         return transition
+
+    async def _run_day_summary_and_private_memories(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        broadcaster: V2BroadcastPort,
+    ) -> bool:
+        prompt_template_version = state.model_context_contract.get("prompt_template_version")
+        if not isinstance(prompt_template_version, int) or prompt_template_version < 3:
+            return await self._judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="judge_day_summary",
+                objective=f"播报第{state.round_no}天流程结束并即将入夜",
+                success_phase_state=state.phase_state,
+                context={},
+            )
+
+        players = tuple(
+            sorted(
+                (player for player in state.players if player.alive),
+                key=lambda player: player.seat,
+            )
+        )
+        batch_id = f"{state.game_id}:round_{state.round_no}:private_memories"
+        self._repository.append_event(
+            game_id=state.game_id,
+            event_type="day_private_memory_batch_started",
+            payload={
+                "round_no": state.round_no,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": state.last_record_seq,
+                "player_ids": [player.player_id for player in players],
+                "commit_order": [player.player_id for player in players],
+            },
+        )
+
+        request_started = {player.player_id: asyncio.Event() for player in players}
+        memory_tasks = {
+            player.player_id: asyncio.create_task(
+                self._generate_private_round_memory(
+                    state=state,
+                    player=player,
+                    broadcaster=broadcaster,
+                    batch_id=batch_id,
+                    request_started=request_started[player.player_id],
+                )
+            )
+            for player in players
+        }
+        judge_task: asyncio.Task[bool] | None = None
+        try:
+            if request_started:
+                await asyncio.gather(*(event.wait() for event in request_started.values()))
+            judge_task = asyncio.create_task(
+                self._judge(
+                    state=state,
+                    broadcaster=broadcaster,
+                    action_type="judge_day_summary",
+                    objective=f"播报第{state.round_no}天流程结束并即将入夜",
+                    success_phase_state=state.phase_state,
+                    context={},
+                )
+            )
+            await asyncio.gather(judge_task, *memory_tasks.values())
+        except BaseException:
+            for task in [*memory_tasks.values(), *([judge_task] if judge_task is not None else [])]:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *memory_tasks.values(),
+                *([judge_task] if judge_task is not None else []),
+                return_exceptions=True,
+            )
+            try:
+                self._repository.append_event(
+                    game_id=state.game_id,
+                    event_type="day_private_memory_batch_canceled",
+                    payload={
+                        "round_no": state.round_no,
+                        "batch_id": batch_id,
+                    },
+                )
+            except Exception:
+                logger.exception("Live V2 could not persist private memory batch cancellation")
+            raise
+
+        if judge_task is None or not judge_task.result():
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="day_private_memory_batch_completed",
+                payload={
+                    "round_no": state.round_no,
+                    "batch_id": batch_id,
+                    "public_summary_status": "failed",
+                    "memories": [],
+                    "commit_order": [player.player_id for player in players],
+                },
+            )
+            return False
+
+        committed: list[dict[str, Any]] = []
+        for commit_index, player in enumerate(players, start=1):
+            decision = memory_tasks[player.player_id].result()
+            memory = decision.speech.strip() if decision is not None and decision.speech else ""
+            if not memory:
+                committed.append(
+                    {
+                        "player_id": player.player_id,
+                        "status": "generation_failed",
+                    }
+                )
+                continue
+            normalized_memory = memory[:_PRIVATE_ROUND_MEMORY_MAX_CHARS].rstrip()
+            if normalized_memory != memory:
+                self._repository.append_event(
+                    game_id=state.game_id,
+                    event_type="private_round_memory_normalized",
+                    payload={
+                        "round_no": state.round_no,
+                        "batch_id": batch_id,
+                        "owner_id": player.player_id,
+                        "reason": "max_chars",
+                        "max_chars": _PRIVATE_ROUND_MEMORY_MAX_CHARS,
+                        "original_chars": len(memory),
+                        "normalized_chars": len(normalized_memory),
+                    },
+                )
+            fact_id, created = self._repository.record_private_round_memory(
+                game_id=state.game_id,
+                player_id=player.player_id,
+                round_no=state.round_no,
+                memory=normalized_memory,
+                batch_id=batch_id,
+                commit_index=commit_index,
+            )
+            committed.append(
+                {
+                    "player_id": player.player_id,
+                    "status": "committed" if created else "reused",
+                    "knowledge_fact_id": fact_id,
+                }
+            )
+
+        self._repository.append_event(
+            game_id=state.game_id,
+            event_type="day_private_memory_batch_completed",
+            payload={
+                "round_no": state.round_no,
+                "batch_id": batch_id,
+                "public_summary_status": "completed",
+                "memories": committed,
+                "commit_order": [player.player_id for player in players],
+            },
+        )
+        return True
+
+    async def _generate_private_round_memory(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+        broadcaster: V2BroadcastPort,
+        batch_id: str,
+        request_started: asyncio.Event,
+    ) -> V2ModelDecision | None:
+        request_started.set()
+        return await self._player_action(
+            game_id=state.game_id,
+            player=player,
+            broadcaster=broadcaster,
+            action_type="private_round_memory",
+            objective=(
+                f"生成仅供你本人后续决策使用的第{state.round_no}轮私有记忆。"
+                "概括本轮关键公开事实、你已知的私人事实、主要判断和下一轮待验证事项；"
+                "不得编造未知身份或结果，使用第一人称并保持精简。"
+            ),
+            candidates=[],
+            target_optional=None,
+            output_kind="private_round_memory",
+            decision_contract=V2DecisionContract(
+                kind="speech",
+                speech_mode="required",
+                speech_max_chars=_PRIVATE_ROUND_MEMORY_MAX_CHARS,
+                speech_max_sentences=4,
+            ),
+            audience="player_private",
+            extra_context={
+                "private_memory_batch_id": batch_id,
+                "public_cutoff_record_seq": state.last_record_seq,
+                "memory_round_no": state.round_no,
+                "memory_visibility": "actor_only",
+            },
+            frozen_state=state,
+            defer_presentation=True,
+            isolated_failure=True,
+            allow_failure=True,
+            batch_id=batch_id,
+        )
 
     async def _judge(
         self,

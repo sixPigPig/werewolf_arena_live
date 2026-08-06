@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.v2.knowledge_timeline import player_private_knowledge
+from app.v2.model_context_contract import frozen_model_context_contract
 from app.v2.models import (
     V2GameRecord,
     V2GameRecordEvent,
@@ -56,6 +57,7 @@ class V2MatchSnapshot:
     pre_sheriff_explosion_count: int
     rule: dict[str, Any]
     max_rounds: int
+    model_context_contract: dict[str, Any]
     players: tuple[V2MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
 
@@ -104,6 +106,7 @@ class V2MatchRepository:
                 pre_sheriff_explosion_count=match.pre_sheriff_explosion_count,
                 rule=compiled_rule,
                 max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
+                model_context_contract=(frozen_model_context_contract(game.rule_snapshot) or {}),
                 players=_players(db, game),
                 public_history=_public_history(db, game_id),
             )
@@ -115,6 +118,91 @@ class V2MatchRepository:
                 game_id=game_id,
                 player_id=player_id,
             )
+
+    def record_private_round_memory(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        round_no: int,
+        memory: str,
+        batch_id: str,
+        commit_index: int,
+    ) -> tuple[str, bool]:
+        normalized_memory = memory.strip()
+        if not normalized_memory:
+            raise V2RepositoryError("private round memory cannot be empty")
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            _raise_if_stop_requested(db, game)
+            match = _match(db, game)
+            if match.round_no != round_no or not game.phase_id.startswith("day_"):
+                raise V2RepositoryError("private round memory phase changed before commit")
+            player = db.get(V2PlayerState, (game_id, player_id))
+            if player is None or not player.alive:
+                raise V2RepositoryError("private round memory owner must be alive")
+            existing_rows = list(
+                db.scalars(
+                    select(V2KnowledgeFact).where(
+                        V2KnowledgeFact.game_id == game_id,
+                        V2KnowledgeFact.owner_scope == "player",
+                        V2KnowledgeFact.owner_id == player_id,
+                        V2KnowledgeFact.fact_type == "private_round_memory",
+                    )
+                )
+            )
+            existing = next(
+                (row for row in existing_rows if (row.payload or {}).get("round_no") == round_no),
+                None,
+            )
+            if existing is not None:
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="private_round_memory_reused",
+                    payload={
+                        "knowledge_fact_id": existing.knowledge_fact_id,
+                        "owner_id": player_id,
+                        "round_no": round_no,
+                        "batch_id": batch_id,
+                        "commit_index": commit_index,
+                    },
+                )
+                return existing.knowledge_fact_id, False
+
+            fact_id = f"v2_fact_{uuid4().hex[:16]}"
+            db.add(
+                V2KnowledgeFact(
+                    knowledge_fact_id=fact_id,
+                    game_id=game_id,
+                    source_activation_id=None,
+                    owner_scope="player",
+                    owner_id=player_id,
+                    fact_type="private_round_memory",
+                    payload={
+                        "schema_version": 1,
+                        "round_no": round_no,
+                        "memory": normalized_memory,
+                        "epistemic_status": "actor_subjective_memory",
+                        "batch_id": batch_id,
+                    },
+                )
+            )
+            _append_event(
+                db,
+                game=game,
+                event_type="private_knowledge_recorded",
+                payload={
+                    "knowledge_fact_id": fact_id,
+                    "owner_scope": "player",
+                    "owner_id": player_id,
+                    "fact_type": "private_round_memory",
+                    "round_no": round_no,
+                    "batch_id": batch_id,
+                    "commit_index": commit_index,
+                },
+            )
+            return fact_id, True
 
     def append_event(
         self,

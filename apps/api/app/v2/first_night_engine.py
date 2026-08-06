@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_PARALLEL_NIGHT_GROUPS = ("werewolves", "guard", "seer")
+
 
 class V2NightError(RuntimeError):
     pass
@@ -63,6 +65,32 @@ class _WerewolfAttackResolution:
     reason: str
     tiebreaker_player_id: str | None = None
     tied_target_player_ids: tuple[str | None, ...] = ()
+
+
+@dataclass(frozen=True)
+class _NightParallelBatch:
+    batch_id: str
+    public_cutoff_record_seq: int
+    public_history: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class _PreparedRoleDecision:
+    group: str
+    ability_id: str
+    player: V2NightPlayer | None
+    candidates: tuple[V2NightPlayer, ...]
+    objective: str
+    knowledge: dict[str, Any]
+    optional: bool
+    skip_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _BufferedRoleDecision:
+    prepared: _PreparedRoleDecision
+    activation: V2ActivationRef | None
+    decision: V2ModelDecision | None
 
 
 GroupHandler = Callable[[V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]]
@@ -106,7 +134,17 @@ class V2NightEngine:
                 audience="public",
             )
             groups = _activation_groups(state.snapshot)
+            parallel_groups = tuple(group for group in _PARALLEL_NIGHT_GROUPS if group in groups)
+            if parallel_groups:
+                await self._run_parallel_independent_groups(
+                    state=state,
+                    broadcaster=broadcaster,
+                    working=working,
+                    groups=parallel_groups,
+                )
             for group in groups:
+                if group in parallel_groups:
+                    continue
                 self._actions.check_cancellation(game_id)
                 handler = self._handlers.get(group)
                 if handler is None:
@@ -304,11 +342,204 @@ class V2NightEngine:
             )
             return None
 
+    async def _run_parallel_independent_groups(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+        working: _WorkingNight,
+        groups: tuple[str, ...],
+    ) -> None:
+        public_cutoff_record_seq = self._repository.latest_record_seq(state.game_id)
+        batch = _NightParallelBatch(
+            batch_id=(f"{state.window_id}:{public_cutoff_record_seq}:night_independent_decisions"),
+            public_cutoff_record_seq=public_cutoff_record_seq,
+            public_history=tuple(self._repository.public_history(state.game_id)),
+        )
+        prepared: dict[str, _PreparedRoleDecision] = {}
+        if "guard" in groups:
+            prepared["guard"] = self._prepare_guard_decision(state)
+        if "seer" in groups:
+            prepared["seer"] = self._prepare_seer_decision(state)
+        self._repository.append_event(
+            game_id=state.game_id,
+            event_type="night_parallel_batch_started",
+            payload={
+                "round_no": state.round_no,
+                "window_id": state.window_id,
+                "batch_id": batch.batch_id,
+                "public_cutoff_record_seq": batch.public_cutoff_record_seq,
+                "groups": list(groups),
+                "commit_order": list(groups),
+            },
+        )
+
+        tasks: dict[str, asyncio.Task[Any]] = {}
+        prefetch_started: list[asyncio.Event] = []
+        for group in ("guard", "seer"):
+            if group in prepared:
+                request_started = asyncio.Event() if prepared[group].skip_reason is None else None
+                if request_started is not None:
+                    prefetch_started.append(request_started)
+                tasks[group] = asyncio.create_task(
+                    self._request_prepared_role_decision(
+                        state=state,
+                        broadcaster=broadcaster,
+                        prepared=prepared[group],
+                        batch=batch,
+                        concurrent_initial=True,
+                        request_started=request_started,
+                    )
+                )
+        try:
+            if prefetch_started:
+                await asyncio.gather(*(event.wait() for event in prefetch_started))
+            if "werewolves" in groups:
+                tasks["werewolves"] = asyncio.create_task(
+                    self._run_werewolves(
+                        state,
+                        broadcaster,
+                        working,
+                        batch=batch,
+                    )
+                )
+            await asyncio.gather(*tasks.values())
+        except BaseException:
+            for task in tasks.values():
+                if not task.done():
+                    task.cancel()
+            try:
+                self._repository.cancel_open_activations(
+                    state=state,
+                    reason="night_parallel_batch_canceled",
+                    batch_id=batch.batch_id,
+                    groups=groups,
+                )
+            except Exception:
+                logger.exception("Live V2 could not persist night batch cancellation")
+            try:
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
+            except BaseException:
+                pass
+            raise
+
+        buffered = {
+            group: task.result() for group, task in tasks.items() if group in {"guard", "seer"}
+        }
+        failed_groups = [
+            group
+            for group in ("guard", "seer")
+            if group in buffered
+            and buffered[group].prepared.skip_reason is None
+            and buffered[group].decision is None
+        ]
+        if failed_groups:
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="night_parallel_batch_recovery_started",
+                payload={
+                    "round_no": state.round_no,
+                    "window_id": state.window_id,
+                    "batch_id": batch.batch_id,
+                    "failed_groups": failed_groups,
+                },
+            )
+            for group in failed_groups:
+                self._actions.check_cancellation(state.game_id)
+                previous = buffered[group]
+                recovered = await self._request_prepared_role_decision(
+                    state=state,
+                    broadcaster=broadcaster,
+                    prepared=previous.prepared,
+                    batch=batch,
+                    concurrent_initial=False,
+                    activation=previous.activation,
+                )
+                if recovered.decision is None:
+                    raise V2NightError(f"{recovered.prepared.ability_id}_decision_failed")
+                buffered[group] = recovered
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="night_parallel_batch_recovery_completed",
+                payload={
+                    "round_no": state.round_no,
+                    "window_id": state.window_id,
+                    "batch_id": batch.batch_id,
+                    "recovered_groups": failed_groups,
+                },
+            )
+
+        if "werewolves" in groups:
+            await self._broadcast_night_actions_progress(state, broadcaster)
+        if "guard" in buffered:
+            await self._commit_guard_decision(
+                state=state,
+                broadcaster=broadcaster,
+                working=working,
+                buffered=buffered["guard"],
+                present_wake=True,
+            )
+            await self._broadcast_night_actions_progress(state, broadcaster)
+        if "seer" in buffered:
+            await self._commit_seer_decision(
+                state=state,
+                broadcaster=broadcaster,
+                buffered=buffered["seer"],
+                present_wake=True,
+            )
+            await self._broadcast_night_actions_progress(state, broadcaster)
+
+        self._repository.append_event(
+            game_id=state.game_id,
+            event_type="night_parallel_batch_resolved",
+            payload={
+                "round_no": state.round_no,
+                "window_id": state.window_id,
+                "batch_id": batch.batch_id,
+                "public_cutoff_record_seq": batch.public_cutoff_record_seq,
+                "lanes": [
+                    {
+                        "group": group,
+                        "status": (
+                            "skipped"
+                            if group in buffered
+                            and buffered[group].prepared.skip_reason is not None
+                            else "completed"
+                        ),
+                        "activation_id": (
+                            buffered[group].activation.activation_id
+                            if group in buffered and buffered[group].activation is not None
+                            else None
+                        ),
+                    }
+                    for group in groups
+                ],
+                "commit_order": list(groups),
+            },
+        )
+
+    async def _broadcast_night_actions_progress(
+        self,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+    ) -> None:
+        await broadcaster.broadcast_json(
+            night_progress(
+                game_id=state.game_id,
+                run_id=state.run_id,
+                stage="actions_in_progress",
+                latest_presentation_seq=self._repository.latest_presentation_seq(state.game_id),
+            ),
+            audience="public",
+        )
+
     async def _run_werewolves(
         self,
         state: V2NightRuntimeState,
         broadcaster: V2BroadcastPort,
         working: _WorkingNight,
+        *,
+        batch: _NightParallelBatch | None = None,
     ) -> None:
         ability_id = "werewolf.attack"
         policy = _werewolf_attack_policy(state)
@@ -388,6 +619,7 @@ class V2NightEngine:
                     isolated_failure=True,
                     allow_failure=True,
                     batch_id=proposal_batch_id,
+                    batch=batch,
                 )
 
             decisions = await asyncio.gather(
@@ -586,6 +818,7 @@ class V2NightEngine:
                         }
                     ),
                     optional=allow_no_attack,
+                    batch=batch,
                 )
                 assert decision is not None
                 final_items.append((wolf, activation, decision))
@@ -650,6 +883,7 @@ class V2NightEngine:
                         "werewolf_attack_policy": policy,
                     },
                     optional=None in tied_targets,
+                    batch=batch,
                 )
                 assert tiebreak_decision is not None
                 resolution = _WerewolfAttackResolution(
@@ -811,15 +1045,44 @@ class V2NightEngine:
         broadcaster: V2BroadcastPort,
         working: _WorkingNight,
     ) -> None:
+        prepared = self._prepare_guard_decision(state)
+        if prepared.skip_reason is None:
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="guard_protect_wake",
+                objective="唤醒守卫并请其选择今晚守护的存活玩家",
+                context={"ability_id": prepared.ability_id, "night_no": state.round_no},
+            )
+        buffered = await self._request_prepared_role_decision(
+            state=state,
+            broadcaster=broadcaster,
+            prepared=prepared,
+            batch=None,
+            concurrent_initial=False,
+        )
+        await self._commit_guard_decision(
+            state=state,
+            broadcaster=broadcaster,
+            working=working,
+            buffered=buffered,
+            present_wake=False,
+        )
+
+    def _prepare_guard_decision(self, state: V2NightRuntimeState) -> _PreparedRoleDecision:
         ability_id = "guard.protect"
         guard = _single_owner(state, "guard")
         if guard is None or not guard.alive:
-            self._repository.skip_activation(
-                state=state,
+            return _PreparedRoleDecision(
+                group="guard",
                 ability_id=ability_id,
-                reason="owner_not_alive",
+                player=guard,
+                candidates=(),
+                objective="选择今晚的守护目标。",
+                knowledge={},
+                optional=False,
+                skip_reason="owner_not_alive",
             )
-            return
         guard_state = self._repository.ability_state(
             game_id=state.game_id,
             ability_id=ability_id,
@@ -830,25 +1093,11 @@ class V2NightEngine:
             for player in state.players
             if player.alive and (state.round_no == 1 or player.player_id != previous_target)
         ]
-        await self._private_judge(
-            state=state,
-            broadcaster=broadcaster,
-            action_type="guard_protect_wake",
-            objective="唤醒守卫并请其选择今晚守护的存活玩家",
-            context={"ability_id": ability_id, "night_no": state.round_no},
-        )
-        activation = self._repository.open_activation(
-            state=state,
+        return _PreparedRoleDecision(
+            group="guard",
             ability_id=ability_id,
-            actor_player_id=guard.player_id,
-            occurrence=1,
-        )
-        decision = await self._player_decision(
-            state=state,
-            broadcaster=broadcaster,
-            activation=activation,
             player=guard,
-            candidates=candidates,
+            candidates=tuple(candidates),
             objective="选择今晚的守护目标。",
             knowledge={
                 "night_no": state.round_no,
@@ -856,23 +1105,114 @@ class V2NightEngine:
             },
             optional=False,
         )
+
+    async def _request_prepared_role_decision(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+        prepared: _PreparedRoleDecision,
+        batch: _NightParallelBatch | None,
+        concurrent_initial: bool,
+        activation: V2ActivationRef | None = None,
+        request_started: asyncio.Event | None = None,
+    ) -> _BufferedRoleDecision:
+        if prepared.skip_reason is not None:
+            return _BufferedRoleDecision(prepared=prepared, activation=None, decision=None)
+        if prepared.player is None:
+            raise V2NightError(f"{prepared.ability_id}_owner_missing")
+        if request_started is not None:
+            request_started.set()
+        current_activation = activation or self._repository.open_activation(
+            state=state,
+            ability_id=prepared.ability_id,
+            actor_player_id=prepared.player.player_id,
+            occurrence=1,
+        )
+        try:
+            decision = await self._player_decision(
+                state=state,
+                broadcaster=broadcaster,
+                activation=current_activation,
+                player=prepared.player,
+                candidates=list(prepared.candidates),
+                objective=prepared.objective,
+                knowledge=prepared.knowledge,
+                optional=prepared.optional,
+                defer_presentation=concurrent_initial,
+                isolated_failure=concurrent_initial,
+                allow_failure=concurrent_initial,
+                batch_id=batch.batch_id if batch is not None else None,
+                batch=batch,
+                batch_stage=("concurrent_initial" if concurrent_initial else "sequential_recovery"),
+            )
+        except asyncio.CancelledError:
+            if concurrent_initial:
+                self._repository.cancel_open_activation(
+                    state=state,
+                    activation=current_activation,
+                    reason="night_parallel_batch_canceled",
+                    batch_id=batch.batch_id if batch is not None else None,
+                    group=prepared.group if batch is not None else None,
+                )
+            raise
+        return _BufferedRoleDecision(
+            prepared=prepared,
+            activation=current_activation,
+            decision=decision,
+        )
+
+    async def _commit_guard_decision(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+        working: _WorkingNight,
+        buffered: _BufferedRoleDecision,
+        present_wake: bool,
+    ) -> None:
+        prepared = buffered.prepared
+        if prepared.skip_reason is not None:
+            self._repository.skip_activation(
+                state=state,
+                ability_id=prepared.ability_id,
+                reason=prepared.skip_reason,
+            )
+            return
+        if buffered.activation is None or buffered.decision is None or prepared.player is None:
+            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+        if present_wake:
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="guard_protect_wake",
+                objective="唤醒守卫并请其选择今晚守护的存活玩家",
+                context={"ability_id": prepared.ability_id, "night_no": state.round_no},
+            )
+        decision = buffered.decision
         working.protected_target = decision.target_player_id
         self._repository.complete_activation(
             state=state,
-            activation=activation,
+            activation=buffered.activation,
             decision=_private_decision_record(decision),
             result={"effect": "protect_registered"},
             effect_type="protect",
             target_player_id=decision.target_player_id,
             ability_state_patch={"previous_target_player_id": decision.target_player_id},
         )
-        await self._ability_completed(state, broadcaster, ability_id, guard, decision)
+        await self._ability_completed(
+            state,
+            broadcaster,
+            prepared.ability_id,
+            prepared.player,
+            decision,
+        )
         await self._private_judge(
             state=state,
             broadcaster=broadcaster,
             action_type="guard_protect_sleep",
             objective="宣布守卫行动结束并请守卫闭眼，不公开守护目标",
-            context={"ability_id": ability_id},
+            context={"ability_id": prepared.ability_id},
         )
 
     async def _run_seer(
@@ -882,39 +1222,53 @@ class V2NightEngine:
         working: _WorkingNight,
     ) -> None:
         del working
+        prepared = self._prepare_seer_decision(state)
+        if prepared.skip_reason is None:
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="seer_investigate_wake",
+                objective="唤醒预言家并请其选择今晚查验的一名其他存活玩家",
+                context={"ability_id": prepared.ability_id},
+            )
+        buffered = await self._request_prepared_role_decision(
+            state=state,
+            broadcaster=broadcaster,
+            prepared=prepared,
+            batch=None,
+            concurrent_initial=False,
+        )
+        await self._commit_seer_decision(
+            state=state,
+            broadcaster=broadcaster,
+            buffered=buffered,
+            present_wake=False,
+        )
+
+    def _prepare_seer_decision(self, state: V2NightRuntimeState) -> _PreparedRoleDecision:
         ability_id = "seer.investigate"
         seer = _single_owner(state, "seer")
         if seer is None or not seer.alive:
-            self._repository.skip_activation(
-                state=state,
+            return _PreparedRoleDecision(
+                group="seer",
                 ability_id=ability_id,
-                reason="owner_not_alive",
+                player=seer,
+                candidates=(),
+                objective="选择今晚的查验目标。",
+                knowledge={},
+                optional=False,
+                skip_reason="owner_not_alive",
             )
-            return
         candidates = [
             player
             for player in state.players
             if player.alive and player.player_id != seer.player_id
         ]
-        await self._private_judge(
-            state=state,
-            broadcaster=broadcaster,
-            action_type="seer_investigate_wake",
-            objective="唤醒预言家并请其选择今晚查验的一名其他存活玩家",
-            context={"ability_id": ability_id},
-        )
-        activation = self._repository.open_activation(
-            state=state,
+        return _PreparedRoleDecision(
+            group="seer",
             ability_id=ability_id,
-            actor_player_id=seer.player_id,
-            occurrence=1,
-        )
-        decision = await self._player_decision(
-            state=state,
-            broadcaster=broadcaster,
-            activation=activation,
             player=seer,
-            candidates=candidates,
+            candidates=tuple(candidates),
             objective="选择今晚的查验目标。",
             knowledge={
                 "known_investigations": self._repository.player_knowledge(
@@ -924,11 +1278,39 @@ class V2NightEngine:
             },
             optional=False,
         )
+
+    async def _commit_seer_decision(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        broadcaster: V2BroadcastPort,
+        buffered: _BufferedRoleDecision,
+        present_wake: bool,
+    ) -> None:
+        prepared = buffered.prepared
+        if prepared.skip_reason is not None:
+            self._repository.skip_activation(
+                state=state,
+                ability_id=prepared.ability_id,
+                reason=prepared.skip_reason,
+            )
+            return
+        if buffered.activation is None or buffered.decision is None or prepared.player is None:
+            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+        if present_wake:
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="seer_investigate_wake",
+                objective="唤醒预言家并请其选择今晚查验的一名其他存活玩家",
+                context={"ability_id": prepared.ability_id},
+            )
+        decision = buffered.decision
         target = state.player(_required_target(decision))
         alignment = "werewolves" if target.role_key == "werewolf" else "villagers"
         self._repository.complete_activation(
             state=state,
-            activation=activation,
+            activation=buffered.activation,
             decision=_private_decision_record(
                 decision,
                 target_player_id=target.player_id,
@@ -939,7 +1321,7 @@ class V2NightEngine:
             knowledge=(
                 (
                     "player",
-                    seer.player_id,
+                    prepared.player.player_id,
                     {
                         "fact_type": "investigation_alignment",
                         "payload": {
@@ -960,19 +1342,25 @@ class V2NightEngine:
                 f"{'狼人阵营' if alignment == 'werewolves' else '好人阵营'}"
             ),
             context={
-                "ability_id": ability_id,
+                "ability_id": prepared.ability_id,
                 "target_player_id": target.player_id,
                 "target_player_seat": target.seat,
                 "alignment": alignment,
             },
         )
-        await self._ability_completed(state, broadcaster, ability_id, seer, decision)
+        await self._ability_completed(
+            state,
+            broadcaster,
+            prepared.ability_id,
+            prepared.player,
+            decision,
+        )
         await self._private_judge(
             state=state,
             broadcaster=broadcaster,
             action_type="seer_investigate_sleep",
             objective="宣布预言家行动结束并请预言家闭眼",
-            context={"ability_id": ability_id},
+            context={"ability_id": prepared.ability_id},
         )
 
     async def _run_witch(
@@ -1337,6 +1725,8 @@ class V2NightEngine:
         isolated_failure: bool = False,
         allow_failure: bool = False,
         batch_id: str | None = None,
+        batch: _NightParallelBatch | None = None,
+        batch_stage: str | None = None,
     ) -> V2ModelDecision | None:
         knowledge_fact_ids, knowledge_hash = self._repository.register_activation_knowledge(
             state=state,
@@ -1450,11 +1840,24 @@ class V2NightEngine:
                         rule=state.rule,
                         max_rounds=state.max_rounds,
                     ),
-                    "public_history": self._repository.public_history(state.game_id),
+                    "public_history": (
+                        list(batch.public_history)
+                        if batch is not None
+                        else self._repository.public_history(state.game_id)
+                    ),
+                    **(
+                        {
+                            "night_parallel_batch_id": batch.batch_id,
+                            "public_cutoff_record_seq": batch.public_cutoff_record_seq,
+                            "night_parallel_batch_stage": batch_stage or "blocking_lane",
+                        }
+                        if batch is not None
+                        else {}
+                    ),
                 },
                 defer_presentation=defer_presentation,
                 isolated_failure=isolated_failure,
-                batch_id=batch_id,
+                batch_id=batch_id or (batch.batch_id if batch is not None else None),
             ),
         )
         if decision is None and not allow_failure:

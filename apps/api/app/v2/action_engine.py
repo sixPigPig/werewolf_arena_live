@@ -694,6 +694,10 @@ class V2ActionEngine:
                                     ),
                                 ) from exc
                         except V2ModelError as exc:
+                            # Validation errors are raised after the client has
+                            # returned a decision object. Never carry that invalid
+                            # object across an automatic or operator-triggered retry.
+                            model_decision = None
                             disposition = model_failure_disposition(exc)
                             remaining = model_deadline - time.monotonic()
                             delay_seconds = _model_retry_delay_seconds(

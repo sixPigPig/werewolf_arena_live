@@ -99,6 +99,31 @@ class V2NightRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
+    def latest_record_seq(self, game_id: str) -> int:
+        with self._session_factory() as db:
+            game = db.get(V2GameRecord, game_id)
+            if game is None:
+                raise V2RepositoryError(f"unknown game {game_id}")
+            return game.last_record_seq
+
+    def append_event(
+        self,
+        *,
+        game_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> int:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id)
+            record_seq = game.last_record_seq + 1
+            _append_event(
+                db,
+                game=game,
+                event_type=event_type,
+                payload=payload,
+            )
+            return record_seq
+
     def execution_enabled(self, game_id: str) -> bool:
         with self._session_factory() as db:
             game = db.get(V2GameRecord, game_id)
@@ -375,8 +400,43 @@ class V2NightRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, state.game_id)
             row = db.get(V2AbilityActivation, activation.activation_id)
-            if row is None or row.status != "open" or row.knowledge_fact_ids:
+            if row is None or row.status != "open":
                 raise V2RepositoryError("activation knowledge cannot be registered")
+            existing_ids = tuple(row.knowledge_fact_ids or ())
+            if existing_ids:
+                facts_by_id = {
+                    fact.knowledge_fact_id: fact
+                    for fact in db.scalars(
+                        select(V2KnowledgeFact).where(
+                            V2KnowledgeFact.knowledge_fact_id.in_(existing_ids)
+                        )
+                    )
+                }
+                existing = [facts_by_id.get(fact_id) for fact_id in existing_ids]
+                if (
+                    any(fact is None for fact in existing)
+                    or any(
+                        fact.source_activation_id != activation.activation_id for fact in existing
+                    )
+                    or any(fact.owner_scope != "player" for fact in existing)
+                    or any(fact.owner_id != owner_player_id for fact in existing)
+                    or len(existing) != 1
+                    or existing[0].fact_type != "action_context_projection"
+                    or (existing[0].payload or {}).get("normalized_sha256") != digest
+                ):
+                    raise V2RepositoryError("activation knowledge projection changed during retry")
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="activation_knowledge_reused",
+                    payload={
+                        "activation_id": activation.activation_id,
+                        "knowledge_fact_ids": list(existing_ids),
+                        "projection_policy_id": "v2_ability_allowed_knowledge.v1",
+                        "normalized_sha256": digest,
+                    },
+                )
+                return existing_ids, digest
             db.add(
                 V2KnowledgeFact(
                     knowledge_fact_id=fact_id,
@@ -406,6 +466,116 @@ class V2NightRepository:
                 },
             )
         return (fact_id,), digest
+
+    def cancel_open_activation(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        activation: V2ActivationRef,
+        reason: str,
+        batch_id: str | None = None,
+        group: str | None = None,
+    ) -> bool:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, state.game_id)
+            row = db.get(V2AbilityActivation, activation.activation_id)
+            if row is None or row.game_id != state.game_id:
+                raise V2RepositoryError("ability activation is missing")
+            if row.status != "open":
+                return False
+            row.status = "canceled"
+            row.skip_reason = reason
+            row.result = {
+                "decision_status": "canceled",
+                "reason": reason,
+                "action_id": row.action_id,
+            }
+            row.closed_at = _now()
+            _append_event(
+                db,
+                game=game,
+                event_type="ability_activation_canceled",
+                payload={
+                    "activation_id": activation.activation_id,
+                    "ability_id": activation.ability_id,
+                    "action_id": row.action_id,
+                    "reason": reason,
+                },
+            )
+            if batch_id is not None and group is not None:
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="night_parallel_lane_canceled",
+                    payload={
+                        "round_no": state.round_no,
+                        "window_id": state.window_id,
+                        "batch_id": batch_id,
+                        "group": group,
+                        "activation_id": activation.activation_id,
+                    },
+                )
+            return True
+
+    def cancel_open_activations(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        reason: str,
+        batch_id: str | None = None,
+        groups: tuple[str, ...] = (),
+    ) -> tuple[str, ...]:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, state.game_id)
+            rows = list(
+                db.scalars(
+                    select(V2AbilityActivation)
+                    .where(
+                        V2AbilityActivation.game_id == state.game_id,
+                        V2AbilityActivation.window_id == state.window_id,
+                        V2AbilityActivation.status == "open",
+                    )
+                    .order_by(
+                        V2AbilityActivation.ability_instance_id,
+                        V2AbilityActivation.occurrence,
+                    )
+                )
+            )
+            for row in rows:
+                row.status = "canceled"
+                row.skip_reason = reason
+                row.result = {
+                    "decision_status": "canceled",
+                    "reason": reason,
+                    "action_id": row.action_id,
+                }
+                row.closed_at = _now()
+                instance = db.get(V2AbilityInstance, row.ability_instance_id)
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="ability_activation_canceled",
+                    payload={
+                        "activation_id": row.activation_id,
+                        "ability_id": instance.ability_id if instance is not None else None,
+                        "action_id": row.action_id,
+                        "reason": reason,
+                    },
+                )
+            if batch_id is not None:
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="night_parallel_batch_canceled",
+                    payload={
+                        "round_no": state.round_no,
+                        "window_id": state.window_id,
+                        "batch_id": batch_id,
+                        "groups": list(groups),
+                        "canceled_activation_ids": [row.activation_id for row in rows],
+                    },
+                )
+            return tuple(row.activation_id for row in rows)
 
     def skip_activation(
         self,

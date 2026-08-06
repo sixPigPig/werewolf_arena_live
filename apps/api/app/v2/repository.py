@@ -523,15 +523,15 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, claim.game_id)
             _raise_if_stop_requested(db, game)
-            expected_status = (
-                "ready"
-                if claim.non_blocking
-                else "awaiting_observation"
-                if best_effort
-                else "generating"
-            )
-            if game.status != expected_status:
-                raise V2RepositoryError(f"cannot complete silent action from {game.status}")
+            if claim.non_blocking:
+                if game.status in {"failed", "canceled"}:
+                    raise V2RepositoryError(
+                        f"cannot complete non-blocking action from {game.status}"
+                    )
+            else:
+                expected_status = "awaiting_observation" if best_effort else "generating"
+                if game.status != expected_status:
+                    raise V2RepositoryError(f"cannot complete silent action from {game.status}")
             if game.phase_id != claim.phase_id:
                 raise V2RepositoryError("action phase changed before completion")
             if not best_effort and not claim.non_blocking:
@@ -701,10 +701,31 @@ class V2ActionRepository:
                 event_type="action_failed",
                 payload={
                     "action_id": claim.action_id,
+                    "activation_id": claim.activation_id,
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
                 },
             )
+            if claim.non_blocking and claim.activation_id is not None:
+                activation = db.get(V2AbilityActivation, claim.activation_id)
+                if (
+                    activation is not None
+                    and activation.status == "open"
+                    and activation.action_id == claim.action_id
+                ):
+                    activation.action_id = None
+                    _append_event(
+                        db,
+                        game=game,
+                        run_id=claim.run_id,
+                        event_type="ability_activation_action_released",
+                        payload={
+                            "activation_id": claim.activation_id,
+                            "failed_action_id": claim.action_id,
+                            "failure_code": failure_code,
+                            "reason": "non_blocking_retry_allowed",
+                        },
+                    )
 
     def pause_model_action(
         self,
