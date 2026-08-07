@@ -84,6 +84,7 @@ const lifecycleEventTypes = new Set([
   "model_first_token_received",
   "model_response_received",
   "model_request_failed",
+  "model_binding_health_updated",
   "model_retry_scheduled",
   "model_decision_target_normalized",
   "speech_opened",
@@ -99,6 +100,7 @@ const lifecycleEventTypes = new Set([
   "speech_closed",
   "action_succeeded",
   "action_failed",
+  "action_skipped_technical",
 ]);
 
 const milestoneEventTypes = new Set([

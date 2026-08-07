@@ -447,6 +447,9 @@ describe("V2 game record parsers", () => {
           action_budget_ms: 45_000,
           action_elapsed_ms: 10_001,
           action_remaining_ms: 34_999,
+          model_binding_failure_streak: 2,
+          model_binding_health_status: "degraded",
+          model_binding_recovered_after_failures: null,
           started_at: item.created_at,
           completed_at: item.updated_at,
         },
@@ -471,6 +474,9 @@ describe("V2 game record parsers", () => {
       attempt_budget_ms: 30_000,
       action_budget_ms: 45_000,
       action_remaining_ms: 34_999,
+      model_binding_failure_streak: 2,
+      model_binding_health_status: "degraded",
+      model_binding_recovered_after_failures: null,
     });
     expect(
       parseV2ModelActionRetryResult({

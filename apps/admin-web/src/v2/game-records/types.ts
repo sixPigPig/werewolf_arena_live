@@ -217,6 +217,9 @@ export type V2ModelRequestSummary = {
   action_budget_ms: number | null;
   action_elapsed_ms: number | null;
   action_remaining_ms: number | null;
+  model_binding_failure_streak: number | null;
+  model_binding_health_status: "healthy" | "impaired" | "degraded" | null;
+  model_binding_recovered_after_failures: number | null;
   started_at: string;
   completed_at: string | null;
 };

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -42,6 +43,7 @@ from app.v2.action_engine import (
     V2DecisionContract,
     V2ModelRetryPolicy,
     V2SpeechSpec,
+    _required_retry_window_seconds,
 )
 from app.v2.day_engine import (
     V2DayEngine,
@@ -61,6 +63,7 @@ from app.v2.model_client import (
     V2ModelTarget,
     V2QualityError,
     build_model_request_payload,
+    model_failure_disposition,
 )
 from app.v2.night_repository import V2NightRepository
 from app.v2.models import (
@@ -6187,10 +6190,38 @@ def test_public_speech_format_exhaustion_is_audited_and_skipped(v2_context) -> N
         ]
         assert skipped
         skipped_action_ids = {event.payload["action_id"] for event in skipped}
+        assert all(event.payload.get("actor_id") for event in skipped)
+        assert all(event.payload.get("phase_id") for event in skipped)
+        assert all(
+            isinstance(event.payload.get("round_no"), int)
+            and event.payload["round_no"] >= 1
+            for event in skipped
+        )
         assert skipped_action_ids <= {
             event.payload["action_id"] for event in events if event.event_type == "action_succeeded"
         }
+        health_updates = [
+            event
+            for event in events
+            if event.event_type == "model_binding_health_updated"
+            and event.payload.get("action_id") in skipped_action_ids
+        ]
+        assert health_updates
+        assert {event.payload.get("status") for event in health_updates} >= {
+            "impaired",
+            "degraded",
+        }
         assert not any(event.event_type == "day_runtime_failed" for event in events)
+
+    projected_skips = [
+        event
+        for context in model_client.contexts
+        for event in context.get("known_events", {}).get("events", [])
+        if event.get("kind") == "speech_turn_skipped_technical"
+    ]
+    assert projected_skips
+    assert all(event["authority"] == "judge_fact" for event in projected_skips)
+    assert all(event["reason"] == "technical_failure" for event in projected_skips)
 
 
 def test_optional_boolean_format_exhaustion_uses_false_fallback(v2_context) -> None:
@@ -6417,7 +6448,7 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
     )
     model_client = client.app.state.v2_test_model_client
     model_client.retryable_transport_failures_remaining = 1
-    model_client.call_delay_seconds = 0.15
+    model_client.call_delays_seconds = [0.15, 0.15]
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
 
     terminal_state = None
@@ -6457,13 +6488,155 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        assert sum(event.payload.get("action_id") == action_id for event in starts) == 2
+        action_starts = [
+            event for event in starts if event.payload.get("action_id") == action_id
+        ]
+        assert len(action_starts) == 2
+        assert action_starts[0].payload["model_binding_prior_failure_streak"] == 0
+        assert action_starts[0].payload["model_binding_health_status"] == "healthy"
+        assert action_starts[1].payload["model_binding_prior_failure_streak"] == 1
+        assert action_starts[1].payload["model_binding_health_status"] == "impaired"
         assert failures[0].payload["terminal"] is False
         assert failures[0].payload["attempt_budget_ms"] == 250
         assert failures[0].payload["action_budget_ms"] == 600
         assert failures[0].payload["action_remaining_ms"] > 0
+        assert failures[0].payload["model_binding_failure_streak"] == 1
+        assert failures[0].payload["model_binding_health_status"] == "impaired"
+        health_updates = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_binding_health_updated",
+                    V2GameRecordEvent.payload["action_id"].as_string() == action_id,
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        assert [event.payload["status"] for event in health_updates] == [
+            "impaired",
+            "healthy",
+        ]
+        assert health_updates[-1].payload["recovered_after_failure_count"] == 1
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None and game.status == "awaiting_observation"
+
+    assert client.post("/api/v1/admin/dev-login").status_code == 200
+    request_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=500"
+    )
+    assert request_page.status_code == 200, request_page.text
+    action_requests = [
+        item
+        for item in request_page.json()["items"]
+        if item["action_id"] == action_id
+    ]
+    assert [item["model_binding_failure_streak"] for item in action_requests] == [
+        1,
+        0,
+    ]
+    assert [item["model_binding_health_status"] for item in action_requests] == [
+        "impaired",
+        "healthy",
+    ]
+    assert action_requests[-1]["model_binding_recovered_after_failures"] == 1
+
+
+def test_pre_token_public_speech_timeout_keeps_one_bounded_retry_window() -> None:
+    policy = V2ModelRetryPolicy(
+        max_attempts=2,
+        attempt_total_seconds=180,
+        action_total_seconds=300,
+        base_delay_seconds=0,
+        jitter_seconds=0,
+    )
+    timeout = V2ModelError(
+        "model_first_token_timeout",
+        failure_stage="first_token",
+        first_token_seen=False,
+        response_headers_seen=True,
+        elapsed_ms=120_000,
+    )
+    public_speech = V2SpeechSpec(
+        action_type="day_debate_speech",
+        phase_id="day_3",
+        required_phase_state="public_discussion_open",
+        objective="发表本轮白天讨论发言。",
+        success_live_state="ready",
+        success_phase_state="public_discussion_open",
+        actor_kind="player",
+        actor_id="player-2",
+        decision_contract=V2DecisionContract(kind="speech"),
+    )
+    required_window = _required_retry_window_seconds(
+        spec=public_speech,
+        disposition=model_failure_disposition(timeout),
+        exc=timeout,
+        policy=policy,
+    )
+    assert required_window == 120
+    assert policy.action_total_seconds - 120 > required_window
+
+    vote = replace(
+        public_speech,
+        action_type="exile_vote",
+        decision_contract=V2DecisionContract(kind="target", target_mode="required"),
+    )
+    assert (
+        _required_retry_window_seconds(
+            spec=vote,
+            disposition=model_failure_disposition(timeout),
+            exc=timeout,
+            policy=policy,
+        )
+        == policy.attempt_total_seconds
+    )
+
+
+def test_model_binding_failure_streak_follows_frozen_binding_across_phases(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    repository = V2ActionRepository(session_factory, enforce_execution_fence=False)
+    binding = {
+        "actor_id": "player-1",
+        "model_provider": "test-provider",
+        "model_id": "test-model",
+    }
+
+    repository.append_event(
+        game_id=identifiers["game_id"],
+        event_type="model_binding_health_updated",
+        audience="god_view",
+        payload={
+            **binding,
+            "phase_id": "day_1",
+            "status": "degraded",
+            "consecutive_failure_count": 2,
+        },
+    )
+    assert repository.model_binding_failure_streak(
+        game_id=identifiers["game_id"],
+        **binding,
+    ) == 2
+
+    repository.append_event(
+        game_id=identifiers["game_id"],
+        event_type="model_binding_health_updated",
+        audience="god_view",
+        payload={
+            **binding,
+            "phase_id": "night_2",
+            "status": "healthy",
+            "consecutive_failure_count": 0,
+        },
+    )
+    assert repository.model_binding_failure_streak(
+        game_id=identifiers["game_id"],
+        **binding,
+    ) == 0
 
 
 def test_attempt_budget_timeout_is_retryable_within_action_budget(

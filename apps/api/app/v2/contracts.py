@@ -634,6 +634,9 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     action_budget_ms: int | None
     action_elapsed_ms: int | None
     action_remaining_ms: int | None
+    model_binding_failure_streak: int | None
+    model_binding_health_status: Literal["healthy", "impaired", "degraded"] | None
+    model_binding_recovered_after_failures: int | None
     started_at: datetime
     completed_at: datetime | None
 

@@ -317,6 +317,38 @@ class V2ActionRepository:
             run.lease_expires_at = None
             return True
 
+    def model_binding_failure_streak(
+        self,
+        *,
+        game_id: str,
+        actor_id: str,
+        model_provider: str,
+        model_id: str,
+    ) -> int:
+        """Return the durable consecutive-failure count for one frozen binding."""
+        with self._session_factory() as db:
+            rows = list(
+                db.scalars(
+                    select(V2GameRecordEvent)
+                    .where(
+                        V2GameRecordEvent.game_id == game_id,
+                        V2GameRecordEvent.event_type == "model_binding_health_updated",
+                    )
+                    .order_by(V2GameRecordEvent.record_seq.desc())
+                    .limit(200)
+                )
+            )
+        for row in rows:
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            if (
+                payload.get("actor_id") == actor_id
+                and payload.get("model_provider") == model_provider
+                and payload.get("model_id") == model_id
+            ):
+                value = payload.get("consecutive_failure_count")
+                return value if isinstance(value, int) and not isinstance(value, bool) else 0
+        return 0
+
     def execution_release_reason(self, *, fence: V2RunFence) -> str:
         """Resolve the durable terminal reason before releasing an owned run."""
         with self._session_factory.begin() as db:

@@ -543,6 +543,7 @@ def _project_v10_model_action_context_with_metadata(
         statements, _vote_snapshots, public_events = _project_public_history(
             public_history,
             players=players,
+            include_technical_speech_skips=True,
         )
     else:
         statements = []
@@ -2641,6 +2642,7 @@ def _project_public_history(
     history: Iterable[Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
+    include_technical_speech_skips: bool = False,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -2685,6 +2687,22 @@ def _project_public_history(
         if isinstance(round_no, int) and round_no > 0:
             latest_round = round_no
         projected_payload = _project_value(payload, players=players)
+        if event_type == "action_skipped_technical":
+            if not include_technical_speech_skips:
+                continue
+            public_events.append(
+                {
+                    "kind": "speech_turn_skipped_technical",
+                    "authority": "judge_fact",
+                    **sequenced_source,
+                    "occurred_in": {"period": "day", "round_no": latest_round},
+                    "speaker_ref": projected_payload.get("actor_id"),
+                    "action_type": projected_payload.get("action_type"),
+                    "stage": projected_payload.get("action_type"),
+                    "reason": "technical_failure",
+                }
+            )
+            continue
         if event_type == "public_player_speech_presented":
             statement = {
                 "kind": "player_statement",

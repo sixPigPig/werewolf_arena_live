@@ -299,6 +299,9 @@ const detail = {
       completed_ms: 311,
       failure_kind: null,
       failure_code: null,
+      model_binding_failure_streak: 0,
+      model_binding_health_status: "healthy",
+      model_binding_recovered_after_failures: 1,
       started_at: "2026-07-23T08:00:01Z",
       completed_at: "2026-07-23T08:00:02Z",
     },
@@ -1065,6 +1068,10 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(requestDialog).getByText("请求尝试预算（attempt_budget）"),
     ).toBeVisible();
+    expect(within(requestDialog).getByText("模型绑定健康")).toBeVisible();
+    expect(within(requestDialog).getByText("健康")).toBeVisible();
+    expect(within(requestDialog).getByText("连续故障次数")).toBeVisible();
+    expect(within(requestDialog).getByText("本次恢复前故障")).toBeVisible();
     const responseHeaders = within(requestDialog).getByRole("region", {
       name: "模型响应头",
     });

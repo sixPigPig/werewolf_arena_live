@@ -408,6 +408,23 @@ export function parseV2ModelRequestSummary(
       record.action_remaining_ms === undefined
         ? null
         : nullableInteger(record.action_remaining_ms, 0),
+    model_binding_failure_streak:
+      record.model_binding_failure_streak === undefined
+        ? null
+        : nullableInteger(record.model_binding_failure_streak, 0),
+    model_binding_health_status:
+      record.model_binding_health_status === undefined ||
+      record.model_binding_health_status === null
+        ? null
+        : oneOf(record.model_binding_health_status, [
+            "healthy",
+            "impaired",
+            "degraded",
+          ] as const),
+    model_binding_recovered_after_failures:
+      record.model_binding_recovered_after_failures === undefined
+        ? null
+        : nullableInteger(record.model_binding_recovered_after_failures, 1),
     started_at: date(record.started_at),
     completed_at: nullableDate(record.completed_at),
   };

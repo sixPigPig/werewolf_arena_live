@@ -1384,6 +1384,7 @@ class V2NightRepository:
 
     def public_history(self, game_id: str) -> list[dict[str, Any]]:
         public_types = {
+            "action_skipped_technical",
             "day_speech_committed",
             "day_vote_committed",
             "day_vote_resolved",

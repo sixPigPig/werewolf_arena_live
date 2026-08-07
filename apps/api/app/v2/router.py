@@ -1513,6 +1513,40 @@ def _admin_model_requests(
             if isinstance(response_payload.get("passive_observations"), list)
             else []
         )
+        binding_prior_failure_streak = _first_int(
+            payload.get("model_binding_prior_failure_streak")
+        )
+        binding_failed_streak = _first_int(
+            failure_payload.get("model_binding_failure_streak")
+        )
+        if response is not None and binding_prior_failure_streak is not None:
+            binding_failure_streak = 0
+            binding_health_status = "healthy"
+            binding_recovered_after_failures = (
+                binding_prior_failure_streak
+                if binding_prior_failure_streak > 0
+                else None
+            )
+        elif binding_failed_streak is not None:
+            binding_failure_streak = binding_failed_streak
+            raw_binding_health_status = failure_payload.get(
+                "model_binding_health_status"
+            )
+            binding_health_status = (
+                raw_binding_health_status
+                if raw_binding_health_status in {"healthy", "impaired", "degraded"}
+                else None
+            )
+            binding_recovered_after_failures = None
+        else:
+            binding_failure_streak = binding_prior_failure_streak
+            raw_binding_health_status = payload.get("model_binding_health_status")
+            binding_health_status = (
+                raw_binding_health_status
+                if raw_binding_health_status in {"healthy", "impaired", "degraded"}
+                else None
+            )
+            binding_recovered_after_failures = None
         stored_audience, effective_audience, audience_source = _admin_model_request_audience(
             payload=payload,
             context=context,
@@ -1703,6 +1737,11 @@ def _admin_model_requests(
                 action_remaining_ms=_first_int(
                     failure_payload.get("action_remaining_ms"),
                     payload.get("action_remaining_ms"),
+                ),
+                model_binding_failure_streak=binding_failure_streak,
+                model_binding_health_status=binding_health_status,
+                model_binding_recovered_after_failures=(
+                    binding_recovered_after_failures
                 ),
                 started_at=start.created_at,
                 completed_at=completed_at,

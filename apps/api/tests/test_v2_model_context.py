@@ -216,6 +216,65 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     )
 
 
+def test_v10_projects_public_technical_speech_skip_without_changing_v9() -> None:
+    context = {
+        "round_no": 3,
+        "phase_id": "day_3",
+        "action_type": "exile_vote",
+        "self_identity": {
+            "player_id": "system-player-01",
+            "seat": 2,
+            "role_key": "villager",
+            "team": "villagers",
+        },
+        "public_history": [
+            {
+                "source_event_id": "skip-12",
+                "record_seq": 1345,
+                "event_type": "action_skipped_technical",
+                "payload": {
+                    "round_no": 3,
+                    "phase_id": "day_3",
+                    "actor_id": "system-player-09",
+                    "action_type": "day_debate_speech",
+                    "failure_code": "model_first_token_timeout",
+                },
+            }
+        ],
+    }
+
+    projected_v10 = project_model_action_context(
+        context,
+        players=PLAYERS,
+        action_record_seq=1400,
+    )
+    assert projected_v10["known_events"]["events"] == [
+        {
+            "kind": "speech_turn_skipped_technical",
+            "authority": "judge_fact",
+            "source_event_id": "skip-12",
+            "record_seq": 1345,
+            "occurred_in": {"period": "day", "round_no": 3},
+            "speaker_ref": "seat_4",
+            "action_type": "day_debate_speech",
+            "stage": "day_debate_speech",
+            "reason": "technical_failure",
+            "timeline_index": 1,
+            "event_ref": "skip-12",
+            "visibility": "public",
+            "known_at_seq": 1345,
+        }
+    ]
+
+    projected_v9 = project_model_action_context(
+        context,
+        players=PLAYERS,
+        model_context_contract=v9_model_context_contract(),
+        action_record_seq=1400,
+    )
+    assert projected_v9["known_events"]["events"] == []
+
+
 def test_v10_projects_prior_public_investigation_report_without_rewriting_causality() -> None:
     players = tuple(
         V2ModelPlayerReference(f"player-{seat}", seat, f"玩家{seat}") for seat in (1, 5, 6, 8)
@@ -2253,6 +2312,8 @@ def test_v10_prompt_explains_claim_question_and_time_anchor_semantics() -> None:
     assert "提问前已经公开报过" in system_text
     assert "evaluation_order 和 post_elimination_resolution" in system_text
     assert "夜间指当前夜，白天指下一夜" in system_text
+    assert "因技术故障未能发言" in system_text
+    assert "不得解读为拒绝回应或策略性沉默" in system_text
     assert len(system_text) < 900
 
 

@@ -809,6 +809,7 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
 
 
 _PUBLIC_HISTORY_TYPES = {
+    "action_skipped_technical",
     "day_speech_committed",
     "day_vote_committed",
     "day_vote_resolved",

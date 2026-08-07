@@ -709,6 +709,14 @@ class V2ActionEngine:
                         model_attempt_no += 1
                         cycle_attempt_no = cycle_attempt_index + 1
                         model_failure_recorded = False
+                        binding_prior_failure_streak = (
+                            self._repository.model_binding_failure_streak(
+                                game_id=claim.game_id,
+                                actor_id=spec.actor_id,
+                                model_provider=model_target.provider,
+                                model_id=model_target.model_id,
+                            )
+                        )
                         attempt_started_at = time.monotonic()
                         attempt_progress = _ModelAttemptProgressTrace()
                         progress_method = getattr(
@@ -761,6 +769,14 @@ class V2ActionEngine:
                                 "request_kind": "decision" if decision else "speech",
                                 "model_id": model_target.model_id,
                                 "model_provider": model_target.provider,
+                                "model_binding_prior_failure_streak": (
+                                    binding_prior_failure_streak
+                                ),
+                                "model_binding_health_status": (
+                                    _model_binding_health_status(
+                                        binding_prior_failure_streak
+                                    )
+                                ),
                                 "model_parameters": dict(model_target.parameters),
                                 "configured_max_tokens": (
                                     configured_max_tokens
@@ -883,16 +899,21 @@ class V2ActionEngine:
                                 cycle_attempt_no=cycle_attempt_no,
                                 policy=retry_policy,
                             )
-                            required_retry_window = (
-                                retry_policy.attempt_total_seconds
-                                if disposition.category == "timeout"
-                                else 0.0
+                            required_retry_window = _required_retry_window_seconds(
+                                spec=spec,
+                                disposition=disposition,
+                                exc=exc,
+                                policy=retry_policy,
                             )
                             retryable = (
                                 disposition.retryable
                                 and cycle_attempt_no
                                 < min(retry_policy.max_attempts, disposition.max_attempts)
                                 and remaining > delay_seconds + required_retry_window
+                            )
+                            binding_failure_streak = binding_prior_failure_streak + 1
+                            binding_health_status = _model_binding_health_status(
+                                binding_failure_streak
                             )
                             self._repository.append_event(
                                 game_id=claim.game_id,
@@ -923,7 +944,37 @@ class V2ActionEngine:
                                         0,
                                         round((model_deadline - time.monotonic()) * 1000),
                                     ),
+                                    model_binding_failure_streak=(
+                                        binding_failure_streak
+                                    ),
+                                    model_binding_health_status=(
+                                        binding_health_status
+                                    ),
                                 ),
+                            )
+                            self._repository.append_event(
+                                game_id=claim.game_id,
+                                event_type="model_binding_health_updated",
+                                audience="god_view",
+                                payload={
+                                    "action_id": claim.action_id,
+                                    "attempt_id": model_attempt_id,
+                                    "phase_id": spec.phase_id,
+                                    "actor_id": spec.actor_id,
+                                    "model_provider": model_target.provider,
+                                    "model_id": model_target.model_id,
+                                    "status": binding_health_status,
+                                    "consecutive_failure_count": (
+                                        binding_failure_streak
+                                    ),
+                                    "failure_code": exc.code,
+                                    "failure_category": disposition.category,
+                                    "failure_stage": exc.failure_stage,
+                                    "first_token_seen": exc.first_token_seen,
+                                    "response_headers_seen": (
+                                        exc.response_headers_seen
+                                    ),
+                                },
                             )
                             model_failure_recorded = True
                             previous_attempt_id = model_attempt_id
@@ -975,6 +1026,13 @@ class V2ActionEngine:
                                         "action_id": claim.action_id,
                                         "attempt_id": model_attempt_id,
                                         "action_type": spec.action_type,
+                                        "actor_id": spec.actor_id,
+                                        "phase_id": spec.phase_id,
+                                        "round_no": (
+                                            spec.context.get("round_no")
+                                            if isinstance(spec.context, dict)
+                                            else None
+                                        ),
                                         "failure_code": exc.code,
                                         "failure_category": disposition.category,
                                         "raw_response_preserved": isinstance(
@@ -1137,6 +1195,25 @@ class V2ActionEngine:
                         "completed_ms": model_decision.completed_ms,
                     },
                 )
+                if binding_prior_failure_streak > 0:
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_binding_health_updated",
+                        audience="god_view",
+                        payload={
+                            "action_id": claim.action_id,
+                            "attempt_id": model_attempt_id,
+                            "phase_id": spec.phase_id,
+                            "actor_id": spec.actor_id,
+                            "model_provider": model_target.provider,
+                            "model_id": model_target.model_id,
+                            "status": "healthy",
+                            "consecutive_failure_count": 0,
+                            "recovered_after_failure_count": (
+                                binding_prior_failure_streak
+                            ),
+                        },
+                    )
                 if model_decision.repair_kind is not None:
                     self._repository.append_event(
                         game_id=claim.game_id,
@@ -1919,6 +1996,8 @@ def _model_failure_payload(
     action_budget_ms: int,
     action_elapsed_ms: int,
     action_remaining_ms: int,
+    model_binding_failure_streak: int,
+    model_binding_health_status: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "action_id": action_id,
@@ -1939,6 +2018,8 @@ def _model_failure_payload(
         "action_budget_ms": action_budget_ms,
         "action_elapsed_ms": action_elapsed_ms,
         "action_remaining_ms": action_remaining_ms,
+        "model_binding_failure_streak": model_binding_failure_streak,
+        "model_binding_health_status": model_binding_health_status,
         "failure_stage": exc.failure_stage,
         "exception_type": exc.exception_type,
         "errno": exc.errno,
@@ -1959,6 +2040,39 @@ def _model_failure_payload(
     if isinstance(exc, V2QualityError) and exc.raw_response is not None:
         payload["raw_response"] = exc.raw_response
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _model_binding_health_status(consecutive_failure_count: int) -> str:
+    if consecutive_failure_count <= 0:
+        return "healthy"
+    if consecutive_failure_count == 1:
+        return "impaired"
+    return "degraded"
+
+
+def _required_retry_window_seconds(
+    *,
+    spec: V2SpeechSpec,
+    disposition: V2FailureDisposition,
+    exc: V2ModelError,
+    policy: V2ModelRetryPolicy,
+) -> float:
+    if disposition.category != "timeout":
+        return 0.0
+    if (
+        spec.action_type in _TECHNICAL_SKIP_ACTION_TYPES
+        and spec.decision_contract.kind == "speech"
+        and not exc.first_token_seen
+        and exc.failure_stage in {"response_headers", "first_token"}
+        and isinstance(exc.elapsed_ms, int)
+        and not isinstance(exc.elapsed_ms, bool)
+        and exc.elapsed_ms > 0
+    ):
+        # A public speech gets one bounded second chance after a pre-token
+        # stall. The retry still shares the original action deadline and never
+        # substitutes another model or fabricates speech.
+        return min(policy.attempt_total_seconds, exc.elapsed_ms / 1000)
+    return policy.attempt_total_seconds
 
 
 def _enrich_model_error_from_progress(

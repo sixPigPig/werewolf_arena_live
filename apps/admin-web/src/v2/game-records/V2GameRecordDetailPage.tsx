@@ -1367,6 +1367,31 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             children: formatDuration(request?.action_remaining_ms ?? null),
           },
           {
+            key: "model-binding-health",
+            label: "模型绑定健康",
+            children: modelBindingHealthLabel(
+              request?.model_binding_health_status ?? null,
+            ),
+          },
+          {
+            key: "model-binding-failures",
+            label: "连续故障次数",
+            children:
+              request?.model_binding_failure_streak === null ||
+              request?.model_binding_failure_streak === undefined
+                ? "—"
+                : String(request.model_binding_failure_streak),
+          },
+          {
+            key: "model-binding-recovered",
+            label: "本次恢复前故障",
+            children:
+              request?.model_binding_recovered_after_failures === null ||
+              request?.model_binding_recovered_after_failures === undefined
+                ? "—"
+                : String(request.model_binding_recovered_after_failures),
+          },
+          {
             key: "provider-request",
             label: "供应商请求 ID",
             span: 2,
@@ -1727,6 +1752,14 @@ function timeoutScopeLabel(scope: string | null) {
   if (scope === "attempt_budget") return "请求尝试预算（attempt_budget）";
   if (scope === "action_budget") return "动作总预算（action_budget）";
   return scope;
+}
+
+function modelBindingHealthLabel(status: string | null) {
+  if (status === null) return "—";
+  if (status === "healthy") return "健康";
+  if (status === "impaired") return "单次故障";
+  if (status === "degraded") return "连续故障";
+  return status;
 }
 
 function statusLabel(status: string) {
