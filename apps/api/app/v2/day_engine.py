@@ -26,7 +26,7 @@ from app.v2.model_context import (
     build_public_rule_contract,
     private_authoritative_facts,
 )
-from app.v2.model_context_contract import is_v9_model_context_contract
+from app.v2.model_context_contract import is_v9_or_later_model_context_contract
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -683,7 +683,9 @@ class V2DayEngine:
             for candidate in candidates
         ]
         option_by_start = {str(option["target_player_id"]): option for option in options}
-        is_v9 = is_v9_model_context_contract(state.model_context_contract)
+        uses_compact_context = is_v9_or_later_model_context_contract(
+            state.model_context_contract
+        )
         decision = await self._player_action(
             game_id=state.game_id,
             player=sheriff,
@@ -691,7 +693,7 @@ class V2DayEngine:
             action_type="sheriff_speech_order",
             objective=(
                 "根据每个候选对应的完整发言顺序，选择本轮起始发言者。"
-                if is_v9
+                if uses_compact_context
                 else "选择本轮第一位发言者。"
             ),
             candidates=candidates,
@@ -717,7 +719,7 @@ class V2DayEngine:
                         }
                     }
                 }
-                if is_v9
+                if uses_compact_context
                 else None
             ),
         )
@@ -1554,7 +1556,7 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
     ) -> bool:
         prompt_template_version = state.model_context_contract.get("prompt_template_version")
-        if not is_v9_model_context_contract(state.model_context_contract) and (
+        if not is_v9_or_later_model_context_contract(state.model_context_contract) and (
             not isinstance(prompt_template_version, int) or prompt_template_version < 3
         ):
             return await self._judge(

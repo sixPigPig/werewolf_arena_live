@@ -118,6 +118,89 @@ _PUBLIC_CAUSALITY_ATTRIBUTION = re.compile(
     rf"(?:{_SEAT_NUMBER}号|他|她|有人)[^。！？!?；;]{{0,16}}"
     r"(?:说|声称|认为|提到|讲|表示)"
 )
+_PAST_INVESTIGATION_REPORT_DENIAL = re.compile(
+    rf"(?P<seat>{_SEAT_NUMBER})号"
+    r"[^。！？!?;；]{0,56}?"
+    r"(?P<period>昨晚|昨夜|首夜|第一晚)"
+    r"[^。！？!?;；]{0,20}?"
+    r"(?:"
+    r"(?P<result_field>验人结果|查验结果)"
+    r"|(?P<target_field>验了谁|验谁|查验谁|验人目标|查验目标)"
+    r"|(?P<generic_field>验人|查验)"
+    r")"
+    r"[^。！？!?;；]{0,12}?"
+    r"(?:也|还|一直|都)?\s*(?:没|没有|未)(?:有)?"
+    r"(?:报|说|公布|交代)"
+)
+_PAST_INVESTIGATION_DENIAL_EXCLUSION = re.compile(
+    r"(?:没|没有|未)(?:有)?(?:报|说|公布|交代)"
+    r"(?:清楚|完整|明白|透彻|.{0,6}(?:理由|逻辑|动机|过程|警徽流))"
+    r"|(?:理由|逻辑|动机|过程|警徽流)"
+    r"[^。！？!?;；]{0,10}(?:没|没有|未)(?:有)?(?:报|说|公布|交代)"
+    r"|第二晚|新一晚|下一晚|今晚|今夜|明晚|后续的验人"
+)
+_PAST_INVESTIGATION_DENIAL_NON_ASSERTION = re.compile(
+    r"(?:如果|假如|要是|若是|万一|是否|是不是|请问|想问|想确认)"
+    r"|(?:不能|不该|别|不要)(?:再)?说"
+    r"|(?:不是|并非|并不是).{0,12}(?:没|没有|未)(?:有)?(?:报|说|公布|交代)"
+)
+_FIRST_PARTY_INVESTIGATION_REPORT = re.compile(
+    rf"(?:我|本预言家)?\s*"
+    r"(?P<period>昨晚|昨夜|首夜|第一晚)?"
+    r"[^。！？!?;；]{0,12}?"
+    rf"(?:验|摸|查验)(?:了|过)?\s*(?P<target>{_SEAT_NUMBER})号"
+    r"[^。！？!?;；]{0,24}(?:查杀|金水|是狼|为狼|好人|狼人)"
+)
+_FIRST_PARTY_POSSESSIVE_CHECK = re.compile(
+    rf"(?P<target>{_SEAT_NUMBER})号[^。！？!?;；]{{0,8}}"
+    r"(?:是|为)?(?:我的)?(?:查杀|金水)"
+)
+_POST_CHECK_REACTION_CLAIM = re.compile(
+    rf"(?P<reaction>{_SEAT_NUMBER})号(?:的)?"
+    r"[^。！？!?;；]{0,12}?"
+    r"(?:被|接到|接了|吃到|收到)?"
+    r"(?:狼)?查杀(?:后|以后|之后)"
+    r"[^。！？!?;；]{0,36}?"
+    r"(?:反应|状态|回应|发言|开口)"
+)
+_POST_CHECK_EXPLICIT_COUNT = re.compile(
+    r"(?:已经|有|共|总共)?\s*"
+    r"(?P<count>\d+|零|一|二|两|三|四|五|六|七|八|九|十)"
+    r"\s*(?:次|轮|段)(?:公开)?(?:发言|回应|开口)"
+)
+_POST_CHECK_EXPLICIT_COUNT_AFTER = re.compile(
+    r"(?:发言|回应|开口)(?:了|过)?\s*"
+    r"(?P<count>\d+|零|一|二|两|三|四|五|六|七|八|九|十)"
+    r"\s*(?:次|轮|段)"
+)
+_POST_CHECK_NON_ASSERTION = re.compile(
+    r"(?:如果|假如|要是|若是|万一|假设)"
+    r"|(?:不能|不该|别|不要)(?:再)?说"
+    r"|(?:我)?(?:不认|不认可|不接受|否认)"
+    r"|(?:没|没有|尚未|还没|未曾)"
+    r"[^。！？!?;；]{0,10}(?:反应|状态|回应|发言|开口)"
+    r"|(?:不认同|不同意|不接受|反对)[^。！？!?;；]{0,24}(?:说法|判断)?"
+    r"|(?:说法|判断)[^。！？!?;；]{0,8}(?:不对|错误|不成立)"
+)
+_PEACEFUL_NIGHT_MARKER = re.compile(
+    r"(?:平安夜|昨晚|昨夜)[^。！？!?;；]{0,12}(?:没死人|无人死亡|没有人死|平安)"
+    r"|平安夜"
+)
+_HIDDEN_WITCH_CAUSE = re.compile(
+    r"女巫[^。！？!?;；]{0,12}(?:救了|救人|开药|开了药|开了解药|用了解药|用药|奶了)"
+    r"|(?:解药|女巫的药)[^。！？!?;；]{0,10}(?:用完|没了|已用|用掉|消耗)"
+)
+_HIDDEN_CAUSE_UNCERTAINTY = re.compile(
+    r"(?:可能|也许|或许|大概率|大概|估计|应该|倾向|不排除|像是|有可能)"
+)
+_HIDDEN_CAUSE_REJECTION = re.compile(
+    r"女巫[^。！？!?;；]{0,8}(?:没|没有|未|不)(?:有)?"
+    r"[^。！？!?;；]{0,4}(?:救|开|用|奶)"
+    r"|(?:解药|女巫的药)[^。！？!?;；]{0,8}"
+    r"(?:没|没有|未|不)(?:有)?[^。！？!?;；]{0,4}(?:用|消耗)"
+    r"|(?:不能说|不能说明|不代表|不等于|无法说明)"
+    r"[^。！？!?;；]{0,16}女巫[^。！？!?;；]{0,8}(?:救|开|用|奶)"
+)
 _PUBLIC_REACTION_CLAIM_PATTERNS = (
     re.compile(
         rf"(?P<reaction>{_SEAT_NUMBER})号[^。！？!?；;]{{0,24}}"
@@ -237,6 +320,25 @@ def _observe_model_speech(
     )
     if public_causality_observation is not None:
         observations.append(public_causality_observation)
+    prior_report_observation = _observe_prior_public_investigation_report(
+        speech,
+        model_context=model_context,
+    )
+    if prior_report_observation is not None:
+        observations.append(prior_report_observation)
+    missing_reaction_observation = _observe_post_check_statement_count(
+        speech,
+        model_context=model_context,
+    )
+    if missing_reaction_observation is not None:
+        observations.append(missing_reaction_observation)
+    hidden_cause_observation = _observe_unsupported_hidden_cause(
+        speech,
+        hard_rules=hard_rules,
+        model_context=model_context,
+    )
+    if hidden_cause_observation is not None:
+        observations.append(hidden_cause_observation)
     observations.extend(
         _observe_response_opportunity(
             speech,
@@ -635,6 +737,990 @@ def _deduplicate_public_causality_signals(
             signal.get("reaction_event_ref"),
             signal.get("trigger_event_ref"),
         )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(signal)
+    return deduplicated
+
+
+def _claim_is_secondary_attribution(
+    sentence: str,
+    *,
+    start: int,
+    end: int,
+) -> bool:
+    actor = rf"(?:{_SEAT_NUMBER}号|他|她|有人)"
+    prefix = sentence[max(0, start - 64) : start]
+    if re.search(
+        rf"{actor}(?:刚才|之前|明确|一直|也|还)?"
+        r"(?:说|声称|认为|提到|讲|表示)[：:,，]?\s*$",
+        prefix,
+    ):
+        return True
+    if re.search(
+        rf"(?:按照|按|据){actor}(?:的)?(?:说法|发言)[：:,，]?\s*$",
+        prefix,
+    ):
+        return True
+    suffix = sentence[end : min(len(sentence), end + 64)]
+    return bool(
+        re.search(
+            rf"(?:这|此|这个|这种)?(?:说法)?(?:是|来自)?\s*"
+            rf"{actor}(?:刚才|之前)?(?:说|声称|提到|表示)(?:的|过)"
+            rf"|(?:按照|按|据){actor}(?:的)?(?:说法|发言)",
+            suffix,
+        )
+    )
+
+
+def _observe_prior_public_investigation_report(
+    speech: str,
+    *,
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(model_context, dict):
+        return None
+    statements = _visible_public_statements(model_context)
+    if not statements:
+        return None
+    investigation_claims = _first_party_investigation_claims(
+        model_context,
+        statements=statements,
+    )
+
+    signals: list[dict[str, Any]] = []
+    for sentence_match in re.finditer(r"[^。！？!?;；]+[。！？!?;；]?", speech):
+        sentence = sentence_match.group(0)
+        if (
+            not sentence.strip()
+            or _PAST_INVESTIGATION_DENIAL_EXCLUSION.search(sentence) is not None
+            or _PAST_INVESTIGATION_DENIAL_NON_ASSERTION.search(sentence) is not None
+        ):
+            continue
+        for match in _PAST_INVESTIGATION_REPORT_DENIAL.finditer(sentence):
+            if _claim_is_secondary_attribution(
+                sentence,
+                start=match.start(),
+                end=match.end(),
+            ):
+                continue
+            speaker_ref = f"seat_{match.group('seat')}"
+            night_no = _referenced_night_no(
+                match.group("period"),
+                model_context=model_context,
+            )
+            if night_no is None:
+                continue
+            missing_field = (
+                "result"
+                if match.group("result_field") is not None
+                else "target"
+                if match.group("target_field") is not None
+                else "investigation_report"
+            )
+            prior_reports = [
+                claim
+                for claim in investigation_claims
+                if claim["speaker_ref"] == speaker_ref
+                and claim.get("night_no") == night_no
+                and _investigation_claim_covers_field(
+                    claim,
+                    field=missing_field,
+                )
+            ]
+            if not prior_reports:
+                continue
+            signals.append(
+                {
+                    "reporting_actor_ref": speaker_ref,
+                    "night_no": night_no,
+                    "missing_field": missing_field,
+                    "prior_report_event_refs": [
+                        report["event_ref"] for report in prior_reports
+                    ],
+                    "prior_report_known_at_seqs": [
+                        report["known_at_seq"] for report in prior_reports
+                    ],
+                    "evidence": sentence.strip(),
+                }
+            )
+
+    if not signals:
+        return None
+    return {
+        "code": "prior_public_report_denial",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "public_statement_history",
+        "assertion_scope": "report_was_publicly_made_only",
+        "signals": _deduplicate_signals_by_fields(
+            signals,
+            fields=("reporting_actor_ref", "night_no", "missing_field", "evidence"),
+        ),
+        "effect": "observed_only",
+    }
+
+
+def _observe_post_check_statement_count(
+    speech: str,
+    *,
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(model_context, dict):
+        return None
+    statements = _visible_public_statements(model_context)
+    if not statements:
+        return None
+    investigation_claims = _first_party_investigation_claims(
+        model_context,
+        statements=statements,
+    )
+    current_speaker_ref = _current_speaker_ref(model_context)
+    current_round_no = _task_round_no(model_context)
+    action_at_seq = _context_action_at_seq(model_context, statements=statements)
+
+    signals: list[dict[str, Any]] = []
+    for sentence_match in re.finditer(r"[^。！？!?;；]+[。！？!?;；]?", speech):
+        sentence = sentence_match.group(0)
+        if not sentence.strip() or _POST_CHECK_NON_ASSERTION.search(sentence) is not None:
+            continue
+        for match in _POST_CHECK_REACTION_CLAIM.finditer(sentence):
+            if _claim_is_secondary_attribution(
+                sentence,
+                start=match.start(),
+                end=match.end(),
+            ):
+                continue
+            reaction_ref = f"seat_{match.group('reaction')}"
+            trigger_events = [
+                claim
+                for claim in investigation_claims
+                if claim["speaker_ref"] != reaction_ref
+                and claim.get("target_ref") == reaction_ref
+                and claim.get("claimed_result") == "werewolves"
+                and (
+                    current_round_no is None
+                    or claim.get("night_no") is None
+                    or claim.get("night_no") == current_round_no
+                )
+            ]
+            if not trigger_events:
+                continue
+            earliest_trigger_seq = min(
+                event["known_at_seq"] for event in trigger_events
+            )
+            earliest_triggers = [
+                event
+                for event in trigger_events
+                if event["known_at_seq"] == earliest_trigger_seq
+            ]
+            if len(earliest_triggers) != 1:
+                continue
+            trigger = earliest_triggers[0]
+            post_trigger_events = [
+                statement
+                for statement in statements
+                if statement["speaker_ref"] == reaction_ref
+                and trigger["known_at_seq"] < statement["known_at_seq"] < action_at_seq
+            ]
+            actual_count = len(post_trigger_events)
+            if current_speaker_ref == reaction_ref:
+                actual_count += 1
+
+            count_match = _POST_CHECK_EXPLICIT_COUNT.search(sentence, match.start())
+            if count_match is None:
+                count_match = _POST_CHECK_EXPLICIT_COUNT_AFTER.search(
+                    sentence,
+                    match.start(),
+                )
+            claimed_count = (
+                _spoken_count(count_match.group("count"))
+                if count_match is not None
+                else None
+            )
+            if claimed_count is None:
+                if actual_count > 0:
+                    continue
+                contradiction = "no_post_trigger_public_statement"
+            else:
+                if claimed_count == actual_count:
+                    continue
+                contradiction = "post_trigger_statement_count_mismatch"
+
+            signal: dict[str, Any] = {
+                "reaction_actor_ref": reaction_ref,
+                "trigger_actor_ref": trigger["speaker_ref"],
+                "trigger_event_ref": trigger["event_ref"],
+                "trigger_known_at_seq": trigger["known_at_seq"],
+                "actual_post_trigger_statement_count": actual_count,
+                "post_trigger_statement_event_refs": [
+                    event["event_ref"] for event in post_trigger_events
+                ],
+                "contradiction": contradiction,
+                "evidence": sentence.strip(),
+            }
+            if claimed_count is not None:
+                signal["claimed_post_trigger_statement_count"] = claimed_count
+            signals.append(signal)
+
+    if not signals:
+        return None
+    return {
+        "code": "public_reaction_without_post_trigger_statement",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "event_chronology",
+        "signals": _deduplicate_signals_by_fields(
+            signals,
+            fields=("reaction_actor_ref", "trigger_event_ref", "evidence"),
+        ),
+        "effect": "observed_only",
+    }
+
+
+def _observe_unsupported_hidden_cause(
+    speech: str,
+    *,
+    hard_rules: dict[str, Any],
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(model_context, dict)
+        or not _public_rules_allow_non_witch_peaceful_night(hard_rules)
+    ):
+        return None
+    context_events = _context_events(model_context)
+    peaceful_events = [
+        event
+        for event in context_events
+        if event.get("kind") == "night_result"
+        and event.get("visibility") in (None, "public")
+        and event.get("outcome") == "peaceful"
+    ]
+    if not peaceful_events:
+        return None
+
+    signals: list[dict[str, Any]] = []
+    for sentence_match in re.finditer(r"[^。！？!?;；]+[。！？!?;；]?", speech):
+        sentence = sentence_match.group(0)
+        cause_match = _HIDDEN_WITCH_CAUSE.search(sentence)
+        if (
+            cause_match is None
+            or _PEACEFUL_NIGHT_MARKER.search(sentence) is None
+            or _HIDDEN_CAUSE_UNCERTAINTY.search(sentence) is not None
+            or _HIDDEN_CAUSE_REJECTION.search(sentence) is not None
+            or _PUBLIC_CAUSALITY_HYPOTHESIS.search(sentence) is not None
+            or _PUBLIC_CAUSALITY_REJECTION.search(sentence) is not None
+        ):
+            continue
+        night_no = _hidden_cause_night_no(
+            sentence,
+            model_context=model_context,
+            peaceful_events=peaceful_events,
+        )
+        if night_no is None:
+            continue
+        relevant_peaceful_events = [
+            event
+            for event in peaceful_events
+            if _known_event_night_no(event) == night_no
+        ]
+        if not relevant_peaceful_events or _actor_has_private_same_night_explanation(
+            model_context,
+            hard_rules=hard_rules,
+            night_no=night_no,
+        ):
+            continue
+        prefix = sentence[max(0, cause_match.start() - 40) : cause_match.start()]
+        if _PUBLIC_CAUSALITY_ATTRIBUTION.search(prefix) is not None:
+            continue
+        signals.append(
+            {
+                "public_event_refs": [
+                    str(event.get("event_ref"))
+                    for event in relevant_peaceful_events
+                    if _scalar_source_value(event.get("event_ref")) is not None
+                ],
+                "night_no": night_no,
+                "unsupported_cause": "witch_heal",
+                "evidence": sentence.strip(),
+            }
+        )
+
+    if not signals:
+        return None
+    return {
+        "code": "unsupported_hidden_cause_claim",
+        "severity": "warning",
+        "confidence": "high",
+        "detector_version": 1,
+        "authority": "actor_visible_information",
+        "signals": _deduplicate_signals_by_fields(
+            signals,
+            fields=("unsupported_cause", "evidence"),
+        ),
+        "effect": "observed_only",
+    }
+
+
+def _visible_public_statements(
+    model_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    statements: list[dict[str, Any]] = []
+    for event in _context_events(model_context):
+        if event.get("kind") != "player_statement":
+            continue
+        if event.get("visibility") not in (None, "public"):
+            continue
+        speaker_ref = _normalized_seat_ref(event.get("speaker_ref"))
+        known_at_seq = _integer_source_value(
+            event.get("known_at_seq", event.get("record_seq"))
+        )
+        event_ref = _scalar_source_value(event.get("event_ref"))
+        statement = event.get("speech")
+        if (
+            speaker_ref is None
+            or known_at_seq is None
+            or event_ref is None
+            or not isinstance(statement, str)
+        ):
+            continue
+        statements.append(
+            {
+                "speaker_ref": speaker_ref,
+                "known_at_seq": known_at_seq,
+                "event_ref": str(event_ref),
+                "speech": statement,
+                "occurred_in": event.get("occurred_in"),
+            }
+        )
+    return statements
+
+
+def _context_events(model_context: dict[str, Any]) -> list[dict[str, Any]]:
+    known_events = model_context.get("known_events")
+    events = known_events.get("events") if isinstance(known_events, dict) else None
+    if isinstance(events, list):
+        return [event for event in events if isinstance(event, dict)]
+    timeline = model_context.get("public_timeline")
+    if isinstance(timeline, dict):
+        events = timeline.get("events")
+    else:
+        events = timeline
+    return [event for event in events if isinstance(event, dict)] if isinstance(events, list) else []
+
+
+def _first_party_investigation_claims(
+    model_context: dict[str, Any],
+    *,
+    statements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    statement_by_ref = {statement["event_ref"]: statement for statement in statements}
+    claims: list[dict[str, Any]] = []
+    events = _context_events(model_context)
+    known_events = model_context.get("known_events")
+    known_schema_version = (
+        _integer_source_value(known_events.get("schema_version"))
+        if isinstance(known_events, dict)
+        else None
+    )
+    for event in events:
+        event_ref = _scalar_source_value(event.get("event_ref"))
+        statement = statement_by_ref.get(str(event_ref)) if event_ref is not None else None
+        annotations = event.get("annotations")
+        if statement is None or not isinstance(annotations, list):
+            continue
+        claims.extend(
+            _structured_first_party_investigation_claims(
+                annotations,
+                statement=statement,
+                ledger_schema_version=(4 if known_schema_version == 4 else 3),
+            )
+        )
+
+    history = model_context.get("history")
+    timeline = history.get("timeline") if isinstance(history, dict) else None
+    history_ledger_schema_version = (
+        _integer_source_value(history.get("ledger_schema_version"))
+        if isinstance(history, dict)
+        else None
+    )
+    if isinstance(timeline, list):
+        for raw_statement in timeline:
+            if not isinstance(raw_statement, dict):
+                continue
+            source_event_id = _scalar_source_value(raw_statement.get("source_event_id"))
+            statement = (
+                statement_by_ref.get(str(source_event_id))
+                if source_event_id is not None
+                else None
+            )
+            annotations = raw_statement.get("annotations")
+            if statement is None or not isinstance(annotations, list):
+                continue
+            claims.extend(
+                _structured_first_party_investigation_claims(
+                    annotations,
+                    statement=statement,
+                    ledger_schema_version=(
+                        history_ledger_schema_version
+                        if history_ledger_schema_version in {3, 4}
+                        else 3
+                    ),
+                )
+            )
+
+    structured_event_refs = {claim["event_ref"] for claim in claims}
+    for statement in statements:
+        if statement["event_ref"] in structured_event_refs:
+            continue
+        for target_ref, night_no, claimed_result in _explicit_raw_first_party_investigations(
+            statement["speech"],
+            occurred_in=statement.get("occurred_in"),
+        ):
+            claims.append(
+                {
+                    "claim_id": None,
+                    "speaker_ref": statement["speaker_ref"],
+                    "event_ref": statement["event_ref"],
+                    "known_at_seq": statement["known_at_seq"],
+                    "night_no": night_no,
+                    "target_ref": target_ref,
+                    "claimed_result": claimed_result,
+                    "reported_fields": [
+                        "investigation_report",
+                        *(["target"] if target_ref is not None else []),
+                        *(["result"] if claimed_result is not None else []),
+                    ],
+                    "source": "explicit_first_party_raw_fallback",
+                }
+            )
+
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for claim in claims:
+        identity = (
+            claim.get("event_ref"),
+            claim.get("target_ref"),
+            claim.get("night_no"),
+            claim.get("claimed_result"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(claim)
+    return deduplicated
+
+
+def _investigation_claim_covers_field(
+    claim: dict[str, Any],
+    *,
+    field: str,
+) -> bool:
+    reported_fields = claim.get("reported_fields")
+    return isinstance(reported_fields, list) and field in reported_fields
+
+
+def _structured_first_party_investigation_claims(
+    annotations: list[Any],
+    *,
+    statement: dict[str, Any],
+    ledger_schema_version: int,
+) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for annotation in annotations:
+        if not isinstance(annotation, dict) or annotation.get("claim_type") != "investigation_claim":
+            continue
+        source_kind = annotation.get("source_kind")
+        is_full_ledger_annotation = (
+            source_kind == "speaker_first_party_claim"
+            and annotation.get("confirmation_status") in (None, "unverified")
+        )
+        is_compact_v10_annotation = (
+            source_kind is None
+            and annotation.get("authority") == "player_claim_unverified"
+        )
+        if not is_full_ledger_annotation and not is_compact_v10_annotation:
+            continue
+        if not _structured_investigation_annotation_matches_raw_statement(
+            annotation,
+            statement=statement,
+            ledger_schema_version=ledger_schema_version,
+        ):
+            continue
+        claimed_action_in = annotation.get("claimed_action_in")
+        night_no = (
+            _integer_source_value(claimed_action_in.get("round_no"))
+            if isinstance(claimed_action_in, dict)
+            and claimed_action_in.get("period") == "night"
+            else None
+        )
+        claims.append(
+            {
+                "claim_id": _scalar_source_value(annotation.get("claim_id")),
+                "speaker_ref": statement["speaker_ref"],
+                "event_ref": statement["event_ref"],
+                "known_at_seq": statement["known_at_seq"],
+                "night_no": night_no,
+                "target_ref": _normalized_seat_ref(annotation.get("target_ref")),
+                "claimed_result": annotation.get("claimed_result"),
+                "reported_fields": [
+                    "investigation_report",
+                    *(["target"] if annotation.get("target_ref") is not None else []),
+                    *(["result"] if annotation.get("claimed_result") is not None else []),
+                ],
+                "source": "structured_first_party_claim",
+            }
+        )
+    return claims
+
+
+def _structured_investigation_annotation_matches_raw_statement(
+    annotation: dict[str, Any],
+    *,
+    statement: dict[str, Any],
+    ledger_schema_version: int,
+) -> bool:
+    speech = statement.get("speech")
+    speaker_ref = _normalized_seat_ref(statement.get("speaker_ref"))
+    if not isinstance(speech, str) or speaker_ref is None:
+        return False
+    sentence_pattern = (
+        r"[^。！？!?;；]+[。！？!?;；]?"
+        if ledger_schema_version >= 4
+        else r"[^。！？!?]+[。！？!?]?"
+    )
+    sentences = [match.group(0) for match in re.finditer(sentence_pattern, speech)]
+    sentence_index = _integer_source_value(annotation.get("sentence_index"))
+    if sentence_index is None and len(sentences) == 1:
+        sentence_index = 1
+    if sentence_index is None or not (1 <= sentence_index <= len(sentences)):
+        return False
+    sentence = sentences[sentence_index - 1]
+    if _structured_investigation_raw_rejection(sentence) is not None:
+        return False
+    plain_first_check = re.match(r"^\s*首验", sentence) is not None
+
+    claimed_action_in = annotation.get("claimed_action_in")
+    claimed_night_no = (
+        _integer_source_value(claimed_action_in.get("round_no"))
+        if isinstance(claimed_action_in, dict)
+        and claimed_action_in.get("period") == "night"
+        else None
+    )
+    claimed_target_ref = _normalized_seat_ref(annotation.get("target_ref"))
+    claimed_result = annotation.get("claimed_result")
+    utterance_claims_seer = _utterance_directly_claims_seer(
+        speech,
+        speaker_ref=speaker_ref,
+    )
+    speaker_number = speaker_ref.removeprefix("seat_")
+
+    for verb_match in re.finditer(r"(?:查验|验|摸)", sentence):
+        subject_prefix = sentence[: verb_match.start()]
+        period_matches = list(
+            re.finditer(r"(?:昨晚|昨夜|首夜|第一晚)", subject_prefix)
+        )
+        if not period_matches and not plain_first_check:
+            continue
+        referenced_subjects = {
+            f"seat_{seat}"
+            for seat in re.findall(rf"(?<!\d)({_SEAT_NUMBER})号", subject_prefix)
+        }
+        if referenced_subjects - {speaker_ref}:
+            continue
+        if re.search(r"(?:别人|他人|其他人|有人|他|她|听说|据说|转述|复述)", subject_prefix):
+            continue
+        direct_self_subject = (
+            re.search(r"(?:我|本预言家)", subject_prefix) is not None
+            or re.search(
+                rf"(?<!\d){re.escape(speaker_number)}号[^。！？!?;；]{{0,16}}(?:预言家|查验|验|摸)",
+                sentence[: verb_match.end()],
+            )
+            is not None
+            or utterance_claims_seer
+            or plain_first_check
+        )
+        if not direct_self_subject:
+            continue
+        tail = sentence[verb_match.start() :]
+        target_match = re.search(
+            rf"^(?:查验|验|摸)(?:人)?(?:的?是|了|过)?\s*(?P<target>{_SEAT_NUMBER})号",
+            tail,
+        )
+        raw_target_ref = (
+            f"seat_{target_match.group('target')}" if target_match is not None else None
+        )
+        raw_result = _raw_claimed_investigation_result(tail)
+        raw_night_no = _night_no_from_report(
+            "首夜" if plain_first_check else period_matches[-1].group(0),
+            occurred_in=statement.get("occurred_in"),
+        )
+        if claimed_target_ref is not None and raw_target_ref != claimed_target_ref:
+            continue
+        if claimed_result is not None and raw_result != claimed_result:
+            continue
+        if claimed_night_no is not None and raw_night_no != claimed_night_no:
+            continue
+        return True
+
+    for match in _FIRST_PARTY_INVESTIGATION_REPORT.finditer(sentence):
+        verb_match = re.search(r"(?:查验|验|摸)", match.group(0))
+        if verb_match is None:
+            continue
+        absolute_verb_start = match.start() + verb_match.start()
+        subject_prefix = sentence[:absolute_verb_start]
+        referenced_subjects = {
+            f"seat_{seat}"
+            for seat in re.findall(rf"(?<!\d)({_SEAT_NUMBER})号", subject_prefix)
+        }
+        if referenced_subjects - {speaker_ref}:
+            continue
+        if re.search(r"(?:别人|他人|其他人|有人|他|她|听说|据说|转述|复述)", subject_prefix):
+            continue
+        direct_self_subject = (
+            re.search(r"(?:我|本预言家)", subject_prefix) is not None
+            or re.search(
+                rf"(?<!\d){re.escape(speaker_number)}号[^。！？!?;；]{{0,16}}(?:预言家|查验|验|摸)",
+                sentence[: match.end()],
+            )
+            is not None
+            or utterance_claims_seer
+            or plain_first_check
+        )
+        if not direct_self_subject:
+            continue
+        raw_target_ref = f"seat_{match.group('target')}"
+        raw_result = _raw_claimed_investigation_result(match.group(0))
+        raw_night_no = _night_no_from_report(
+            "首夜" if plain_first_check else match.group("period"),
+            occurred_in=statement.get("occurred_in"),
+        )
+        if claimed_target_ref is not None and raw_target_ref != claimed_target_ref:
+            continue
+        if claimed_result is not None and raw_result != claimed_result:
+            continue
+        if claimed_night_no is not None and raw_night_no != claimed_night_no:
+            continue
+        return True
+
+    for match in _FIRST_PARTY_POSSESSIVE_CHECK.finditer(sentence):
+        if "我的" not in match.group(0):
+            continue
+        raw_target_ref = f"seat_{match.group('target')}"
+        raw_result = _raw_claimed_investigation_result(match.group(0))
+        if claimed_target_ref is not None and raw_target_ref != claimed_target_ref:
+            continue
+        if claimed_result is not None and raw_result != claimed_result:
+            continue
+        return True
+    return False
+
+
+def _structured_investigation_raw_rejection(sentence: str) -> re.Match[str] | None:
+    return re.search(
+        rf"^\s*{_SEAT_NUMBER}号\s*首验"
+        rf"|(?:按|按照|据)[^。！？!?;；]{{0,12}}(?:原话|说法)[^。！？!?;；]{{0,8}}(?:查验|验|摸)"
+        r"|(?:别人|他人|其他人)[^。！？!?;；]{0,16}(?:查验|验|摸)"
+        r"|(?:不认|不认可|否认|不承认)[^。！？!?;；]{0,12}(?:验人|结果|查杀)?"
+        r"|(?:不是|并非)[^。！？!?;；]{0,6}我[^。！？!?;；]{0,6}(?:查验|验|摸)"
+        r"|我[^。！？!?;；]{0,12}(?:没|没有|未|不)[^。！？!?;；]{0,4}(?:查验|验|摸)",
+        sentence,
+    )
+
+
+def _utterance_directly_claims_seer(speech: str, *, speaker_ref: str) -> bool:
+    speaker_number = speaker_ref.removeprefix("seat_")
+    for sentence_match in re.finditer(r"[^。！？!?;；]+", speech):
+        sentence = sentence_match.group(0)
+        role_match = re.search(r"(?:我是|我跳|我拍|我底牌是|底牌)(?:一张|真)?预言家", sentence)
+        if role_match is not None:
+            prefix = sentence[max(0, role_match.start() - 24) : role_match.start()]
+            if _PUBLIC_CAUSALITY_ATTRIBUTION.search(prefix) is None:
+                return True
+        if re.search(
+            rf"^\s*{re.escape(speaker_number)}号[^。！？!?;；]{{0,20}}预言家",
+            sentence,
+        ):
+            return True
+    return False
+
+
+def _explicit_raw_first_party_investigations(
+    speech: str,
+    *,
+    occurred_in: Any,
+) -> list[tuple[str | None, int | None, str | None]]:
+    claims: list[tuple[str | None, int | None, str | None]] = []
+    explicit_self_before_investigation = re.compile(
+        rf"(?:我|本预言家)(?:(?!{_SEAT_NUMBER}号)[^。！？!?;；]){{0,14}}"
+        r"(?:验|摸|查验)"
+    )
+    for sentence_match in re.finditer(r"[^。！？!?;；]+", speech):
+        sentence = sentence_match.group(0)
+        if _structured_investigation_raw_rejection(sentence) is not None:
+            continue
+        plain_first_check = re.match(r"^\s*首验", sentence) is not None
+        for match in _FIRST_PARTY_INVESTIGATION_REPORT.finditer(sentence):
+            prefix = sentence[max(0, match.start() - 32) : match.start()]
+            scope = sentence[max(0, match.start() - 24) : match.end()]
+            if (
+                _PUBLIC_CAUSALITY_ATTRIBUTION.search(prefix) is not None
+                or (
+                    explicit_self_before_investigation.search(scope) is None
+                    and not plain_first_check
+                )
+            ):
+                continue
+            claims.append(
+                (
+                    f"seat_{match.group('target')}",
+                    _night_no_from_report(
+                        "首夜" if plain_first_check else match.group("period"),
+                        occurred_in=occurred_in,
+                    ),
+                    _raw_claimed_investigation_result(sentence[match.start() :]),
+                )
+            )
+        for match in _FIRST_PARTY_POSSESSIVE_CHECK.finditer(sentence):
+            prefix = sentence[max(0, match.start() - 32) : match.start()]
+            if (
+                _PUBLIC_CAUSALITY_ATTRIBUTION.search(prefix) is not None
+                or "我的" not in match.group(0)
+            ):
+                continue
+            claims.append(
+                (
+                    f"seat_{match.group('target')}",
+                    _night_no_from_report(None, occurred_in=occurred_in),
+                    _raw_claimed_investigation_result(match.group(0)),
+                )
+            )
+    return claims
+
+
+def _raw_claimed_investigation_result(value: str) -> str | None:
+    result: str | None = None
+    for match in re.finditer(r"查杀|金水|狼人|好人|是狼|为狼", value):
+        prefix = value[max(0, match.start() - 6) : match.start()]
+        if re.search(r"(?:不是|并非|并不是|不算|不像|非)\s*$", prefix):
+            continue
+        result = (
+            "werewolves"
+            if match.group(0) in {"查杀", "狼人", "是狼", "为狼"}
+            else "villagers"
+        )
+    return result
+
+
+def _referenced_night_no(
+    period: str,
+    *,
+    model_context: dict[str, Any],
+) -> int | None:
+    if period in {"首夜", "第一晚"}:
+        return 1
+    if period in {"昨晚", "昨夜"}:
+        task = model_context.get("task")
+        if isinstance(task, dict):
+            current_night_no = _integer_source_value(task.get("night_no"))
+            phase_id = task.get("phase_id")
+            if current_night_no is not None or (
+                isinstance(phase_id, str) and phase_id.startswith("night_")
+            ):
+                if current_night_no is None:
+                    phase_match = re.fullmatch(r"night_(\d+)", phase_id)
+                    current_night_no = (
+                        int(phase_match.group(1)) if phase_match is not None else None
+                    )
+                return (
+                    current_night_no - 1
+                    if current_night_no is not None and current_night_no > 1
+                    else None
+                )
+        return _task_round_no(model_context)
+    return None
+
+
+def _night_no_from_report(period: str | None, *, occurred_in: Any) -> int | None:
+    if period in {"首夜", "第一晚"}:
+        return 1
+    return _event_round_no(occurred_in)
+
+
+def _event_round_no(occurred_in: Any) -> int | None:
+    if not isinstance(occurred_in, dict):
+        return None
+    return _integer_source_value(occurred_in.get("round_no"))
+
+
+def _task_round_no(model_context: dict[str, Any]) -> int | None:
+    task = model_context.get("task")
+    return (
+        _integer_source_value(task.get("round_no"))
+        if isinstance(task, dict)
+        else None
+    )
+
+
+def _current_speaker_ref(model_context: dict[str, Any]) -> str | None:
+    task = model_context.get("task")
+    progress = task.get("speech_progress") if isinstance(task, dict) else None
+    return (
+        _normalized_seat_ref(progress.get("current_speaker_ref"))
+        if isinstance(progress, dict)
+        else None
+    )
+
+
+def _context_action_at_seq(
+    model_context: dict[str, Any],
+    *,
+    statements: list[dict[str, Any]],
+) -> int:
+    task = model_context.get("task")
+    explicit = _integer_source_value(task.get("at_seq")) if isinstance(task, dict) else None
+    if explicit is not None:
+        return explicit
+    return max(
+        (statement["known_at_seq"] for statement in statements),
+        default=0,
+    ) + 1
+
+
+def _spoken_count(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    return {
+        "零": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }.get(value)
+
+
+def _hidden_cause_night_no(
+    sentence: str,
+    *,
+    model_context: dict[str, Any],
+    peaceful_events: list[dict[str, Any]],
+) -> int | None:
+    period_match = re.search(r"(?:昨晚|昨夜|首夜|第一晚)", sentence)
+    if period_match is not None:
+        return _referenced_night_no(
+            period_match.group(0),
+            model_context=model_context,
+        )
+    peaceful_night_nos = {
+        night_no
+        for event in peaceful_events
+        for night_no in (_known_event_night_no(event),)
+        if night_no is not None
+    }
+    return next(iter(peaceful_night_nos)) if len(peaceful_night_nos) == 1 else None
+
+
+def _known_event_night_no(event: dict[str, Any]) -> int | None:
+    occurred_in = event.get("occurred_in")
+    if isinstance(occurred_in, dict) and occurred_in.get("period") == "night":
+        round_no = _integer_source_value(occurred_in.get("round_no"))
+        if round_no is not None:
+            return round_no
+    data = event.get("data")
+    return _integer_source_value(data.get("night_no")) if isinstance(data, dict) else None
+
+
+def _actor_has_private_same_night_explanation(
+    model_context: dict[str, Any],
+    *,
+    hard_rules: dict[str, Any],
+    night_no: int,
+) -> bool:
+    same_night_private_events = [
+        event
+        for event in _context_events(model_context)
+        if event.get("visibility") == "actor_private"
+        and _known_event_night_no(event) == night_no
+    ]
+    for event in same_night_private_events:
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("ability_id") != "witch.heal":
+            continue
+        result = data.get("result")
+        decision = data.get("decision")
+        if isinstance(result, dict) and result.get("heal_used") is True:
+            return True
+        if isinstance(decision, dict) and decision.get("use") is True:
+            return True
+
+    if _public_guard_enabled(hard_rules):
+        return False
+    for event in _context_events(model_context):
+        if event not in same_night_private_events:
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        if event.get("kind") == "werewolf_attack_resolved":
+            if _normalized_seat_ref(data.get("final_target_player_id")) is not None:
+                return True
+            continue
+        if data.get("ability_id") != "werewolf.attack":
+            continue
+        decision = data.get("decision")
+        if isinstance(decision, dict) and _normalized_seat_ref(
+            decision.get("final_target_player_id")
+        ) is not None:
+            return True
+    return False
+
+
+def _public_guard_enabled(hard_rules: dict[str, Any]) -> bool:
+    ability_rules = hard_rules.get("ability_rules")
+    guard_rule = ability_rules.get("guard_protect") if isinstance(ability_rules, dict) else None
+    return isinstance(guard_rule, dict) and guard_rule.get("enabled") is True
+
+
+def _public_rules_allow_non_witch_peaceful_night(
+    hard_rules: dict[str, Any],
+) -> bool:
+    ability_rules = hard_rules.get("ability_rules")
+    if not isinstance(ability_rules, dict):
+        return False
+    if _public_guard_enabled(hard_rules):
+        return True
+    attack_rule = ability_rules.get("werewolf_attack")
+    if not isinstance(attack_rule, dict):
+        return False
+    team_resolution = attack_rule.get("team_resolution")
+    if not isinstance(team_resolution, dict):
+        return False
+    return bool(
+        team_resolution.get("resolution") == "unanimous_no_attack"
+        or team_resolution.get("allow_no_attack") is True
+    )
+
+
+def _deduplicate_signals_by_fields(
+    signals: list[dict[str, Any]],
+    *,
+    fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for signal in signals:
+        identity = tuple(signal.get(field) for field in fields)
         if identity in seen:
             continue
         seen.add(identity)
@@ -1069,7 +2155,7 @@ def _open_question_contexts(
 
 def _uses_projected_v9_discourse(model_context: dict[str, Any]) -> bool:
     known_events = model_context.get("known_events")
-    return isinstance(known_events, dict) and known_events.get("schema_version") == 3
+    return isinstance(known_events, dict) and known_events.get("schema_version") in {3, 4}
 
 
 def _deduplicate_signals(

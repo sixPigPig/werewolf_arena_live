@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.v2.action_engine import _observe_model_output_fields
 from app.v2.model_observation import _vote_claims, observe_model_speech
 
 
@@ -955,7 +956,10 @@ def test_unfair_silence_claim_is_observed_when_target_has_not_reached_turn() -> 
     assert observations[1]["signals"][0]["prior_relevant_statement_refs"] == ["437"]
 
 
-def test_v9_silence_observation_uses_only_projected_questions_and_event_refs() -> None:
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_projected_silence_observation_uses_only_questions_and_event_refs(
+    schema_version: int,
+) -> None:
     speech = "5号到现在一个字都没解释。"
     observations = observe_model_speech(
         speech,
@@ -979,7 +983,7 @@ def test_v9_silence_observation_uses_only_projected_questions_and_event_refs() -
                 ]
             },
             "known_events": {
-                "schema_version": 3,
+                "schema_version": schema_version,
                 "events": [
                     {"event_ref": "437", "kind": "player_statement"},
                     {"event_ref": "471", "kind": "player_statement"},
@@ -1104,3 +1108,1003 @@ def test_silence_claim_after_target_turn_is_not_premature() -> None:
     )
 
     assert observations == []
+
+
+def _first_day_check_context(
+    *,
+    include_post_check_statements: int = 0,
+    current_speaker_ref: str = "seat_8",
+    at_seq: int = 725,
+    repeated_check: bool = False,
+) -> dict[str, object]:
+    events: list[dict[str, object]] = [
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "authority": "player_claim_unverified",
+            "speaker_ref": "seat_1",
+            "event_ref": "440",
+            "known_at_seq": 440,
+            "record_seq": 440,
+            "occurred_in": {"period": "day", "round_no": 1},
+            "speech": "1号警上发言，我先听后置位。",
+        },
+        {
+            "kind": "player_statement",
+            "visibility": "public",
+            "authority": "player_claim_unverified",
+            "speaker_ref": "seat_5",
+            "event_ref": "460",
+            "known_at_seq": 460,
+            "record_seq": 460,
+            "occurred_in": {"period": "day", "round_no": 1},
+            "speech": "首夜我验了1号，是狼人查杀。",
+        },
+    ]
+    for index in range(include_post_check_statements):
+        record_seq = 500 + index * 10
+        events.append(
+            {
+                "kind": "player_statement",
+                "visibility": "public",
+                "authority": "player_claim_unverified",
+                "speaker_ref": "seat_1",
+                "event_ref": str(record_seq),
+                "known_at_seq": record_seq,
+                "record_seq": record_seq,
+                "occurred_in": {"period": "day", "round_no": 1},
+                "speech": "我回应5号的查杀，这个验人是假的。",
+            }
+        )
+    if repeated_check:
+        events.append(
+            {
+                "kind": "player_statement",
+                "visibility": "public",
+                "authority": "player_claim_unverified",
+                "speaker_ref": "seat_5",
+                "event_ref": "600",
+                "known_at_seq": 600,
+                "record_seq": 600,
+                "occurred_in": {"period": "day", "round_no": 1},
+                "speech": "我再说一次，1号是我的查杀。",
+            }
+        )
+    return {
+        "task": {
+            "round_no": 1,
+            "at_seq": at_seq,
+            "speech_progress": {"current_speaker_ref": current_speaker_ref},
+        },
+        "known_events": {"schema_version": 3, "events": events},
+    }
+
+
+def test_prior_first_party_investigation_report_denial_is_observed() -> None:
+    observations = observe_model_speech(
+        "5号跳预言家查杀1号，但昨晚验人也没报。",
+        hard_rules={},
+        model_context=_first_day_check_context(),
+    )
+
+    assert observations == [
+        {
+            "code": "prior_public_report_denial",
+            "severity": "warning",
+            "confidence": "high",
+            "detector_version": 1,
+            "authority": "public_statement_history",
+            "assertion_scope": "report_was_publicly_made_only",
+            "signals": [
+                {
+                    "reporting_actor_ref": "seat_5",
+                    "night_no": 1,
+                    "missing_field": "investigation_report",
+                    "prior_report_event_refs": ["460"],
+                    "prior_report_known_at_seqs": [460],
+                    "evidence": "5号跳预言家查杀1号，但昨晚验人也没报。",
+                }
+            ],
+            "effect": "observed_only",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "5号昨晚验人没报，这说不通。",
+        "5号昨晚验人没报，这完全说不过去。",
+        "5号昨晚验人没报，说明他有问题。",
+    ],
+)
+def test_ordinary_shuo_wording_does_not_hide_a_report_denial(speech: str) -> None:
+    observations = observe_model_speech(
+        speech,
+        hard_rules={},
+        model_context=_first_day_check_context(),
+    )
+
+    assert observations[0]["code"] == "prior_public_report_denial"
+    assert observations[0]["signals"][0]["missing_field"] == (
+        "investigation_report"
+    )
+
+
+def test_cannot_say_report_denial_is_not_treated_as_an_assertion() -> None:
+    assert (
+        observe_model_speech(
+            "不能说5号昨晚验人没报。",
+            hard_rules={},
+            model_context=_first_day_check_context(),
+        )
+        == []
+    )
+
+
+def test_v10_structured_first_party_investigation_drives_report_observation() -> None:
+    context = _first_day_check_context()
+    events = context["known_events"]["events"]
+    report = events[1]
+    report["speech"] = "5号首夜验1号查杀。"
+    report["annotations"] = [
+        {
+            "claim_id": "claim_460_1_investigation_claim",
+            "claim_type": "investigation_claim",
+            "authority": "player_claim_unverified",
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            "target_ref": "seat_1",
+            "claimed_result": "werewolves",
+        }
+    ]
+
+    observations = observe_model_speech(
+        "5号昨晚验人没有报。",
+        hard_rules={},
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "prior_public_report_denial"
+    assert observations[0]["signals"][0]["prior_report_event_refs"] == ["460"]
+
+
+@pytest.mark.parametrize(
+    "prior_speech,annotation,denial,expected_missing_field",
+    [
+        (
+            "我昨晚验了1号。",
+            {"target_ref": "seat_1"},
+            "5号昨晚验人没报。",
+            "investigation_report",
+        ),
+        (
+            "我昨晚验了1号。",
+            {"target_ref": "seat_1"},
+            "5号昨晚验了谁没报。",
+            "target",
+        ),
+        (
+            "我昨晚验人结果是查杀。",
+            {"claimed_result": "werewolves"},
+            "5号昨晚验人结果没报。",
+            "result",
+        ),
+    ],
+)
+def test_prior_report_denial_requires_the_denied_field_to_have_been_public(
+    prior_speech: str,
+    annotation: dict[str, str],
+    denial: str,
+    expected_missing_field: str,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report["speech"] = prior_speech
+    report["annotations"] = [
+        {
+            "claim_id": "claim_460_1_investigation_claim",
+            "claim_type": "investigation_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 1,
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            **annotation,
+        }
+    ]
+
+    observations = observe_model_speech(
+        denial,
+        hard_rules={},
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "prior_public_report_denial"
+    assert observations[0]["signals"][0]["missing_field"] == (
+        expected_missing_field
+    )
+
+
+@pytest.mark.parametrize(
+    "prior_speech,annotation,denial",
+    [
+        (
+            "我昨晚验了1号。",
+            {"target_ref": "seat_1"},
+            "5号昨晚验人结果没报。",
+        ),
+        (
+            "我昨晚验人结果是查杀。",
+            {"claimed_result": "werewolves"},
+            "5号昨晚验了谁没报。",
+        ),
+    ],
+)
+def test_prior_report_denial_does_not_cross_target_and_result_fields(
+    prior_speech: str,
+    annotation: dict[str, str],
+    denial: str,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report["speech"] = prior_speech
+    report["annotations"] = [
+        {
+            "claim_id": "claim_460_1_investigation_claim",
+            "claim_type": "investigation_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 1,
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            **annotation,
+        }
+    ]
+
+    assert (
+        observe_model_speech(
+            denial,
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+def test_v9_history_first_party_annotation_drives_reaction_observation() -> None:
+    context = _first_day_check_context()
+    events = context["known_events"]["events"]
+    events[1]["speech"] = "5号首夜验1号查杀。"
+    context["history"] = {
+        "timeline": [
+            {
+                "source_event_id": "460",
+                "speaker_ref": "seat_5",
+                "annotations": [
+                    {
+                        "claim_id": "claim_460_1_investigation_claim",
+                        "claim_type": "investigation_claim",
+                        "source_kind": "speaker_first_party_claim",
+                        "confirmation_status": "unverified",
+                        "claimed_action_in": {"period": "night", "round_no": 1},
+                        "target_ref": "seat_1",
+                        "claimed_result": "werewolves",
+                    }
+                ],
+            }
+        ]
+    }
+
+    observations = observe_model_speech(
+        "1号被查杀后状态稳定。",
+        hard_rules={},
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "public_reaction_without_post_trigger_statement"
+    assert observations[0]["signals"][0]["trigger_event_ref"] == "460"
+
+
+@pytest.mark.parametrize(
+    "reported_subject",
+    ["别人", "5号"],
+)
+def test_legacy_first_party_annotation_is_revalidated_against_raw_sentence(
+    reported_subject: str,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report.update(
+        {
+            "speaker_ref": "seat_8",
+            "speech": (
+                f"我是预言家。昨晚{reported_subject}验了1号查杀，我不认。"
+            ),
+        }
+    )
+    context["history"] = {
+        "ledger_schema_version": 3,
+        "timeline": [
+            {
+                "source_event_id": "460",
+                "speaker_ref": "seat_8",
+                "annotations": [
+                    {
+                        "claim_id": "claim_460_2_investigation_claim",
+                        "claim_type": "investigation_claim",
+                        "source_kind": "speaker_first_party_claim",
+                        "confirmation_status": "unverified",
+                        "sentence_index": 2,
+                        "claimed_action_in": {"period": "night", "round_no": 1},
+                        "target_ref": "seat_1",
+                        "claimed_result": "werewolves",
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert (
+        observe_model_speech(
+            "8号昨晚验人没报，1号被查杀后状态稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+def test_secondary_paraphrase_is_not_promoted_to_a_first_party_investigation() -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report.update(
+        {
+            "speaker_ref": "seat_7",
+            "speech": "5号首夜验1号查杀。",
+            "annotations": [
+                {
+                    "claim_id": "claim_460_1_secondary_paraphrase",
+                    "claim_type": "secondary_paraphrase",
+                    "source_kind": "secondary_unverified_paraphrase",
+                    "reported_speaker_ref": "seat_5",
+                    "confirmation_status": "unverified",
+                }
+            ],
+        }
+    )
+
+    assert (
+        observe_model_speech(
+            "5号昨晚验人没有报，1号被查杀后状态稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_gold_water_investigation_is_not_a_post_check_trigger(structured: bool) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report["speech"] = "首夜我验了1号，是好人金水。"
+    if structured:
+        report["annotations"] = [
+            {
+                "claim_id": "claim_460_1_investigation_claim",
+                "claim_type": "investigation_claim",
+                "authority": "player_claim_unverified",
+                "claimed_action_in": {"period": "night", "round_no": 1},
+                "target_ref": "seat_1",
+                "claimed_result": "villagers",
+            }
+        ]
+
+    assert (
+        observe_model_speech(
+            "1号被查杀后状态很稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("annotation_version", ["v9_wrong_wolves", "v10_villagers"])
+def test_negated_wolf_result_is_reconciled_as_a_public_villager_result(
+    annotation_version: str,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report["speech"] = "我是预言家。昨晚我验1号不是狼人，是好人。"
+    annotation = {
+        "claim_id": "claim_460_2_investigation_claim",
+        "claim_type": "investigation_claim",
+        "sentence_index": 2,
+        "claimed_action_in": {"period": "night", "round_no": 1},
+        "target_ref": "seat_1",
+        "claimed_result": (
+            "werewolves" if annotation_version == "v9_wrong_wolves" else "villagers"
+        ),
+    }
+    if annotation_version == "v9_wrong_wolves":
+        context["history"] = {
+            "ledger_schema_version": 3,
+            "timeline": [
+                {
+                    "source_event_id": "460",
+                    "speaker_ref": "seat_5",
+                    "annotations": [
+                        {
+                            **annotation,
+                            "source_kind": "speaker_first_party_claim",
+                            "confirmation_status": "unverified",
+                        }
+                    ],
+                }
+            ],
+        }
+    else:
+        report["annotations"] = [
+            {
+                **annotation,
+                "authority": "player_claim_unverified",
+            }
+        ]
+
+    denial_observations = observe_model_speech(
+        "5号昨晚验人结果没报。",
+        hard_rules={},
+        model_context=context,
+    )
+
+    assert denial_observations[0]["code"] == "prior_public_report_denial"
+    assert denial_observations[0]["signals"][0]["missing_field"] == "result"
+    assert (
+        observe_model_speech(
+            "1号被查杀后状态稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_plain_sentence_initial_first_check_is_accepted_as_first_party(
+    structured: bool,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report["speech"] = "首验1号金水。"
+    if structured:
+        report["annotations"] = [
+            {
+                "claim_id": "claim_460_1_investigation_claim",
+                "claim_type": "investigation_claim",
+                "authority": "player_claim_unverified",
+                "sentence_index": 1,
+                "claimed_action_in": {"period": "night", "round_no": 1},
+                "target_ref": "seat_1",
+                "claimed_result": "villagers",
+            }
+        ]
+
+    observations = observe_model_speech(
+        "5号昨晚验人结果没报。",
+        hard_rules={},
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "prior_public_report_denial"
+    assert observations[0]["signals"][0]["missing_field"] == "result"
+    assert (
+        observe_model_speech(
+            "1号被查杀后状态稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "secondary_speech",
+    [
+        "5号首验1号金水。",
+        "按5号原话，首验1号金水。",
+    ],
+)
+def test_attributed_first_check_is_not_reconciled_as_current_speaker_claim(
+    secondary_speech: str,
+) -> None:
+    context = _first_day_check_context()
+    report = context["known_events"]["events"][1]
+    report.update(
+        {
+            "speaker_ref": "seat_8",
+            "speech": secondary_speech,
+            "annotations": [
+                {
+                    "claim_id": "claim_460_1_investigation_claim",
+                    "claim_type": "investigation_claim",
+                    "authority": "player_claim_unverified",
+                    "sentence_index": 1,
+                    "claimed_action_in": {"period": "night", "round_no": 1},
+                    "target_ref": "seat_1",
+                    "claimed_result": "villagers",
+                }
+            ],
+        }
+    )
+
+    assert (
+        observe_model_speech(
+            "8号昨晚验人结果没报。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "5号昨晚验人没报清楚。",
+        "5号昨晚验人的理由没有交代。",
+        "5号第二晚验人没报。",
+        "如果5号昨晚验人没报，那他就不可信。",
+        "8号说5号昨晚验人没报，我只是在复述。",
+        "5号昨晚验人没报，这是8号说的。",
+        "5号昨晚警徽流没报。",
+        "5号昨晚验人是不是没报？",
+    ],
+)
+def test_prior_report_denial_excludes_qualified_or_non_asserted_claims(
+    speech: str,
+) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context=_first_day_check_context(),
+        )
+        == []
+    )
+
+
+def test_generic_post_check_reaction_without_a_statement_is_observed() -> None:
+    observations = observe_model_speech(
+        "1号被查杀后反应也还行，状态比较稳定。",
+        hard_rules={},
+        model_context=_first_day_check_context(),
+    )
+
+    observation = observations[0]
+    assert observation["code"] == "public_reaction_without_post_trigger_statement"
+    assert observation["authority"] == "event_chronology"
+    assert observation["effect"] == "observed_only"
+    assert observation["signals"] == [
+        {
+            "reaction_actor_ref": "seat_1",
+            "trigger_actor_ref": "seat_5",
+            "trigger_event_ref": "460",
+            "trigger_known_at_seq": 460,
+            "actual_post_trigger_statement_count": 0,
+            "post_trigger_statement_event_refs": [],
+            "contradiction": "no_post_trigger_public_statement",
+            "evidence": "1号被查杀后反应也还行，状态比较稳定。",
+        }
+    ]
+
+
+def test_actual_post_check_statement_suppresses_generic_reaction_warning() -> None:
+    assert (
+        observe_model_speech(
+            "1号被查杀后反应也还行。",
+            hard_rules={},
+            model_context=_first_day_check_context(
+                include_post_check_statements=1,
+                at_seq=725,
+            ),
+        )
+        == []
+    )
+
+
+def test_explicit_post_check_statement_count_mismatch_is_observed() -> None:
+    observations = observe_model_speech(
+        "1号被查杀后已经有两次发言，状态一直很稳。",
+        hard_rules={},
+        model_context=_first_day_check_context(
+            include_post_check_statements=1,
+            at_seq=725,
+        ),
+    )
+
+    signal = observations[0]["signals"][0]
+    assert signal["contradiction"] == "post_trigger_statement_count_mismatch"
+    assert signal["claimed_post_trigger_statement_count"] == 2
+    assert signal["actual_post_trigger_statement_count"] == 1
+    assert signal["post_trigger_statement_event_refs"] == ["500"]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "如果1号被查杀后反应稳定，再考虑放下他。",
+        "不能说1号被查杀后状态稳定，他还没发言。",
+        "8号说1号被查杀后反应稳定，我只是在复述。",
+        "我不同意1号被查杀后状态稳定的说法。",
+        "1号被查杀后状态稳定，这是8号说的。",
+    ],
+)
+def test_post_check_reaction_excludes_hypothesis_rejection_and_attribution(
+    speech: str,
+) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules={},
+            model_context=_first_day_check_context(),
+        )
+        == []
+    )
+
+
+def test_rejected_post_check_reaction_is_not_treated_as_an_assertion() -> None:
+    assert (
+        observe_model_speech(
+            "我不认1号被查杀后反应稳定。",
+            hard_rules={},
+            model_context=_first_day_check_context(),
+        )
+        == []
+    )
+
+
+def test_current_target_speech_counts_as_the_post_check_statement() -> None:
+    assert (
+        observe_model_speech(
+            "1号被查杀后现在正式回应：5号是悍跳。",
+            hard_rules={},
+            model_context=_first_day_check_context(current_speaker_ref="seat_1"),
+        )
+        == []
+    )
+
+
+def test_repeated_check_does_not_replace_the_original_trigger() -> None:
+    observations = observe_model_speech(
+        "1号被查杀后状态很稳定。",
+        hard_rules={},
+        model_context=_first_day_check_context(repeated_check=True),
+    )
+
+    assert observations[0]["signals"][0]["trigger_event_ref"] == "460"
+
+
+def test_prior_round_check_is_not_reused_as_the_current_round_trigger() -> None:
+    context = _first_day_check_context()
+    context["task"] = {
+        "round_no": 2,
+        "at_seq": 900,
+        "speech_progress": {"current_speaker_ref": "seat_8"},
+    }
+
+    assert (
+        observe_model_speech(
+            "1号被查杀后状态很稳定。",
+            hard_rules={},
+            model_context=context,
+        )
+        == []
+    )
+
+
+def _peaceful_night_context(*, actor_knows_heal: bool = False) -> dict[str, object]:
+    events: list[dict[str, object]] = [
+        {
+            "kind": "night_result",
+            "visibility": "public",
+            "authority": "judge_fact",
+            "event_ref": "648",
+            "known_at_seq": 648,
+            "occurred_in": {"period": "night", "round_no": 1},
+            "announced_in": {"period": "dawn", "round_no": 1},
+            "outcome": "peaceful",
+            "eliminated_player_refs": [],
+        }
+    ]
+    if actor_knows_heal:
+        events.append(
+            {
+                "kind": "private_ability_action_committed",
+                "visibility": "actor_private",
+                "authority": "judge_fact",
+                "event_ref": "witch-heal-1",
+                "known_at_seq": 620,
+                "data": {
+                    "ability_id": "witch.heal",
+                    "night_no": 1,
+                    "decision": {"use": True, "target_player_id": "seat_3"},
+                    "result": {"heal_used": True},
+                },
+            }
+        )
+    return {
+        "task": {"phase_id": "day_1", "round_no": 1},
+        "known_events": {"events": events},
+    }
+
+
+def _alternative_peaceful_night_rules() -> dict[str, object]:
+    return {
+        "ability_rules": {
+            "werewolf_attack": {
+                "enabled": True,
+                "team_resolution": {
+                    "resolution": "unanimous_no_attack",
+                    "allow_no_attack": False,
+                },
+            },
+            "guard_protect": {
+                "enabled": True,
+                "successful_protection_effect": (
+                    "若守护目标当夜受到狼人攻击，该目标不会因这次攻击出局。"
+                ),
+            },
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "昨晚是平安夜，说明女巫救了人，解药已经用完。",
+        "平安夜就是女巫开了解药，今天别再指望救人。",
+        "平安夜，解药已用，女巫手里只剩毒药。",
+    ],
+)
+def test_categorical_hidden_cause_for_peaceful_night_is_observed(
+    speech: str,
+) -> None:
+    observations = observe_model_speech(
+        speech,
+        hard_rules=_alternative_peaceful_night_rules(),
+        model_context=_peaceful_night_context(),
+    )
+
+    assert observations[0]["code"] == "unsupported_hidden_cause_claim"
+    assert observations[0]["authority"] == "actor_visible_information"
+    assert observations[0]["effect"] == "observed_only"
+    assert observations[0]["signals"][0]["public_event_refs"] == ["648"]
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "昨晚平安夜，大概率是女巫救人。",
+        "昨晚平安夜，可能是女巫开了解药。",
+        "如果平安夜是女巫救人，那解药才会用完。",
+        "8号说平安夜就是女巫救人，我只是在复述。",
+        "昨晚平安夜，但女巫没有救人，解药没用。",
+        "昨晚平安夜，不能说女巫救人。",
+        "昨晚平安夜不代表女巫救人。",
+    ],
+)
+def test_hidden_cause_uncertainty_hypothesis_or_attribution_is_not_flagged(
+    speech: str,
+) -> None:
+    assert (
+        observe_model_speech(
+            speech,
+            hard_rules=_alternative_peaceful_night_rules(),
+            model_context=_peaceful_night_context(),
+        )
+        == []
+    )
+
+
+def test_actor_private_heal_fact_suppresses_hidden_cause_warning() -> None:
+    assert (
+        observe_model_speech(
+            "昨晚是平安夜，因为女巫救了人，解药已经用完。",
+            hard_rules=_alternative_peaceful_night_rules(),
+            model_context=_peaceful_night_context(actor_knows_heal=True),
+        )
+        == []
+    )
+
+
+def test_old_private_heal_does_not_exempt_a_later_peaceful_night_claim() -> None:
+    context = _peaceful_night_context(actor_knows_heal=True)
+    context["task"] = {"phase_id": "day_2", "round_no": 2}
+    context["known_events"]["events"].append(
+        {
+            "kind": "night_result",
+            "visibility": "public",
+            "authority": "judge_fact",
+            "event_ref": "900",
+            "known_at_seq": 900,
+            "occurred_in": {"period": "night", "round_no": 2},
+            "announced_in": {"period": "dawn", "round_no": 2},
+            "outcome": "peaceful",
+            "eliminated_player_refs": [],
+        }
+    )
+
+    observations = observe_model_speech(
+        "昨晚是平安夜，说明女巫救了人，解药已经用完。",
+        hard_rules=_alternative_peaceful_night_rules(),
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "unsupported_hidden_cause_claim"
+    assert observations[0]["signals"][0]["night_no"] == 2
+    assert observations[0]["signals"][0]["public_event_refs"] == ["900"]
+
+
+def test_same_night_wolf_attack_resolution_can_privately_explain_peace() -> None:
+    context = _peaceful_night_context()
+    context["known_events"]["events"].append(
+        {
+            "kind": "werewolf_attack_resolved",
+            "visibility": "actor_private",
+            "authority": "judge_fact",
+            "event_ref": "wolf-resolution-1",
+            "known_at_seq": 610,
+            "occurred_in": {"period": "night", "round_no": 1},
+            "data": {
+                "night_no": 1,
+                "final_target_player_id": "seat_3",
+                "resolution_reason": "unanimous_target",
+            },
+        }
+    )
+    no_guard_rules = {
+        "ability_rules": {
+            "werewolf_attack": {
+                "enabled": True,
+                "team_resolution": {
+                    "resolution": "unanimous_no_attack",
+                    "allow_no_attack": False,
+                },
+            }
+        }
+    }
+
+    assert (
+        observe_model_speech(
+            "昨晚是平安夜，说明女巫救了人，解药已经用完。",
+            hard_rules=no_guard_rules,
+            model_context=context,
+        )
+        == []
+    )
+
+
+def test_night_decision_note_resolves_yesterday_to_the_previous_night() -> None:
+    context = _peaceful_night_context()
+    context["task"] = {"phase_id": "night_2", "night_no": 2, "round_no": 2}
+
+    observations = observe_model_speech(
+        "昨晚是平安夜，说明女巫救了人，解药已经用完。",
+        hard_rules=_alternative_peaceful_night_rules(),
+        model_context=context,
+    )
+
+    assert observations[0]["code"] == "unsupported_hidden_cause_claim"
+    assert observations[0]["signals"][0]["night_no"] == 1
+
+
+def test_hidden_cause_observer_requires_a_public_non_witch_alternative() -> None:
+    assert (
+        observe_model_speech(
+            "昨晚是平安夜，因为女巫救了人，解药已经用完。",
+            hard_rules={
+                "ability_rules": {
+                    "werewolf_attack": {
+                        "enabled": True,
+                        "coordination": "solo",
+                    }
+                }
+            },
+            model_context=_peaceful_night_context(),
+        )
+        == []
+    )
+
+
+def test_action_engine_observes_decision_note_and_marks_the_output_field() -> None:
+    observations = _observe_model_output_fields(
+        speech=None,
+        decision_note="这局双狼，我需要找出两张狼人牌。",
+        hard_rules={"werewolf_count": 1},
+        model_context=None,
+    )
+
+    assert len(observations) == 1
+    assert observations[0]["code"] == "wolf_cardinality_contradiction"
+    assert observations[0]["output_field"] == "decision_note"
+    assert observations[0]["signals"][0]["output_field"] == "decision_note"
+    assert observations[0]["effect"] == "observed_only"
+
+
+def test_action_engine_observes_post_check_reaction_in_decision_note() -> None:
+    observations = _observe_model_output_fields(
+        speech=None,
+        decision_note="1号被查杀后状态稳定，更像好人。",
+        hard_rules={},
+        model_context=_first_day_check_context(),
+    )
+
+    assert len(observations) == 1
+    assert observations[0]["code"] == (
+        "public_reaction_without_post_trigger_statement"
+    )
+    assert observations[0]["output_field"] == "decision_note"
+    assert observations[0]["signals"][0]["output_field"] == "decision_note"
+    assert observations[0]["signals"][0]["reaction_actor_ref"] == "seat_1"
+    assert observations[0]["effect"] == "observed_only"
+
+
+def test_action_engine_output_field_wrapper_is_fail_open_per_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_decision_note(text, *, hard_rules, model_context=None):
+        if text == "bad decision note":
+            raise RuntimeError("labeling path exploded")
+        return observe_model_speech(
+            text,
+            hard_rules=hard_rules,
+            model_context=model_context,
+        )
+
+    monkeypatch.setattr(
+        "app.v2.action_engine.observe_model_speech",
+        fail_decision_note,
+    )
+    observations = _observe_model_output_fields(
+        speech="这局双狼。",
+        decision_note="bad decision note",
+        hard_rules={"werewolf_count": 1},
+        model_context=None,
+    )
+
+    assert [item["code"] for item in observations] == [
+        "wolf_cardinality_contradiction",
+        "model_observation_failed",
+    ]
+    assert [item["output_field"] for item in observations] == [
+        "speech",
+        "decision_note",
+    ]
+    assert observations[1]["error_type"] == "RuntimeError"
+    assert all(item["effect"] == "observed_only" for item in observations)
+
+
+def test_action_engine_output_field_wrapper_tolerates_malformed_observer_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def malformed_decision_note(text, **_kwargs):
+        return [None] if text == "bad shape" else []
+
+    monkeypatch.setattr(
+        "app.v2.action_engine.observe_model_speech",
+        malformed_decision_note,
+    )
+    observations = _observe_model_output_fields(
+        speech="normal",
+        decision_note="bad shape",
+        hard_rules={},
+        model_context=None,
+    )
+
+    assert observations == [
+        {
+            "code": "model_observation_failed",
+            "severity": "warning",
+            "confidence": "unknown",
+            "detector_version": 1,
+            "error_type": "TypeError",
+            "output_field": "decision_note",
+            "effect": "observed_only",
+        }
+    ]

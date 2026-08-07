@@ -1050,8 +1050,10 @@ class V2ActionEngine:
                     if raw_model_speech is not None
                     else None
                 )
-                passive_observations = observe_model_speech(
-                    sanitized_speech,
+                raw_decision_note = model_decision.decision_note
+                passive_observations = _observe_model_output_fields(
+                    speech=sanitized_speech,
+                    decision_note=raw_decision_note,
                     hard_rules=(
                         observation_context.get("hard_rules")
                         if isinstance(observation_context.get("hard_rules"), dict)
@@ -1066,7 +1068,6 @@ class V2ActionEngine:
                     max_chars=None,
                     max_sentences=spec.decision_contract.speech_max_sentences,
                 )
-                raw_decision_note = model_decision.decision_note
                 constrained_decision_note, decision_note_constraint_reasons = (
                     _constrain_model_speech(
                         raw_decision_note,
@@ -1689,6 +1690,52 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
 
 _SPEECH_SENTENCE_ENDINGS = frozenset("。！？!?\n")
 _SPEECH_SENTENCE_CLOSERS = frozenset("”’」』）)]}")
+
+
+def _observe_model_output_fields(
+    *,
+    speech: str | None,
+    decision_note: str | None,
+    hard_rules: dict[str, Any],
+    model_context: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for output_field, text in (
+        ("speech", speech),
+        ("decision_note", decision_note),
+    ):
+        try:
+            for raw_observation in observe_model_speech(
+                text,
+                hard_rules=hard_rules,
+                model_context=model_context,
+            ):
+                observation = dict(raw_observation)
+                observation["output_field"] = output_field
+                for signal_field in ("signals", "conflicts"):
+                    raw_signals = observation.get(signal_field)
+                    if not isinstance(raw_signals, list):
+                        continue
+                    observation[signal_field] = [
+                        {**signal, "output_field": output_field}
+                        if isinstance(signal, dict)
+                        else signal
+                        for signal in raw_signals
+                    ]
+                observations.append(observation)
+        except Exception as exc:  # Output-field labeling must remain passive too.
+            observations.append(
+                {
+                    "code": "model_observation_failed",
+                    "severity": "warning",
+                    "confidence": "unknown",
+                    "detector_version": 1,
+                    "error_type": type(exc).__name__,
+                    "output_field": output_field,
+                    "effect": "observed_only",
+                }
+            )
+    return observations
 
 
 def _constrain_model_speech(

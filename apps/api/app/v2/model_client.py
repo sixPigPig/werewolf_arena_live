@@ -985,7 +985,35 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
         )
     else:
         raise V2ModelError("model_decision_contract_invalid")
-    if action_context.get("model_context_schema_version") == 9 and action_context.get(
+    if (
+        action_context.get("model_context_schema_version") == 10
+        and action_context.get("prompt_template_version") == 2
+    ):
+        system_text = (
+            "你在扮演狼人杀玩家。法官事实可信；玩家发言均为未核实说法。"
+            "player_statement.annotations 仅标出其中由该发言者直接作出的"
+            "身份、验人和未来验人计划声明，仍不是法官事实。"
+            "actor_memory 和 declared_reason 是本人历史主观内容，也不是法官事实。"
+            "只能使用当前动作前已可见的信息；known_at_seq/record_seq 是记录或获知顺序，"
+            "occurred_in 是实际阶段，announced_in 只是公布阶段。"
+            "state 的 current_period、latest_completed_night_no 和 next_night_no 是当前轮次锚点。"
+            "next_night_no 是首个尚未完成的夜晚：夜间指当前夜，白天指下一夜。"
+            "questions/relations 只引用已有事件；source_authority=player_claim_unverified "
+            "表示提问来自玩家。address_resolution 只表示对象是否识别，"
+            "status 只表示后来是否已有回答。"
+            "requested_fields 是问题要求的验人字段，"
+            "referenced_night_no 是夜次。"
+            "reply_opportunity=awaiting_scheduled_turn 表示被问者尚未轮到发言，不表示拒绝回应。"
+            "prior_relevant_event_refs 是问题前的相关说明，不是对后来问题的回答；"
+            "prior_coverage=already_publicly_reported 表示提问前已经公开报过。"
+            "按 rules.win_condition_contract 的 evaluation_order 和 "
+            "post_elimination_resolution 理解胜负边界。"
+            "策略、身份伪装和表达由你自主决定，不得使用未提供的私密信息。"
+            f"{output_instruction}只能用“N号”称呼玩家，不得生成玩家姓名。"
+        )
+    elif action_context.get("model_context_schema_version") == 10:
+        raise V2ModelError("model_prompt_template_unsupported")
+    elif action_context.get("model_context_schema_version") == 9 and action_context.get(
         "prompt_template_version"
     ) in {1, 2}:
         win_condition_instruction = (

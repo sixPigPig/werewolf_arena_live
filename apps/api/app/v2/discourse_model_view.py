@@ -21,6 +21,7 @@ def build_discourse_model_view(
     claims = _dict_list(ledger.get("claims"))
     questions = _dict_list(ledger.get("questions"))
     relations = _dict_list(ledger.get("relations"))
+    ledger_schema_version = _positive_int(ledger.get("ledger_schema_version"), default=2)
 
     annotations_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for claim in claims:
@@ -41,8 +42,11 @@ def build_discourse_model_view(
     projected_questions = _project_questions(
         questions,
         statements=statements,
+        claims=claims,
         actor_ref=actor_ref,
         task=task,
+        ledger_schema_version=ledger_schema_version,
+        model_view_schema_version=model_view_schema_version,
     )
     focus = _build_focus(
         statements=statements,
@@ -65,6 +69,11 @@ def build_discourse_model_view(
             ),
         }
     )
+    if model_view_schema_version >= 4:
+        source_rules["prior_coverage_rule"] = (
+            "prior_coverage=already_publicly_reported 表示被提问者在问题之前已公开报告同一事项；"
+            "此前报告不是对后来问题的回答，问题仍需按后续发言判断 status"
+        )
     model_view = {
         "ledger_schema_version": ledger.get("ledger_schema_version"),
         "model_view_schema_version": model_view_schema_version,
@@ -128,6 +137,11 @@ def build_discourse_model_view(
         "ledger_serialized_char_count": _serialized_chars(ledger),
         "model_view_serialized_char_count": _serialized_chars(model_view),
     }
+    if model_view_schema_version >= 4:
+        metadata["prior_coverage_question_count"] = sum(
+            question.get("prior_coverage") == "already_publicly_reported"
+            for question in projected_questions
+        )
     return model_view, metadata
 
 
@@ -144,16 +158,28 @@ def _claim_annotation(claim: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in claim.items() if key not in redundant_fields}
 
 
-def _question_reference(question: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in question.items() if key not in {"exact_quote"}}
+def _question_reference(
+    question: dict[str, Any],
+    *,
+    model_view_schema_version: int,
+) -> dict[str, Any]:
+    item = {key: value for key, value in question.items() if key not in {"exact_quote"}}
+    if model_view_schema_version < 4:
+        item.pop("address_resolution", None)
+        if item.get("status") == "open" and not isinstance(item.get("addressed_to"), str):
+            item["status"] = "unresolved_target"
+    return item
 
 
 def _project_questions(
     questions: list[dict[str, Any]],
     *,
     statements: list[dict[str, Any]],
+    claims: list[dict[str, Any]],
     actor_ref: str | None,
     task: dict[str, Any],
+    ledger_schema_version: int,
+    model_view_schema_version: int,
 ) -> list[dict[str, Any]]:
     speech_order = _string_list(task.get("speech_order"))
     current_position = (
@@ -163,7 +189,10 @@ def _project_questions(
     )
     projected: list[dict[str, Any]] = []
     for question in questions:
-        item = _question_reference(question)
+        item = _question_reference(
+            question,
+            model_view_schema_version=model_view_schema_version,
+        )
         target_ref = item.get("addressed_to")
         if item.get("status") == "open":
             item["status_semantics"] = "no_response_after_question"
@@ -175,22 +204,98 @@ def _project_questions(
             if reply_opportunity is not None:
                 item["reply_opportunity"] = reply_opportunity
         if isinstance(target_ref, str):
-            prior_refs = [
+            past_investigation_v4 = (
+                model_view_schema_version >= 4
+                and question.get("topic") == "past_investigation_result"
+            )
+            raw_prior_refs = [
                 str(statement["source_event_id"])
                 for statement in statements
                 if statement.get("speaker_ref") == target_ref
-                and _same_round(statement, question=question)
+                and (past_investigation_v4 or _same_round(statement, question=question))
                 and _statement_precedes_question(statement, question=question)
                 and speech_matches_question_topic(
                     str(statement.get("speech") or ""),
                     topic=str(question.get("topic") or ""),
+                    ledger_schema_version=ledger_schema_version,
                 )
                 and isinstance(statement.get("source_event_id"), str)
             ]
+            prior_refs = raw_prior_refs
+            matching_investigation_claims: list[dict[str, Any]] = []
+            referenced_night_no = question.get("referenced_night_no")
+            if past_investigation_v4 and isinstance(referenced_night_no, int):
+                matching_investigation_claims = [
+                    claim
+                    for claim in claims
+                    if _qualifying_prior_investigation_claim(
+                        claim,
+                        target_ref=target_ref,
+                        prior_refs=raw_prior_refs,
+                        referenced_night_no=referenced_night_no,
+                    )
+                ]
+                matching_refs = {
+                    str(claim["source_event_id"])
+                    for claim in matching_investigation_claims
+                    if isinstance(claim.get("source_event_id"), str)
+                }
+                prior_refs = [ref for ref in raw_prior_refs if ref in matching_refs]
             if prior_refs:
                 item["prior_relevant_statement_refs"] = prior_refs
+                if (
+                    past_investigation_v4
+                    and isinstance(referenced_night_no, int)
+                    and _claims_cover_requested_fields(
+                        matching_investigation_claims,
+                        requested_fields=_string_list(question.get("requested_fields")),
+                    )
+                ):
+                    item["prior_coverage"] = "already_publicly_reported"
         projected.append(item)
     return projected
+
+
+def _qualifying_prior_investigation_claim(
+    claim: dict[str, Any],
+    *,
+    target_ref: str,
+    prior_refs: list[str],
+    referenced_night_no: int,
+) -> bool:
+    claimed_action_in = claim.get("claimed_action_in")
+    return (
+        claim.get("claim_type") == "investigation_claim"
+        and claim.get("source_kind") == "speaker_first_party_claim"
+        and claim.get("speaker_ref") == target_ref
+        and claim.get("source_event_id") in prior_refs
+        and isinstance(claimed_action_in, dict)
+        and claimed_action_in.get("period") == "night"
+        and claimed_action_in.get("round_no") == referenced_night_no
+        and (
+            isinstance(claim.get("target_ref"), str)
+            or claim.get("claimed_result") in {"werewolves", "villagers"}
+        )
+    )
+
+
+def _claims_cover_requested_fields(
+    claims: list[dict[str, Any]],
+    *,
+    requested_fields: list[str],
+) -> bool:
+    required = requested_fields or ["target_ref", "claimed_result"]
+    return all(
+        any(
+            isinstance(claim.get("target_ref"), str)
+            if field == "target_ref"
+            else claim.get("claimed_result") in {"werewolves", "villagers"}
+            if field == "claimed_result"
+            else False
+            for claim in claims
+        )
+        for field in required
+    )
 
 
 def _reply_opportunity(
@@ -292,8 +397,12 @@ def _build_focus(
                     "asked_by",
                     "addressed_to",
                     "topic",
+                    "address_resolution",
+                    "requested_fields",
+                    "referenced_night_no",
                     "reply_opportunity",
                     "prior_relevant_statement_refs",
+                    "prior_coverage",
                 )
                 if key in question
             }
@@ -327,6 +436,12 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
 
 
 def _string_list(value: Any) -> list[str]:

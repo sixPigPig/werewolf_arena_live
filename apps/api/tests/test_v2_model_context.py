@@ -24,6 +24,7 @@ from app.v2.model_context_contract import (
     legacy_v8_prompt_v2_model_context_contract,
     legacy_v8_prompt_v3_model_context_contract,
     supports_model_context_contract,
+    v10_prompt_v2_model_context_contract,
     v9_model_context_contract,
     v9_prompt_v2_model_context_contract,
 )
@@ -137,7 +138,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "沈砚" not in serialized
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
-    assert projected["model_context_schema_version"] == 9
+    assert projected["model_context_schema_version"] == 10
     assert projected["prompt_template_version"] == 2
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
@@ -177,6 +178,10 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
         "eliminated_player_count": 1,
         "eliminated_player_ids": ["seat_1"],
         "identity_information_included": False,
+        "current_period": "day",
+        "current_round_no": 1,
+        "latest_completed_night_no": 1,
+        "next_night_no": 2,
         "as_of_seq": 1,
     }
     public_events = [
@@ -195,7 +200,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert public_events[1]["event_ref"] == "history_2"
     assert public_events[2]["public_reason"] == "exile"
     assert public_events[2]["role_revealed"] is False
-    assert projected["known_events"]["schema_version"] == 3
+    assert projected["known_events"]["schema_version"] == 4
     assert projected["known_events"]["questions"] == []
     assert projected["known_events"]["relations"] == []
     assert "history" not in projected
@@ -204,11 +209,207 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "annotations" not in serialized
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] is None
-    assert metadata["model_context_schema_version"] == 9
+    assert metadata["model_context_schema_version"] == 10
     assert metadata["prompt_template_version"] == 2
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
+
+
+def test_v10_projects_prior_public_investigation_report_without_rewriting_causality() -> None:
+    players = tuple(
+        V2ModelPlayerReference(f"player-{seat}", seat, f"玩家{seat}") for seat in (1, 5, 6, 8)
+    )
+    projected = project_model_action_context_with_metadata(
+        {
+            "round_no": 1,
+            "phase_id": "day_1",
+            "action_type": "day_debate_speech",
+            "self_identity": {
+                "player_id": "player-6",
+                "seat": 6,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "speech_order": ["player-8", "player-6", "player-5", "player-1"],
+            "public_history": [
+                {
+                    "source_event_id": 460,
+                    "record_seq": 460,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "sheriff_campaign_speech",
+                        "player_id": "player-5",
+                        "speech": (
+                            "5号上警，我是预言家。首夜验了1号，是狼人查杀。警徽流暂时不想死留。"
+                        ),
+                    },
+                },
+                {
+                    "source_event_id": 732,
+                    "record_seq": 732,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "player-8",
+                        "speech": "现在天亮了，5号昨晚验了谁、什么结果，该报了吧？",
+                    },
+                },
+            ],
+            "output_contract": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        players=players,
+        action_record_seq=764,
+    )
+
+    events = projected.context["known_events"]["events"]
+    first_party_report = next(event for event in events if event["event_ref"] == "460")
+    assert first_party_report["annotations"] == [
+        {
+            "claim_id": "claim_460_1_role_claim",
+            "claim_type": "role_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 1,
+            "claimed_role": "seer",
+        },
+        {
+            "claim_id": "claim_460_2_investigation_claim",
+            "claim_type": "investigation_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 2,
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            "target_ref": "seat_1",
+            "claimed_result": "werewolves",
+        },
+    ]
+    assert projected.context["known_events"]["questions"] == [
+        {
+            "question_id": "question_732_1",
+            "source_event_ref": "732",
+            "source_authority": "player_claim_unverified",
+            "asked_by": "seat_8",
+            "addressed_to": "seat_5",
+            "address_resolution": "resolved",
+            "asked_at_seq": 732,
+            "topic": "past_investigation_result",
+            "status": "open",
+            "requested_fields": ["target_ref", "claimed_result"],
+            "referenced_night_no": 1,
+            "reply_opportunity": "awaiting_scheduled_turn",
+            "prior_relevant_event_refs": ["460"],
+            "prior_coverage": "already_publicly_reported",
+        }
+    ]
+    assert projected.context["known_events"]["relations"] == []
+    assert projected.projection_metadata["structured_claim_count"] == 2
+    assert projected.projection_metadata["prior_coverage_question_count"] == 1
+
+
+def test_v10_night_state_anchor_distinguishes_current_from_completed_night() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 2,
+            "night_no": 2,
+            "phase_id": "night_2",
+            "action_type": "ability_seer.investigate_decision",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "seer",
+                "team": "villagers",
+            },
+            "public_history": [],
+        },
+        players=PLAYERS,
+        action_record_seq=20,
+    )
+
+    assert projected["state"] == {
+        "current_period": "night",
+        "current_round_no": 2,
+        "latest_completed_night_no": 1,
+        "next_night_no": 2,
+        "as_of_seq": 20,
+    }
+
+    pre_dawn_sheriff = project_model_action_context(
+        {
+            "round_no": 1,
+            "phase_id": "first_night",
+            "action_type": "sheriff_campaign_speech",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "seer",
+                "team": "villagers",
+            },
+            "public_history": [],
+        },
+        players=PLAYERS,
+        action_record_seq=30,
+    )
+    assert pre_dawn_sheriff["state"] == {
+        "current_period": "day",
+        "current_round_no": 1,
+        "latest_completed_night_no": 1,
+        "next_night_no": 2,
+        "as_of_seq": 30,
+    }
+
+    hunter_dawn_context = {
+        "round_no": 1,
+        "night_no": 1,
+        "phase_id": "day_1",
+        "action_type": "ability_hunter.death_shot_decision",
+        "self_identity": {
+            "player_id": "system-player-01",
+            "seat": 2,
+            "role_key": "hunter",
+            "team": "villagers",
+        },
+        "public_history": [
+            {
+                "source_event_id": 35,
+                "record_seq": 35,
+                "event_type": "dawn_public_result",
+                "payload": {
+                    "round_no": 1,
+                    "dead_player_ids": ["system-player-01"],
+                },
+            }
+        ],
+    }
+    hunter_dawn = project_model_action_context(
+        hunter_dawn_context,
+        players=PLAYERS,
+        action_record_seq=40,
+    )
+    assert hunter_dawn["state"] == {
+        "current_period": "day",
+        "current_round_no": 1,
+        "latest_completed_night_no": 1,
+        "next_night_no": 2,
+        "as_of_seq": 40,
+    }
+    assert hunter_dawn["known_events"]["events"][0]["occurred_in"] == {
+        "period": "night",
+        "round_no": 1,
+    }
+    assert hunter_dawn["known_events"]["events"][0]["announced_in"] == {
+        "period": "dawn",
+        "round_no": 1,
+    }
+
+    frozen_v9_hunter_dawn = project_model_action_context(
+        hunter_dawn_context,
+        players=PLAYERS,
+        model_context_contract=v9_prompt_v2_model_context_contract(),
+        action_record_seq=40,
+    )
+    assert frozen_v9_hunter_dawn["state"] == {"as_of_seq": 40}
+    assert frozen_v9_hunter_dawn["known_events"]["schema_version"] == 3
 
 
 def test_private_round_memory_keeps_subjective_actor_authority() -> None:
@@ -732,6 +933,7 @@ def test_supported_model_context_contract_set_includes_all_frozen_readers() -> N
         legacy_v8_prompt_v3_model_context_contract(),
         v9_model_context_contract(),
         v9_prompt_v2_model_context_contract(),
+        v10_prompt_v2_model_context_contract(),
     ):
         assert supports_model_context_contract({"model_context_contract": contract})
 
@@ -1180,6 +1382,8 @@ def test_v9_uses_one_canonical_current_living_werewolf_teammate_event() -> None:
     projected = project_model_action_context(
         {
             "round_no": 2,
+            "night_no": 2,
+            "phase_id": "day_2",
             "action_type": "day_debate_speech",
             "self_identity": {
                 "player_id": "system-player-01",
@@ -1231,7 +1435,7 @@ def test_v9_uses_one_canonical_current_living_werewolf_teammate_event() -> None:
             "authority": "judge_fact",
             "visibility": "actor_private",
             "known_at_seq": 50,
-            "occurred_in": {"period": "day", "round_no": 2},
+            "occurred_in": {"period": "night", "round_no": 2},
             "data": {"teammate_refs": ["seat_3"]},
         }
     ]
@@ -1520,71 +1724,73 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
         )
         for seat in (6, 8, 9, 10, 11, 12)
     )
+    action_context = {
+        "round_no": 1,
+        "actor": {"kind": "player", "id": "system-player-12"},
+        "public_history": [
+            {
+                "source_event_id": 400,
+                "record_seq": 400,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "sheriff_campaign_speech",
+                    "player_id": "system-player-06",
+                    "speech": "6号上警，我先听后置位怎么说。",
+                },
+            },
+            {
+                "source_event_id": 417,
+                "record_seq": 417,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "sheriff_campaign_speech",
+                    "player_id": "system-player-08",
+                    "speech": (
+                        "8号上警竞选，底牌预言家，昨晚验6号，查杀。"
+                        "现在回头看6号刚才的发言，我认为他在带节奏。"
+                        "今晚我会验9号。"
+                    ),
+                },
+            },
+            {
+                "source_event_id": 597,
+                "record_seq": 597,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-09",
+                    "speech": "8号因为6号发言带节奏，所以昨晚验了6号。",
+                },
+            },
+            {
+                "source_event_id": 620,
+                "record_seq": 620,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-10",
+                    "speech": "9号转述说8号验6号是因为6号发言像狼。",
+                },
+            },
+            {
+                "source_event_id": 637,
+                "record_seq": 637,
+                "event_type": "public_player_speech_presented",
+                "payload": {
+                    "round_no": 1,
+                    "stage": "day_debate_speech",
+                    "player_id": "system-player-11",
+                    "speech": "8号警上已经说了，因为6号发言像带节奏才验6号。",
+                },
+            },
+        ],
+    }
     projected = project_model_action_context(
-        {
-            "round_no": 1,
-            "actor": {"kind": "player", "id": "system-player-12"},
-            "public_history": [
-                {
-                    "source_event_id": 400,
-                    "record_seq": 400,
-                    "event_type": "public_player_speech_presented",
-                    "payload": {
-                        "round_no": 1,
-                        "stage": "sheriff_campaign_speech",
-                        "player_id": "system-player-06",
-                        "speech": "6号上警，我先听后置位怎么说。",
-                    },
-                },
-                {
-                    "source_event_id": 417,
-                    "record_seq": 417,
-                    "event_type": "public_player_speech_presented",
-                    "payload": {
-                        "round_no": 1,
-                        "stage": "sheriff_campaign_speech",
-                        "player_id": "system-player-08",
-                        "speech": (
-                            "8号上警竞选，底牌预言家，昨晚验6号，查杀。"
-                            "现在回头看6号刚才的发言，我认为他在带节奏。"
-                        ),
-                    },
-                },
-                {
-                    "source_event_id": 597,
-                    "record_seq": 597,
-                    "event_type": "public_player_speech_presented",
-                    "payload": {
-                        "round_no": 1,
-                        "stage": "day_debate_speech",
-                        "player_id": "system-player-09",
-                        "speech": "8号因为6号发言带节奏，所以昨晚验了6号。",
-                    },
-                },
-                {
-                    "source_event_id": 620,
-                    "record_seq": 620,
-                    "event_type": "public_player_speech_presented",
-                    "payload": {
-                        "round_no": 1,
-                        "stage": "day_debate_speech",
-                        "player_id": "system-player-10",
-                        "speech": "9号转述说8号验6号是因为6号发言像狼。",
-                    },
-                },
-                {
-                    "source_event_id": 637,
-                    "record_seq": 637,
-                    "event_type": "public_player_speech_presented",
-                    "payload": {
-                        "round_no": 1,
-                        "stage": "day_debate_speech",
-                        "player_id": "system-player-11",
-                        "speech": "8号警上已经说了，因为6号发言像带节奏才验6号。",
-                    },
-                },
-            ],
-        },
+        action_context,
         players=players,
     )
 
@@ -1599,8 +1805,45 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
     assert events[1]["speech"].startswith("8号上警竞选，底牌预言家，昨晚验6号，查杀。")
     assert events[2]["speech"] == "8号因为6号发言带节奏，所以昨晚验了6号。"
     assert all(event["authority"] == "player_claim_unverified" for event in events)
-    assert "annotations" not in json.dumps(projected, ensure_ascii=False)
+    assert events[1]["annotations"] == [
+        {
+            "claim_id": "claim_417_1_role_claim",
+            "claim_type": "role_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 1,
+            "claimed_role": "seer",
+        },
+        {
+            "claim_id": "claim_417_1_investigation_claim",
+            "claim_type": "investigation_claim",
+            "authority": "player_claim_unverified",
+            "sentence_index": 1,
+            "claimed_action_in": {"period": "night", "round_no": 1},
+            "target_ref": "seat_6",
+            "claimed_result": "werewolves",
+        },
+        {
+            "claim_id": "claim_417_3_future_investigation_plan",
+            "claim_type": "future_investigation_plan",
+            "authority": "player_claim_unverified",
+            "sentence_index": 3,
+            "target_ref": "seat_9",
+            "specificity": "specific_target",
+        },
+    ]
+    assert all("annotations" not in event for index, event in enumerate(events) if index != 1)
+    assert projected["known_events"]["schema_version"] == 4
+    assert model_prompt_metadata(projected)["structured_claim_count"] == 3
     assert "source_rules" not in json.dumps(projected, ensure_ascii=False)
+
+    frozen_v9 = project_model_action_context(
+        action_context,
+        players=players,
+        model_context_contract=v9_prompt_v2_model_context_contract(),
+    )
+    assert frozen_v9["model_context_schema_version"] == 9
+    assert frozen_v9["known_events"]["schema_version"] == 3
+    assert "annotations" not in json.dumps(frozen_v9, ensure_ascii=False)
 
 
 def test_model_target_and_speech_are_mapped_back_to_internal_identity() -> None:
@@ -1968,6 +2211,49 @@ def test_v9_prompt_explains_compact_question_reference_semantics() -> None:
     assert "问题之前已有的相关说明，不是对后来问题的回答" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
     assert len(system_text) < 600
+
+
+def test_v10_prompt_explains_claim_question_and_time_anchor_semantics() -> None:
+    payload = build_model_request_payload(
+        {
+            "model_context_schema_version": 10,
+            "prompt_template_version": 2,
+            "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
+            "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
+            "rules": {"win_condition_contract": {"mode": "slaughter_side"}},
+            "state": {
+                "current_period": "day",
+                "current_round_no": 1,
+                "latest_completed_night_no": 1,
+                "next_night_no": 2,
+                "as_of_seq": 472,
+            },
+            "known_events": {
+                "schema_version": 4,
+                "events": [],
+                "questions": [],
+                "relations": [],
+            },
+            "response": {"kind": "speech", "speech": {"mode": "required"}},
+        },
+        decision=True,
+        model_id="test-model",
+    )
+    system_text = payload["input"][0]["content"][0]["text"]
+
+    assert "玩家发言均为未核实说法" in system_text
+    assert "player_statement.annotations 仅标出其中由该发言者直接作出的" in system_text
+    assert "仍不是法官事实" in system_text
+    assert "current_period、latest_completed_night_no 和 next_night_no" in system_text
+    assert "source_authority=player_claim_unverified" in system_text
+    assert "address_resolution 只表示对象是否识别" in system_text
+    assert "requested_fields 是问题要求的验人字段" in system_text
+    assert "referenced_night_no 是夜次" in system_text
+    assert "prior_coverage=already_publicly_reported" in system_text
+    assert "提问前已经公开报过" in system_text
+    assert "evaluation_order 和 post_elimination_resolution" in system_text
+    assert "夜间指当前夜，白天指下一夜" in system_text
+    assert len(system_text) < 900
 
 
 def test_v9_prompt_v2_identifies_the_public_win_condition_contract() -> None:

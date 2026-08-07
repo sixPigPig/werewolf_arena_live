@@ -1217,11 +1217,11 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "judge_voice": game.judge_voice_snapshot,
             "delivery_snapshot": game.delivery_snapshot,
             "model_context_contract": {
-                "model_context_schema_version": 9,
+                "model_context_schema_version": 10,
                 "prompt_template_version": 2,
-                "known_events_schema_version": 3,
-                "ledger_schema_version": 3,
-                "model_view_schema_version": 3,
+                "known_events_schema_version": 4,
+                "ledger_schema_version": 4,
+                "model_view_schema_version": 4,
                 "model_view_selector_version": 1,
             },
         }
@@ -1947,17 +1947,17 @@ def test_profile_library_mode_requires_inner_rule_revision(v2_context) -> None:
     assert response.status_code == 422
 
 
-def test_new_game_freezes_v9_prompt_v2_model_context_contract(v2_context) -> None:
+def test_new_game_freezes_v10_prompt_v2_model_context_contract(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "V9 契约冻结"})
+    created = client.post("/api/v2/games", json={"title": "V10 契约冻结"})
     assert created.status_code == 201, created.text
 
     expected = {
-        "model_context_schema_version": 9,
+        "model_context_schema_version": 10,
         "prompt_template_version": 2,
-        "known_events_schema_version": 3,
-        "ledger_schema_version": 3,
-        "model_view_schema_version": 3,
+        "known_events_schema_version": 4,
+        "ledger_schema_version": 4,
+        "model_view_schema_version": 4,
         "model_view_selector_version": 1,
     }
     with session_factory() as db:
@@ -3623,13 +3623,13 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["model_context_schema_version"] == 9
+        context["model_context_schema_version"] == 10
         and context["prompt_template_version"] == 2
         and "private_judge_facts" not in context["self"]
         and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "state" in context
-        and context["known_events"]["schema_version"] == 3
+        and context["known_events"]["schema_version"] == 4
         and "events" in context["known_events"]
         and "questions" in context["known_events"]
         and "relations" in context["known_events"]
@@ -5005,17 +5005,17 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 9
-            and event.payload["model_context_schema_version"] == 9
+            event.payload["prompt_schema_version"] == 10
+            and event.payload["model_context_schema_version"] == 10
             and event.payload["prompt_template_version"] == 2
             and event.payload["model_view_selector_version"] == 1
-            and event.payload["prompt_projection"]["known_events_schema_version"] == 3
+            and event.payload["prompt_projection"]["known_events_schema_version"] == 4
             and "known_event_count" in event.payload["prompt_projection"]
             and "known_event_total_count" in event.payload["prompt_projection"]
             and "known_event_record_seq_min" in event.payload["prompt_projection"]
             and "known_event_record_seq_max" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["ledger_schema_version"] == 3
-            and event.payload["prompt_projection"]["model_view_schema_version"] == 3
+            and event.payload["prompt_projection"]["ledger_schema_version"] == 4
+            and event.payload["prompt_projection"]["model_view_schema_version"] == 4
             and event.payload["prompt_projection"]["model_view_selector_version"] == 1
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "open_question_count" in event.payload["prompt_projection"]
@@ -5040,8 +5040,11 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         assert observed_responses
         observed_action_ids = {event.payload["action_id"] for event in observed_responses}
         assert all(
-            event.payload["passive_observations"][0]["code"] == "wolf_cardinality_contradiction"
-            and event.payload["passive_observations"][0]["effect"] == "observed_only"
+            any(
+                observation.get("code") == "wolf_cardinality_contradiction"
+                and observation.get("effect") == "observed_only"
+                for observation in event.payload.get("passive_observations", [])
+            )
             for event in observed_responses
         )
         assert all(
@@ -5158,9 +5161,9 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     )
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
-        context["model_context_schema_version"] == 9
+        context["model_context_schema_version"] == 10
         and context["prompt_template_version"] == 2
-        and context["known_events"]["schema_version"] == 3
+        and context["known_events"]["schema_version"] == 4
         and "questions" in context["known_events"]
         and "relations" in context["known_events"]
         and "source_rules" not in context["known_events"]
