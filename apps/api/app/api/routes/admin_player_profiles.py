@@ -587,7 +587,9 @@ def get_profile(
     except RecoverableDatabaseError as exc:
         raise _database_unavailable() from exc
     _set_private_headers(request, response)
-    return AdminPlayerProfileResponse.model_validate(admin_player_profile_snapshot(profile))
+    return AdminPlayerProfileResponse.model_validate(
+        admin_player_profile_snapshot(profile)
+    )
 
 
 @router.patch("/player-profiles/{profile_id}", response_model=AdminPlayerProfileResponse)
@@ -715,9 +717,7 @@ def move_profile(
         db.rollback()
         raise _database_unavailable() from exc
     _set_private_headers(request, response)
-    return AdminPlayerProfileResponse.model_validate(
-        admin_player_profile_snapshot(profile)
-    )
+    return AdminPlayerProfileResponse.model_validate(admin_player_profile_snapshot(profile))
 
 
 @router.post(
@@ -956,6 +956,7 @@ def _require_extra_permission(
 def _model_provider_label(provider: str) -> str:
     return {
         "agent_plan": "火山方舟 Agent Plan",
+        "ark": "火山方舟标准推理 API",
         "deepseek": "DeepSeek 官方 API",
     }.get(provider, provider)
 

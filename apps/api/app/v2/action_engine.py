@@ -237,12 +237,45 @@ class _ModelAttemptProgressTrace:
     first_token_ms: int | None = None
     first_token_kind: str | None = None
     first_visible_text_ms: int | None = None
+    queue_wait_ms: int = 0
+    provider_in_flight: int | None = None
+    provider_concurrency_limit: int | None = None
+    queued_recorded: bool = False
+    admitted_recorded: bool = False
     response_headers_recorded: bool = False
     first_token_recorded: bool = False
     first_text_recorded: bool = False
 
     def accept(self, progress: V2ModelProgress) -> tuple[str, dict[str, Any]] | None:
         self.provider_request_id = progress.provider_request_id
+        if progress.stage == "queued":
+            if self.queued_recorded:
+                return None
+            self.queued_recorded = True
+            self.provider_concurrency_limit = progress.provider_concurrency_limit
+            return (
+                "model_request_queued",
+                {
+                    "model_provider": progress.provider,
+                    "provider_concurrency_limit": progress.provider_concurrency_limit,
+                },
+            )
+        if progress.stage == "admitted":
+            if self.admitted_recorded:
+                return None
+            self.admitted_recorded = True
+            self.queue_wait_ms = progress.queue_wait_ms or 0
+            self.provider_in_flight = progress.provider_in_flight
+            self.provider_concurrency_limit = progress.provider_concurrency_limit
+            return (
+                "model_request_admitted",
+                {
+                    "model_provider": progress.provider,
+                    "queue_wait_ms": self.queue_wait_ms,
+                    "provider_in_flight": progress.provider_in_flight,
+                    "provider_concurrency_limit": progress.provider_concurrency_limit,
+                },
+            )
         if progress.stage == "response_headers":
             if self.response_headers_recorded:
                 return None
@@ -289,6 +322,8 @@ class _ModelAttemptProgressTrace:
             return "stream"
         if self.response_headers_recorded:
             return "first_token"
+        if self.queued_recorded and not self.admitted_recorded:
+            return "queue"
         return "response_headers"
 
 
@@ -686,12 +721,16 @@ class V2ActionEngine:
                     request_payload.get("max_tokens"),
                 )
                 retry_policy = self._model_retry_policy
+                manages_attempt_timeout = bool(
+                    getattr(self._model_client, "manages_attempt_timeout", False)
+                )
                 retry_cycle = 1
                 previous_attempt_id: str | None = None
                 model_attempt_no = 0
                 while model_decision is None:
                     model_started_at = time.monotonic()
                     model_deadline = model_started_at + retry_policy.action_total_seconds
+                    model_queue_wait_seconds = 0.0
                     attempt_ids = [
                         (
                             model_attempt_id
@@ -719,6 +758,7 @@ class V2ActionEngine:
                         )
                         attempt_started_at = time.monotonic()
                         attempt_progress = _ModelAttemptProgressTrace()
+                        managed_action_timeout: asyncio.Timeout | None = None
                         progress_method = getattr(
                             type(self._model_client),
                             "generate_action_decision_with_progress",
@@ -731,6 +771,22 @@ class V2ActionEngine:
                             *,
                             observed_attempt_id: str = attempt_id,
                         ) -> None:
+                            nonlocal attempt_started_at
+                            nonlocal model_deadline
+                            nonlocal model_queue_wait_seconds
+                            if progress.stage == "admitted":
+                                queue_wait_seconds = (progress.queue_wait_ms or 0) / 1000
+                                model_queue_wait_seconds += queue_wait_seconds
+                                model_deadline += queue_wait_seconds
+                                attempt_started_at = time.monotonic()
+                                if managed_action_timeout is not None:
+                                    active_action_remaining = max(
+                                        0.0,
+                                        model_deadline - time.monotonic(),
+                                    )
+                                    managed_action_timeout.reschedule(
+                                        asyncio.get_running_loop().time() + active_action_remaining
+                                    )
                             observed = attempt_progress.accept(progress)
                             if observed is None:
                                 return
@@ -761,6 +817,35 @@ class V2ActionEngine:
                                     retry_policy.attempt_total_seconds * 1000
                                 ),
                                 "action_budget_ms": round(retry_policy.action_total_seconds * 1000),
+                                "first_token_timeout_ms": round(
+                                    getattr(
+                                        self._model_client,
+                                        "first_token_seconds",
+                                        retry_policy.attempt_total_seconds,
+                                    )
+                                    * 1000
+                                ),
+                                "stream_idle_timeout_ms": round(
+                                    getattr(
+                                        self._model_client,
+                                        "stream_idle_seconds",
+                                        retry_policy.attempt_total_seconds,
+                                    )
+                                    * 1000
+                                ),
+                                "provider_concurrency_limit": (
+                                    self._model_client.provider_concurrency_limit(
+                                        model_target.provider
+                                    )
+                                    if callable(
+                                        getattr(
+                                            self._model_client,
+                                            "provider_concurrency_limit",
+                                            None,
+                                        )
+                                    )
+                                    else None
+                                ),
                                 "action_remaining_ms": max(
                                     0,
                                     round((model_deadline - time.monotonic()) * 1000),
@@ -835,9 +920,9 @@ class V2ActionEngine:
                                 else "action_budget"
                             )
                             try:
-                                async with asyncio.timeout(request_timeout):
+                                async def generate_once() -> V2ModelDecision:
                                     if progress_capable:
-                                        model_decision = await progress_method(
+                                        return await progress_method(
                                             self._model_client,
                                             action_context=model_context,
                                             attempt_id=model_attempt_id,
@@ -845,27 +930,35 @@ class V2ActionEngine:
                                             check_cancellation=check_cancellation,
                                             on_progress=persist_model_progress,
                                         )
-                                    else:
-                                        model_decision = (
-                                            await self._model_client.generate_action_decision(
-                                                action_context=model_context,
-                                                attempt_id=model_attempt_id,
-                                                target=model_target,
-                                                check_cancellation=check_cancellation,
-                                            )
-                                        )
-                                    _validate_model_target_decision(
-                                        model_decision,
-                                        spec=spec,
+                                    return await self._model_client.generate_action_decision(
+                                        action_context=model_context,
+                                        attempt_id=model_attempt_id,
+                                        target=model_target,
+                                        check_cancellation=check_cancellation,
                                     )
+
+                                if manages_attempt_timeout:
+                                    async with asyncio.timeout(None) as action_timeout:
+                                        managed_action_timeout = action_timeout
+                                        model_decision = await generate_once()
+                                else:
+                                    async with asyncio.timeout(request_timeout):
+                                        model_decision = await generate_once()
+                                _validate_model_target_decision(
+                                    model_decision,
+                                    spec=spec,
+                                )
                             except TimeoutError as exc:
+                                observed_timeout_stage = (
+                                    "action_budget" if manages_attempt_timeout else timeout_stage
+                                )
                                 raise V2ModelError(
                                     "model_total_timeout",
-                                    retryable=timeout_stage == "attempt_budget",
+                                    retryable=observed_timeout_stage == "attempt_budget",
                                     failure_stage=(
                                         attempt_progress.failure_stage()
                                         if progress_capable
-                                        else timeout_stage
+                                        else observed_timeout_stage
                                     ),
                                     provider_request_id=(attempt_progress.provider_request_id),
                                     first_token_seen=(attempt_progress.first_token_recorded),
@@ -876,7 +969,7 @@ class V2ActionEngine:
                                     first_token_ms=attempt_progress.first_token_ms,
                                     first_token_kind=(attempt_progress.first_token_kind),
                                     first_visible_text_ms=(attempt_progress.first_visible_text_ms),
-                                    timeout_scope=timeout_stage,
+                                    timeout_scope=observed_timeout_stage,
                                     elapsed_ms=round(
                                         (time.monotonic() - attempt_started_at) * 1000
                                     ),
@@ -938,7 +1031,12 @@ class V2ActionEngine:
                                         retry_policy.action_total_seconds * 1000
                                     ),
                                     action_elapsed_ms=round(
-                                        (time.monotonic() - model_started_at) * 1000
+                                        (
+                                            time.monotonic()
+                                            - model_started_at
+                                            - model_queue_wait_seconds
+                                        )
+                                        * 1000
                                     ),
                                     action_remaining_ms=max(
                                         0,
@@ -1192,7 +1290,17 @@ class V2ActionEngine:
                         "passive_observations": passive_observations,
                         "repair_kind": model_decision.repair_kind,
                         "first_token_ms": model_decision.first_token_ms,
+                        "first_visible_text_ms": model_decision.first_visible_text_ms,
                         "completed_ms": model_decision.completed_ms,
+                        "queue_wait_ms": model_decision.queue_wait_ms,
+                        "provider_in_flight": model_decision.provider_in_flight,
+                        "provider_concurrency_limit": (
+                            model_decision.provider_concurrency_limit
+                        ),
+                        "reasoning_delta_count": model_decision.reasoning_delta_count,
+                        "text_delta_count": model_decision.text_delta_count,
+                        "max_inter_delta_ms": model_decision.max_inter_delta_ms,
+                        "last_progress_ms": model_decision.last_progress_ms,
                     },
                 )
                 if binding_prior_failure_streak > 0:
@@ -2036,6 +2144,13 @@ def _model_failure_payload(
         "retry_after_ms": (
             round(exc.retry_after_seconds * 1000) if exc.retry_after_seconds is not None else None
         ),
+        "queue_wait_ms": exc.queue_wait_ms,
+        "provider_in_flight": exc.provider_in_flight,
+        "provider_concurrency_limit": exc.provider_concurrency_limit,
+        "reasoning_delta_count": exc.reasoning_delta_count,
+        "text_delta_count": exc.text_delta_count,
+        "max_inter_delta_ms": exc.max_inter_delta_ms,
+        "last_progress_ms": exc.last_progress_ms,
     }
     if isinstance(exc, V2QualityError) and exc.raw_response is not None:
         payload["raw_response"] = exc.raw_response
@@ -2092,6 +2207,12 @@ def _enrich_model_error_from_progress(
         exc.first_token_kind = progress.first_token_kind
     if progress.first_text_recorded:
         exc.first_visible_text_ms = progress.first_visible_text_ms
+    if exc.queue_wait_ms is None and progress.admitted_recorded:
+        exc.queue_wait_ms = progress.queue_wait_ms
+    if exc.provider_in_flight is None:
+        exc.provider_in_flight = progress.provider_in_flight
+    if exc.provider_concurrency_limit is None:
+        exc.provider_concurrency_limit = progress.provider_concurrency_limit
     if progress_capable and exc.failure_stage is None:
         exc.failure_stage = progress.failure_stage()
 

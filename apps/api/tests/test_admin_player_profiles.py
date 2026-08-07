@@ -64,6 +64,8 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminProfilesContext, 
     monkeypatch.setattr(settings, "admin_session_cookie_secure", False)
     monkeypatch.setattr(settings, "admin_session_ttl_seconds", 3600)
     monkeypatch.setattr(settings, "legacy_player_profile_content_writes_enabled", False)
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "test-agent-plan-key")
+    monkeypatch.setenv("ARK_AGENT_PLAN_MODELS", "test-model")
 
     engine = create_engine(
         "sqlite+pysqlite://",
@@ -125,6 +127,7 @@ def _model_label() -> str:
     provider_label = {
         "deepseek": "DeepSeek 官方 API",
         "agent_plan": "火山方舟 Agent Plan",
+        "ark": "火山方舟标准推理 API",
     }.get(_model_provider(), _model_provider())
     return f"{provider_label} · {_model_name()}"
 
@@ -1107,7 +1110,12 @@ def test_admin_voice_preview_rejects_audio_over_the_response_limit(
     assert "audio_base64" not in response.text
 
 
-def test_mapper_version_rejects_a_real_two_session_lost_update(tmp_path) -> None:
+def test_mapper_version_rejects_a_real_two_session_lost_update(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "test-agent-plan-key")
+    monkeypatch.setenv("ARK_AGENT_PLAN_MODELS", "test-model")
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'version-race.sqlite'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)

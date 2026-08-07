@@ -17,7 +17,7 @@ class AdminModelParameters(BaseModel):
 
 
 class AdminModelSource(BaseModel):
-    provider: Literal["agent_plan", "deepseek"]
+    provider: Literal["agent_plan", "ark", "deepseek"]
     label: str
     refresh_mode: Literal["manual", "automatic"]
     status: Literal["ok", "error"]
@@ -28,7 +28,7 @@ class AdminModelSource(BaseModel):
 
 
 class AdminModelItem(BaseModel):
-    provider: Literal["agent_plan", "deepseek"]
+    provider: Literal["agent_plan", "ark", "deepseek"]
     model_id: str
     source_model_id: str | None
     display_name: str

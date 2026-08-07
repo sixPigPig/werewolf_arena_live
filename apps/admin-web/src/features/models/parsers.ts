@@ -72,7 +72,7 @@ function parseParameters(value: unknown): ModelParameters {
 }
 
 function providerValue(value: unknown): ModelProvider {
-  if (value === "agent_plan" || value === "deepseek") return value;
+  if (value === "agent_plan" || value === "ark" || value === "deepseek") return value;
   throw new Error("Invalid model provider");
 }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 import re
@@ -53,6 +54,13 @@ class V2ModelError(RuntimeError):
         timeout_scope: str | None = None,
         elapsed_ms: int | None = None,
         retry_after_seconds: float | None = None,
+        queue_wait_ms: int | None = None,
+        provider_in_flight: int | None = None,
+        provider_concurrency_limit: int | None = None,
+        reasoning_delta_count: int = 0,
+        text_delta_count: int = 0,
+        max_inter_delta_ms: int | None = None,
+        last_progress_ms: int | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -71,6 +79,13 @@ class V2ModelError(RuntimeError):
         self.timeout_scope = timeout_scope
         self.elapsed_ms = elapsed_ms
         self.retry_after_seconds = retry_after_seconds
+        self.queue_wait_ms = queue_wait_ms
+        self.provider_in_flight = provider_in_flight
+        self.provider_concurrency_limit = provider_concurrency_limit
+        self.reasoning_delta_count = reasoning_delta_count
+        self.text_delta_count = text_delta_count
+        self.max_inter_delta_ms = max_inter_delta_ms
+        self.last_progress_ms = last_progress_ms
 
 
 class V2QualityError(V2ModelError):
@@ -99,9 +114,23 @@ class V2ModelDecision:
     boolean_field: str | None = None
     boolean_value: bool | None = None
     repair_kind: str | None = None
+    queue_wait_ms: int = 0
+    provider_in_flight: int | None = None
+    provider_concurrency_limit: int | None = None
+    first_visible_text_ms: int | None = None
+    reasoning_delta_count: int = 0
+    text_delta_count: int = 0
+    max_inter_delta_ms: int | None = None
+    last_progress_ms: int | None = None
 
 
-V2ModelProgressStage = Literal["response_headers", "first_token", "first_text"]
+V2ModelProgressStage = Literal[
+    "queued",
+    "admitted",
+    "response_headers",
+    "first_token",
+    "first_text",
+]
 V2ModelTokenKind = Literal["reasoning", "text"]
 
 
@@ -112,6 +141,10 @@ class V2ModelProgress:
     elapsed_ms: int
     response_headers: dict[str, str] | None = None
     token_kind: V2ModelTokenKind | None = None
+    provider: str | None = None
+    queue_wait_ms: int | None = None
+    provider_in_flight: int | None = None
+    provider_concurrency_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +165,61 @@ class _ProviderRoute:
     api_key: str
     url: str
     protocol: str
+    max_in_flight: int
+
+
+@dataclass(frozen=True)
+class _ProviderAdmission:
+    queue_wait_ms: int
+    provider_in_flight: int
+    provider_concurrency_limit: int
+
+
+@dataclass(frozen=True)
+class _StreamResult:
+    text: str
+    provider_request_id: str
+    first_token_ms: int
+    completed_ms: int
+    queue_wait_ms: int
+    provider_in_flight: int
+    provider_concurrency_limit: int
+    first_visible_text_ms: int | None
+    reasoning_delta_count: int
+    text_delta_count: int
+    max_inter_delta_ms: int | None
+    last_progress_ms: int | None
+
+
+class _ProviderGate:
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self._semaphore = asyncio.Semaphore(limit)
+        self._in_flight = 0
+
+    @asynccontextmanager
+    async def admit(
+        self,
+        *,
+        check_cancellation: Callable[[], None] | None,
+    ):
+        loop = asyncio.get_running_loop()
+        queued_at = loop.time()
+        await _acquire_with_cancellation(
+            self._semaphore,
+            check_cancellation=check_cancellation,
+        )
+        self._in_flight += 1
+        admission = _ProviderAdmission(
+            queue_wait_ms=round((loop.time() - queued_at) * 1000),
+            provider_in_flight=self._in_flight,
+            provider_concurrency_limit=self.limit,
+        )
+        try:
+            yield admission
+        finally:
+            self._in_flight -= 1
+            self._semaphore.release()
 
 
 @dataclass(frozen=True)
@@ -198,7 +286,12 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
             pausable=recoverable,
             max_attempts=2 if recoverable else 1,
         )
-    if exc.code in {"model_first_token_timeout", "model_total_timeout"}:
+    if exc.code in {
+        "model_first_token_timeout",
+        "model_stream_idle_timeout",
+        "model_attempt_hard_timeout",
+        "model_total_timeout",
+    }:
         return V2FailureDisposition(
             category="timeout",
             retryable=True,
@@ -250,10 +343,16 @@ class V2ModelClient:
         *,
         agent_plan_api_key: str,
         agent_plan_base_url: str,
+        ark_api_key: str,
+        ark_base_url: str,
         deepseek_api_key: str,
         deepseek_base_url: str,
         first_token_seconds: float,
+        stream_idle_seconds: float,
         total_seconds: float,
+        agent_plan_max_in_flight: int = 3,
+        ark_max_in_flight: int = 3,
+        deepseek_max_in_flight: int = 32,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._routes = {
@@ -261,16 +360,68 @@ class V2ModelClient:
                 api_key=agent_plan_api_key.strip(),
                 url=f"{agent_plan_base_url.rstrip('/')}/responses",
                 protocol="responses",
+                max_in_flight=agent_plan_max_in_flight,
+            ),
+            "ark": _ProviderRoute(
+                api_key=ark_api_key.strip(),
+                url=f"{ark_base_url.rstrip('/')}/responses",
+                protocol="responses",
+                max_in_flight=ark_max_in_flight,
             ),
             "deepseek": _ProviderRoute(
                 api_key=deepseek_api_key.strip(),
                 url=f"{deepseek_base_url.rstrip('/')}/chat/completions",
                 protocol="chat_completions",
+                max_in_flight=deepseek_max_in_flight,
             ),
         }
         self._first_token_seconds = first_token_seconds
+        self._stream_idle_seconds = stream_idle_seconds
         self._total_seconds = total_seconds
         self._transport = transport
+        self._gates = {
+            provider: _ProviderGate(route.max_in_flight) for provider, route in self._routes.items()
+        }
+        self._clients: dict[str, httpx.AsyncClient] = {}
+
+    @property
+    def manages_attempt_timeout(self) -> bool:
+        return True
+
+    @property
+    def first_token_seconds(self) -> float:
+        return self._first_token_seconds
+
+    @property
+    def stream_idle_seconds(self) -> float:
+        return self._stream_idle_seconds
+
+    def provider_concurrency_limit(self, provider: str) -> int | None:
+        route = self._routes.get(provider)
+        return route.max_in_flight if route is not None else None
+
+    async def aclose(self) -> None:
+        clients = tuple(self._clients.values())
+        self._clients.clear()
+        for client in clients:
+            await client.aclose()
+
+    def _client_for(self, provider: str) -> httpx.AsyncClient:
+        existing = self._clients.get(provider)
+        if existing is not None:
+            return existing
+        route = self._routes[provider]
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0),
+            limits=httpx.Limits(
+                max_connections=route.max_in_flight,
+                max_keepalive_connections=route.max_in_flight,
+            ),
+            transport=self._transport,
+            trust_env=False,
+        )
+        self._clients[provider] = client
+        return client
 
     def resolve_model_target(
         self,
@@ -341,7 +492,7 @@ class V2ModelClient:
         check_cancellation: Callable[[], None] | None = None,
         on_progress: Callable[[V2ModelProgress], None] | None = None,
     ) -> V2ModelDecision:
-        raw, provider_request_id, first_token_ms, completed_ms = await self._stream_text(
+        result = await self._stream_text(
             action_context=action_context,
             attempt_id=attempt_id,
             max_output_tokens=None,
@@ -350,6 +501,7 @@ class V2ModelClient:
             check_cancellation=check_cancellation,
             on_progress=on_progress,
         )
+        raw = result.text
         output_contract = _decision_output_contract(action_context)
         try:
             try:
@@ -383,14 +535,22 @@ class V2ModelClient:
         return V2ModelDecision(
             target_player_id=target_player_id,
             speech=normalized_speech,
-            provider_request_id=provider_request_id,
-            first_token_ms=first_token_ms,
-            completed_ms=completed_ms,
+            provider_request_id=result.provider_request_id,
+            first_token_ms=result.first_token_ms,
+            completed_ms=result.completed_ms,
             decision_note=decision_note,
             raw_response=raw,
             boolean_field=boolean_field,
             boolean_value=boolean_value,
             repair_kind=repair_kind,
+            queue_wait_ms=result.queue_wait_ms,
+            provider_in_flight=result.provider_in_flight,
+            provider_concurrency_limit=result.provider_concurrency_limit,
+            first_visible_text_ms=result.first_visible_text_ms,
+            reasoning_delta_count=result.reasoning_delta_count,
+            text_delta_count=result.text_delta_count,
+            max_inter_delta_ms=result.max_inter_delta_ms,
+            last_progress_ms=result.last_progress_ms,
         )
 
     async def _stream_text(
@@ -403,13 +563,70 @@ class V2ModelClient:
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None,
         on_progress: Callable[[V2ModelProgress], None] | None,
-    ) -> tuple[str, str, int, int]:
+    ) -> _StreamResult:
         _check(check_cancellation)
         route = self._routes[target.provider]
+        gate = self._gates[target.provider]
+        loop = asyncio.get_running_loop()
+        queued_at = loop.time()
+        if on_progress is not None:
+            on_progress(
+                V2ModelProgress(
+                    stage="queued",
+                    provider_request_id=attempt_id,
+                    elapsed_ms=0,
+                    provider=target.provider,
+                    provider_concurrency_limit=route.max_in_flight,
+                )
+            )
+        async with gate.admit(check_cancellation=check_cancellation) as admission:
+            if on_progress is not None:
+                on_progress(
+                    V2ModelProgress(
+                        stage="admitted",
+                        provider_request_id=attempt_id,
+                        elapsed_ms=admission.queue_wait_ms,
+                        provider=target.provider,
+                        queue_wait_ms=admission.queue_wait_ms,
+                        provider_in_flight=admission.provider_in_flight,
+                        provider_concurrency_limit=(admission.provider_concurrency_limit),
+                    )
+                )
+            return await self._stream_text_admitted(
+                action_context=action_context,
+                attempt_id=attempt_id,
+                max_output_tokens=max_output_tokens,
+                decision=decision,
+                target=target,
+                route=route,
+                admission=admission,
+                queued_at=queued_at,
+                check_cancellation=check_cancellation,
+                on_progress=on_progress,
+            )
+
+    async def _stream_text_admitted(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        max_output_tokens: int | None,
+        decision: bool,
+        target: V2ModelTarget,
+        route: _ProviderRoute,
+        admission: _ProviderAdmission,
+        queued_at: float,
+        check_cancellation: Callable[[], None] | None,
+        on_progress: Callable[[V2ModelProgress], None] | None,
+    ) -> _StreamResult:
         loop = asyncio.get_running_loop()
         started = loop.time()
         first_token_at: float | None = None
         first_text_at: float | None = None
+        last_progress_at: float | None = None
+        max_inter_delta_ms: int | None = None
+        reasoning_delta_count = 0
+        text_delta_count = 0
         response_headers_seen = False
         provider_request_id = attempt_id
         text = ""
@@ -432,157 +649,202 @@ class V2ModelClient:
                 parameters=target.parameters,
             )
         )
-        timeout = httpx.Timeout(connect=8.0, read=None, write=8.0, pool=8.0)
-        phase_timeout = asyncio.timeout_at(started + self._first_token_seconds)
+        client = self._client_for(target.provider)
+        response_header_timeout = min(
+            self._first_token_seconds,
+            self._total_seconds,
+        )
         try:
-            async with phase_timeout:
-                async with httpx.AsyncClient(
-                    timeout=timeout,
-                    transport=self._transport,
-                    trust_env=False,
-                ) as client:
-                    async with client.stream(
-                        "POST",
-                        route.url,
-                        headers={
-                            "Authorization": f"Bearer {route.api_key}",
-                            "Content-Type": "application/json",
-                            "Accept": "text/event-stream",
-                        },
-                        json=payload,
-                    ) as response:
-                        response_headers_seen = True
-                        provider_request_id = (
-                            response.headers.get("x-request-id")
-                            or response.headers.get("x-tt-logid")
-                            or attempt_id
+            async with _stream_response_with_cancellation(
+                client,
+                "POST",
+                route.url,
+                timeout=response_header_timeout,
+                check_cancellation=check_cancellation,
+                headers={
+                    "Authorization": f"Bearer {route.api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                },
+                json=payload,
+            ) as response:
+                response_headers_seen = True
+                provider_request_id = (
+                    response.headers.get("x-request-id")
+                    or response.headers.get("x-tt-logid")
+                    or attempt_id
+                )
+                response_headers = _diagnostic_response_headers(response.headers)
+                if on_progress is not None:
+                    on_progress(
+                        V2ModelProgress(
+                            stage="response_headers",
+                            provider_request_id=provider_request_id,
+                            elapsed_ms=round((loop.time() - started) * 1000),
+                            response_headers=response_headers,
                         )
-                        response_headers = _diagnostic_response_headers(response.headers)
+                    )
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise V2ModelError(
+                        f"model_http_{response.status_code}",
+                        retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
+                        failure_stage="http_response",
+                        http_status=response.status_code,
+                        provider_request_id=provider_request_id,
+                        response_headers_seen=True,
+                        elapsed_ms=round((loop.time() - started) * 1000),
+                        retry_after_seconds=_retry_after_seconds(
+                            response.headers.get("Retry-After")
+                        ),
+                        **_stream_diagnostic_fields(
+                            started=started,
+                            admission=admission,
+                            reasoning_delta_count=reasoning_delta_count,
+                            text_delta_count=text_delta_count,
+                            max_inter_delta_ms=max_inter_delta_ms,
+                            last_progress_at=last_progress_at,
+                        ),
+                    )
+                lines = response.aiter_lines().__aiter__()
+                while True:
+                    _check(check_cancellation)
+                    now = loop.time()
+                    hard_remaining = self._total_seconds - (now - started)
+                    if first_token_at is None:
+                        phase_remaining = self._first_token_seconds - (now - started)
+                        timeout_scope = "first_token"
+                    else:
+                        assert last_progress_at is not None
+                        phase_remaining = self._stream_idle_seconds - (now - last_progress_at)
+                        timeout_scope = "stream_idle"
+                    remaining = min(hard_remaining, phase_remaining)
+                    if remaining <= 0:
+                        scope = "attempt_hard" if hard_remaining <= 0 else timeout_scope
+                        raise _model_timeout_error(
+                            scope=scope,
+                            started=started,
+                            first_token_at=first_token_at,
+                            provider_request_id=provider_request_id,
+                            response_headers_seen=response_headers_seen,
+                            admission=admission,
+                            reasoning_delta_count=reasoning_delta_count,
+                            text_delta_count=text_delta_count,
+                            max_inter_delta_ms=max_inter_delta_ms,
+                            last_progress_at=last_progress_at,
+                        )
+                    try:
+                        line = await _next_with_cancellation(
+                            lines,
+                            timeout=remaining,
+                            check_cancellation=check_cancellation,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as exc:
+                        now = loop.time()
+                        scope = (
+                            "attempt_hard"
+                            if now - started >= self._total_seconds
+                            else ("first_token" if first_token_at is None else "stream_idle")
+                        )
+                        raise _model_timeout_error(
+                            scope=scope,
+                            started=started,
+                            first_token_at=first_token_at,
+                            provider_request_id=provider_request_id,
+                            response_headers_seen=response_headers_seen,
+                            admission=admission,
+                            reasoning_delta_count=reasoning_delta_count,
+                            text_delta_count=text_delta_count,
+                            max_inter_delta_ms=max_inter_delta_ms,
+                            last_progress_at=last_progress_at,
+                        ) from exc
+                    event = _sse_data(line)
+                    if event is None:
+                        continue
+                    provider_event = _provider_event(event, protocol=route.protocol)
+                    if provider_event.candidate_id:
+                        provider_request_id = provider_event.candidate_id
+                    if provider_event.failed:
+                        raise V2ModelError(
+                            "model_provider_failed",
+                            retryable=True,
+                            failure_stage=("first_token" if first_token_at is None else "stream"),
+                            provider_request_id=provider_request_id,
+                            first_token_seen=first_token_at is not None,
+                            response_headers_seen=True,
+                            elapsed_ms=round((loop.time() - started) * 1000),
+                            **_stream_diagnostic_fields(
+                                started=started,
+                                admission=admission,
+                                reasoning_delta_count=reasoning_delta_count,
+                                text_delta_count=text_delta_count,
+                                max_inter_delta_ms=max_inter_delta_ms,
+                                last_progress_at=last_progress_at,
+                            ),
+                        )
+                    if provider_event.finish_reason:
+                        finish_reason = provider_event.finish_reason
+                    token_kind: V2ModelTokenKind | None = None
+                    if provider_event.reasoning_delta:
+                        reasoning_seen = True
+                        reasoning_delta_count += 1
+                        token_kind = "reasoning"
+                    if provider_event.text_delta:
+                        text_delta_count += 1
+                        token_kind = token_kind or "text"
+                        text += provider_event.text_delta
+                    if token_kind is None:
+                        continue
+                    progress_at = loop.time()
+                    if last_progress_at is not None:
+                        inter_delta_ms = round((progress_at - last_progress_at) * 1000)
+                        max_inter_delta_ms = max(max_inter_delta_ms or 0, inter_delta_ms)
+                    last_progress_at = progress_at
+                    if first_token_at is None:
+                        first_token_at = progress_at
                         if on_progress is not None:
                             on_progress(
                                 V2ModelProgress(
-                                    stage="response_headers",
+                                    stage="first_token",
                                     provider_request_id=provider_request_id,
-                                    elapsed_ms=round((loop.time() - started) * 1000),
-                                    response_headers=response_headers,
+                                    elapsed_ms=round((first_token_at - started) * 1000),
+                                    token_kind=token_kind,
                                 )
                             )
-                        if response.status_code >= 400:
-                            await response.aread()
-                            raise V2ModelError(
-                                f"model_http_{response.status_code}",
-                                retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
-                                failure_stage="http_response",
-                                http_status=response.status_code,
-                                provider_request_id=provider_request_id,
-                                response_headers_seen=True,
-                                elapsed_ms=round((loop.time() - started) * 1000),
-                                retry_after_seconds=_retry_after_seconds(
-                                    response.headers.get("Retry-After")
-                                ),
-                            )
-                        lines = response.aiter_lines().__aiter__()
-                        while True:
-                            _check(check_cancellation)
-                            elapsed = loop.time() - started
-                            deadline = (
-                                self._first_token_seconds
-                                if first_token_at is None
-                                else self._total_seconds
-                            )
-                            remaining = deadline - elapsed
-                            if remaining <= 0:
-                                raise _model_timeout_error(
-                                    started=started,
-                                    first_token_at=first_token_at,
+                    if (
+                        provider_event.text_delta
+                        and first_text_at is None
+                        and provider_event.text_delta.strip()
+                    ):
+                        first_text_at = progress_at
+                        if on_progress is not None:
+                            on_progress(
+                                V2ModelProgress(
+                                    stage="first_text",
                                     provider_request_id=provider_request_id,
-                                    response_headers_seen=response_headers_seen,
+                                    elapsed_ms=round((first_text_at - started) * 1000),
+                                    token_kind="text",
                                 )
-                            try:
-                                line = await _next_with_cancellation(
-                                    lines,
-                                    timeout=remaining,
-                                    check_cancellation=check_cancellation,
-                                )
-                            except StopAsyncIteration:
-                                break
-                            except TimeoutError as exc:
-                                raise _model_timeout_error(
-                                    started=started,
-                                    first_token_at=first_token_at,
-                                    provider_request_id=provider_request_id,
-                                    response_headers_seen=response_headers_seen,
-                                ) from exc
-                            event = _sse_data(line)
-                            if event is None:
-                                continue
-                            provider_event = _provider_event(
-                                event,
-                                protocol=route.protocol,
                             )
-                            if provider_event.candidate_id:
-                                provider_request_id = provider_event.candidate_id
-                            if provider_event.failed:
-                                raise V2ModelError(
-                                    "model_provider_failed",
-                                    retryable=True,
-                                    failure_stage=(
-                                        "first_token" if first_token_at is None else "stream"
-                                    ),
-                                    provider_request_id=provider_request_id,
-                                    first_token_seen=first_token_at is not None,
-                                    response_headers_seen=True,
-                                    elapsed_ms=round((loop.time() - started) * 1000),
-                                )
-                            if provider_event.finish_reason:
-                                finish_reason = provider_event.finish_reason
-                            if provider_event.reasoning_delta:
-                                reasoning_seen = True
-                                if first_token_at is None:
-                                    first_token_at = loop.time()
-                                    phase_timeout.reschedule(started + self._total_seconds)
-                                    if on_progress is not None:
-                                        on_progress(
-                                            V2ModelProgress(
-                                                stage="first_token",
-                                                provider_request_id=provider_request_id,
-                                                elapsed_ms=round((first_token_at - started) * 1000),
-                                                token_kind="reasoning",
-                                            )
-                                        )
-                            if provider_event.text_delta:
-                                if first_token_at is None:
-                                    first_token_at = loop.time()
-                                    phase_timeout.reschedule(started + self._total_seconds)
-                                    if on_progress is not None:
-                                        on_progress(
-                                            V2ModelProgress(
-                                                stage="first_token",
-                                                provider_request_id=provider_request_id,
-                                                elapsed_ms=round((first_token_at - started) * 1000),
-                                                token_kind="text",
-                                            )
-                                        )
-                                if first_text_at is None and provider_event.text_delta.strip():
-                                    first_text_at = loop.time()
-                                    if on_progress is not None:
-                                        on_progress(
-                                            V2ModelProgress(
-                                                stage="first_text",
-                                                provider_request_id=provider_request_id,
-                                                elapsed_ms=round((first_text_at - started) * 1000),
-                                                token_kind="text",
-                                            )
-                                        )
-                                text += provider_event.text_delta
         except V2ModelError:
             raise
         except TimeoutError as exc:
+            timeout_scope: Literal["first_token", "attempt_hard"] = (
+                "attempt_hard" if loop.time() - started >= self._total_seconds else "first_token"
+            )
             raise _model_timeout_error(
+                scope=timeout_scope,
                 started=started,
                 first_token_at=first_token_at,
                 provider_request_id=provider_request_id,
                 response_headers_seen=response_headers_seen,
+                admission=admission,
+                reasoning_delta_count=reasoning_delta_count,
+                text_delta_count=text_delta_count,
+                max_inter_delta_ms=max_inter_delta_ms,
+                last_progress_at=last_progress_at,
             ) from exc
         except (httpx.HTTPError, OSError) as exc:
             root = _root_exception(exc)
@@ -604,6 +866,14 @@ class V2ModelClient:
                 first_token_seen=first_token_at is not None,
                 response_headers_seen=response_headers_seen,
                 elapsed_ms=round((loop.time() - started) * 1000),
+                **_stream_diagnostic_fields(
+                    started=started,
+                    admission=admission,
+                    reasoning_delta_count=reasoning_delta_count,
+                    text_delta_count=text_delta_count,
+                    max_inter_delta_ms=max_inter_delta_ms,
+                    last_progress_at=last_progress_at,
+                ),
             ) from exc
         if not text.strip():
             if finish_reason in {"length", "max_output_tokens"}:
@@ -615,24 +885,47 @@ class V2ModelClient:
         if first_token_at is None:
             raise V2ModelError("model_empty_stream", retryable=True)
         completed = loop.time()
-        return (
-            text.strip(),
-            provider_request_id,
-            round((first_token_at - started) * 1000),
-            round((completed - started) * 1000),
+        return _StreamResult(
+            text=text.strip(),
+            provider_request_id=provider_request_id,
+            first_token_ms=round((first_token_at - started) * 1000),
+            completed_ms=round((completed - started) * 1000),
+            queue_wait_ms=round((started - queued_at) * 1000),
+            provider_in_flight=admission.provider_in_flight,
+            provider_concurrency_limit=admission.provider_concurrency_limit,
+            first_visible_text_ms=(
+                round((first_text_at - started) * 1000) if first_text_at is not None else None
+            ),
+            reasoning_delta_count=reasoning_delta_count,
+            text_delta_count=text_delta_count,
+            max_inter_delta_ms=max_inter_delta_ms,
+            last_progress_ms=(
+                round((last_progress_at - started) * 1000) if last_progress_at is not None else None
+            ),
         )
 
 
 def _model_timeout_error(
     *,
+    scope: Literal["first_token", "stream_idle", "attempt_hard"],
     started: float,
     first_token_at: float | None,
     provider_request_id: str,
     response_headers_seen: bool,
+    admission: _ProviderAdmission,
+    reasoning_delta_count: int,
+    text_delta_count: int,
+    max_inter_delta_ms: int | None,
+    last_progress_at: float | None,
 ) -> V2ModelError:
     before_first_token = first_token_at is None
+    code = {
+        "first_token": "model_first_token_timeout",
+        "stream_idle": "model_stream_idle_timeout",
+        "attempt_hard": "model_attempt_hard_timeout",
+    }[scope]
     return V2ModelError(
-        "model_first_token_timeout" if before_first_token else "model_total_timeout",
+        code,
         retryable=True,
         failure_stage=(
             "response_headers"
@@ -642,8 +935,39 @@ def _model_timeout_error(
         provider_request_id=provider_request_id,
         first_token_seen=not before_first_token,
         response_headers_seen=response_headers_seen,
+        timeout_scope=scope,
         elapsed_ms=round((asyncio.get_running_loop().time() - started) * 1000),
+        **_stream_diagnostic_fields(
+            started=started,
+            admission=admission,
+            reasoning_delta_count=reasoning_delta_count,
+            text_delta_count=text_delta_count,
+            max_inter_delta_ms=max_inter_delta_ms,
+            last_progress_at=last_progress_at,
+        ),
     )
+
+
+def _stream_diagnostic_fields(
+    *,
+    started: float,
+    admission: _ProviderAdmission,
+    reasoning_delta_count: int,
+    text_delta_count: int,
+    max_inter_delta_ms: int | None,
+    last_progress_at: float | None,
+) -> dict[str, int | None]:
+    return {
+        "queue_wait_ms": admission.queue_wait_ms,
+        "provider_in_flight": admission.provider_in_flight,
+        "provider_concurrency_limit": admission.provider_concurrency_limit,
+        "reasoning_delta_count": reasoning_delta_count,
+        "text_delta_count": text_delta_count,
+        "max_inter_delta_ms": max_inter_delta_ms,
+        "last_progress_ms": (
+            round((last_progress_at - started) * 1000) if last_progress_at is not None else None
+        ),
+    }
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
@@ -805,6 +1129,93 @@ async def _next_with_cancellation(
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@asynccontextmanager
+async def _stream_response_with_cancellation(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    timeout: float,
+    check_cancellation: Callable[[], None] | None,
+    **kwargs: Any,
+):
+    stream_context = client.stream(method, url, **kwargs)
+    enter_task = asyncio.create_task(stream_context.__aenter__())
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    entered = False
+    try:
+        while True:
+            remaining = timeout - (loop.time() - started)
+            if remaining <= 0:
+                raise TimeoutError
+            done, _pending = await asyncio.wait(
+                {enter_task},
+                timeout=min(remaining, 0.25),
+            )
+            if enter_task in done:
+                response = enter_task.result()
+                entered = True
+                break
+            _check(check_cancellation)
+        try:
+            yield response
+        except BaseException as exc:
+            await stream_context.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
+        else:
+            await stream_context.__aexit__(None, None, None)
+    finally:
+        if not entered:
+            if not enter_task.done():
+                enter_task.cancel()
+                await asyncio.gather(enter_task, return_exceptions=True)
+            elif not enter_task.cancelled():
+                try:
+                    enter_task.result()
+                except BaseException:
+                    pass
+                else:
+                    # The request may have crossed the completion boundary
+                    # immediately after the wait timed out or cancellation was
+                    # observed. Close that response explicitly so a raced
+                    # cancellation cannot leak a pooled connection.
+                    await stream_context.__aexit__(None, None, None)
+
+
+async def _acquire_with_cancellation(
+    semaphore: asyncio.Semaphore,
+    *,
+    check_cancellation: Callable[[], None] | None,
+) -> None:
+    task = asyncio.create_task(semaphore.acquire())
+    handed_off = False
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=0.25)
+            if task in done:
+                task.result()
+                handed_off = True
+                return
+            _check(check_cancellation)
+    finally:
+        if not handed_off:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            elif not task.cancelled():
+                try:
+                    acquired = task.result()
+                except BaseException:
+                    pass
+                else:
+                    # If cancellation won the race just after acquire
+                    # completed, return the permit here because ownership was
+                    # never handed to _ProviderGate.
+                    if acquired:
+                        semaphore.release()
 
 
 def _check(check_cancellation: Callable[[], None] | None) -> None:

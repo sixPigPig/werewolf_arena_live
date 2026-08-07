@@ -34,7 +34,7 @@ from app.models.model_configuration import ModelConfigurationRecord
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-ProviderPath = Literal["agent_plan", "deepseek"]
+ProviderPath = Literal["agent_plan", "ark", "deepseek"]
 
 
 def get_agent_plan_catalog_client() -> AgentPlanCatalogClient:

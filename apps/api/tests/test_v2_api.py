@@ -582,6 +582,80 @@ class _ProgressThenSlowModelClient(FakeV2ModelClient):
         )
 
 
+class _QueuedManagedModelClient(FakeV2ModelClient):
+    manages_attempt_timeout = True
+    first_token_seconds = 0.12
+    stream_idle_seconds = 0.09
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.managed_calls = 0
+
+    def provider_concurrency_limit(self, provider: str) -> int:
+        assert provider == "agent_plan"
+        return 2
+
+    async def generate_action_decision_with_progress(
+        self,
+        *,
+        action_context: dict[str, Any],
+        attempt_id: str,
+        target: V2ModelTarget,
+        check_cancellation: Any = None,
+        on_progress: Any = None,
+    ) -> V2ModelDecision:
+        self.managed_calls += 1
+        managed_call_no = self.managed_calls
+        assert on_progress is not None
+        on_progress(
+            V2ModelProgress(
+                stage="queued",
+                provider_request_id=attempt_id,
+                elapsed_ms=0,
+                provider="agent_plan",
+                provider_concurrency_limit=2,
+            )
+        )
+        queue_wait_ms = 150 if managed_call_no == 1 else 0
+        if queue_wait_ms:
+            await asyncio.sleep(queue_wait_ms / 1000)
+        on_progress(
+            V2ModelProgress(
+                stage="admitted",
+                provider_request_id=attempt_id,
+                elapsed_ms=queue_wait_ms,
+                provider="agent_plan",
+                queue_wait_ms=queue_wait_ms,
+                provider_in_flight=2,
+                provider_concurrency_limit=2,
+            )
+        )
+        if managed_call_no == 1:
+            raise V2ModelError(
+                "model_transport_failed",
+                retryable=True,
+                failure_stage="connect",
+                elapsed_ms=1,
+            )
+        decision = await super().generate_action_decision(
+            action_context=action_context,
+            attempt_id=attempt_id,
+            target=target,
+            check_cancellation=check_cancellation,
+        )
+        return replace(
+            decision,
+            queue_wait_ms=queue_wait_ms,
+            provider_in_flight=2,
+            provider_concurrency_limit=2,
+            first_visible_text_ms=13,
+            reasoning_delta_count=4,
+            text_delta_count=2,
+            max_inter_delta_ms=7,
+            last_progress_ms=27,
+        )
+
+
 class FakeV2TtsClient:
     def __init__(self) -> None:
         self.call_count = 0
@@ -5871,6 +5945,70 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
     )
     assert event_detail.status_code == 200, event_detail.text
     assert event_detail.json()["payload"]["request_payload"]
+
+
+def test_managed_model_queue_wait_is_observable_and_excluded_from_action_budget(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = _QueuedManagedModelClient()
+    runtime = client.app.state.v2_live_runtime
+    runtime._action_engine._model_client = model_client
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            if json.loads(message["text"]).get("live_state") == "awaiting_observation":
+                break
+
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        failure = next(event for event in events if event.event_type == "model_request_failed")
+        first_attempt_id = failure.payload["attempt_id"]
+        attempt_events = [
+            event for event in events if event.payload.get("attempt_id") == first_attempt_id
+        ]
+        assert [event.event_type for event in attempt_events[:4]] == [
+            "model_request_started",
+            "model_request_queued",
+            "model_request_admitted",
+            "model_request_failed",
+        ]
+        started = attempt_events[0]
+        assert started.payload["first_token_timeout_ms"] == 120
+        assert started.payload["stream_idle_timeout_ms"] == 90
+        assert started.payload["provider_concurrency_limit"] == 2
+        admitted = attempt_events[2]
+        assert admitted.payload["queue_wait_ms"] == 150
+        assert admitted.payload["provider_in_flight"] == 2
+        assert failure.payload["queue_wait_ms"] == 150
+        assert failure.payload["provider_concurrency_limit"] == 2
+        assert failure.payload["action_elapsed_ms"] < 100
+
+        action_id = failure.payload["action_id"]
+        response = next(
+            event
+            for event in events
+            if event.event_type == "model_response_received"
+            and event.payload.get("action_id") == action_id
+        )
+        assert response.payload["provider_concurrency_limit"] == 2
+        assert response.payload["reasoning_delta_count"] == 4
+        assert response.payload["text_delta_count"] == 2
+        assert response.payload["max_inter_delta_ms"] == 7
+        assert response.payload["last_progress_ms"] == 27
 
 
 def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(

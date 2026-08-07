@@ -14,6 +14,16 @@ export const previewModelCatalog: AdminModelCatalog = {
       error: null,
     },
     {
+      provider: "ark",
+      label: "火山方舟标准推理 API",
+      refresh_mode: "manual",
+      status: "ok",
+      model_count: 1,
+      last_synced_at: "2026-07-15T11:56:00+08:00",
+      docs_url: "https://www.volcengine.com/docs/82379/1298454",
+      error: null,
+    },
+    {
       provider: "deepseek",
       label: "DeepSeek 官方 API",
       refresh_mode: "automatic",
@@ -25,6 +35,7 @@ export const previewModelCatalog: AdminModelCatalog = {
     },
   ],
   models: [
+    previewModel("ark", "ep-example", true, false),
     previewModel("agent_plan", "doubao-seed-2-0-lite-260215", true, true),
     previewModel("agent_plan", "glm-5-2-260617", true, false),
     previewModel("deepseek", "deepseek-v4-flash", true, false),
@@ -33,7 +44,7 @@ export const previewModelCatalog: AdminModelCatalog = {
 };
 
 function previewModel(
-  provider: "agent_plan" | "deepseek",
+  provider: "agent_plan" | "ark" | "deepseek",
   modelId: string,
   enabled: boolean,
   isDefault: boolean,
@@ -46,7 +57,9 @@ function previewModel(
     description:
       provider === "deepseek"
         ? "DeepSeek 官方 API 模型，支持思考模式与推理强度控制。"
-        : "Agent Plan 套餐内可用模型。",
+        : provider === "ark"
+          ? "火山方舟标准推理接入点。"
+          : "Agent Plan 套餐内可用模型。",
     available: true,
     enabled,
     is_default: isDefault,

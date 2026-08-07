@@ -1,4 +1,4 @@
-export type ModelProvider = "agent_plan" | "deepseek";
+export type ModelProvider = "agent_plan" | "ark" | "deepseek";
 export type ThinkingMode = "default" | "enabled" | "disabled";
 
 export type ModelParameters = {

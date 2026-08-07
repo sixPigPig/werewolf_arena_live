@@ -110,6 +110,27 @@ class Settings(BaseSettings):
             "ARK_AGENT_PLAN_BASE_URL",
         ),
     )
+    live_v2_ark_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "LIVE_V2_ARK_API_KEY",
+            "ARK_STANDARD_API_KEY",
+        ),
+    )
+    live_v2_ark_base_url: str = Field(
+        default="https://ark.cn-beijing.volces.com/api/v3",
+        validation_alias=AliasChoices(
+            "LIVE_V2_ARK_BASE_URL",
+            "ARK_STANDARD_BASE_URL",
+        ),
+    )
+    live_v2_ark_models: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "LIVE_V2_ARK_MODELS",
+            "ARK_STANDARD_MODELS",
+        ),
+    )
     live_v2_deepseek_api_key: str = Field(
         default="",
         validation_alias=AliasChoices(
@@ -124,17 +145,21 @@ class Settings(BaseSettings):
             "DEEPSEEK_BASE_URL",
         ),
     )
-    live_v2_model_first_token_seconds: float = Field(default=120.0, ge=0.1, le=120.0)
+    live_v2_agent_plan_max_in_flight: int = Field(default=3, ge=1, le=64)
+    live_v2_ark_max_in_flight: int = Field(default=3, ge=1, le=1024)
+    live_v2_deepseek_max_in_flight: int = Field(default=32, ge=1, le=2500)
+    live_v2_model_first_token_seconds: float = Field(default=120.0, ge=0.1, le=600.0)
+    live_v2_model_stream_idle_seconds: float = Field(default=90.0, ge=0.1, le=600.0)
     live_v2_model_attempt_total_seconds: float = Field(
-        default=180.0,
+        default=300.0,
         ge=0.1,
-        le=180.0,
+        le=900.0,
         validation_alias=AliasChoices(
             "LIVE_V2_MODEL_ATTEMPT_TOTAL_SECONDS",
             "LIVE_V2_MODEL_TOTAL_SECONDS",
         ),
     )
-    live_v2_model_action_total_seconds: float = Field(default=300.0, ge=0.1, le=300.0)
+    live_v2_model_action_total_seconds: float = Field(default=620.0, ge=0.1, le=1800.0)
     live_v2_model_max_attempts: int = Field(default=3, ge=1, le=3)
     live_v2_model_retry_base_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
     live_v2_model_retry_jitter_seconds: float = Field(default=0.25, ge=0.0, le=5.0)

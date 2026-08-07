@@ -106,6 +106,11 @@ def model_admin_client(
     )
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "agent-fast")
+    monkeypatch.setattr(
+        settings,
+        "live_v2_ark_models",
+        "ep-glm-5-2-production",
+    )
 
     engine = create_engine(
         "sqlite+pysqlite://",
@@ -196,6 +201,7 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     assert {item["model_id"] for item in listed_payload["models"]} >= {
         "agent-fast",
         "glm-5-2-260617",
+        "ep-glm-5-2-production",
         "deepseek-v4-flash",
         "deepseek-v4-pro",
     }
@@ -215,6 +221,16 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
         "high",
     ]
     assert bootstrapped_glm["max_output_tokens_limit"] == 131_072
+    standard_ark = next(
+        item
+        for item in listed_payload["models"]
+        if item["provider"] == "ark" and item["model_id"] == "ep-glm-5-2-production"
+    )
+    assert standard_ark["supports_thinking"] is True
+    assert standard_ark["parameters"]["thinking"] == "enabled"
+    assert standard_ark["parameters"]["max_tokens"] == 16_384
+    ark_source = next(source for source in listed_payload["sources"] if source["provider"] == "ark")
+    assert ark_source["model_count"] == 1
     deepseek_source = next(
         source for source in listed_payload["sources"] if source["provider"] == "deepseek"
     )

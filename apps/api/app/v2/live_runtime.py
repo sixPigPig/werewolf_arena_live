@@ -438,6 +438,7 @@ class V2LiveRuntime:
         if heartbeat_seconds >= lease_seconds:
             raise ValueError("V2 heartbeat interval must be shorter than its lease")
         self._session_factory = session_factory
+        self._model_client = model_client
         self._worker_id = worker_id or f"v2_worker_{uuid4().hex[:20]}"
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
@@ -498,6 +499,11 @@ class V2LiveRuntime:
     @property
     def default_audio_mode(self) -> Literal["tts", "text_only"]:
         return "tts" if self._tts_capability_enabled else "text_only"
+
+    async def aclose(self) -> None:
+        close = getattr(self._model_client, "aclose", None)
+        if callable(close):
+            await close()
 
     async def connect(
         self,
@@ -695,10 +701,16 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
         model_client=V2ModelClient(
             agent_plan_api_key=config.live_v2_agent_plan_api_key,
             agent_plan_base_url=config.live_v2_agent_plan_base_url,
+            ark_api_key=config.live_v2_ark_api_key,
+            ark_base_url=config.live_v2_ark_base_url,
             deepseek_api_key=config.live_v2_deepseek_api_key,
             deepseek_base_url=config.live_v2_deepseek_base_url,
             first_token_seconds=config.live_v2_model_first_token_seconds,
+            stream_idle_seconds=config.live_v2_model_stream_idle_seconds,
             total_seconds=config.live_v2_model_attempt_total_seconds,
+            agent_plan_max_in_flight=config.live_v2_agent_plan_max_in_flight,
+            ark_max_in_flight=config.live_v2_ark_max_in_flight,
+            deepseek_max_in_flight=config.live_v2_deepseek_max_in_flight,
         ),
         tts_client=None,
         tts_client_factory=(

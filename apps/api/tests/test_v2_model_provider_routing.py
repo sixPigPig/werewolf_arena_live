@@ -9,6 +9,7 @@ import pytest
 
 from app.v2.model_client import (
     V2ModelClient,
+    V2ModelDecision,
     V2ModelError,
     V2ModelProgress,
     V2QualityError,
@@ -21,15 +22,25 @@ def _client(
     agent_plan_api_key: str = "ark-key",
     deepseek_api_key: str = "deepseek-key",
     first_token_seconds: float = 2,
+    stream_idle_seconds: float | None = None,
     total_seconds: float = 5,
+    agent_plan_max_in_flight: int = 3,
+    ark_max_in_flight: int = 3,
+    deepseek_max_in_flight: int = 32,
 ) -> V2ModelClient:
     return V2ModelClient(
         agent_plan_api_key=agent_plan_api_key,
         agent_plan_base_url="https://ark.example.test/api/plan/v3",
+        ark_api_key="ark-standard-key",
+        ark_base_url="https://ark.example.test/api/v3",
         deepseek_api_key=deepseek_api_key,
         deepseek_base_url="https://api.deepseek.example.test",
         first_token_seconds=first_token_seconds,
+        stream_idle_seconds=stream_idle_seconds or total_seconds,
         total_seconds=total_seconds,
+        agent_plan_max_in_flight=agent_plan_max_in_flight,
+        ark_max_in_flight=ark_max_in_flight,
+        deepseek_max_in_flight=deepseek_max_in_flight,
         transport=httpx.MockTransport(handler),
     )
 
@@ -82,15 +93,25 @@ def test_model_client_disables_environment_proxy(
         model_parameters={"thinking": "disabled", "max_tokens": 512},
     )
 
-    decision = asyncio.run(
-        client.generate_action_decision(
+    async def run_twice() -> tuple[V2ModelDecision, V2ModelDecision]:
+        first = await client.generate_action_decision(
             action_context=_action_context(),
             attempt_id="v2_model_direct_transport",
             target=target,
         )
-    )
+        second = await client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_direct_transport_again",
+            target=target,
+        )
+        await client.aclose()
+        return first, second
+
+    decision, repeated_decision = asyncio.run(run_twice())
 
     assert decision.speech == "直连响应"
+    assert repeated_decision.speech == "直连响应"
+    assert len(captured_client_options) == 1
     assert captured_client_options[0]["trust_env"] is False
 
 
@@ -546,6 +567,355 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     assert "temperature" not in payload
 
 
+def test_ark_target_uses_standard_responses_endpoint_and_credentials() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "ark-standard-request-id"},
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"speech\\":\\"标准方舟响应\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_provider="ark",
+        model_id="ep-glm-5-2",
+        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+    )
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_test_ark_standard",
+            target=target,
+        )
+    )
+
+    assert decision.speech == "标准方舟响应"
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == "https://ark.example.test/api/v3/responses"
+    assert request.headers["authorization"] == "Bearer ark-standard-key"
+    payload = json.loads(request.content)
+    assert payload["model"] == "ep-glm-5-2"
+    assert payload["thinking"] == {"type": "enabled"}
+
+
+def test_provider_concurrency_is_bounded_without_serializing_other_providers() -> None:
+    active = {"ark.example.test": 0, "api.deepseek.example.test": 0}
+    maximum = {"ark.example.test": 0, "api.deepseek.example.test": 0}
+    overlap_seen = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal overlap_seen
+        host = request.url.host
+        assert host in active
+        active[host] += 1
+        maximum[host] = max(maximum[host], active[host])
+        overlap_seen = overlap_seen or all(count > 0 for count in active.values())
+        try:
+            await asyncio.sleep(0.03)
+            if host == "ark.example.test":
+                body = (
+                    'data: {"type":"response.output_text.delta",'
+                    '"delta":"{\\"speech\\":\\"方舟完成\\"}"}\n\n'
+                    "data: [DONE]\n\n"
+                )
+            else:
+                body = (
+                    'data: {"id":"chatcmpl-bounded","choices":[{"delta":'
+                    '{"content":"{\\"speech\\":\\"DeepSeek完成\\"}"}}]}\n\n'
+                    "data: [DONE]\n\n"
+                )
+            return httpx.Response(200, text=body)
+        finally:
+            active[host] -= 1
+
+    async def run_requests() -> list:
+        client = _client(
+            handler,
+            agent_plan_max_in_flight=2,
+            deepseek_max_in_flight=2,
+        )
+        agent_target = client.resolve_model_target(
+            model_provider="agent_plan",
+            model_id="glm-5-2-260617",
+            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        )
+        deepseek_target = client.resolve_model_target(
+            model_provider="deepseek",
+            model_id="deepseek-v4-flash",
+            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        )
+        return await asyncio.gather(
+            *[
+                client.generate_action_decision(
+                    action_context=_action_context(),
+                    attempt_id=f"v2_model_agent_{index}",
+                    target=agent_target,
+                )
+                for index in range(5)
+            ],
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_deepseek_parallel",
+                target=deepseek_target,
+            ),
+        )
+
+    decisions = asyncio.run(run_requests())
+
+    assert maximum["ark.example.test"] == 2
+    assert maximum["api.deepseek.example.test"] == 1
+    assert overlap_seen is True
+    assert any(decision.queue_wait_ms > 0 for decision in decisions[:5])
+    assert all(decision.provider_concurrency_limit == 2 for decision in decisions)
+
+
+def test_provider_queue_wait_does_not_consume_first_token_or_hard_timeout() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.03)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"speech\\":\\"排队后完成\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    async def run_requests() -> list:
+        client = _client(
+            handler,
+            first_token_seconds=0.05,
+            stream_idle_seconds=0.05,
+            total_seconds=0.05,
+            agent_plan_max_in_flight=1,
+        )
+        target = client.resolve_model_target(
+            model_provider="agent_plan",
+            model_id="glm-5-2-260617",
+            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        )
+        return await asyncio.gather(
+            *[
+                client.generate_action_decision(
+                    action_context=_action_context(),
+                    attempt_id=f"v2_model_queued_{index}",
+                    target=target,
+                )
+                for index in range(2)
+            ]
+        )
+
+    decisions = asyncio.run(run_requests())
+
+    assert [decision.speech for decision in decisions] == ["排队后完成", "排队后完成"]
+    assert decisions[1].queue_wait_ms >= 20
+    assert decisions[1].completed_ms < 50
+
+
+def test_canceled_provider_queue_wait_returns_the_permit() -> None:
+    first_request_started = asyncio.Event()
+    release_first_request = asyncio.Event()
+    request_count = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            first_request_started.set()
+            await release_first_request.wait()
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_text.delta",'
+                '"delta":"{\\"speech\\":\\"取消后完成\\"}"}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    async def run_requests() -> tuple[V2ModelDecision, V2ModelDecision]:
+        client = _client(handler, agent_plan_max_in_flight=1)
+        target = client.resolve_model_target(
+            model_provider="agent_plan",
+            model_id="glm-5-2-260617",
+            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        )
+        first_task = asyncio.create_task(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_gate_owner",
+                target=target,
+            )
+        )
+        await first_request_started.wait()
+
+        cancellation_checks = 0
+
+        def cancel_queued_request() -> None:
+            nonlocal cancellation_checks
+            cancellation_checks += 1
+            if cancellation_checks >= 2:
+                raise RuntimeError("scripted queue cancellation")
+
+        with pytest.raises(RuntimeError, match="scripted queue cancellation"):
+            await client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_gate_canceled",
+                target=target,
+                check_cancellation=cancel_queued_request,
+            )
+
+        release_first_request.set()
+        first = await first_task
+        third = await asyncio.wait_for(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_gate_after_cancellation",
+                target=target,
+            ),
+            timeout=0.2,
+        )
+        await client.aclose()
+        return first, third
+
+    first, third = asyncio.run(run_requests())
+
+    assert first.speech == third.speech == "取消后完成"
+    assert request_count == 2
+
+
+def test_reasoning_progress_resets_stream_idle_timeout() -> None:
+    class ProgressingSSEStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for index in range(3):
+                yield (
+                    'data: {"id":"chatcmpl-progressing","choices":[{"delta":'
+                    f'{{"reasoning_content":"step-{index}"}}}}]}}\n\n'
+                ).encode()
+                await asyncio.sleep(0.015)
+            yield (
+                'data: {"id":"chatcmpl-progressing","choices":[{"delta":'
+                '{"content":"{\\"speech\\":\\"持续推理完成\\"}"}}]}\n\n'
+            ).encode()
+            yield b"data: [DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=ProgressingSSEStream())
+
+    client = _client(
+        handler,
+        first_token_seconds=0.03,
+        stream_idle_seconds=0.025,
+        total_seconds=0.2,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+    )
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_progressing_reasoning",
+            target=target,
+        )
+    )
+
+    assert decision.speech == "持续推理完成"
+    assert decision.reasoning_delta_count == 3
+    assert decision.text_delta_count == 1
+    assert decision.max_inter_delta_ms is not None
+    assert decision.max_inter_delta_ms < 25
+
+
+def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
+    class StalledSSEStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"id":"chatcmpl-stalled","choices":[{"delta":'
+                b'{"reasoning_content":"started"}}]}\n\n'
+            )
+            await asyncio.sleep(0.06)
+            yield b"data: [DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=StalledSSEStream())
+
+    client = _client(
+        handler,
+        first_token_seconds=0.03,
+        stream_idle_seconds=0.02,
+        total_seconds=0.2,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+    )
+
+    with pytest.raises(V2ModelError, match="model_stream_idle_timeout") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_stalled_reasoning",
+                target=target,
+            )
+        )
+
+    assert caught.value.timeout_scope == "stream_idle"
+    assert caught.value.reasoning_delta_count == 1
+    assert caught.value.first_token_seen is True
+
+
+def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
+    class NeverEndingReasoningStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for index in range(20):
+                yield (
+                    'data: {"id":"chatcmpl-hard-cap","choices":[{"delta":'
+                    f'{{"reasoning_content":"step-{index}"}}}}]}}\n\n'
+                ).encode()
+                await asyncio.sleep(0.01)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=NeverEndingReasoningStream())
+
+    client = _client(
+        handler,
+        first_token_seconds=0.03,
+        stream_idle_seconds=0.03,
+        total_seconds=0.045,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+    )
+
+    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_continuous_reasoning_hard_cap",
+                target=target,
+            )
+        )
+
+    assert caught.value.timeout_scope == "attempt_hard"
+    assert caught.value.reasoning_delta_count >= 3
+    assert caught.value.text_delta_count == 0
+    assert caught.value.first_token_seen is True
+
+
 def test_model_progress_reports_headers_reasoning_token_and_first_visible_text() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -593,11 +963,13 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
 
     assert decision.speech == "进度响应"
     assert [item.stage for item in progress] == [
+        "queued",
+        "admitted",
         "response_headers",
         "first_token",
         "first_text",
     ]
-    headers = progress[0].response_headers
+    headers = progress[2].response_headers
     assert headers is not None
     assert headers["x-request-id"] == "header-request-id"
     assert headers["ratelimit-remaining"] == "23"
@@ -614,11 +986,11 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
         "ratelimit-custom-secret",
         "x-unlisted-provider-metadata",
     }.isdisjoint(headers)
-    assert progress[1].provider_request_id == "chatcmpl-progress"
-    assert progress[1].token_kind == "reasoning"
-    assert progress[2].provider_request_id == "chatcmpl-progress"
-    assert progress[2].token_kind == "text"
-    assert progress[0].elapsed_ms <= progress[1].elapsed_ms <= progress[2].elapsed_ms
+    assert progress[3].provider_request_id == "chatcmpl-progress"
+    assert progress[3].token_kind == "reasoning"
+    assert progress[4].provider_request_id == "chatcmpl-progress"
+    assert progress[4].token_kind == "text"
+    assert progress[2].elapsed_ms <= progress[3].elapsed_ms <= progress[4].elapsed_ms
 
 
 def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> None:
@@ -808,6 +1180,36 @@ def test_first_token_timeout_includes_response_header_wait() -> None:
     assert caught.value.first_token_seen is False
 
 
+def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    client = _client(
+        handler,
+        first_token_seconds=0.1,
+        total_seconds=0.02,
+    )
+    target = client.resolve_model_target(
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+    )
+
+    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_header_hard_cap",
+                target=target,
+            )
+        )
+
+    assert caught.value.timeout_scope == "attempt_hard"
+    assert caught.value.failure_stage == "response_headers"
+    assert caught.value.response_headers_seen is False
+
+
 def test_total_timeout_after_first_token_is_retryable() -> None:
     class DelayedSSEStream(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -832,7 +1234,7 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
         model_parameters={"thinking": "enabled", "max_tokens": 2048},
     )
 
-    with pytest.raises(V2ModelError, match="model_total_timeout") as caught:
+    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -845,6 +1247,7 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
     assert caught.value.failure_stage == "stream"
     assert caught.value.response_headers_seen is True
     assert caught.value.first_token_seen is True
+    assert caught.value.timeout_scope == "attempt_hard"
 
 
 def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
@@ -873,7 +1276,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
         model_parameters={"thinking": "enabled", "max_tokens": 2048},
     )
 
-    with pytest.raises(V2ModelError, match="model_total_timeout") as caught:
+    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
         _run_with_uvloop(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -887,6 +1290,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
     assert caught.value.failure_stage == "stream"
     assert caught.value.response_headers_seen is True
     assert caught.value.first_token_seen is True
+    assert caught.value.timeout_scope == "attempt_hard"
 
 
 @pytest.mark.parametrize(

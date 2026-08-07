@@ -74,9 +74,13 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.ark_tts_judge_asset_audio_format == "mp3"
     assert settings.ark_tts_judge_asset_sample_rate == 24000
     assert settings.live_v2_model_first_token_seconds == 120.0
-    assert settings.live_v2_model_attempt_total_seconds == 180.0
-    assert settings.live_v2_model_action_total_seconds == 300.0
+    assert settings.live_v2_model_stream_idle_seconds == 90.0
+    assert settings.live_v2_model_attempt_total_seconds == 300.0
+    assert settings.live_v2_model_action_total_seconds == 620.0
     assert settings.live_v2_model_max_attempts == 3
+    assert settings.live_v2_agent_plan_max_in_flight == 3
+    assert settings.live_v2_ark_max_in_flight == 3
+    assert settings.live_v2_deepseek_max_in_flight == 32
     assert settings.live_v2_model_retry_base_delay_seconds == 0.5
     assert settings.live_v2_model_retry_jitter_seconds == 0.25
     assert settings.judge_voice_worker_poll_seconds == 2.0
@@ -102,6 +106,24 @@ def test_settings_accepts_legacy_v2_attempt_budget_env(monkeypatch) -> None:
 
     assert settings.live_v2_model_attempt_total_seconds == 17.0
     assert settings.live_v2_model_action_total_seconds == 20.0
+
+
+def test_settings_reads_standard_ark_and_provider_concurrency_env(monkeypatch) -> None:
+    monkeypatch.setenv("ARK_STANDARD_API_KEY", "standard-ark-key")
+    monkeypatch.setenv("ARK_STANDARD_BASE_URL", "https://ark.example/api/v3")
+    monkeypatch.setenv("ARK_STANDARD_MODELS", "ep-glm,ep-doubao")
+    monkeypatch.setenv("LIVE_V2_AGENT_PLAN_MAX_IN_FLIGHT", "2")
+    monkeypatch.setenv("LIVE_V2_ARK_MAX_IN_FLIGHT", "4")
+    monkeypatch.setenv("LIVE_V2_DEEPSEEK_MAX_IN_FLIGHT", "40")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.live_v2_ark_api_key == "standard-ark-key"
+    assert settings.live_v2_ark_base_url == "https://ark.example/api/v3"
+    assert settings.live_v2_ark_models == "ep-glm,ep-doubao"
+    assert settings.live_v2_agent_plan_max_in_flight == 2
+    assert settings.live_v2_ark_max_in_flight == 4
+    assert settings.live_v2_deepseek_max_in_flight == 40
 
 
 def test_settings_rejects_v2_action_budget_shorter_than_attempt(monkeypatch) -> None:

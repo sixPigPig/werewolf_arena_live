@@ -251,9 +251,15 @@ cd apps/api
 
 实时 run、SSE 事件、运行租约、fencing token 和控制信号会写入 PostgreSQL。可运行多个 API 副本；每个副本只执行自己持有有效租约的模型任务，丢失租约的写入会被 fence 拒绝。独立 reaper 从数据库原子认领 orphan，不依赖 API 单副本部署。
 
-运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。火山方舟
-Agent Plan 使用 `ARK_AGENT_PLAN_API_KEY`（也兼容标准变量 `ARK_API_KEY`）和
-`https://ark.cn-beijing.volces.com/api/plan/v3`，一把套餐 Key 可选择以下模型：
+运行真实模型对局前，请确认 `apps/api/.env` 中模型服务相关配置已经填写。生产 Live V2
+对局应使用允许应用服务调用的火山方舟标准推理 API：配置 `ARK_STANDARD_API_KEY`、
+`ARK_STANDARD_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，并把已部署的
+Endpoint/模型 ID 写入 `ARK_STANDARD_MODELS`。Admin 模型管理会把这些模型列在
+“火山方舟标准推理 API”下。
+
+旧的 Agent Plan 兼容配置仍可读取历史冻结记录，但官方套餐使用范围不适合作为游戏后端
+生产 API。旧配置使用 `ARK_AGENT_PLAN_API_KEY` 和
+`https://ark.cn-beijing.volces.com/api/plan/v3`，可见模型包括：
 
 - `doubao-seed-2-0-lite-260215`
 - `glm-5-2-260617`

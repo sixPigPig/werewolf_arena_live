@@ -29,6 +29,11 @@ def create_application() -> FastAPI:
     app.include_router(api_v2_router, prefix="/api/v2")
     app.include_router(api_v2_god_view_router, prefix="/api/v2")
     app.state.v2_live_runtime = build_v2_live_runtime()
+
+    async def close_v2_runtime() -> None:
+        await app.state.v2_live_runtime.aclose()
+
+    app.router.add_event_handler("shutdown", close_v2_runtime)
     return app
 
 

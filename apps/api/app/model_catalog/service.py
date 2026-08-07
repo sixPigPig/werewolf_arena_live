@@ -27,11 +27,12 @@ from app.werewolf.providers import (
     open_url_direct,
 )
 
-ModelProviderName = Literal["agent_plan", "deepseek"]
+ModelProviderName = Literal["agent_plan", "ark", "deepseek"]
 ThinkingMode = Literal["default", "enabled", "disabled"]
 UNSUPPORTED_CATALOG_MODELS = frozenset({("agent_plan", "auto")})
 
 ARK_DOCS_URL = "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01"
+ARK_STANDARD_DOCS_URL = "https://www.volcengine.com/docs/82379/1298454"
 DEEPSEEK_MODELS_URL = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
 DEEPSEEK_THINKING_URL = "https://api-docs.deepseek.com/zh-cn/guides/thinking_mode"
 
@@ -370,8 +371,9 @@ def bootstrap_environment_catalog(db: Session) -> None:
     _delete_unsupported_catalog_models(db)
     now = datetime.now(tz=UTC)
     default_model = default_model_name()
-    providers = (
+    providers: tuple[tuple[ModelProviderName, Any], ...] = (
         ("agent_plan", ARK_AGENT_PLAN_CONFIG),
+        ("ark", None),
         ("deepseek", DEEPSEEK_CONFIG),
     )
     has_default = db.scalar(
@@ -380,7 +382,12 @@ def bootstrap_environment_catalog(db: Session) -> None:
         )
     )
     for provider_name, config in providers:
-        for model_id in environment_model_names(config):
+        model_ids = (
+            _configured_ark_model_ids()
+            if provider_name == "ark"
+            else environment_model_names(config)
+        )
+        for model_id in model_ids:
             if _is_unsupported_catalog_model(provider_name, model_id):
                 continue
             record = db.get(ModelConfigurationRecord, (provider_name, model_id))
@@ -434,7 +441,9 @@ def _sync_discovered_models(
 ) -> None:
     now = datetime.now(tz=UTC)
     configured_ids = set(
-        environment_model_names(
+        _configured_ark_model_ids()
+        if provider == "ark"
+        else environment_model_names(
             ARK_AGENT_PLAN_CONFIG if provider == "agent_plan" else DEEPSEEK_CONFIG
         )
     )
@@ -553,11 +562,15 @@ def _snapshot_from_database(
                 record.provider,  # type: ignore[arg-type]
                 record.model_id,
             ),
-            docs_url=DEEPSEEK_THINKING_URL if record.provider == "deepseek" else ARK_DOCS_URL,
+            docs_url=(
+                DEEPSEEK_THINKING_URL
+                if record.provider == "deepseek"
+                else (ARK_STANDARD_DOCS_URL if record.provider == "ark" else ARK_DOCS_URL)
+            ),
             updated_at=record.updated_at,
         )
         for record in records
-        if record.provider in {"agent_plan", "deepseek"}
+        if record.provider in {"agent_plan", "ark", "deepseek"}
     )
     sources = (
         _source_state(
@@ -574,6 +587,13 @@ def _snapshot_from_database(
             refresh_mode="automatic",
             docs_url=DEEPSEEK_MODELS_URL,
             error=deepseek_error,
+        ),
+        _source_state(
+            records,
+            provider="ark",
+            label="火山方舟标准推理 API",
+            refresh_mode="manual",
+            docs_url=ARK_STANDARD_DOCS_URL,
         ),
     )
     return CatalogSnapshot(sources=sources, models=models)
@@ -640,6 +660,8 @@ def _bootstrap_supports_thinking(
 ) -> bool:
     if provider == "deepseek":
         return True
+    if provider == "ark":
+        return True
     normalized = model_id.lower()
     return normalized.startswith(
         (
@@ -677,6 +699,16 @@ def _copy_optional_number(
 
 def _non_empty_string(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _configured_ark_model_ids() -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            model_id.strip()
+            for model_id in settings.live_v2_ark_models.split(",")
+            if model_id.strip()
+        )
+    )
 
 
 def _deepseek_description(model_id: str) -> str:

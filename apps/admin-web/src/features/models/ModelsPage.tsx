@@ -92,6 +92,7 @@ export default function ModelsPage() {
   });
   const catalog = catalogQuery.data;
   const agentModels = catalog?.models.filter((model) => model.provider === "agent_plan") ?? [];
+  const arkModels = catalog?.models.filter((model) => model.provider === "ark") ?? [];
   const deepseekModels = catalog?.models.filter((model) => model.provider === "deepseek") ?? [];
 
   return (
@@ -126,7 +127,7 @@ export default function ModelsPage() {
 
       <div className="models-safety-note">
         <strong>生效规则</strong>
-        <span>新发现模型默认关闭；被虚拟玩家使用的模型不能直接停用；运行时输出上限始终取游戏预算与模型配置中的较小值。</span>
+        <span>新发现模型默认关闭；被虚拟玩家使用的模型不能直接停用；运行时输出上限始终取游戏预算与模型配置中的较小值。生产应用应使用火山方舟标准推理 API 或模型厂商正式 API；Agent Plan 仅保留兼容现有冻结配置，不建议用于游戏后端。</span>
       </div>
 
       {catalog ? <ModelSources sources={catalog.sources} /> : null}
@@ -138,6 +139,14 @@ export default function ModelsPage() {
       ) : null}
       {catalog ? (
         <div className="model-provider-sections">
+          <ModelProviderSection
+            canManage={canManage && runtimeMode !== "preview"}
+            models={arkModels}
+            onSave={(model, input) => configurationMutation.mutate({ model, input })}
+            pendingKey={configurationMutation.isPending ? mutationKey(configurationMutation.variables?.model) : null}
+            subtitle="通过 ARK_STANDARD_MODELS 配置正式推理接入点 ID；请求使用标准 /api/v3 Responses API。"
+            title="火山方舟标准推理 API"
+          />
           <ModelProviderSection
             canManage={canManage && runtimeMode !== "preview"}
             models={agentModels}
@@ -452,7 +461,7 @@ function ModelConfigurationForm({
           </p>
         ) : model.provider === "deepseek" && samplingDisabled ? (
           <p className="model-parameter-note">DeepSeek 官方说明：思考开启（含默认值）时，Temperature、Top P 与两类 penalty 不生效，保存时会自动清空。</p>
-        ) : model.provider === "agent_plan" ? (
+        ) : model.provider === "agent_plan" || model.provider === "ark" ? (
           <p className="model-parameter-note">Temperature 与 Top P 建议只配置一个；两类 penalty 仅用于 Chat 调用，V2 Responses 请求不会发送。</p>
         ) : (
           <p className="model-parameter-note">Temperature 与 Top P 建议只配置一个；留空表示继续使用游戏动作自己的动态值。</p>
