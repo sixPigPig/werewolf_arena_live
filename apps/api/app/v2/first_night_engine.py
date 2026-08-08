@@ -1779,8 +1779,16 @@ class V2NightEngine:
                         current_action_knowledge=current_action_knowledge,
                     ),
                     "private_authoritative_facts": [
-                        *private_authoritative_facts(historical_private_facts),
-                        *private_authoritative_facts(current_action_knowledge),
+                        *private_authoritative_facts(
+                            historical_private_facts,
+                            owner_scope="player",
+                            owner_id=player.player_id,
+                        ),
+                        *private_authoritative_facts(
+                            current_action_knowledge,
+                            owner_scope="player",
+                            owner_id=player.player_id,
+                        ),
                     ],
                     "public_match_state": build_public_match_state(
                         round_no=state.round_no,

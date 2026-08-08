@@ -36,25 +36,11 @@ type StructuredPrompt = {
   value: Record<string, unknown>;
 };
 
-type PublicTimelineSummary = {
-  eventCount: number;
-  kindCounts: Record<string, number>;
-  missingRecordSeqCount: number;
-  recordSeqMax: number | null;
-  recordSeqMin: number | null;
-  schemaVersion: number | null;
-};
-
 type KnownEventsSummary = {
-  budgetChars: number | null;
-  budgetExceededByRequired: boolean;
-  droppedCount: number;
   recordSeqMax: number | null;
   recordSeqMin: number | null;
   schemaVersion: number | null;
   selectedCount: number;
-  totalCount: number;
-  usedChars: number | null;
 };
 
 const fieldLabels: Record<string, string> = {
@@ -63,6 +49,7 @@ const fieldLabels: Record<string, string> = {
   activation_id: "激活 ID",
   action_id: "动作 ID",
   action_type: "动作类型",
+  address_resolution: "寻址结果",
   addressed_to: "提问对象",
   answer_record_seq: "回答记录序号",
   answer_source_event_id: "回答来源事件",
@@ -169,13 +156,41 @@ const fieldLabels: Record<string, string> = {
   dropped_claim_count: "丢弃声明数",
   dropped_question_count: "丢弃提问数",
   dropped_relation_count: "丢弃关系数",
+  source_event_count: "源事件数",
+  emitted_event_count: "模型可见事件数",
+  future_filtered_event_count: "未来事件过滤数",
+  source_claim_candidate_count: "声明候选数",
+  emitted_claim_count: "模型可见声明数",
+  out_of_scope_claim_count: "作用域外声明数",
+  rejected_claim_count: "被拒绝声明数",
+  source_question_count: "源提问数",
+  current_scope_question_count: "当前作用域提问数",
+  emitted_question_count: "模型可见提问数",
+  out_of_scope_question_count: "作用域外提问数",
+  invalid_question_count: "无效提问数",
+  source_relation_count: "源回应关系数",
+  emitted_relation_count: "模型可见回应关系数",
+  invalid_relation_count: "无效回应关系数",
+  budget_dropped_event_count: "容量选择丢弃事件数",
+  derivation_rejections: "派生项拒绝明细",
+  derivation: "派生校验",
+  missing_fields: "缺失字段",
+  reason: "拒绝原因",
+  requested_fields: "请求字段",
+  response_status: "回应检测状态",
+  source_authority: "源内容权威性",
+  source_event_ref: "源事件引用",
+  validation_status: "校验状态",
+  validator_version: "校验器版本",
   selection_profile: "模型视图选择规则",
   focus: "当前动作引用焦点",
   annotations: "发言结构化注释",
   claim_id: "声明 ID",
   claim_type: "声明类型",
   claimed_action_in: "声明的行动时间",
+  claimed_role: "声明的角色",
   claimed_result: "声明的结果",
+  claimed_team: "声明的阵营",
   claims: "结构化声明",
   first_party_source_priority: "第一方来源优先级",
   mentioned_player_refs: "涉及玩家",
@@ -285,6 +300,17 @@ const valueLabels: Record<string, string> = {
   sheriff_vote: "警长投票",
   speech: "发言",
   vote_result: "投票结果",
+  complete: "校验完整",
+  deterministic_heuristic: "确定性启发式",
+  none_detected: "未检测到回应",
+  response_detected: "检测到回应",
+  response_to_question: "对提问的回应",
+  resolved: "已明确寻址",
+  unresolved: "未明确寻址",
+  role_claim: "角色声明",
+  team_claim: "阵营声明",
+  investigation_claim: "验人声明",
+  future_investigation_plan: "未来验人计划",
 };
 
 export function ReadableModelInput({
@@ -295,11 +321,10 @@ export function ReadableModelInput({
   if (!request?.request_payload) {
     return <Empty description="这一步没有模型输入" />;
   }
+  if (request.model_context_schema_version !== 11) {
+    return <HistoricalRawModelInput request={request} />;
+  }
   const messages = requestMessages(request.request_payload);
-  const publicTimeline = summarizePublicTimeline(
-    request.prompt_projection,
-    publicTimelineFromMessages(messages),
-  );
   const knownEvents = summarizeKnownEvents(
     request.prompt_projection,
     knownEventsFromMessages(messages),
@@ -316,33 +341,6 @@ export function ReadableModelInput({
     request.prompt_projection,
     "model_view_schema_version",
   );
-  const ledgerStatementCount = numericField(
-    request.prompt_projection,
-    "ledger_statement_count",
-  );
-  const droppedStatementCount = numericField(
-    request.prompt_projection,
-    "dropped_statement_count",
-  );
-  const currentRoundStatementCount = numericField(
-    request.prompt_projection,
-    "current_round_statement_count",
-  );
-  const structuredClaimCount = numericField(
-    request.prompt_projection,
-    "structured_claim_count",
-  );
-  const openQuestionCount = numericField(
-    request.prompt_projection,
-    "open_question_count",
-  );
-  const hasKnownEventRetentionAudit =
-    request.prompt_projection !== null &&
-    [
-      "retained_event_refs",
-      "dropped_event_refs",
-      "retention_reasons",
-    ].some((key) => request.prompt_projection?.[key] !== undefined);
   const hasSectionCharCounts =
     request.prompt_projection?.section_char_counts !== undefined;
   return (
@@ -390,7 +388,7 @@ export function ReadableModelInput({
           },
           {
             key: "prompt-schema",
-            label: "兼容提示词版本",
+            label: "提示词结构版本",
             children:
               request.prompt_schema_version === null
                 ? "—"
@@ -444,46 +442,6 @@ export function ReadableModelInput({
                 ? "—"
                 : `V${modelViewSchemaVersion}`,
           },
-          {
-            key: "ledger-statements",
-            label: "完整公开发言",
-            children:
-              ledgerStatementCount === null
-                ? "—"
-                : String(ledgerStatementCount),
-          },
-          {
-            key: "dropped-statements",
-            label: "发言截断",
-            children:
-              droppedStatementCount === null
-                ? "—"
-                : droppedStatementCount === 0
-                  ? "0（无截断）"
-                  : String(droppedStatementCount),
-          },
-          {
-            key: "current-statements",
-            label: "本轮完整发言",
-            children:
-              currentRoundStatementCount === null
-                ? "—"
-                : String(currentRoundStatementCount),
-          },
-          {
-            key: "structured-claims",
-            label: "结构化声明",
-            children:
-              structuredClaimCount === null
-                ? "—"
-                : String(structuredClaimCount),
-          },
-          {
-            key: "open-questions",
-            label: "未回答提问",
-            children:
-              openQuestionCount === null ? "—" : String(openQuestionCount),
-          },
           ...(knownEvents
             ? [
                 {
@@ -495,15 +453,8 @@ export function ReadableModelInput({
                         <Tag>V{knownEvents.schemaVersion}</Tag>
                       )}
                       <Typography.Text>
-                        已选 {knownEvents.selectedCount} / 完整 {knownEvents.totalCount}
+                        模型实际可见 {knownEvents.selectedCount} 个
                       </Typography.Text>
-                      {knownEvents.droppedCount ? (
-                        <Tag color="warning">
-                          未送入模型 {knownEvents.droppedCount}
-                        </Tag>
-                      ) : (
-                        <Tag color="success">无丢弃</Tag>
-                      )}
                     </Space>
                   ),
                 },
@@ -512,108 +463,28 @@ export function ReadableModelInput({
                   label: "已知事件序号范围",
                   children: recordSeqRange(knownEvents),
                 },
-                ...(knownEvents.budgetChars !== null ||
-                knownEvents.usedChars !== null
-                  ? [
-                      {
-                        key: "known-events-budget",
-                        label: "事件选择预算",
-                        children:
-                          knownEvents.budgetChars === null ||
-                          knownEvents.usedChars === null ? (
-                            "—"
-                          ) : (
-                            <Space size={6} wrap>
-                              <Typography.Text>
-                                {knownEvents.usedChars.toLocaleString("zh-CN")} /{" "}
-                                {knownEvents.budgetChars.toLocaleString("zh-CN")} 字符
-                              </Typography.Text>
-                              {knownEvents.budgetExceededByRequired ? (
-                                <Tag color="warning">必保事件超出预算</Tag>
-                              ) : null}
-                            </Space>
-                          ),
-                      },
-                    ]
-                  : []),
-              ]
-            : []),
-          ...(publicTimeline
-            ? [
-                {
-                  key: "public-timeline",
-                  label: "统一公开时间线",
-                  children: (
-                    <Space size={6} wrap>
-                      {publicTimeline.schemaVersion === null ? null : (
-                        <Tag>V{publicTimeline.schemaVersion}</Tag>
-                      )}
-                      <Typography.Text>
-                        {publicTimeline.eventCount} 个事件
-                      </Typography.Text>
-                    </Space>
-                  ),
-                },
-                {
-                  key: "public-timeline-range",
-                  label: "记录序号范围",
-                  children: recordSeqRange(publicTimeline),
-                },
-                {
-                  key: "public-timeline-kinds",
-                  label: "时间线事件类型",
-                  children: (
-                    <TimelineKindCounts counts={publicTimeline.kindCounts} />
-                  ),
-                },
-                {
-                  key: "public-timeline-missing-seq",
-                  label: "缺少记录序号",
-                  children:
-                    publicTimeline.missingRecordSeqCount === 0 ? (
-                      "0（完整）"
-                    ) : (
-                      <Tag color="warning">
-                        {publicTimeline.missingRecordSeqCount}
-                      </Tag>
-                    ),
-                },
               ]
             : []),
         ]}
         size="small"
       />
-      {knownEvents &&
-      request.prompt_projection &&
-      (hasKnownEventRetentionAudit || hasSectionCharCounts) ? (
+      <V11ProjectionAudit projection={request.prompt_projection} />
+      {knownEvents && request.prompt_projection && hasSectionCharCounts ? (
         <Collapse
           items={[
             {
               children: (
                 <ReadableValue
                   value={
-                    hasKnownEventRetentionAudit
-                      ? {
-                          retained_event_refs:
-                            request.prompt_projection.retained_event_refs ?? [],
-                          dropped_event_refs:
-                            request.prompt_projection.dropped_event_refs ?? [],
-                          retention_reasons:
-                            request.prompt_projection.retention_reasons ?? {},
-                          section_char_counts:
-                            request.prompt_projection.section_char_counts ?? {},
-                        }
-                      : {
-                          section_char_counts:
-                            request.prompt_projection.section_char_counts ?? {},
-                        }
+                    {
+                      section_char_counts:
+                        request.prompt_projection.section_char_counts ?? {},
+                    }
                   }
                 />
               ),
               key: "known-event-selection-audit",
-              label: hasKnownEventRetentionAudit
-                ? "查看事件选择审计"
-                : "查看上下文结构统计",
+              label: "查看上下文结构统计",
             },
           ]}
           size="small"
@@ -639,12 +510,22 @@ export function ReadableModelOutput({
   request: V2ModelRequest | null;
 }) {
   if (!request) return <Empty description="这一步没有模型输出" />;
+  if (request.model_context_schema_version !== 11) {
+    if (request.output_source === "unavailable") {
+      return <Empty description="模型尚未返回，或历史记录没有可恢复的输出" />;
+    }
+    return <HistoricalRawModelOutput request={request} />;
+  }
   if (request.output_source === "unavailable") {
-    return <Empty description="模型尚未返回，或历史记录没有可恢复的输出" />;
+    return (
+      <div className="v2-inspector-panel">
+        <V11OutputEnforcementAudit request={request} />
+        <Empty description="模型尚未返回，或没有可恢复的输出" />
+      </div>
+    );
   }
 
   const rawValue = parseJsonValue(request.raw_response);
-  const adoptedValue = request.parsed_output ?? rawValue ?? request.raw_response;
   const rawMatchesAdopted = outputsMatch(
     request.raw_response,
     rawValue,
@@ -657,8 +538,12 @@ export function ReadableModelOutput({
         <JsonCopyButton
           label="复制完整输出 JSON"
           value={{
+            application_validation_result:
+              request.application_validation_result ?? null,
+            output_enforcement: request.output_enforcement ?? null,
             raw_response: request.raw_response,
             parsed_output: request.parsed_output,
+            repair_kind: request.repair_kind ?? null,
           }}
         />
       </div>
@@ -670,6 +555,7 @@ export function ReadableModelOutput({
           type="warning"
         />
       ) : null}
+      <V11OutputEnforcementAudit request={request} />
       {request.passive_observations.length ? (
         <>
           <Alert
@@ -692,7 +578,26 @@ export function ReadableModelOutput({
           />
         </>
       ) : null}
-      <OutputSummary label="程序采用结果" value={adoptedValue} />
+      {request.application_validation_result === "accepted" ? (
+        <OutputSummary label="程序采用结果" value={request.parsed_output} />
+      ) : request.application_validation_result === "rejected" ? (
+        <Empty description="应用层校验已拒绝该输出，没有最终采用结果" />
+      ) : (
+        <>
+          <Alert
+            description="应用层校验结果未记录，Admin 不把原始响应或解析结果推断为最终采用结果。"
+            showIcon
+            title="最终采用状态未知"
+            type="warning"
+          />
+          {request.parsed_output ? (
+            <OutputSummary
+              label="程序解析结果（采用状态未知）"
+              value={request.parsed_output}
+            />
+          ) : null}
+        </>
+      )}
       {request.raw_response ? (
         <Collapse
           className="v2-raw-response-collapse"
@@ -716,6 +621,342 @@ export function ReadableModelOutput({
       ) : null}
     </div>
   );
+}
+
+function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
+  return (
+    <div className="v2-inspector-panel">
+      <div className="v2-inspector-actions">
+        <JsonCopyButton
+          label="复制完整输入 JSON"
+          value={request.request_payload}
+        />
+      </div>
+      <Alert
+        description={
+          request.input_source === "reconstructed"
+            ? "这份旧合同输入由历史动作上下文重建，并非逐字原始请求；Admin 不再使用旧版专用解析器。"
+            : "Admin 不再使用 V7～V10 或未知合同的专用解析器，以下仅展示持久化 JSON。"
+        }
+        showIcon
+        title="历史或未知合同仅提供通用 JSON"
+        type="warning"
+      />
+      <pre aria-label="历史模型输入原始 JSON">
+        {prettyJson(request.request_payload)}
+      </pre>
+    </div>
+  );
+}
+
+function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
+  const value = {
+    application_validation_result:
+      request.application_validation_result ?? null,
+    output_enforcement: request.output_enforcement ?? null,
+    output_source: request.output_source,
+    parsed_output: request.parsed_output,
+    passive_observations: request.passive_observations,
+    raw_response: request.raw_response,
+    repair_kind: request.repair_kind ?? null,
+  };
+  return (
+    <div className="v2-inspector-panel">
+      <div className="v2-inspector-actions">
+        <JsonCopyButton label="复制完整输出 JSON" value={value} />
+      </div>
+      <Alert
+        description="Admin 不推断旧合同的采用语义、输出约束或修复阶段；以下仅展示保存的数据。"
+        showIcon
+        title="历史或未知合同仅提供通用 JSON"
+        type="warning"
+      />
+      <pre aria-label="历史模型输出原始 JSON">{prettyJson(value)}</pre>
+    </div>
+  );
+}
+
+const v11ProjectionAuditFields = [
+  "source_event_count",
+  "emitted_event_count",
+  "future_filtered_event_count",
+  "source_claim_candidate_count",
+  "emitted_claim_count",
+  "out_of_scope_claim_count",
+  "rejected_claim_count",
+  "source_question_count",
+  "current_scope_question_count",
+  "emitted_question_count",
+  "out_of_scope_question_count",
+  "invalid_question_count",
+  "source_relation_count",
+  "emitted_relation_count",
+  "invalid_relation_count",
+  "budget_dropped_event_count",
+] as const;
+
+function V11ProjectionAudit({
+  projection,
+}: {
+  projection: V2PromptProjection | null;
+}) {
+  const missingFields = v11ProjectionAuditFields.filter(
+    (key) => numericField(projection, key) === null,
+  );
+  const hasRejectionDetails =
+    projection !== null &&
+    Object.prototype.hasOwnProperty.call(projection, "derivation_rejections");
+  const rejections = Array.isArray(projection?.derivation_rejections)
+    ? projection.derivation_rejections
+    : null;
+
+  return (
+    <section aria-label="V11 上下文投影审计">
+      <Flex align="center" justify="space-between" wrap>
+        <Typography.Text strong>V11 上下文投影审计</Typography.Text>
+        <Tag color={missingFields.length || !hasRejectionDetails ? "warning" : "success"}>
+          {missingFields.length || !hasRejectionDetails
+            ? "审计字段不完整"
+            : "审计字段完整"}
+        </Tag>
+      </Flex>
+      {missingFields.length || !hasRejectionDetails ? (
+        <Alert
+          description="未记录项统一显示为未知；Admin 不从模型输入反推过滤、拒绝或容量丢弃数量。"
+          showIcon
+          title="V11 投影审计信息缺失"
+          type="warning"
+        />
+      ) : null}
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "events",
+            label: "源事件 → 模型可见事件",
+            children: auditFlow(projection, [
+              ["源", "source_event_count"],
+              ["可见", "emitted_event_count"],
+            ]),
+          },
+          {
+            key: "event-filters",
+            label: "事件过滤",
+            children: auditFlow(projection, [
+              ["未来", "future_filtered_event_count"],
+              ["容量", "budget_dropped_event_count"],
+            ]),
+          },
+          {
+            key: "claims",
+            label: "派生声明",
+            children: auditFlow(projection, [
+              ["候选", "source_claim_candidate_count"],
+              ["可见", "emitted_claim_count"],
+              ["作用域外", "out_of_scope_claim_count"],
+              ["拒绝", "rejected_claim_count"],
+            ]),
+          },
+          {
+            key: "questions",
+            label: "派生提问",
+            children: auditFlow(projection, [
+              ["源", "source_question_count"],
+              ["当前作用域", "current_scope_question_count"],
+              ["可见", "emitted_question_count"],
+            ]),
+          },
+          {
+            key: "question-filters",
+            label: "提问过滤",
+            children: auditFlow(projection, [
+              ["作用域外", "out_of_scope_question_count"],
+              ["无效", "invalid_question_count"],
+            ]),
+          },
+          {
+            key: "relations",
+            label: "派生回应关系",
+            children: auditFlow(projection, [
+              ["源", "source_relation_count"],
+              ["可见", "emitted_relation_count"],
+              ["无效", "invalid_relation_count"],
+            ]),
+          },
+        ]}
+        size="small"
+      />
+      {rejections === null ? (
+        <Typography.Text type="secondary">
+          派生项拒绝明细：未知（未记录）
+        </Typography.Text>
+      ) : rejections.length === 0 ? (
+        <Typography.Text type="secondary">派生项拒绝明细：无</Typography.Text>
+      ) : (
+        <Collapse
+          items={[
+            {
+              children: (
+                <div className="v2-readable-list">
+                  {rejections.map((rejection, index) => (
+                    <div
+                      className="v2-readable-list-item"
+                      key={`${rejection.source_event_ref}-${rejection.kind}-${index}`}
+                    >
+                      <ReadableValue value={rejection} />
+                    </div>
+                  ))}
+                </div>
+              ),
+              key: "derivation-rejections",
+              label: `查看被拒绝的派生项（${rejections.length} 项）`,
+            },
+          ]}
+          size="small"
+        />
+      )}
+    </section>
+  );
+}
+
+function auditFlow(
+  projection: V2PromptProjection | null,
+  fields: Array<
+    readonly [
+      string,
+      (typeof v11ProjectionAuditFields)[number],
+    ]
+  >,
+) {
+  return (
+    <Space size={[6, 6]} wrap>
+      {fields.map(([label, key]) => {
+        const value = numericField(projection, key);
+        return (
+          <Tag color={value === null ? "default" : undefined} key={key}>
+            {label} {value === null ? "未知" : value}
+          </Tag>
+        );
+      })}
+    </Space>
+  );
+}
+
+function V11OutputEnforcementAudit({
+  request,
+}: {
+  request: V2ModelRequest;
+}) {
+  const enforcement = request.output_enforcement;
+  const enforcementMissing =
+    enforcement === undefined ||
+    enforcement === null ||
+    enforcement.requested === null ||
+    enforcement.actual === null;
+  const validationRecorded = Object.prototype.hasOwnProperty.call(
+    request,
+    "application_validation_result",
+  );
+  const repairRecorded = Object.prototype.hasOwnProperty.call(
+    request,
+    "repair_kind",
+  );
+  return (
+    <section aria-label="Provider 输出约束审计">
+      <Flex align="center" justify="space-between" wrap>
+        <Typography.Text strong>Provider 输出约束审计</Typography.Text>
+        <Tag color={enforcementMissing ? "warning" : "success"}>
+          {enforcementMissing ? "约束状态未知" : "约束状态已记录"}
+        </Tag>
+      </Flex>
+      {enforcementMissing || !validationRecorded || !repairRecorded ? (
+        <Alert
+          description="未记录项以未知展示；Admin 不根据 Provider 名称、响应外形或采用结果猜测约束阶段。"
+          showIcon
+          title="输出审计信息不完整"
+          type="warning"
+        />
+      ) : null}
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "requested",
+            label: "请求的输出约束",
+            children: outputEnforcementLabel(enforcement?.requested ?? null),
+          },
+          {
+            key: "actual",
+            label: "Provider 实际约束",
+            children: outputEnforcementLabel(enforcement?.actual ?? null),
+          },
+          {
+            key: "schema",
+            label: "输出 Schema",
+            children: outputSchemaLabel(enforcement ?? null),
+          },
+          {
+            key: "repair",
+            label: "Parser 修复",
+            children: repairRecorded
+              ? request.repair_kind === null
+                ? "无机械修复"
+                : request.repair_kind
+              : "未知（未记录）",
+          },
+          {
+            key: "application-validation",
+            label: "应用层校验",
+            children: validationRecorded
+              ? applicationValidationLabel(
+                  request.application_validation_result ?? null,
+                )
+              : "未知（未记录）",
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
+function outputEnforcementLabel(value: string | null) {
+  if (value === null) return <Tag>未知（未记录）</Tag>;
+  if (value === "strict_json_schema") {
+    return <Tag color="success">严格 JSON Schema</Tag>;
+  }
+  if (value === "prompt_and_application_validation") {
+    return <Tag color="warning">提示词 + 应用层校验</Tag>;
+  }
+  if (value === "none") return <Tag>无 Provider 结构约束</Tag>;
+  return <Tag>未识别（{value}）</Tag>;
+}
+
+function outputSchemaLabel(
+  enforcement: V2ModelRequest["output_enforcement"] | null,
+) {
+  if (enforcement?.actual === "prompt_and_application_validation") {
+    return "未使用 Provider 严格 Schema";
+  }
+  if (enforcement?.actual === "none") return "不适用";
+  if (
+    !enforcement ||
+    (!enforcement.schema_name && enforcement.schema_version === null)
+  ) {
+    return "未知（未记录）";
+  }
+  return `${enforcement.schema_name ?? "名称未知"} · ${
+    enforcement.schema_version === null
+      ? "版本未知"
+      : `V${enforcement.schema_version}`
+  }`;
+}
+
+function applicationValidationLabel(value: string | null) {
+  if (value === null) return "未知（未记录）";
+  if (value === "accepted") return <Tag color="success">已接受</Tag>;
+  if (value === "rejected") return <Tag color="error">已拒绝</Tag>;
+  return <Tag>未识别（{value}）</Tag>;
 }
 
 function numericField(
@@ -978,8 +1219,6 @@ function ActionContext({
           {groups.map(([key, value]) =>
             key === "known_events" && isRecord(value) ? (
               <KnownEventsGroup key={key} value={value} />
-            ) : key === "public_timeline" && isRecord(value) ? (
-              <PublicTimelineGroup key={key} value={value} />
             ) : (
               <ReadableGroup key={key} label={fieldLabel(key)} value={value} />
             ),
@@ -996,6 +1235,14 @@ function KnownEventsGroup({
   value: Record<string, unknown>;
 }) {
   const events = Array.isArray(value.events) ? value.events : [];
+  const claims = events.flatMap((event) =>
+    isRecord(event) && Array.isArray(event.annotations)
+      ? event.annotations
+      : [],
+  );
+  const questions = Array.isArray(value.questions) ? value.questions : [];
+  const relations = Array.isArray(value.relations) ? value.relations : [];
+  const derivedCount = claims.length + questions.length + relations.length;
   return (
     <section className="v2-readable-group">
       <Typography.Text className="v2-readable-group-title" strong>
@@ -1009,7 +1256,7 @@ function KnownEventsGroup({
                 {events.map((event, index) => (
                   <div className="v2-readable-list-item" key={index}>
                     <KnownEventHeader event={event} index={index} />
-                    <ReadableValue value={event} />
+                    <ReadableValue value={sourceKnownEvent(event)} />
                   </div>
                 ))}
               </div>
@@ -1017,12 +1264,38 @@ function KnownEventsGroup({
               <Empty description="当前动作没有已知事件" />
             ),
             key: "known-events-details",
-            label: `查看动作前已知事件（${events.length} 个）`,
+            label: `查看模型实际可见的源事件（${events.length} 个）`,
+          },
+          {
+            children: derivedCount ? (
+              <div className="v2-readable-groups">
+                <ReadableGroup label={`声明（${claims.length}）`} value={claims} />
+                <ReadableGroup
+                  label={`提问（${questions.length}）`}
+                  value={questions}
+                />
+                <ReadableGroup
+                  label={`回应关系（${relations.length}）`}
+                  value={relations}
+                />
+              </div>
+            ) : (
+              <Empty description="当前模型上下文没有通过校验的派生索引" />
+            ),
+            key: "known-events-derived-index",
+            label: `查看通过校验的派生索引（${derivedCount} 项）`,
           },
         ]}
         size="small"
       />
     </section>
+  );
+}
+
+function sourceKnownEvent(event: unknown) {
+  if (!isRecord(event)) return event;
+  return Object.fromEntries(
+    Object.entries(event).filter(([key]) => key !== "annotations"),
   );
 }
 
@@ -1074,80 +1347,6 @@ function ReadableGroup({
       </Typography.Text>
       <ReadableValue value={value} />
     </section>
-  );
-}
-
-function PublicTimelineGroup({
-  value,
-}: {
-  value: Record<string, unknown>;
-}) {
-  const summary = summarizePublicTimeline(null, value);
-  const events = Array.isArray(value.events) ? value.events : [];
-  return (
-    <section className="v2-readable-group">
-      <Typography.Text className="v2-readable-group-title" strong>
-        统一公开时间线
-      </Typography.Text>
-      <Collapse
-        items={[
-          {
-            children: (
-              <>
-                {value.source_rules === undefined ? null : (
-                  <ReadableGroup
-                    label={fieldLabel("source_rules")}
-                    value={value.source_rules}
-                  />
-                )}
-                {events.length ? (
-                  <div className="v2-readable-list">
-                    {events.map((event, index) => (
-                      <div className="v2-readable-list-item" key={index}>
-                        <TimelineEventHeader event={event} index={index} />
-                        <ReadableValue value={event} />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty description="没有公开时间线事件" />
-                )}
-              </>
-            ),
-            key: "public-timeline-details",
-            label: `查看统一公开时间线详情（${summary?.eventCount ?? 0} 个事件）`,
-          },
-        ]}
-        size="small"
-      />
-    </section>
-  );
-}
-
-function TimelineEventHeader({
-  event,
-  index,
-}: {
-  event: unknown;
-  index: number;
-}) {
-  if (!isRecord(event)) {
-    return <Typography.Text type="secondary">{index + 1}</Typography.Text>;
-  }
-  const recordSeq = integerNumber(event.record_seq);
-  const kind = typeof event.kind === "string" ? event.kind : null;
-  const authority =
-    typeof event.authority === "string" ? event.authority : null;
-  return (
-    <Space size={6} wrap>
-      <Tag>{recordSeq === null ? `事件 ${index + 1}` : `#${recordSeq}`}</Tag>
-      {kind ? <Tag color="blue">{timelineKindLabel(kind)}</Tag> : null}
-      {authority ? (
-        <Typography.Text type="secondary">
-          {valueLabels[authority] ?? authority}
-        </Typography.Text>
-      ) : null}
-    </Space>
   );
 }
 
@@ -1217,18 +1416,6 @@ function ReadableValue({
   return displayScalar(value, fieldKey);
 }
 
-function publicTimelineFromMessages(
-  messages: RequestMessage[],
-): Record<string, unknown> | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const structured = parseStructuredPrompt(messages[index].text);
-    if (structured && isRecord(structured.value.public_timeline)) {
-      return structured.value.public_timeline;
-    }
-  }
-  return null;
-}
-
 function knownEventsFromMessages(
   messages: RequestMessage[],
 ): Record<string, unknown> | null {
@@ -1250,9 +1437,8 @@ function summarizeKnownEvents(
     projection !== null &&
     [
       "known_events_schema_version",
-      "known_event_count",
-      "known_event_total_count",
-      "dropped_event_count",
+      "source_event_count",
+      "emitted_event_count",
       "known_event_record_seq_min",
       "known_event_record_seq_max",
     ].some((key) => projection[key] !== undefined);
@@ -1265,16 +1451,8 @@ function summarizeKnownEvents(
     return sequence === null ? [] : [sequence];
   });
   const selectedCount =
-    numericField(projection, "known_event_count") ?? events?.length ?? 0;
-  const totalCount =
-    numericField(projection, "known_event_total_count") ?? selectedCount;
+    numericField(projection, "emitted_event_count") ?? events?.length ?? 0;
   return {
-    budgetChars: numericField(projection, "selection_budget_chars"),
-    budgetExceededByRequired:
-      projection?.selection_budget_exceeded_by_required === true,
-    droppedCount:
-      numericField(projection, "dropped_event_count") ??
-      Math.max(0, totalCount - selectedCount),
     recordSeqMax:
       numericField(projection, "known_event_record_seq_max") ??
       (sequences.length ? Math.max(...sequences) : null),
@@ -1285,83 +1463,7 @@ function summarizeKnownEvents(
       numericField(projection, "known_events_schema_version") ??
       integerNumber(value?.schema_version),
     selectedCount,
-    totalCount,
-    usedChars: numericField(projection, "selection_used_chars"),
   };
-}
-
-function summarizePublicTimeline(
-  projection: V2PromptProjection | null,
-  value: Record<string, unknown> | null,
-): PublicTimelineSummary | null {
-  const events = value && Array.isArray(value.events) ? value.events : null;
-  const metadataPresent =
-    projection !== null &&
-    [
-      "public_timeline_schema_version",
-      "public_timeline_event_count",
-      "public_timeline_record_seq_min",
-      "public_timeline_record_seq_max",
-      "public_timeline_missing_record_seq_count",
-      "public_timeline_kind_counts",
-    ].some((key) => projection[key] !== undefined);
-  if (!events && !metadataPresent) return null;
-
-  const eventRecords = (events ?? []).filter(isRecord);
-  const recordSeqs = eventRecords.flatMap((event) => {
-    const recordSeq = integerNumber(event.record_seq);
-    return recordSeq === null ? [] : [recordSeq];
-  });
-  const fallbackKindCounts = eventRecords.reduce<Record<string, number>>(
-    (counts, event) => {
-      if (typeof event.kind === "string" && event.kind) {
-        counts[event.kind] = (counts[event.kind] ?? 0) + 1;
-      }
-      return counts;
-    },
-    {},
-  );
-  const metadataKindCounts = numericRecordField(
-    projection,
-    "public_timeline_kind_counts",
-  );
-
-  return {
-    eventCount:
-      numericField(projection, "public_timeline_event_count") ??
-      events?.length ??
-      0,
-    kindCounts: metadataKindCounts ?? fallbackKindCounts,
-    missingRecordSeqCount:
-      numericField(
-        projection,
-        "public_timeline_missing_record_seq_count",
-      ) ??
-      eventRecords.length - recordSeqs.length,
-    recordSeqMax:
-      numericField(projection, "public_timeline_record_seq_max") ??
-      (recordSeqs.length ? Math.max(...recordSeqs) : null),
-    recordSeqMin:
-      numericField(projection, "public_timeline_record_seq_min") ??
-      (recordSeqs.length ? Math.min(...recordSeqs) : null),
-    schemaVersion:
-      numericField(projection, "public_timeline_schema_version") ??
-      integerNumber(value?.schema_version),
-  };
-}
-
-function numericRecordField(
-  value: Record<string, unknown> | null,
-  key: string,
-): Record<string, number> | null {
-  const candidate = value?.[key];
-  if (!isRecord(candidate)) return null;
-  return Object.fromEntries(
-    Object.entries(candidate).flatMap(([kind, count]) => {
-      const numericCount = integerNumber(count);
-      return numericCount === null ? [] : [[kind, numericCount]];
-    }),
-  );
 }
 
 function integerNumber(value: unknown): number | null {
@@ -1377,28 +1479,6 @@ function recordSeqRange(summary: {
     return `#${summary.recordSeqMin}`;
   }
   return `#${summary.recordSeqMin} – #${summary.recordSeqMax}`;
-}
-
-function TimelineKindCounts({
-  counts,
-}: {
-  counts: Record<string, number>;
-}) {
-  const entries = Object.entries(counts).sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  if (!entries.length) {
-    return <Typography.Text type="secondary">无</Typography.Text>;
-  }
-  return (
-    <Space size={[6, 6]} wrap>
-      {entries.map(([kind, count]) => (
-        <Tag key={kind}>
-          {timelineKindLabel(kind)} × {count}
-        </Tag>
-      ))}
-    </Space>
-  );
 }
 
 function timelineKindLabel(kind: string) {

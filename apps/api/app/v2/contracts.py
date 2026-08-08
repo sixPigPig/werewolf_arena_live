@@ -571,6 +571,13 @@ class AdminV2VoiceAssetResponse(BaseModel):
     completed_at: datetime | None
 
 
+class AdminV2OutputEnforcementResponse(BaseModel):
+    requested: str | None
+    actual: str | None
+    schema_name: str | None
+    schema_version: int | None
+
+
 class AdminV2ModelRequestSummaryResponse(BaseModel):
     attempt_id: str
     attempt_no: int
@@ -606,6 +613,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     prompt_template_version: int | None
     model_view_selector_version: int | None
     prompt_projection: dict[str, Any] | None
+    output_enforcement: AdminV2OutputEnforcementResponse | None
     status: Literal["running", "succeeded", "failed"]
     input_source: Literal["persisted", "reconstructed", "unavailable"]
     passive_observation_count: int
@@ -617,6 +625,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     failure_code: str | None
     failure_category: str | None
     repair_kind: str | None
+    application_validation_result: Literal["accepted", "rejected"] | None
     retryable: bool | None
     terminal: bool | None
     failure_stage: str | None

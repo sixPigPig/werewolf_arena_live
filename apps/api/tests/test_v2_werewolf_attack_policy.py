@@ -15,7 +15,7 @@ from app.v2.model_context import (
     build_public_rule_contract,
     project_model_action_context,
 )
-from app.v2.model_context_contract import v9_model_context_contract
+from app.v2.model_context_contract import current_model_context_contract
 from app.v2.night_repository import (
     V2ActivationRef,
     V2NightPlayer,
@@ -90,7 +90,7 @@ def _state(
     )
 
 
-def _v9_werewolf_attack_ability(
+def _v11_werewolf_attack_ability(
     policy: dict[str, Any],
     *,
     living_teammates: list[str] | None = None,
@@ -104,7 +104,7 @@ def _v9_werewolf_attack_ability(
     )
     rule_contract = build_public_rule_contract(
         rule={
-            "id": "wolf-policy-v9",
+            "id": "wolf-policy-v11",
             "version": "1",
             "player_count": 4,
             "roles": [
@@ -115,6 +115,10 @@ def _v9_werewolf_attack_ability(
         },
         max_rounds=8,
     )
+    candidate_ids = ["good-3", "good-4"]
+    if policy["allow_wolf_target"]:
+        candidate_ids.extend(teammate_ids)
+    player_by_id = {player.player_id: player for player in players}
     projected = project_model_action_context(
         {
             "round_no": 2,
@@ -136,23 +140,41 @@ def _v9_werewolf_attack_ability(
             "public_match_state": {
                 "round_no": 2,
                 "alive_player_ids": ["wolf-1", *teammate_ids, "good-3", "good-4"],
+                "eliminated_player_ids": [
+                    player.player_id
+                    for player in players
+                    if player.player_id not in {"wolf-1", *teammate_ids, "good-3", "good-4"}
+                ],
+                "sheriff_badge_state": "unassigned",
             },
+            "public_office_capabilities": {"is_current_sheriff": False},
             "public_rule_contract": rule_contract,
+            "candidates": [
+                {
+                    "player_id": player_id,
+                    "seat": player_by_id[player_id].seat,
+                    "display_name": player_by_id[player_id].display_name,
+                }
+                for player_id in candidate_ids
+            ],
             "public_history": [],
             "output_contract": {
                 "kind": "target",
-                "target_policy": {"mode": "optional" if policy["allow_no_attack"] else "required"},
+                "target_policy": {
+                    "mode": "optional" if policy["allow_no_attack"] else "required",
+                    "allowed_target_ids": candidate_ids,
+                },
                 "speech": {"mode": "forbidden"},
             },
         },
         players=players,
-        model_context_contract=v9_model_context_contract(),
+        model_context_contract=current_model_context_contract(),
         action_record_seq=50,
     )
     return projected["rules"]["current_ability"]
 
 
-def test_v9_derives_unambiguous_semantics_for_all_werewolf_attack_strategies() -> None:
+def test_v11_derives_unambiguous_semantics_for_all_werewolf_attack_strategies() -> None:
     expected = {
         "unanimous_no_attack": {
             "strategy": "unanimity_required",
@@ -170,7 +192,7 @@ def test_v9_derives_unambiguous_semantics_for_all_werewolf_attack_strategies() -
         },
     }
     for resolution, team_resolution in expected.items():
-        ability = _v9_werewolf_attack_ability(
+        ability = _v11_werewolf_attack_ability(
             {
                 "resolution": resolution,
                 "allow_no_attack": False,
@@ -185,8 +207,8 @@ def test_v9_derives_unambiguous_semantics_for_all_werewolf_attack_strategies() -
         }
 
 
-def test_v9_werewolf_attack_single_living_actor_and_optional_ballot_are_explicit() -> None:
-    ability = _v9_werewolf_attack_ability(
+def test_v11_werewolf_attack_single_living_actor_and_optional_ballot_are_explicit() -> None:
+    ability = _v11_werewolf_attack_ability(
         {
             "resolution": "plurality_seeded_random",
             "allow_no_attack": True,

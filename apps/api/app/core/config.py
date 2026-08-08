@@ -148,6 +148,9 @@ class Settings(BaseSettings):
     live_v2_agent_plan_max_in_flight: int = Field(default=3, ge=1, le=64)
     live_v2_ark_max_in_flight: int = Field(default=3, ge=1, le=1024)
     live_v2_deepseek_max_in_flight: int = Field(default=32, ge=1, le=2500)
+    live_v2_agent_plan_supports_strict_json_schema: bool = False
+    live_v2_ark_supports_strict_json_schema: bool = False
+    live_v2_deepseek_supports_strict_json_schema: bool = False
     live_v2_model_first_token_seconds: float = Field(default=120.0, ge=0.1, le=600.0)
     live_v2_model_stream_idle_seconds: float = Field(default=90.0, ge=0.1, le=600.0)
     live_v2_model_attempt_total_seconds: float = Field(

@@ -13,6 +13,7 @@ import type {
   V2ModelRequestAudienceSource,
   V2ModelRequestPage,
   V2ModelRequestSummary,
+  V2OutputEnforcementAudit,
   V2PlayerIdentity,
   V2PromptProjection,
   V2VoiceAsset,
@@ -244,6 +245,10 @@ export function parseV2ModelRequestSummary(
     record.effective_audience === undefined
       ? audience
       : text(record.effective_audience);
+  const modelContextSchemaVersion =
+    record.model_context_schema_version === undefined
+      ? null
+      : nullableInteger(record.model_context_schema_version, 0);
   const audienceSource: V2ModelRequestAudienceSource =
     record.audience_source === undefined
       ? "legacy_unknown"
@@ -303,10 +308,7 @@ export function parseV2ModelRequestSummary(
       record.prompt_schema_version === undefined
         ? null
         : nullableInteger(record.prompt_schema_version, 0),
-    model_context_schema_version:
-      record.model_context_schema_version === undefined
-        ? null
-        : nullableInteger(record.model_context_schema_version, 0),
+    model_context_schema_version: modelContextSchemaVersion,
     prompt_template_version:
       record.prompt_template_version === undefined
         ? null
@@ -319,7 +321,10 @@ export function parseV2ModelRequestSummary(
       record.prompt_projection === undefined ||
       record.prompt_projection === null
         ? null
-        : parsePromptProjection(record.prompt_projection),
+        : parsePromptProjection(
+            record.prompt_projection,
+            modelContextSchemaVersion,
+          ),
     status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
     input_source: oneOf(
       record.input_source,
@@ -346,6 +351,25 @@ export function parseV2ModelRequestSummary(
     ...(record.repair_kind === undefined
       ? {}
       : { repair_kind: nullableText(record.repair_kind) }),
+    ...(record.output_enforcement === undefined
+      ? {}
+      : {
+          output_enforcement:
+            record.output_enforcement === null
+              ? null
+              : parseOutputEnforcement(record.output_enforcement),
+        }),
+    ...(record.application_validation_result === undefined
+      ? {}
+      : {
+          application_validation_result:
+            record.application_validation_result === null
+              ? null
+              : oneOf(record.application_validation_result, [
+                  "accepted",
+                  "rejected",
+                ] as const),
+        }),
     retryable:
       record.retryable === undefined ? null : nullableBoolean(record.retryable),
     terminal:
@@ -430,23 +454,50 @@ export function parseV2ModelRequestSummary(
   };
 }
 
-function parsePromptProjection(value: unknown): V2PromptProjection {
+function parsePromptProjection(
+  value: unknown,
+  modelContextSchemaVersion: number | null,
+): V2PromptProjection {
   const projection = object(value);
+  if (modelContextSchemaVersion !== 11) return projection;
   for (const key of [
     "model_context_schema_version",
     "prompt_template_version",
     "known_events_schema_version",
+    "ledger_schema_version",
     "model_view_schema_version",
     "model_view_selector_version",
   ]) {
     validateOptionalInteger(projection, key, 0, true);
   }
   for (const key of [
-    "known_event_count",
-    "known_event_total_count",
-    "dropped_event_count",
-    "selection_budget_chars",
-    "selection_used_chars",
+    "serialized_char_count",
+    "ledger_statement_count",
+    "ledger_statement_char_count",
+    "ledger_claim_count",
+    "ledger_question_count",
+    "ledger_relation_count",
+    "source_event_count",
+    "emitted_event_count",
+    "future_filtered_event_count",
+    "source_claim_candidate_count",
+    "emitted_claim_count",
+    "out_of_scope_claim_count",
+    "rejected_claim_count",
+    "source_question_count",
+    "current_scope_question_count",
+    "emitted_question_count",
+    "out_of_scope_question_count",
+    "invalid_question_count",
+    "source_relation_count",
+    "emitted_relation_count",
+    "invalid_relation_count",
+    "budget_dropped_event_count",
+    "none_detected_question_count",
+    "response_detected_question_count",
+    "awaiting_scheduled_turn_question_count",
+    "current_round_statement_count",
+    "current_round_statement_char_count",
   ]) {
     validateOptionalInteger(projection, key, 0);
   }
@@ -456,50 +507,43 @@ function parsePromptProjection(value: unknown): V2PromptProjection {
   ]) {
     validateOptionalInteger(projection, key, 1, true);
   }
-  if (projection.selection_budget_exceeded_by_required !== undefined) {
-    boolean(projection.selection_budget_exceeded_by_required);
-  }
-  for (const key of ["retained_event_refs", "dropped_event_refs"]) {
-    if (projection[key] !== undefined) {
-      array(projection[key]).forEach(text);
+  if (projection.section_char_counts !== undefined) {
+    for (const count of Object.values(object(projection.section_char_counts))) {
+      integer(count, 0);
     }
   }
-  for (const key of ["retention_reasons", "section_char_counts"]) {
-    if (projection[key] !== undefined) object(projection[key]);
-  }
-  validateOptionalInteger(
-    projection,
-    "public_timeline_schema_version",
-    1,
-    true,
-  );
-  validateOptionalInteger(
-    projection,
-    "public_timeline_event_count",
-    0,
-  );
-  validateOptionalInteger(
-    projection,
-    "public_timeline_record_seq_min",
-    1,
-    true,
-  );
-  validateOptionalInteger(
-    projection,
-    "public_timeline_record_seq_max",
-    1,
-    true,
-  );
-  validateOptionalInteger(
-    projection,
-    "public_timeline_missing_record_seq_count",
-    0,
-  );
-  if (projection.public_timeline_kind_counts !== undefined) {
-    const counts = object(projection.public_timeline_kind_counts);
-    for (const count of Object.values(counts)) integer(count, 0);
+  if (projection.derivation_rejections !== undefined) {
+    for (const rejectionValue of array(projection.derivation_rejections)) {
+      const rejection = object(rejectionValue);
+      text(rejection.source_event_ref);
+      text(rejection.kind);
+      text(rejection.reason);
+      if (rejection.missing_fields !== undefined) {
+        array(rejection.missing_fields).forEach(text);
+      }
+    }
   }
   return projection;
+}
+
+function parseOutputEnforcement(value: unknown): V2OutputEnforcementAudit {
+  const enforcement = object(value);
+  return {
+    requested:
+      enforcement.requested === undefined
+        ? null
+        : nullableText(enforcement.requested),
+    actual:
+      enforcement.actual === undefined ? null : nullableText(enforcement.actual),
+    schema_name:
+      enforcement.schema_name === undefined
+        ? null
+        : nullableText(enforcement.schema_name),
+    schema_version:
+      enforcement.schema_version === undefined
+        ? null
+        : nullableInteger(enforcement.schema_version, 1),
+  };
 }
 
 function validateOptionalInteger(

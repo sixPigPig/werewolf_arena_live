@@ -75,6 +75,8 @@ def player_private_knowledge(
             {
                 "knowledge_fact_id": row.knowledge_fact_id,
                 "source_activation_id": row.source_activation_id,
+                "owner_scope": row.owner_scope,
+                "owner_id": row.owner_id,
                 "fact_type": row.fact_type,
                 "payload": payload,
                 **(

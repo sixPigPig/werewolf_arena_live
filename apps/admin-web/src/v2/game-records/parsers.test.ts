@@ -378,6 +378,103 @@ describe("V2 game record parsers", () => {
     });
   });
 
+  it("parses V11 projection rejections and output enforcement without inference", () => {
+    const request = parseV2ModelRequest({
+      attempt_id: "v2_model_v11",
+      action_id: "v2_action_v11",
+      run_id: item.current_run_id,
+      phase_id: "day_3",
+      action_type: "exile_vote",
+      actor_kind: "player",
+      actor_id: "seat_12",
+      audience: "seat_12",
+      request_kind: "decision",
+      model_id: "glm-5-2-260617",
+      model_provider: "openai_compatible",
+      judge_configuration_version: null,
+      prompt_schema_version: 11,
+      model_context_schema_version: 11,
+      prompt_template_version: 3,
+      model_view_selector_version: 2,
+      prompt_projection: {
+        model_context_schema_version: 11,
+        prompt_template_version: 3,
+        known_events_schema_version: 5,
+        ledger_schema_version: 5,
+        model_view_schema_version: 5,
+        model_view_selector_version: 2,
+        source_event_count: 52,
+        emitted_event_count: 52,
+        future_filtered_event_count: 0,
+        source_claim_candidate_count: 4,
+        emitted_claim_count: 3,
+        out_of_scope_claim_count: 0,
+        rejected_claim_count: 1,
+        source_question_count: 9,
+        current_scope_question_count: 9,
+        emitted_question_count: 9,
+        out_of_scope_question_count: 0,
+        invalid_question_count: 0,
+        source_relation_count: 6,
+        emitted_relation_count: 6,
+        invalid_relation_count: 0,
+        budget_dropped_event_count: 0,
+        derivation_rejections: [
+          {
+            source_event_ref: "402",
+            kind: "investigation_claim",
+            reason: "missing_required_fields",
+            missing_fields: ["target_ref", "claimed_result"],
+          },
+        ],
+      },
+      output_enforcement: {
+        requested: "strict_json_schema",
+        actual: "prompt_and_application_validation",
+        schema_name: "v2_action_decision",
+        schema_version: 1,
+      },
+      application_validation_result: "accepted",
+      repair_kind: null,
+      status: "succeeded",
+      input_source: "persisted",
+      output_source: "persisted",
+      request_payload: { model: "glm-5-2-260617" },
+      raw_response: '{"target_player_id":"seat_5"}',
+      parsed_output: { target_player_id: "seat_5" },
+      passive_observations: [],
+      provider_request_id: "provider-v11",
+      first_token_ms: 123,
+      completed_ms: 456,
+      failure_kind: null,
+      failure_code: null,
+      started_at: item.created_at,
+      completed_at: item.updated_at,
+    });
+
+    expect(request.prompt_projection).toMatchObject({
+      ledger_schema_version: 5,
+      emitted_event_count: 52,
+      rejected_claim_count: 1,
+      derivation_rejections: [
+        {
+          source_event_ref: "402",
+          kind: "investigation_claim",
+          reason: "missing_required_fields",
+          missing_fields: ["target_ref", "claimed_result"],
+        },
+      ],
+    });
+    expect(request.output_enforcement).toEqual({
+      requested: "strict_json_schema",
+      actual: "prompt_and_application_validation",
+      schema_name: "v2_action_decision",
+      schema_version: 1,
+    });
+    expect(request.application_validation_result).toBe("accepted");
+    expect(request.repair_kind).toBeNull();
+  });
+
   it("parses an idempotent V2 stop result", () => {
     expect(
       parseV2GameControlResult({

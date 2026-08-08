@@ -380,6 +380,187 @@ const detail = {
   ],
 };
 
+const v11Detail = {
+  ...detail,
+  title: "V11 上下文审计验收",
+  model_requests: [
+    {
+      ...detail.model_requests[0],
+      prompt_schema_version: 11,
+      model_context_schema_version: 11,
+      prompt_template_version: 3,
+      model_view_selector_version: 2,
+      prompt_projection: {
+        model_context_schema_version: 11,
+        prompt_template_version: 3,
+        known_events_schema_version: 5,
+        ledger_schema_version: 5,
+        model_view_schema_version: 5,
+        model_view_selector_version: 2,
+        serialized_char_count: 1840,
+        source_event_count: 2,
+        emitted_event_count: 2,
+        future_filtered_event_count: 0,
+        source_claim_candidate_count: 2,
+        emitted_claim_count: 1,
+        out_of_scope_claim_count: 0,
+        rejected_claim_count: 1,
+        source_question_count: 1,
+        current_scope_question_count: 1,
+        emitted_question_count: 1,
+        out_of_scope_question_count: 0,
+        invalid_question_count: 0,
+        source_relation_count: 1,
+        emitted_relation_count: 1,
+        invalid_relation_count: 0,
+        budget_dropped_event_count: 0,
+        derivation_rejections: [
+          {
+            source_event_ref: "402",
+            kind: "investigation_claim",
+            reason: "missing_required_fields",
+            missing_fields: ["target_ref", "claimed_result"],
+          },
+        ],
+      },
+      output_enforcement: {
+        requested: "strict_json_schema",
+        actual: "prompt_and_application_validation",
+        schema_name: null,
+        schema_version: null,
+      },
+      application_validation_result: "accepted",
+      repair_kind: null,
+      request_payload: {
+        model: "glm-5-2-260617",
+        stream: true,
+        max_output_tokens: 256,
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "派生项仅是启发式索引；冲突时以原始 speech 为准。",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `请执行这个实时动作：${JSON.stringify({
+                  model_context_schema_version: 11,
+                  prompt_template_version: 3,
+                  task: {
+                    type: "exile_vote",
+                    goal: "选择一名合法候选人。",
+                    at_seq: 1467,
+                    phase_id: "day_3",
+                    round_no: 3,
+                  },
+                  state: {
+                    as_of_seq: 1467,
+                    current_round_no: 3,
+                    current_period: "day",
+                  },
+                  known_events: {
+                    schema_version: 5,
+                    events: [
+                      {
+                        event_ref: "1403",
+                        record_seq: 1403,
+                        known_at_seq: 1403,
+                        kind: "player_statement",
+                        authority: "player_claim_unverified",
+                        visibility: "public",
+                        speaker_ref: "seat_12",
+                        speech: "12号原始发言：7号你解释一下昨天为什么投5号。",
+                        annotations: [
+                          {
+                            claim_id: "claim_1403_1_team_claim",
+                            claim_type: "team_claim",
+                            authority: "player_claim_unverified",
+                            sentence_index: 1,
+                            claimed_team: "villagers",
+                            derivation: {
+                              kind: "deterministic_heuristic",
+                              validator_version: 1,
+                              validation_status: "complete",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        event_ref: "1442",
+                        record_seq: 1442,
+                        known_at_seq: 1442,
+                        kind: "player_statement",
+                        authority: "player_claim_unverified",
+                        visibility: "public",
+                        speaker_ref: "seat_7",
+                        speech: "7号回应：我昨天认为5号的复盘更差。",
+                      },
+                    ],
+                    questions: [
+                      {
+                        question_id: "question_1403_7",
+                        source_event_ref: "1403",
+                        source_authority: "player_claim_unverified",
+                        asked_by: "seat_12",
+                        addressed_to: "seat_7",
+                        address_resolution: "resolved",
+                        asked_at_seq: 1403,
+                        topic: "vote_reason",
+                        response_status: "response_detected",
+                        derivation: {
+                          kind: "deterministic_heuristic",
+                          validator_version: 1,
+                          validation_status: "complete",
+                        },
+                      },
+                    ],
+                    relations: [
+                      {
+                        relation_id: "relation_1442_question_1403_7",
+                        type: "response_to_question",
+                        from_event_ref: "1442",
+                        to_question_id: "question_1403_7",
+                        temporal_order_valid: true,
+                        derivation: {
+                          kind: "deterministic_heuristic",
+                          validator_version: 1,
+                          validation_status: "complete",
+                        },
+                      },
+                    ],
+                  },
+                  candidates: [
+                    { player_id: "seat_5", seat: 5, display_name: "5号" },
+                  ],
+                  response: {
+                    kind: "target",
+                    target_policy: { mode: "required" },
+                    decision_note: { mode: "optional", max_chars: 80 },
+                  },
+                })}`,
+              },
+            ],
+          },
+        ],
+      },
+      raw_response:
+        '{"target_player_id":"seat_5","decision_note":"复盘不足。"}',
+      parsed_output: {
+        target_player_id: "seat_5",
+        decision_note: "复盘不足。",
+      },
+      passive_observations: [],
+    },
+  ],
+};
+
 const privateInformationDetail = {
   ...detail,
   title: "私有信息归属验收",
@@ -1099,52 +1280,13 @@ describe("V2 game record detail workspace", () => {
       JSON.stringify(detail.model_requests[0].request_payload, null, 2),
     );
     expect(
-      within(inputPanel).getByText("你是狼人杀法官，只输出一句开场词。"),
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
-    expect(
-      within(inputPanel).getByText("欢迎玩家并宣布对局开始"),
-    ).toBeVisible();
-    expect(within(inputPanel).getByText("对局配置")).toBeVisible();
-    expect(within(inputPanel).getByText("九人标准局")).toBeVisible();
-    expect(within(inputPanel).getAllByText("公开发言")).not.toHaveLength(0);
-    expect(within(inputPanel).getByText("V6")).toBeVisible();
-    expect(within(inputPanel).getByText("3,210")).toBeVisible();
-    expect(within(inputPanel).getByText("发言账本")).toBeVisible();
-    expect(within(inputPanel).getByText("V2")).toBeVisible();
-    expect(within(inputPanel).getByText("模型视图")).toBeVisible();
-    expect(within(inputPanel).getAllByText("V1")).not.toHaveLength(0);
-    expect(within(inputPanel).getByText("完整公开发言")).toBeVisible();
-    expect(within(inputPanel).getByText("发言截断")).toBeVisible();
-    expect(within(inputPanel).getByText("0（无截断）")).toBeVisible();
-    expect(within(inputPanel).getByText("本轮完整发言")).toBeVisible();
-    expect(within(inputPanel).getByText("结构化声明")).toBeVisible();
-    expect(within(inputPanel).getByText("未回答提问")).toBeVisible();
-    expect(
-      within(inputPanel).getAllByText("统一公开时间线"),
-    ).not.toHaveLength(0);
-    expect(within(inputPanel).getByText("3 个事件")).toBeVisible();
-    expect(within(inputPanel).getByText("#448 – #564")).toBeVisible();
-    expect(within(inputPanel).getByText("玩家发言 × 1")).toBeVisible();
-    expect(within(inputPanel).getByText("白天投票 × 2")).toBeVisible();
-    expect(within(inputPanel).getByText("0（完整）")).toBeVisible();
-    await user.click(
-      within(inputPanel).getByText(
-        "查看统一公开时间线详情（3 个事件）",
-      ),
+    const historicalInput = within(inputPanel).getByLabelText(
+      "历史模型输入原始 JSON",
     );
-    await waitFor(() =>
-      expect(within(inputPanel).getByText("#448")).toBeVisible(),
-    );
-    expect(within(inputPanel).getByText("#562")).toBeVisible();
-    expect(within(inputPanel).getByText("#564")).toBeVisible();
-    expect(
-      within(inputPanel).getByText("警徽流：今晚验2号，明晚验5号。"),
-    ).toBeVisible();
-    expect(within(inputPanel).getAllByText("seat_7")).toHaveLength(2);
-    expect(within(inputPanel).getByText("发言账本")).toBeVisible();
-    expect(
-      within(inputPanel).queryByText(/"schema_version"/),
-    ).not.toBeInTheDocument();
+    expect(historicalInput).toHaveTextContent("九人标准局");
+    expect(historicalInput).toHaveTextContent("public_timeline");
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
@@ -1157,23 +1299,27 @@ describe("V2 game record detail workspace", () => {
     expect(await navigator.clipboard.readText()).toBe(
       JSON.stringify(
         {
-          raw_response: detail.model_requests[0].raw_response,
+          application_validation_result: null,
+          output_enforcement: null,
+          output_source: "persisted",
           parsed_output: detail.model_requests[0].parsed_output,
+          passive_observations:
+            detail.model_requests[0].passive_observations,
+          raw_response: detail.model_requests[0].raw_response,
+          repair_kind: null,
         },
         null,
         2,
       ),
     );
     expect(
-      within(outputPanel).getByText("旁路观察（未影响对局，1 项）"),
+      within(outputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
-    expect(
-      within(outputPanel).getByText(/不会触发重试、改写、拦截或替换/),
-    ).toBeVisible();
-    expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
-    expect(
-      within(outputPanel).getByText("夜幕将至，九位玩家请准备。"),
-    ).toBeVisible();
+    const historicalOutput = within(outputPanel).getByLabelText(
+      "历史模型输出原始 JSON",
+    );
+    expect(historicalOutput).toHaveTextContent("raw_response");
+    expect(historicalOutput).toHaveTextContent("夜幕将至");
     expect(
       fetchMock.mock.calls.some(([input]) =>
         String(input).includes("/model-requests/v2_model_attempt_1"),
@@ -1340,7 +1486,164 @@ describe("V2 game record detail workspace", () => {
     );
   });
 
-  it("derives public timeline evidence from persisted input for older summaries", async () => {
+  it("separates V11 source events, derived indexes, rejections and output enforcement", async () => {
+    stubRecordFetch(v11Detail);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "V11 上下文审计验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    const audit = within(inputPanel).getByRole("region", {
+      name: "V11 上下文投影审计",
+    });
+
+    expect(within(audit).getByText("审计字段完整")).toBeVisible();
+    expect(within(audit).getByText("源 2")).toBeVisible();
+    expect(within(audit).getAllByText("可见 2")).not.toHaveLength(0);
+    expect(within(audit).getByText("候选 2")).toBeVisible();
+    expect(within(audit).getByText("拒绝 1")).toBeVisible();
+    expect(within(audit).getByText("容量 0")).toBeVisible();
+    await user.click(
+      within(audit).getByRole("button", {
+        name: /查看被拒绝的派生项（1 项）/,
+      }),
+    );
+    await waitFor(() => expect(within(audit).getByText("402")).toBeVisible());
+    expect(within(audit).getByText("验人声明")).toBeVisible();
+    expect(within(audit).getByText("missing_required_fields")).toBeVisible();
+    expect(within(audit).getByText("target_ref")).toBeVisible();
+    expect(within(audit).getByText("claimed_result")).toBeVisible();
+
+    await user.click(
+      within(inputPanel).getByRole("button", {
+        name: /查看模型实际可见的源事件（2 个）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(inputPanel).getByText(
+          "12号原始发言：7号你解释一下昨天为什么投5号。",
+        ),
+      ).toBeVisible(),
+    );
+    await user.click(
+      within(inputPanel).getByRole("button", {
+        name: /查看通过校验的派生索引（3 项）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(within(inputPanel).getByText("阵营声明")).toBeVisible(),
+    );
+    expect(within(inputPanel).getByText("检测到回应")).toBeVisible();
+    expect(within(inputPanel).getByText("对提问的回应")).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "模型输出" }));
+    const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    const enforcement = within(outputPanel).getByRole("region", {
+      name: "Provider 输出约束审计",
+    });
+    expect(within(enforcement).getByText("严格 JSON Schema")).toBeVisible();
+    expect(
+      within(enforcement).getByText("提示词 + 应用层校验"),
+    ).toBeVisible();
+    expect(
+      within(enforcement).getByText("未使用 Provider 严格 Schema"),
+    ).toBeVisible();
+    expect(within(enforcement).getByText("无机械修复")).toBeVisible();
+    expect(within(enforcement).getByText("已接受")).toBeVisible();
+    expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
+    expect(within(outputPanel).getByText("seat_5")).toBeVisible();
+  });
+
+  it("shows missing V11 audit fields as unknown instead of guessing", async () => {
+    stubRecordFetch({
+      ...v11Detail,
+      title: "V11 缺失审计字段验收",
+      model_requests: [
+        {
+          ...v11Detail.model_requests[0],
+          prompt_projection: {
+            model_context_schema_version: 11,
+            prompt_template_version: 3,
+            known_events_schema_version: 5,
+            ledger_schema_version: 5,
+            model_view_schema_version: 5,
+            model_view_selector_version: 2,
+          },
+          output_enforcement: undefined,
+          application_validation_result: undefined,
+          repair_kind: undefined,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "V11 缺失审计字段验收",
+      }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    expect(
+      within(inputPanel).getByText("V11 投影审计信息缺失"),
+    ).toBeVisible();
+    expect(within(inputPanel).getAllByText(/未知/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: "模型输出" }));
+    const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    expect(within(outputPanel).getByText("输出审计信息不完整")).toBeVisible();
+    expect(within(outputPanel).getAllByText(/未知/).length).toBeGreaterThan(0);
+  });
+
+  it("does not present a rejected V11 response as the adopted result", async () => {
+    stubRecordFetch({
+      ...v11Detail,
+      title: "V11 输出拒绝验收",
+      model_requests: [
+        {
+          ...v11Detail.model_requests[0],
+          application_validation_result: "rejected",
+          parsed_output: null,
+          raw_response: '{"target_player_id":"seat_99"}',
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "V11 输出拒绝验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输出" }));
+    const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+
+    expect(within(outputPanel).getByText("已拒绝")).toBeVisible();
+    expect(
+      within(outputPanel).getByText(
+        "应用层校验已拒绝该输出，没有最终采用结果",
+      ),
+    ).toBeVisible();
+    expect(
+      within(outputPanel).queryByText("程序采用结果"),
+    ).not.toBeInTheDocument();
+    expect(within(outputPanel).getByText("查看模型原始返回")).toBeVisible();
+  });
+
+  it("renders historical persisted input as generic raw JSON", async () => {
     stubRecordFetch({
       ...detail,
       title: "统一时间线兼容验收",
@@ -1367,13 +1670,16 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
 
-    expect(within(inputPanel).getByText("3 个事件")).toBeVisible();
-    expect(within(inputPanel).getByText("#448 – #564")).toBeVisible();
-    expect(within(inputPanel).getByText("玩家发言 × 1")).toBeVisible();
-    expect(within(inputPanel).getByText("白天投票 × 2")).toBeVisible();
+    expect(
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
+    ).toBeVisible();
+    const rawInput = within(inputPanel).getByLabelText("历史模型输入原始 JSON");
+    expect(rawInput).toHaveTextContent("public_timeline");
+    expect(rawInput).toHaveTextContent("player_statement");
+    expect(within(inputPanel).queryByText("3 个事件")).not.toBeInTheDocument();
   });
 
-  it("shows V8 known-event chronology and selector audit", async () => {
+  it("shows a V8 request only through generic raw JSON", async () => {
     const knownEvents = {
       events: [
         {
@@ -1475,21 +1781,15 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
 
-    expect(within(inputPanel).getByText("已选 2 / 完整 5")).toBeVisible();
-    expect(within(inputPanel).getByText("未送入模型 3")).toBeVisible();
-    expect(within(inputPanel).getByText("#258 – #472")).toBeVisible();
-    expect(within(inputPanel).getByText("680 / 8,000 字符")).toBeVisible();
-    await user.click(
-      within(inputPanel).getByRole("button", {
-        name: /查看动作前已知事件（2 个）/,
-      }),
-    );
-    await waitFor(() =>
-      expect(
-        within(inputPanel).getByText("在警上发言前已经决定查验6号。"),
-      ).toBeVisible(),
-    );
-    expect(within(inputPanel).getAllByText("仅当前玩家可见")).toHaveLength(2);
+    expect(
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
+    ).toBeVisible();
+    const rawInput = within(inputPanel).getByLabelText("历史模型输入原始 JSON");
+    expect(rawInput).toHaveTextContent("model_context_schema_version");
+    expect(rawInput).toHaveTextContent("knowledge-seer-night-1");
+    expect(
+      within(inputPanel).queryByText("已选 2 / 完整 5"),
+    ).not.toBeInTheDocument();
   });
 
   it("clears detail and on-demand query cache after leaving the route", async () => {
@@ -1516,7 +1816,7 @@ describe("V2 game record detail workspace", () => {
     );
   });
 
-  it("renders Chat Completions messages as readable model input", async () => {
+  it("renders an old Chat Completions request as generic raw JSON", async () => {
     stubRecordFetch(deepSeekDetail);
     const user = userEvent.setup();
     renderPage();
@@ -1530,23 +1830,15 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
 
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
-    expect(within(inputPanel).getByText("deepseek-v4-flash")).toBeVisible();
-    expect(within(inputPanel).getByText("16384")).toBeVisible();
     expect(
-      within(inputPanel).getByText(
-        "你正在扮演一名狼人杀玩家，只能根据已提供的信息行动。",
-      ),
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
+    const rawInput = within(inputPanel).getByLabelText("历史模型输入原始 JSON");
+    expect(rawInput).toHaveTextContent("deepseek-v4-flash");
+    expect(rawInput).toHaveTextContent("16384");
+    expect(rawInput).toHaveTextContent("seat_4");
     expect(
-      within(inputPanel).getByText(
-        "选择本轮狼人团队建议袭击的一名非狼人存活玩家",
-      ),
-    ).toBeVisible();
-    expect(within(inputPanel).getByText("可选目标")).toBeVisible();
-    expect(within(inputPanel).getByText("seat_4")).toBeVisible();
-    expect(within(inputPanel).queryByText("请求参数")).not.toBeInTheDocument();
-    expect(
-      within(inputPanel).queryByText(/"schema_version"/),
+      within(inputPanel).queryByText("可选目标"),
     ).not.toBeInTheDocument();
   });
 

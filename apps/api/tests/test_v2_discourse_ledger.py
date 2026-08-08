@@ -1,7 +1,18 @@
 from __future__ import annotations
 
-from app.v2.discourse_ledger import build_public_discourse_ledger
+from copy import deepcopy
+
+import pytest
+
+from app.v2.discourse_ledger import (
+    build_public_discourse_ledger,
+    validate_claim_candidate,
+)
 from app.v2.discourse_model_view import build_discourse_model_view
+from app.v2.model_context_contract import (
+    DISCOURSE_LEDGER_SCHEMA_VERSION,
+    DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+)
 
 
 def _statement(
@@ -9,8 +20,8 @@ def _statement(
     *,
     speaker_ref: str,
     speech: str,
-    round_no: int = 1,
-    stage: str = "sheriff_campaign_speech",
+    round_no: int = 3,
+    stage: str = "day_debate_speech",
 ) -> dict[str, object]:
     return {
         "source_event_id": str(source_event_id),
@@ -22,1350 +33,541 @@ def _statement(
     }
 
 
-def _game_vote_reason_statements() -> list[dict[str, object]]:
-    return [
-        _statement(
-            1226,
-            speaker_ref="seat_8",
-            stage="day_debate_speech",
-            speech="10号，你当时为什么急着归12不归11？",
-        ),
-        _statement(
-            1248,
-            speaker_ref="seat_3",
-            stage="day_debate_speech",
-            speech=(
-                "1号在警徽流里要验，5号警徽票投1扎眼，10号我等会听你解释为什么急着归12不压一轮。"
-            ),
-        ),
-        _statement(
-            1259,
-            speaker_ref="seat_2",
-            stage="day_debate_speech",
-            speech="10号你等会必须解释为什么急着归12、不多压一轮。",
-        ),
-        _statement(
-            1270,
-            speaker_ref="seat_1",
-            stage="day_debate_speech",
-            speech="先回3号：9号警徽流留我，是因为没验过、想后置位补信息，不是查杀。",
-        ),
-        _statement(
-            1281,
-            speaker_ref="seat_10",
-            stage="day_debate_speech",
-            speech=(
-                "我先把话说明白。昨天归12，是根据当时信息判断："
-                "11、12发言几乎同模板，12又急着抗推5号，我作为警长必须给方向。"
-            ),
-        ),
-    ]
-
-
-def test_ledger_keeps_prior_plan_separate_from_later_open_question() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                389,
-                speaker_ref="seat_8",
-                speech=(
-                    "8号玩家上警竞选警长，我跳预言家。"
-                    "昨晚首验6号，法官给我的结果是好人。"
-                    "警徽流我先留一个方向：今晚我会优先验警上发言里最拧巴的牌。"
-                    "具体等大家发完言我再锁定。"
-                ),
-            ),
-            _statement(
-                406,
-                speaker_ref="seat_9",
-                speech="8号你今晚第一验锁谁，你现在能不能给我一个明确方向？",
-            ),
-            _statement(
-                423,
-                speaker_ref="seat_10",
-                speech=("9号问你的问题，你确实没有给明确方向，只说优先验警上最拧巴的牌。"),
-            ),
-        ],
-        current_round_no=1,
-        actor_ref="seat_9",
+def _ledger(
+    *statements: dict[str, object],
+    current_round_no: int = 3,
+    **kwargs: object,
+) -> dict[str, object]:
+    return build_public_discourse_ledger(
+        statements,
+        current_round_no=current_round_no,
+        **kwargs,
     )
 
-    assert [item["record_seq"] for item in ledger["statements"]] == [389, 406, 423]
-    future_plans = [
-        claim for claim in ledger["claims"] if claim["claim_type"] == "future_investigation_plan"
-    ]
-    assert [(claim["speaker_ref"], claim["uttered_record_seq"]) for claim in future_plans] == [
-        ("seat_8", 389)
-    ]
-    assert future_plans[0]["exact_quote"] == (
-        "警徽流我先留一个方向：今晚我会优先验警上发言里最拧巴的牌。"
-    )
-    assert ledger["questions"] == [
-        {
-            "question_id": "question_406_1",
-            "source_event_id": "406",
-            "source_sentence_id": "sentence_406_1",
-            "sentence_index": 1,
-            "asked_turn_index": 2,
-            "asked_by": "seat_9",
-            "addressed_to": "seat_8",
-            "asked_in": {"period": "day", "round_no": 1},
-            "stage": "sheriff_campaign_speech",
-            "topic": "future_investigation_target",
-            "exact_quote": "8号你今晚第一验锁谁，你现在能不能给我一个明确方向？",
-            "status": "open",
-            "confirmation_status": "speaker_asked_publicly",
-            "asked_record_seq": 406,
-        }
-    ]
-    assert ledger["relations"] == []
-    paraphrase = next(
-        claim for claim in ledger["claims"] if claim["claim_type"] == "secondary_paraphrase"
-    )
-    assert paraphrase["source_event_id"] == "423"
-    assert paraphrase["source_kind"] == "secondary_unverified_paraphrase"
-    assert paraphrase["asserted_relation_type"] == "reported_response"
-    assert paraphrase["temporal_relation_status"] == "unverified"
 
-
-def test_model_view_distinguishes_prior_explanation_from_awaiting_reply_turn() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                437,
-                speaker_ref="seat_5",
-                speech=(
-                    "5号是真预言家，第一晚首验1号没什么特殊心路，就是随便选的。"
-                    "警徽流先留8号排警下坑，再留警上的9号多攒信息。"
-                ),
-            ),
-            _statement(
-                471,
-                speaker_ref="seat_9",
-                speech="5号你首验为什么选1号？5号你警徽流为什么留9号？",
-            ),
-            _statement(
-                771,
-                speaker_ref="seat_9",
-                stage="day_debate_speech",
-                speech="5号到现在一个字都没解释。",
-            ),
-        ],
-        current_round_no=1,
-        actor_ref="seat_8",
-    )
-
-    model_view, metadata = build_discourse_model_view(
+def _view(
+    ledger: dict[str, object],
+    *,
+    actor_ref: str = "seat_12",
+    task: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    return build_discourse_model_view(
         ledger,
-        actor_ref="seat_8",
-        task={
-            "action_type": "day_debate_speech",
-            "speech_order": [
-                "seat_4",
-                "seat_3",
-                "seat_2",
-                "seat_1",
-                "seat_12",
-                "seat_11",
-                "seat_10",
-                "seat_9",
-                "seat_8",
-                "seat_7",
-                "seat_6",
-                "seat_5",
-            ],
-        },
+        actor_ref=actor_ref,
+        task=task or {"type": "exile_vote"},
         candidate_refs=[],
         latest_vote_result_ref=None,
     )
 
-    open_questions = [
-        question for question in model_view["questions"] if question["status"] == "open"
-    ]
-    assert len(open_questions) == 2
-    assert {question["topic"] for question in open_questions} == {
-        "investigation_reason",
-        "sheriff_plan",
-    }
-    assert all(
-        question["status_semantics"] == "no_response_after_question" for question in open_questions
-    )
-    assert all(
-        question["reply_opportunity"] == "awaiting_scheduled_turn" for question in open_questions
-    )
-    assert all(question["prior_relevant_statement_refs"] == ["437"] for question in open_questions)
-    assert model_view["focus"]["first_party_relevant_statement_refs"] == ["437"]
-    assert {
-        context["reply_opportunity"] for context in model_view["focus"]["open_question_contexts"]
-    } == {"awaiting_scheduled_turn"}
-    assert metadata["awaiting_scheduled_turn_question_count"] == 2
-    assert metadata["prior_relevant_statement_question_count"] == 2
-    assert "不表示被提问者此前从未解释" in model_view["source_rules"]["open_question_rule"]
-    assert "不得描述成拒绝回应" in model_view["source_rules"]["turn_opportunity_rule"]
 
+def test_v5_only_schema_versions_fail_closed() -> None:
+    statement = _statement(100, speaker_ref="seat_1", speech="我底牌是好人。")
 
-def test_ledger_does_not_reuse_seat_8_for_seat_6_self_or_table_questions() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                448,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech=(
-                    "8号大概率会跳预言家或者跳女巫来搅浑水，你们要心里有数。"
-                    "我为什么要这个警徽？"
-                    "因为我手握查杀，必须有1.5票的归票权确保8号今天出局。"
-                    "后续如果有人对跳预言家，你们看他给的是什么结果——"
-                    "如果他也说查杀8号，那就是蹭我的力度；"
-                    "如果他给的是金水或者查杀别人，那就是狼人悍跳。"
-                ),
-            )
-        ],
-        current_round_no=1,
-        actor_ref="seat_8",
-    )
-
-    assert [
-        (question["exact_quote"], question["addressed_to"], question["status"])
-        for question in ledger["questions"]
-    ] == [
-        ("我为什么要这个警徽？", None, "unresolved_target"),
-        (
-            "后续如果有人对跳预言家，你们看他给的是什么结果——"
-            "如果他也说查杀8号，那就是蹭我的力度；"
-            "如果他给的是金水或者查杀别人，那就是狼人悍跳。",
-            None,
-            "unresolved_target",
-        ),
-    ]
-
-
-def test_ledger_reuses_explicit_addressee_only_for_singular_you_continuation() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                449,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech=(
-                    "8号先别回避。"
-                    "你今晚具体验谁？"
-                    "我为什么要相信你？"
-                    "大家该怎么看？"
-                    "你们觉得呢？"
-                    "如果有人对跳怎么办？"
-                ),
-            )
-        ],
-        current_round_no=1,
-        actor_ref="seat_8",
-    )
-
-    assert [
-        (question["exact_quote"], question["addressed_to"], question["status"])
-        for question in ledger["questions"]
-    ] == [
-        ("你今晚具体验谁？", "seat_8", "open"),
-        ("我为什么要相信你？", None, "unresolved_target"),
-        ("大家该怎么看？", None, "unresolved_target"),
-        ("你们觉得呢？", None, "unresolved_target"),
-        ("如果有人对跳怎么办？", None, "unresolved_target"),
-    ]
-
-
-def test_ledger_v3_uses_nearest_question_target_without_changing_frozen_v2() -> None:
-    statement = _statement(
-        326,
-        speaker_ref="seat_8",
-        speech=(
-            "1号聊得挺稳，说要盯带节奏；6号嘛，说预言家聊不清警徽就替好人接住，"
-            "但我想问一句，你凭什么替好人接？你有判断狼人的专属渠道吗？"
-        ),
-    )
-
-    frozen_v2 = build_public_discourse_ledger(
-        [statement],
-        current_round_no=1,
-        ledger_schema_version=2,
-    )
-    current_v3 = build_public_discourse_ledger(
-        [statement],
-        current_round_no=1,
-        ledger_schema_version=3,
-    )
-
-    assert [question["addressed_to"] for question in frozen_v2["questions"]] == [
-        "seat_1",
-        "seat_1",
-    ]
-    assert [question["addressed_to"] for question in current_v3["questions"]] == [
-        "seat_6",
-        "seat_6",
-    ]
-    assert [question["exact_quote"] for question in current_v3["questions"]] == [
-        "1号聊得挺稳，说要盯带节奏；6号嘛，说预言家聊不清警徽就替好人接住，"
-        "但我想问一句，你凭什么替好人接？",
-        "你有判断狼人的专属渠道吗？",
-    ]
-
-
-def test_ledger_v3_resolves_game_vote_reason_questions_only_with_target_answer() -> None:
-    ledger = build_public_discourse_ledger(
-        _game_vote_reason_statements(),
-        current_round_no=1,
-        ledger_schema_version=3,
-    )
-
-    assert [question["question_id"] for question in ledger["questions"]] == [
-        "question_1226_1",
-        "question_1248_1",
-        "question_1259_1",
-    ]
-    assert {
-        (
-            question["addressed_to"],
-            question["topic"],
-            question["status"],
-            question.get("answer_source_event_id"),
+    with pytest.raises(ValueError, match="unsupported_discourse_ledger_schema_version"):
+        build_public_discourse_ledger(
+            [statement],
+            current_round_no=3,
+            ledger_schema_version=DISCOURSE_LEDGER_SCHEMA_VERSION - 1,
         )
-        for question in ledger["questions"]
-    } == {("seat_10", "vote_reason", "answered", "1281")}
-    assert len(ledger["relations"]) == 3
-    assert {relation["from_source_event_id"] for relation in ledger["relations"]} == {"1281"}
-    assert all(relation["from_source_event_id"] != "1270" for relation in ledger["relations"])
+
+    ledger = _ledger(statement)
+    with pytest.raises(ValueError, match="unsupported_discourse_model_view_schema_version"):
+        build_discourse_model_view(
+            ledger,
+            actor_ref="seat_12",
+            task={"type": "exile_vote"},
+            candidate_refs=[],
+            latest_vote_result_ref=None,
+            model_view_schema_version=DISCOURSE_MODEL_VIEW_SCHEMA_VERSION - 1,
+        )
 
 
-def test_ledger_v4_projects_prior_investigation_report_without_backdating_answer() -> None:
-    statements = [
+def test_conditional_topic_player_is_not_question_addressee() -> None:
+    ledger = _ledger(
+        _statement(
+            1403,
+            speaker_ref="seat_12",
+            speech="如果8是狼，7号和9号在保谁？",
+        )
+    )
+
+    assert ledger["questions"] == [
+        {
+            "question_id": "question_1403_1",
+            "source_event_ref": "1403",
+            "source_authority": "player_claim_unverified",
+            "source_sentence_id": "sentence_1403_1",
+            "sentence_index": 1,
+            "asked_turn_index": 1,
+            "asked_by": "seat_12",
+            "asked_in": {"period": "day", "round_no": 3},
+            "stage": "day_debate_speech",
+            "topic": "general",
+            "exact_quote": "如果8是狼，7号和9号在保谁？",
+            "response_status": "none_detected",
+            "address_resolution": "unresolved",
+            "asked_at_seq": 1403,
+            "derivation": {
+                "kind": "deterministic_heuristic",
+                "validator_version": 1,
+                "validation_status": "complete",
+            },
+        }
+    ]
+    assert "addressed_to" not in ledger["questions"][0]
+
+
+def test_leading_conditional_topic_is_not_reused_as_addressee() -> None:
+    ledger = _ledger(
+        _statement(
+            1403,
+            speaker_ref="seat_12",
+            speech="8号如果是狼，7号和9号在保谁？你们怎么判断？",
+        )
+    )
+
+    assert [question["address_resolution"] for question in ledger["questions"]] == [
+        "unresolved",
+        "unresolved",
+    ]
+    assert all("addressed_to" not in question for question in ledger["questions"])
+
+
+def test_explicit_direct_address_resolves_only_the_grammatical_target() -> None:
+    ledger = _ledger(
+        _statement(
+            1403,
+            speaker_ref="seat_12",
+            speech=("8号和9号的票型都要盘。7号你接了警徽，今天先解释昨天为什么投5不投8。"),
+        )
+    )
+
+    assert len(ledger["questions"]) == 1
+    question = ledger["questions"][0]
+    assert question["addressed_to"] == "seat_7"
+    assert question["address_resolution"] == "resolved"
+    assert question["topic"] == "vote_reason"
+
+
+def test_explicit_address_can_resolve_a_stable_singular_continuation() -> None:
+    ledger = _ledger(
+        _statement(
+            1404,
+            speaker_ref="seat_12",
+            speech="8号先别回避。你今晚具体验谁？",
+        )
+    )
+
+    assert len(ledger["questions"]) == 1
+    assert ledger["questions"][0]["addressed_to"] == "seat_8"
+    assert ledger["questions"][0]["address_resolution"] == "resolved"
+
+
+def test_reported_question_does_not_create_address_or_relation() -> None:
+    ledger = _ledger(
+        _statement(
+            1416,
+            speaker_ref="seat_11",
+            speech="8号问我为什么投5，我已经解释过。",
+        ),
+        _statement(
+            1429,
+            speaker_ref="seat_8",
+            speech="我投5是因为他的复盘最差。",
+        ),
+    )
+
+    assert ledger["questions"] == []
+    assert ledger["relations"] == []
+
+
+def test_reported_question_does_not_seed_a_later_singular_addressee() -> None:
+    ledger = _ledger(
+        _statement(
+            1416,
+            speaker_ref="seat_11",
+            speech="8号问我为什么投5。你觉得这个票型怎么盘？",
+        )
+    )
+
+    assert len(ledger["questions"]) == 1
+    assert ledger["questions"][0]["address_resolution"] == "unresolved"
+    assert "addressed_to" not in ledger["questions"][0]
+
+
+def test_good_alignment_is_team_claim_not_role_claim() -> None:
+    ledger = _ledger(_statement(403, speaker_ref="seat_11", speech="我底牌是好人。"))
+
+    assert [(claim["claim_type"], claim.get("claimed_team")) for claim in ledger["claims"]] == [
+        ("team_claim", "villagers")
+    ]
+    assert all(claim.get("claimed_role") != "good" for claim in ledger["claims"])
+    assert ledger["claims"][0]["authority"] == "player_claim_unverified"
+    assert ledger["claims"][0]["derivation"]["validation_status"] == "complete"
+
+
+def test_concrete_role_claim_remains_role_claim() -> None:
+    ledger = _ledger(_statement(404, speaker_ref="seat_6", speech="我是真预言家。"))
+
+    assert [(claim["claim_type"], claim.get("claimed_role")) for claim in ledger["claims"]] == [
+        ("role_claim", "seer")
+    ]
+
+
+def test_incomplete_investigation_claim_is_rejected_without_hiding_raw_speech() -> None:
+    ledger = _ledger(
+        _statement(
+            402,
+            speaker_ref="seat_10",
+            speech="我是真预言家，昨晚我验了，结果稍后再说。",
+            round_no=1,
+        ),
+        current_round_no=1,
+    )
+
+    assert [claim["claim_type"] for claim in ledger["claims"]] == ["role_claim"]
+    assert ledger["statements"][0]["speech"] == "我是真预言家，昨晚我验了，结果稍后再说。"
+    assert ledger["derivation_rejections"] == [
+        {
+            "source_event_ref": "402",
+            "kind": "investigation_claim",
+            "reason": "missing_required_fields",
+            "missing_fields": ["target_ref", "claimed_result"],
+        }
+    ]
+    assert ledger["derivation_metadata"] == {
+        "source_claim_candidate_count": 2,
+        "emitted_claim_count": 1,
+        "rejected_claim_count": 1,
+    }
+
+
+def test_complete_investigation_claim_has_all_required_fields() -> None:
+    ledger = _ledger(
         _statement(
             460,
             speaker_ref="seat_5",
-            speech="5号预言家，首夜验了1号，是狼人查杀。警徽流暂时不想死留。",
+            speech="我是预言家，首夜验了1号，是狼人查杀。",
+            round_no=1,
+        ),
+        current_round_no=1,
+    )
+
+    investigation = next(
+        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
+    )
+    assert investigation["claimed_action_in"] == {"period": "night", "round_no": 1}
+    assert investigation["target_ref"] == "seat_1"
+    assert investigation["claimed_result"] == "werewolves"
+    assert investigation["derivation"] == {
+        "kind": "deterministic_heuristic",
+        "validator_version": 1,
+        "validation_status": "complete",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("claimed_role", "unknown_role", "unknown_role_key"),
+        ("claimed_team", "unknown_team", "unknown_team_key"),
+        ("target_ref", "seat_9", "unknown_player_ref"),
+    ],
+)
+def test_claim_validator_rejects_values_outside_frozen_enums(
+    field: str,
+    value: str,
+    reason: str,
+) -> None:
+    claim_type = (
+        "role_claim"
+        if field == "claimed_role"
+        else "team_claim"
+        if field == "claimed_team"
+        else "vote_stance"
+    )
+    candidate = {
+        "claim_id": f"claim_100_1_{claim_type}",
+        "claim_type": claim_type,
+        "source_event_ref": "100",
+        "sentence_index": 1,
+        "exact_quote": "原句",
+        field: value,
+    }
+    if claim_type == "vote_stance":
+        candidate["stance"] = "support_vote"
+
+    validated, rejection = validate_claim_candidate(
+        candidate,
+        source_statement={"source_event_id": "100", "speech": "原句"},
+        role_keys=["seer"],
+        team_keys=["villagers", "werewolves"],
+        player_refs=["seat_1", "seat_2"],
+        current_night_no=3,
+    )
+
+    assert validated is None
+    assert rejection == {
+        "source_event_ref": "100",
+        "kind": claim_type,
+        "reason": reason,
+    }
+
+
+def test_one_later_statement_can_respond_to_multiple_questions() -> None:
+    ledger = _ledger(
+        _statement(
+            1350,
+            speaker_ref="seat_3",
+            speech="今天7号接警徽，我想听你怎么盘4号这一刀——狼队为什么选择刀4号？",
+        ),
+        _statement(
+            1364,
+            speaker_ref="seat_5",
+            speech="7号你昨天为什么投5不投8？",
+        ),
+        _statement(
+            1403,
+            speaker_ref="seat_12",
+            speech="7号请解释昨天投5的理由。",
+        ),
+        _statement(
+            1442,
+            speaker_ref="seat_7",
+            speech=("刀4号的收益是拿走警徽位并制造怀疑。我昨天投5没投8，是因为5号的复盘最差。"),
+        ),
+    )
+
+    assert {question["response_status"] for question in ledger["questions"]} == {
+        "response_detected"
+    }
+    assert len(ledger["relations"]) == 3
+    assert {relation["from_event_ref"] for relation in ledger["relations"]} == {"1442"}
+    assert {relation["type"] for relation in ledger["relations"]} == {"response_to_question"}
+    assert all(relation["temporal_order_valid"] is True for relation in ledger["relations"])
+
+
+def test_one_question_can_retain_multiple_later_responses() -> None:
+    ledger = _ledger(
+        _statement(
+            1403,
+            speaker_ref="seat_12",
+            speech="7号你昨天为什么投5不投8？",
+        ),
+        _statement(
+            1420,
+            speaker_ref="seat_7",
+            speech="我投5是因为他复盘最差。",
+        ),
+        _statement(
+            1442,
+            speaker_ref="seat_7",
+            speech="再解释一次，我投5是根据他的站边和发言判断。",
+        ),
+    )
+
+    assert ledger["questions"][0]["response_status"] == "response_detected"
+    assert [relation["from_event_ref"] for relation in ledger["relations"]] == [
+        "1420",
+        "1442",
+    ]
+
+
+def test_prior_statement_is_coverage_not_a_response_to_later_question() -> None:
+    ledger = _ledger(
+        _statement(
+            460,
+            speaker_ref="seat_5",
+            speech="我是预言家，首夜验了1号，是狼人查杀。",
+            round_no=1,
         ),
         _statement(
             732,
             speaker_ref="seat_8",
-            stage="day_debate_speech",
-            speech="现在天亮了，5号昨晚验了谁、什么结果，该报了吧？",
+            speech="5号昨晚验了谁、什么结果？",
+            round_no=1,
         ),
-    ]
-
-    ledger = build_public_discourse_ledger(
-        statements,
         current_round_no=1,
-        ledger_schema_version=4,
     )
 
-    assert len(ledger["questions"]) == 1
-    question = ledger["questions"][0]
-    assert question["addressed_to"] == "seat_5"
-    assert question["address_resolution"] == "resolved"
-    assert question["topic"] == "past_investigation_result"
-    assert question["status"] == "open"
-    assert "answer_source_event_id" not in question
+    assert ledger["questions"][0]["response_status"] == "none_detected"
     assert ledger["relations"] == []
-
-    model_view, metadata = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={
-            "action_type": "day_debate_speech",
-            "speech_order": ["seat_8", "seat_7", "seat_6", "seat_5"],
-        },
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=4,
-    )
-
-    projected = model_view["questions"][0]
-    assert projected["status"] == "open"
-    assert projected["prior_relevant_statement_refs"] == ["460"]
-    assert projected["prior_coverage"] == "already_publicly_reported"
-    assert metadata["prior_coverage_question_count"] == 1
-    assert "此前报告不是对后来问题的回答" in model_view["source_rules"][
-        "prior_coverage_rule"
-    ]
-
-    frozen_view, frozen_metadata = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=3,
-    )
-    assert "address_resolution" not in frozen_view["questions"][0]
-    assert "prior_coverage" not in frozen_view["questions"][0]
-    assert "prior_coverage_rule" not in frozen_view["source_rules"]
-    assert "prior_coverage_question_count" not in frozen_metadata
-
-
-def test_ledger_v4_keeps_v3_question_shape_and_semantics_frozen() -> None:
-    statement = _statement(
-        732,
-        speaker_ref="seat_8",
-        stage="day_debate_speech",
-        speech="现在天亮了，5号昨晚验了谁、什么结果，该报了吧？",
-    )
-
-    frozen_v3 = build_public_discourse_ledger(
-        [statement],
-        current_round_no=1,
-        ledger_schema_version=3,
-    )
-    current_v4 = build_public_discourse_ledger(
-        [statement],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert frozen_v3["questions"][0]["addressed_to"] is None
-    assert frozen_v3["questions"][0]["topic"] == "future_investigation_target"
-    assert frozen_v3["questions"][0]["status"] == "unresolved_target"
-    assert "address_resolution" not in frozen_v3["questions"][0]
-    assert "question_address_rule" not in frozen_v3["source_rules"]
-    assert current_v4["questions"][0]["addressed_to"] == "seat_5"
-    assert current_v4["questions"][0]["topic"] == "past_investigation_result"
-    assert current_v4["questions"][0]["status"] == "open"
-    assert current_v4["questions"][0]["address_resolution"] == "resolved"
-    assert "address_resolution 单独表示" in current_v4["source_rules"][
-        "question_address_rule"
-    ]
-
-
-def test_ledger_v4_separates_question_status_from_address_resolution() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                733,
-                speaker_ref="seat_8",
-                stage="day_debate_speech",
-                speech="大家觉得昨晚验了谁、结果是什么？",
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    question = ledger["questions"][0]
-    assert question["status"] == "open"
-    assert question["addressed_to"] is None
-    assert question["address_resolution"] == "unresolved"
-
-
-def test_ledger_v4_splits_semicolon_enumeration_into_distinct_question_topics() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                770,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech=(
-                    "5号我问你两点：第一，报一下昨晚验了谁、什么结果；"
-                    "第二，警徽流怎么留？"
-                ),
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert [question["topic"] for question in ledger["questions"]] == [
-        "past_investigation_result",
-        "sheriff_plan",
-    ]
-    assert [question["addressed_to"] for question in ledger["questions"]] == [
-        "seat_5",
-        "seat_5",
-    ]
-    assert all(
-        question["address_resolution"] == "resolved" for question in ledger["questions"]
-    )
-
-
-def test_ledger_v4_splits_multiple_chinese_enumerated_issues_without_semicolon() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                771,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech=(
-                    "5号我问你两点：第一，报一下昨晚验了谁、什么结果，"
-                    "第二，今晚准备验谁，第三，警徽流怎么留？"
-                ),
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert [question["topic"] for question in ledger["questions"]] == [
-        "past_investigation_result",
-        "future_investigation_plan",
-        "sheriff_plan",
-    ]
-    assert all(question["addressed_to"] == "seat_5" for question in ledger["questions"])
-
-
-def test_ledger_v4_does_not_treat_bare_interrogative_word_as_a_question() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                772,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech="我现在还不知道谁是狼，5号也不知道谁是狼，继续听后面的发言。",
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert ledger["questions"] == []
-
-
-def test_ledger_v4_does_not_treat_future_first_check_as_past_result() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                773,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech="5号你今晚首验谁？",
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert ledger["questions"][0]["topic"] == "future_investigation_plan"
-
-
-def test_ledger_v4_keeps_past_investigation_reason_distinct_from_result() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                774,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech="5号你首夜为什么验1号？",
-            )
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert ledger["questions"][0]["topic"] == "investigation_reason"
-
-
-def test_ledger_never_promotes_attributed_reports_to_current_speaker_claims() -> None:
-    statements = [
-        _statement(
-            800,
-            speaker_ref="seat_8",
-            speech="5号说我是预言家。",
-        ),
-        _statement(
-            801,
-            speaker_ref="seat_8",
-            speech="5号说今晚我会验9号。",
-        ),
-        _statement(
-            802,
-            speaker_ref="seat_8",
-            speech="我是预言家。昨晚5号验1号查杀，我不认。",
-        ),
-    ]
-
-    ledger = build_public_discourse_ledger(
-        statements,
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-    claims_by_source = {
-        source_id: [
-            claim for claim in ledger["claims"] if claim["source_event_id"] == source_id
-        ]
-        for source_id in ("800", "801", "802")
-    }
-
-    assert {claim["claim_type"] for claim in claims_by_source["800"]} == {
-        "secondary_paraphrase"
-    }
-    assert {claim["claim_type"] for claim in claims_by_source["801"]} == {
-        "secondary_paraphrase"
-    }
-    assert {claim["claim_type"] for claim in claims_by_source["802"]} == {
-        "role_claim",
-        "secondary_paraphrase",
-        "player_assessment",
-    }
-    assert all(
-        claim["claim_type"] != "investigation_claim" for claim in claims_by_source["802"]
-    )
-
-
-def test_ledger_v2_preserves_legacy_claim_projection_for_frozen_v7() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(800, speaker_ref="seat_8", speech="5号说我是预言家。"),
-            _statement(801, speaker_ref="seat_8", speech="5号说今晚我会验9号。"),
-            _statement(
-                802,
-                speaker_ref="seat_8",
-                speech="我是预言家。昨晚5号验1号查杀，我不认。",
-            ),
-            _statement(803, speaker_ref="seat_8", speech="今晚我不会验9号。"),
-        ],
-        current_round_no=1,
-        ledger_schema_version=2,
-    )
-
-    claims_by_source = {
-        source_id: [
-            claim["claim_type"]
-            for claim in ledger["claims"]
-            if claim["source_event_id"] == source_id
-        ]
-        for source_id in ("800", "801", "802", "803")
-    }
-    assert claims_by_source == {
-        "800": ["secondary_paraphrase", "role_claim"],
-        "801": ["secondary_paraphrase", "future_investigation_plan"],
-        "802": ["role_claim", "investigation_claim", "player_assessment"],
-        "803": ["future_investigation_plan"],
-    }
-    model_view, _ = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=2,
-    )
-    assert [
-        [annotation["claim_type"] for annotation in statement["annotations"]]
-        for statement in model_view["timeline"]
-    ] == list(claims_by_source.values())
-
-
-def test_ledger_omits_hypothetical_and_negated_first_party_claims() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(810, speaker_ref="seat_8", speech="如果我是预言家，我会先听发言。"),
-            _statement(811, speaker_ref="seat_8", speech="别说我是预言家，这话不成立。"),
-            _statement(812, speaker_ref="seat_8", speech="如果今晚我验9号，只是假设。"),
-            _statement(813, speaker_ref="seat_8", speech="今晚我不会验9号。"),
-            _statement(814, speaker_ref="seat_8", speech="今晚我没打算验9号。"),
-            _statement(815, speaker_ref="seat_8", speech="今晚我不要验9号。"),
-            _statement(
-                816,
-                speaker_ref="seat_8",
-                speech="我是预言家。昨晚我没有验9号。",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    claims_by_source = {
-        source_id: [
-            claim for claim in ledger["claims"] if claim["source_event_id"] == source_id
-        ]
-        for source_id in {str(value) for value in range(810, 817)}
-    }
-    assert all(
-        claim["claim_type"] != "role_claim"
-        for source_id in ("810", "811")
-        for claim in claims_by_source[source_id]
-    )
-    assert all(
-        claim["claim_type"] != "future_investigation_plan"
-        for source_id in ("812", "813", "814", "815")
-        for claim in claims_by_source[source_id]
-    )
-    assert all(
-        claim["claim_type"] != "investigation_claim"
-        for claim in claims_by_source["816"]
-    )
-
-
-def test_ledger_uses_final_non_negated_investigation_result() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                820,
-                speaker_ref="seat_5",
-                speech="我是预言家，昨晚验1号，不是狼人，是好人。",
-            ),
-            _statement(
-                821,
-                speaker_ref="seat_5",
-                speech="我是预言家，昨晚验2号，不是查杀，是金水。",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    investigations = [
-        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
-    ]
-    assert [(claim["target_ref"], claim["claimed_result"]) for claim in investigations] == [
-        ("seat_1", "villagers"),
-        ("seat_2", "villagers"),
-    ]
-
-
-def test_ledger_v4_treats_completed_investigation_wording_as_past_report() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(830, speaker_ref="seat_6", speech="5号你验了谁？"),
-            _statement(831, speaker_ref="seat_6", speech="5号你验人结果是什么？"),
-            _statement(832, speaker_ref="seat_6", speech="5号你首验谁？"),
-            _statement(833, speaker_ref="seat_6", speech="5号你今晚首验谁？"),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert [question["topic"] for question in ledger["questions"]] == [
-        "past_investigation_result",
-        "past_investigation_result",
-        "past_investigation_result",
-        "future_investigation_plan",
-    ]
-
-
-def test_model_view_prior_coverage_requires_first_party_investigation_claim() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                840,
-                speaker_ref="seat_5",
-                speech="我是预言家，昨晚我没有验1号。",
-            ),
-            _statement(
-                841,
-                speaker_ref="seat_8",
-                stage="day_debate_speech",
-                speech="5号你昨晚验了谁、什么结果？",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    model_view, metadata = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=4,
-    )
-
+    model_view, metadata = _view(ledger, actor_ref="seat_8")
     question = model_view["questions"][0]
-    assert "prior_relevant_statement_refs" not in question
-    assert "prior_coverage" not in question
-    assert metadata["prior_coverage_question_count"] == 0
+    assert question["prior_relevant_statement_refs"] == ["460"]
+    assert question["prior_coverage"] == "already_publicly_reported"
+    assert metadata["prior_coverage_question_count"] == 1
 
 
-def test_ledger_v4_rejects_quoted_and_generic_role_attribution() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(850, speaker_ref="seat_8", speech="按5号原话，我是预言家。"),
-            _statement(851, speaker_ref="seat_8", speech="引用5号：我是预言家。"),
-            _statement(852, speaker_ref="seat_8", speech="5号的原话是“我是预言家”。"),
-            _statement(853, speaker_ref="seat_8", speech="复述5号：我是预言家。"),
-            _statement(854, speaker_ref="seat_8", speech="有人说我是预言家。"),
-            _statement(855, speaker_ref="seat_8", speech="他说我是预言家。"),
-            _statement(856, speaker_ref="seat_8", speech="别人认为我是预言家。"),
-            _statement(
-                857,
-                speaker_ref="seat_8",
-                speech="我是预言家。昨晚别人验了1号是查杀，我不认。",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    for source_id in {str(value) for value in range(850, 857)}:
-        assert all(
-            claim["claim_type"] != "role_claim"
-            for claim in ledger["claims"]
-            if claim["source_event_id"] == source_id
-        )
-    assert all(
-        claim["claim_type"] != "investigation_claim"
-        for claim in ledger["claims"]
-        if claim["source_event_id"] == "857"
-    )
-    for source_id in ("850", "851", "852", "853"):
-        assert any(
-            claim["claim_type"] == "secondary_paraphrase"
-            for claim in ledger["claims"]
-            if claim["source_event_id"] == source_id
-        )
-
-
-def test_ledger_v4_does_not_confuse_vote_target_with_question_addressee() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(860, speaker_ref="seat_8", speech="我票给5号，为什么他这么狼？"),
-            _statement(861, speaker_ref="seat_8", speech="我给5号投票，理由是什么？"),
-            _statement(862, speaker_ref="seat_8", speech="给5号一个问题：你昨晚验谁？"),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert [question["addressed_to"] for question in ledger["questions"]] == [
-        None,
-        None,
-        "seat_5",
-    ]
-    assert [question["address_resolution"] for question in ledger["questions"]] == [
-        "unresolved",
-        "unresolved",
-        "resolved",
-    ]
-
-
-def test_ledger_v4_limits_investigation_result_to_target_clause() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                870,
-                speaker_ref="seat_5",
-                speech="我是预言家。昨晚验1号金水，2号更像狼人。",
-            ),
-            _statement(
-                871,
-                speaker_ref="seat_5",
-                speech="我是预言家。我昨晚验1号金水，但他发言像狼人。",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    investigations = [
-        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
-    ]
-    assert [claim["target_ref"] for claim in investigations] == ["seat_1", "seat_1"]
-    assert [claim["claimed_result"] for claim in investigations] == [
-        "villagers",
-        "villagers",
-    ]
-
-
-def test_model_view_prior_coverage_matches_requested_fields_and_night() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                880,
-                speaker_ref="seat_5",
-                round_no=1,
-                speech="我是预言家，首夜验1号金水。",
-            ),
-            _statement(
-                881,
-                speaker_ref="seat_5",
-                round_no=2,
-                speech="我是预言家，昨晚验2号查杀。",
-            ),
-            _statement(
-                882,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="5号你首夜验了谁、什么结果？",
-            ),
-            _statement(
-                883,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="5号你昨晚验了谁、什么结果？",
-            ),
-        ],
-        current_round_no=2,
-        ledger_schema_version=4,
-    )
-
-    model_view, _ = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=4,
-    )
-
-    first_night, second_night = model_view["questions"]
-    assert first_night["requested_fields"] == ["target_ref", "claimed_result"]
-    assert first_night["referenced_night_no"] == 1
-    assert first_night["prior_relevant_statement_refs"] == ["880"]
-    assert first_night["prior_coverage"] == "already_publicly_reported"
-    assert second_night["referenced_night_no"] == 2
-    assert second_night["prior_relevant_statement_refs"] == ["881"]
-    assert second_night["prior_coverage"] == "already_publicly_reported"
-
-
-def test_model_view_prior_coverage_does_not_overstate_partial_report() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                890,
-                speaker_ref="seat_5",
-                speech="我是预言家，首夜验了1号。",
-            ),
-            _statement(
-                891,
-                speaker_ref="seat_8",
-                speech="5号你首夜验人结果是什么？",
-            ),
-            _statement(
-                892,
-                speaker_ref="seat_8",
-                speech="5号你首夜验了谁？",
-            ),
-            _statement(
-                893,
-                speaker_ref="seat_8",
-                speech="5号你首夜验了谁、什么结果？",
-            ),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    model_view, _ = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-        model_view_schema_version=4,
-    )
-
-    result_question, target_question, both_question = model_view["questions"]
-    assert result_question["requested_fields"] == ["claimed_result"]
-    assert "prior_coverage" not in result_question
-    assert target_question["requested_fields"] == ["target_ref"]
-    assert target_question["prior_coverage"] == "already_publicly_reported"
-    assert both_question["requested_fields"] == ["target_ref", "claimed_result"]
-    assert "prior_coverage" not in both_question
-
-
-def test_ledger_v4_answer_requires_all_requested_fields_and_matching_night() -> None:
-    question = _statement(
-        900,
-        speaker_ref="seat_8",
-        round_no=2,
-        speech="5号你首夜验了谁、什么结果？",
-    )
-    responses = {
-        "target_only": "我首夜验了1号。",
-        "result_only": "我首夜验人结果是金水。",
-        "wrong_night": "我昨晚验了1号金水。",
-        "complete": "我首夜验了1号金水。",
-    }
-
-    statuses: dict[str, str] = {}
-    for index, (case, speech) in enumerate(responses.items(), start=901):
-        ledger = build_public_discourse_ledger(
-            [
-                question,
-                _statement(
-                    index,
-                    speaker_ref="seat_5",
-                    round_no=2,
-                    speech=speech,
-                ),
-            ],
-            current_round_no=2,
-            ledger_schema_version=4,
-        )
-        statuses[case] = ledger["questions"][0]["status"]
-        if case == "complete":
-            assert len(ledger["relations"]) == 1
-        else:
-            assert ledger["relations"] == []
-
-    assert statuses == {
-        "target_only": "open",
-        "result_only": "open",
-        "wrong_night": "open",
-        "complete": "answered",
-    }
-
-
-def test_ledger_v4_does_not_turn_report_wording_into_an_implicit_question() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(910, speaker_ref="seat_8", speech="5号昨晚验了谁都没说。"),
-            _statement(911, speaker_ref="seat_8", speech="5号昨晚验了谁没有公布。"),
-            _statement(912, speaker_ref="seat_8", speech="5号昨晚验谁不重要。"),
-            _statement(913, speaker_ref="seat_8", speech="5号昨晚验了谁我不知道。"),
-        ],
-        current_round_no=1,
-        ledger_schema_version=4,
-    )
-
-    assert ledger["questions"] == []
-
-
-def test_ledger_v4_treats_first_investigation_as_night_one_in_claim_and_answer() -> None:
-    statements = [
+@pytest.mark.parametrize(
+    ("actor_ref", "target_ref", "expected"),
+    [
+        ("seat_2", "seat_3", "awaiting_scheduled_turn"),
+        ("seat_2", "seat_2", "current_speaker_turn"),
+        ("seat_2", "seat_1", "scheduled_turn_passed"),
+        ("seat_2", "seat_9", "not_in_current_speech_order"),
+    ],
+)
+def test_reply_opportunity_is_only_mechanical_turn_position(
+    actor_ref: str,
+    target_ref: str,
+    expected: str,
+) -> None:
+    target_no = target_ref.removeprefix("seat_")
+    ledger = _ledger(
         _statement(
-            920,
-            speaker_ref="seat_8",
+            100,
+            speaker_ref="seat_12",
+            speech=f"{target_no}号你为什么投5号？",
+        )
+    )
+
+    model_view, _metadata = _view(
+        ledger,
+        actor_ref=actor_ref,
+        task={
+            "type": "day_debate_speech",
+            "speech_order": ["seat_1", "seat_2", "seat_3"],
+        },
+    )
+
+    assert model_view["questions"][0]["reply_opportunity"] == expected
+
+
+def test_private_vote_does_not_project_reply_opportunity() -> None:
+    ledger = _ledger(_statement(100, speaker_ref="seat_12", speech="7号你为什么投5号？"))
+
+    model_view, _metadata = _view(
+        ledger,
+        task={
+            "type": "exile_vote",
+            "speech_order": ["seat_12", "seat_7"],
+        },
+    )
+
+    assert "reply_opportunity" not in model_view["questions"][0]
+
+
+def test_model_view_filters_out_of_scope_questions_and_relations_with_real_counts() -> None:
+    ledger = _ledger(
+        _statement(
+            100,
+            speaker_ref="seat_12",
+            speech="7号你为什么投5号？",
             round_no=2,
-            speech="5号你的首验是谁、什么结果？",
         ),
         _statement(
-            921,
-            speaker_ref="seat_5",
+            110,
+            speaker_ref="seat_7",
+            speech="我投5是因为他的复盘最差。",
             round_no=2,
-            speech="我的首验是1号金水。",
         ),
-    ]
-    ledger = build_public_discourse_ledger(
-        statements,
-        current_round_no=2,
-        ledger_schema_version=4,
+        _statement(
+            200,
+            speaker_ref="seat_12",
+            speech="7号你为什么投8号？",
+            round_no=3,
+        ),
+        current_round_no=3,
     )
 
-    question = ledger["questions"][0]
-    assert question["topic"] == "past_investigation_result"
-    assert question["referenced_night_no"] == 1
-    assert question["requested_fields"] == ["target_ref", "claimed_result"]
-    assert question["status"] == "answered"
-    investigation = next(
-        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
-    )
-    assert investigation["speaker_ref"] == "seat_5"
-    assert investigation["claimed_action_in"] == {"period": "night", "round_no": 1}
-    assert investigation["target_ref"] == "seat_1"
-    assert investigation["claimed_result"] == "villagers"
-    assert len(ledger["relations"]) == 1
+    model_view, metadata = _view(ledger)
 
-    frozen_v3 = build_public_discourse_ledger(
-        statements,
-        current_round_no=2,
-        ledger_schema_version=3,
-    )
-    assert all(
-        claim["claim_type"] != "investigation_claim" for claim in frozen_v3["claims"]
-    )
-    assert "referenced_night_no" not in frozen_v3["questions"][0]
+    assert [question["source_event_ref"] for question in model_view["questions"]] == ["200"]
+    assert model_view["relations"] == []
+    assert metadata["source_question_count"] == 2
+    assert metadata["current_scope_question_count"] == 1
+    assert metadata["emitted_question_count"] == 1
+    assert metadata["out_of_scope_question_count"] == 1
+    assert metadata["source_relation_count"] == 1
+    assert metadata["emitted_relation_count"] == 0
+    assert metadata["out_of_scope_relation_count"] == 1
+    assert metadata["invalid_relation_count"] == 0
 
 
-def test_ledger_v4_treats_plain_first_investigation_as_direct_but_not_attribution() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                930,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="首验1号金水。",
-            ),
-            _statement(
-                931,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="5号首验1号金水。",
-            ),
-            _statement(
-                932,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="按5号原话，首验1号金水。",
-            ),
-        ],
-        current_round_no=2,
-        ledger_schema_version=4,
-    )
-
-    investigations = [
-        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
-    ]
-    assert len(investigations) == 1
-    assert investigations[0]["source_event_id"] == "930"
-    assert investigations[0]["speaker_ref"] == "seat_8"
-    assert investigations[0]["claimed_action_in"] == {"period": "night", "round_no": 1}
-    assert investigations[0]["target_ref"] == "seat_1"
-    assert investigations[0]["claimed_result"] == "villagers"
-    assert any(
-        claim["source_event_id"] == "932"
-        and claim["claim_type"] == "secondary_paraphrase"
-        and claim["reported_speaker_ref"] == "seat_5"
-        for claim in ledger["claims"]
-    )
-
-    frozen_v3 = build_public_discourse_ledger(
-        [_statement(930, speaker_ref="seat_8", round_no=2, speech="首验1号金水。")],
-        current_round_no=2,
-        ledger_schema_version=3,
-    )
-    assert all(
-        claim["claim_type"] != "investigation_claim" for claim in frozen_v3["claims"]
-    )
-
-
-def test_ledger_v2_preserves_frozen_vote_question_projection() -> None:
-    ledger = build_public_discourse_ledger(
-        _game_vote_reason_statements(),
-        current_round_no=1,
-        ledger_schema_version=2,
-    )
-
-    questions = {question["source_event_id"]: question for question in ledger["questions"]}
-    assert questions["1248"]["addressed_to"] == "seat_1"
-    assert questions["1248"]["topic"] == "investigation_reason"
-    assert questions["1248"]["answer_source_event_id"] == "1270"
-
-
-def test_discourse_model_view_treats_day_debate_as_public_speech() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                450,
-                speaker_ref="seat_6",
-                stage="day_debate_speech",
-                speech="6号今天先听大家发言。",
-            )
-        ],
-        current_round_no=1,
-        actor_ref="seat_8",
-    )
-
-    model_view, _ = build_discourse_model_view(
-        ledger,
-        actor_ref="seat_8",
-        task={"action_type": "day_debate_speech"},
-        candidate_refs=[],
-        latest_vote_result_ref=None,
-    )
-
-    assert model_view["focus"]["profile"] == "public_speech"
-
-
-def test_ledger_only_closes_question_with_later_target_speech() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                389,
-                speaker_ref="seat_8",
-                speech="今晚优先验警上发言里最拧巴的牌。",
-            ),
-            _statement(
-                406,
-                speaker_ref="seat_9",
-                speech="8号你今晚具体验谁？",
-            ),
-            _statement(
-                423,
-                speaker_ref="seat_10",
-                speech="9号问过8号具体验谁。",
-            ),
-            _statement(
-                440,
-                speaker_ref="seat_8",
-                speech="回应9号的问题，今晚我会验2号。",
-            ),
-        ],
-        current_round_no=1,
-        actor_ref="seat_9",
-    )
-
-    question = ledger["questions"][0]
-    assert question["status"] == "answered"
-    assert question["asked_record_seq"] == 406
-    assert question["answer_record_seq"] == 440
-    assert ledger["relations"] == [
+def test_model_view_rejects_dangling_claim_and_relation_references() -> None:
+    ledger = _ledger(_statement(100, speaker_ref="seat_12", speech="7号你为什么投5号？"))
+    malformed = deepcopy(ledger)
+    malformed["claims"].append(
         {
-            "relation_id": "relation_440_question_406_1",
-            "relation_type": "answers_question",
-            "from_source_event_id": "440",
-            "from_speaker_ref": "seat_8",
-            "from_turn_index": 4,
-            "to_question_id": "question_406_1",
-            "to_source_event_id": "406",
-            "to_turn_index": 2,
+            "claim_id": "claim_missing_1_role_claim",
+            "claim_type": "role_claim",
+            "source_event_ref": "missing",
+            "claimed_role": "seer",
+            "derivation": {
+                "kind": "deterministic_heuristic",
+                "validator_version": 1,
+                "validation_status": "complete",
+            },
+        }
+    )
+    malformed["relations"].append(
+        {
+            "relation_id": "relation_missing_question_100_1",
+            "type": "response_to_question",
+            "from_event_ref": "missing",
+            "to_question_id": "question_100_1",
             "temporal_order_valid": True,
-            "confirmation_status": "deterministic_speaker_time_and_topic_match",
-            "from_record_seq": 440,
-            "to_record_seq": 406,
+            "derivation": {
+                "kind": "deterministic_heuristic",
+                "validator_version": 1,
+                "validation_status": "complete",
+            },
+        }
+    )
+
+    model_view, metadata = _view(malformed)
+
+    assert model_view["timeline"][0]["annotations"] == []
+    assert model_view["relations"] == []
+    assert metadata["emitted_claim_count"] == 0
+    assert metadata["rejected_claim_count"] == 1
+    assert metadata["invalid_relation_count"] == 1
+    assert {item["kind"] for item in metadata["derivation_rejections"]} == {
+        "claim",
+        "relation",
+    }
+
+
+def test_derivation_metadata_reports_complete_and_rejected_claims() -> None:
+    ledger = _ledger(
+        _statement(100, speaker_ref="seat_1", speech="我底牌是好人。"),
+        _statement(
+            110,
+            speaker_ref="seat_5",
+            speech="我是预言家，昨晚我验了，结果以后报。",
+        ),
+    )
+
+    _model_view, metadata = _view(ledger)
+
+    assert metadata["source_claim_candidate_count"] == 3
+    assert metadata["emitted_claim_count"] == 2
+    assert metadata["rejected_claim_count"] == 1
+    assert metadata["derivation_rejections"] == [
+        {
+            "source_event_ref": "110",
+            "kind": "investigation_claim",
+            "reason": "missing_required_fields",
+            "missing_fields": ["target_ref", "claimed_result"],
         }
     ]
 
 
-def test_ledger_orders_source_events_before_building_temporal_relations() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                406,
-                speaker_ref="seat_9",
-                speech="8号你今晚具体验谁？",
-            ),
-            _statement(
-                389,
-                speaker_ref="seat_8",
-                speech="今晚我会验发言最拧巴的牌。",
-            ),
-        ],
-        current_round_no=1,
-        actor_ref="seat_9",
+def test_ledger_orders_statements_before_creating_temporal_relations() -> None:
+    ledger = _ledger(
+        _statement(
+            200,
+            speaker_ref="seat_7",
+            speech="我投5是因为他的复盘最差。",
+        ),
+        _statement(
+            100,
+            speaker_ref="seat_12",
+            speech="7号你为什么投5号？",
+        ),
     )
 
-    assert [statement["record_seq"] for statement in ledger["statements"]] == [389, 406]
-    assert ledger["questions"][0]["status"] == "open"
-    assert ledger["relations"] == []
-
-
-def test_ledger_rejects_older_record_seq_when_some_events_lack_sequence() -> None:
-    unsequenced = _statement(
-        420,
-        speaker_ref="seat_1",
-        speech="1号先继续听。",
-    )
-    unsequenced.pop("uttered_record_seq")
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                406,
-                speaker_ref="seat_9",
-                speech="8号你今晚具体验谁？",
-            ),
-            _statement(
-                389,
-                speaker_ref="seat_8",
-                speech="今晚我会验2号。",
-            ),
-            unsequenced,
-        ],
-        current_round_no=1,
-        actor_ref="seat_9",
-    )
-
-    assert ledger["questions"][0]["status"] == "open"
-    assert ledger["relations"] == []
-
-
-def test_ledger_keeps_prior_questions_without_cross_round_answers() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                406,
-                speaker_ref="seat_9",
-                round_no=1,
-                speech="8号你今晚具体验谁？",
-            ),
-            _statement(
-                500,
-                speaker_ref="seat_8",
-                round_no=2,
-                speech="今晚我会验2号。",
-            ),
-        ],
-        current_round_no=2,
-        actor_ref="seat_8",
-    )
-
-    assert len(ledger["questions"]) == 1
-    assert ledger["questions"][0]["status"] == "open"
-    assert ledger["questions"][0]["asked_in"]["round_no"] == 1
-    assert ledger["relations"] == []
-
-
-def test_ledger_preserves_first_party_investigation_before_later_motive_claims() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                400,
-                speaker_ref="seat_6",
-                speech="6号上警，我先听后置位怎么说。",
-            ),
-            _statement(
-                417,
-                speaker_ref="seat_8",
-                speech=(
-                    "8号底牌预言家，昨晚验6号，查杀。现在回头看6号刚才的发言，我认为他在带节奏。"
-                ),
-            ),
-            _statement(
-                597,
-                speaker_ref="seat_9",
-                stage="day_debate_speech",
-                speech="8号因为6号发言带节奏，所以昨晚验了6号。",
-            ),
-        ],
-        current_round_no=1,
-        actor_ref="seat_12",
-    )
-
-    investigation = next(
-        claim for claim in ledger["claims"] if claim["claim_type"] == "investigation_claim"
-    )
-    assert investigation["source_event_id"] == "417"
-    assert investigation["uttered_record_seq"] == 417
-    assert investigation["claimed_action_in"] == {"period": "night", "round_no": 1}
-    assert investigation["target_ref"] == "seat_6"
-    assert investigation["claimed_result"] == "werewolves"
-    later_account = next(
-        claim
-        for claim in ledger["claims"]
-        if claim["source_event_id"] == "597" and claim["claim_type"] == "secondary_paraphrase"
-    )
-    assert later_account["source_kind"] == "secondary_unverified_paraphrase"
-
-
-def test_ledger_does_not_promote_ambiguous_investigation_reference_to_first_party() -> None:
-    ledger = build_public_discourse_ledger(
-        [
-            _statement(
-                430,
-                speaker_ref="seat_5",
-                speech="昨晚验6号这个说法不可信，我还要继续听。",
-            )
-        ],
-        current_round_no=1,
-        actor_ref="seat_5",
-    )
-
-    assert all(claim["claim_type"] != "investigation_claim" for claim in ledger["claims"])
-
-
-def test_ledger_keeps_all_prior_speech_and_marks_unparsed_sources() -> None:
-    prior = _statement(
-        100,
-        speaker_ref="seat_3",
-        round_no=1,
-        speech="这是一段无法可靠归类、但仍需保留的完整原话。",
-    )
-    current = _statement(
-        200,
-        speaker_ref="seat_4",
-        round_no=2,
-        speech="4号今天先听大家发言。",
-    )
-
-    first = build_public_discourse_ledger(
-        [prior, current],
-        current_round_no=2,
-        actor_ref="seat_4",
-    )
-    second = build_public_discourse_ledger(
-        [prior, current],
-        current_round_no=2,
-        actor_ref="seat_4",
-    )
-
-    assert first == second
-    assert first["ledger_schema_version"] == 2
-    assert first["statements"][0]["source_event_id"] == "100"
-    assert first["statements"][0]["speech"] == prior["speech"]
-    assert first["unparsed_statement_refs"] == ["100", "200"]
+    assert [statement["record_seq"] for statement in ledger["statements"]] == [100, 200]
+    assert ledger["questions"][0]["response_status"] == "response_detected"
+    assert ledger["relations"][0]["from_event_ref"] == "200"

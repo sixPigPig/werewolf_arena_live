@@ -12,12 +12,7 @@ from app.v2.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
-    current_model_context_contract,
-    is_legacy_v7_model_context_contract,
-    is_v8_model_context_contract,
-    is_v9_model_context_contract,
-    is_v9_prompt_v2_model_context_contract,
-    is_v10_model_context_contract,
+    is_current_model_context_contract,
 )
 from app.v2.win_conditions import (
     build_public_win_condition_contract,
@@ -57,6 +52,12 @@ class V2ProjectedModelContext:
     observation_context: dict[str, Any] = dataclass_field(default_factory=dict)
 
 
+class V2ModelContextProjectionInvariantError(ValueError):
+    def __init__(self, invariant_code: str) -> None:
+        super().__init__("model_context_projection_invariant_failed")
+        self.invariant_code = invariant_code
+
+
 def project_model_action_context(
     context: dict[str, Any],
     *,
@@ -86,439 +87,21 @@ def project_model_action_context_with_metadata(
         action_record_seq=action_record_seq,
         projection_at_seq=projection_at_seq,
     )
-    contract = model_context_contract or current_model_context_contract()
-    if is_legacy_v7_model_context_contract(contract):
-        return _project_v7_model_action_context_with_metadata(
-            context,
-            players=players,
-        )
-    if is_v8_model_context_contract(contract):
-        return _project_v8_model_action_context_with_metadata(
-            context,
-            players=players,
-            projection_at_seq=resolved_projection_at_seq,
-            prompt_template_version=int(contract["prompt_template_version"]),
-            known_events_schema_version=int(contract["known_events_schema_version"]),
-            model_view_schema_version=int(contract["model_view_schema_version"]),
-        )
-    if is_v9_model_context_contract(contract):
-        return _project_v9_model_action_context_with_metadata(
-            context,
-            players=players,
-            projection_at_seq=resolved_projection_at_seq,
-            prompt_template_version=int(contract["prompt_template_version"]),
-            known_events_schema_version=int(contract["known_events_schema_version"]),
-            ledger_schema_version=int(contract["ledger_schema_version"]),
-            model_view_schema_version=int(contract["model_view_schema_version"]),
-            include_win_condition_contract=is_v9_prompt_v2_model_context_contract(contract),
-        )
-    if is_v10_model_context_contract(contract):
-        return _project_v10_model_action_context_with_metadata(
-            context,
-            players=players,
-            projection_at_seq=resolved_projection_at_seq,
-            prompt_template_version=int(contract["prompt_template_version"]),
-            known_events_schema_version=int(contract["known_events_schema_version"]),
-            ledger_schema_version=int(contract["ledger_schema_version"]),
-            model_view_schema_version=int(contract["model_view_schema_version"]),
-        )
-    raise ValueError("unsupported_model_context_contract")
-
-
-def _project_v7_model_action_context_with_metadata(
-    context: dict[str, Any],
-    *,
-    players: tuple[V2ModelPlayerReference, ...],
-) -> V2ProjectedModelContext:
-    if not players:
-        projected = dict(context)
-        return V2ProjectedModelContext(
-            context=projected,
-            projection_metadata={},
-            observation_context=projected,
-        )
-    source = _project_value(context, players=players)
-    private_facts = source.pop("private_authoritative_facts", None)
-    private_facts = private_facts if isinstance(private_facts, list) else []
-    public_history = context.get("public_history")
-    if isinstance(public_history, list) or isinstance(public_history, tuple):
-        statements, vote_snapshots, public_events = _project_public_history(
-            public_history,
-            players=players,
-        )
-    else:
-        statements = []
-        vote_snapshots = []
-        public_events = []
-
-    current_round_no = _current_round_no(source, statements=statements)
-    identity = source.get("self_identity")
-    identity = identity if isinstance(identity, dict) else {}
-    actor_ref = identity.get("player_id")
-    history_projection = build_public_discourse_ledger(
-        statements,
-        current_round_no=current_round_no,
-        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
-    )
-    task = _model_task(source)
-    speech_progress = _model_speech_progress(
-        task,
-        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
-    )
-    if speech_progress is not None:
-        task["speech_progress"] = speech_progress
-    candidates = source.get("candidates") if isinstance(source.get("candidates"), list) else []
-    candidate_refs = [
-        str(candidate["player_id"])
-        for candidate in candidates
-        if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
-    ]
-    latest_vote_result_ref = vote_snapshots[-1].get("source_event_id") if vote_snapshots else None
-    history_view, projection_metadata = build_discourse_model_view(
-        history_projection,
-        actor_ref=actor_ref if isinstance(actor_ref, str) else None,
-        task=task,
-        candidate_refs=candidate_refs,
-        latest_vote_result_ref=(
-            latest_vote_result_ref if isinstance(latest_vote_result_ref, str) else None
-        ),
-        model_view_schema_version=2,
-    )
-    hard_rules = _model_hard_rules(source.get("public_rule_contract"))
-    projected_context = {
-        "prompt_schema_version": 7,
-        "task": task,
-        "hard_rules": hard_rules,
-        "self": _model_self(
-            source,
-            private_facts=private_facts,
-            hard_rules=hard_rules,
-        ),
-        "public_state": _model_public_state(source),
-        "public_timeline": _model_public_timeline(public_events),
-        "history": history_view,
-        "persona": _compact_persona(source.get("actor_profile")),
-        "candidates": candidates,
-        "output_contract": (
-            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
-        ),
-        "player_reference_rule": {
-            "reference_format": "seat_N",
-            "spoken_format": "N号",
-            "names_available": False,
-        },
-    }
-    return V2ProjectedModelContext(
-        context=projected_context,
-        projection_metadata=projection_metadata,
-        observation_context=projected_context,
+    contract = model_context_contract
+    if not is_current_model_context_contract(contract):
+        raise ValueError("unsupported_model_context_contract")
+    return _project_v11_model_action_context_with_metadata(
+        context,
+        players=players,
+        projection_at_seq=resolved_projection_at_seq,
+        prompt_template_version=int(contract["prompt_template_version"]),
+        known_events_schema_version=int(contract["known_events_schema_version"]),
+        ledger_schema_version=int(contract["ledger_schema_version"]),
+        model_view_schema_version=int(contract["model_view_schema_version"]),
     )
 
 
-def _project_v8_model_action_context_with_metadata(
-    context: dict[str, Any],
-    *,
-    players: tuple[V2ModelPlayerReference, ...],
-    projection_at_seq: int | None,
-    prompt_template_version: int,
-    known_events_schema_version: int,
-    model_view_schema_version: int,
-) -> V2ProjectedModelContext:
-    if not players:
-        projected = dict(context)
-        return V2ProjectedModelContext(
-            context=projected,
-            projection_metadata={},
-        )
-    source = _project_value(context, players=players)
-    private_facts = source.pop("private_authoritative_facts", None)
-    private_facts = private_facts if isinstance(private_facts, list) else []
-    public_history = context.get("public_history")
-    if isinstance(public_history, (list, tuple)):
-        statements, _vote_snapshots, public_events = _project_public_history(
-            public_history,
-            players=players,
-        )
-    else:
-        statements = []
-        public_events = []
-
-    current_round_no = _current_round_no(source, statements=statements)
-    identity = source.get("self_identity")
-    identity = identity if isinstance(identity, dict) else {}
-    actor_ref = identity.get("player_id")
-    actor_ref = actor_ref if isinstance(actor_ref, str) else None
-    candidates = source.get("candidates")
-    candidates = candidates if isinstance(candidates, list) else []
-    candidate_refs = [
-        str(candidate["player_id"])
-        for candidate in candidates
-        if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
-    ]
-    hard_rules = _model_hard_rules(source.get("public_rule_contract"))
-    if identity.get("role_key") == "werewolf" and hard_rules.get("werewolf_count") == 1:
-        private_facts = [
-            fact
-            for fact in private_facts
-            if not isinstance(fact, dict)
-            or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
-        ]
-    task_at_seq = _action_at_seq(
-        projection_at_seq,
-        source=source,
-        public_events=public_events,
-        private_facts=private_facts,
-    )
-    task = _model_task_v8(source, at_seq=task_at_seq, actor_ref=actor_ref)
-    ledger = build_public_discourse_ledger(
-        statements,
-        current_round_no=current_round_no,
-        actor_ref=actor_ref,
-    )
-    observation_task = _model_task(source)
-    observation_speech_progress = _model_speech_progress(
-        observation_task,
-        actor_ref=actor_ref,
-    )
-    if observation_speech_progress is not None:
-        observation_task["speech_progress"] = observation_speech_progress
-    observation_history, _observation_metadata = build_discourse_model_view(
-        ledger,
-        actor_ref=actor_ref,
-        task=observation_task,
-        candidate_refs=candidate_refs,
-        latest_vote_result_ref=None,
-        model_view_schema_version=model_view_schema_version,
-    )
-    all_known_events = _known_events(
-        public_events=public_events,
-        statements=statements,
-        private_facts=private_facts,
-        task_at_seq=task_at_seq,
-        current_round_no=current_round_no,
-        schema_version=known_events_schema_version,
-    )
-    selected_events = all_known_events
-    state = _model_public_state(source)
-    if task_at_seq is not None:
-        state["as_of_seq"] = task_at_seq
-    projected_context = {
-        "model_context_schema_version": 8,
-        "prompt_template_version": prompt_template_version,
-        "task": task,
-        "self": _model_self_v8(source, hard_rules=hard_rules),
-        "rules": _model_action_rules(source, hard_rules=hard_rules),
-        "state": state,
-        "known_events": {
-            "schema_version": known_events_schema_version,
-            "events": selected_events,
-        },
-        "persona": _compact_persona(source.get("actor_profile")),
-        "candidates": candidates,
-        "response": (
-            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
-        ),
-        "player_reference_format": "seat_N",
-    }
-    projection_metadata = _v8_projection_metadata(
-        ledger=ledger,
-        projected_context=projected_context,
-        selected_events=selected_events,
-        current_round_no=current_round_no,
-        model_view_schema_version=model_view_schema_version,
-    )
-    return V2ProjectedModelContext(
-        context=projected_context,
-        projection_metadata=projection_metadata,
-        observation_context={
-            "task": observation_task,
-            "hard_rules": hard_rules,
-            "public_timeline": _model_public_timeline(public_events),
-            "history": observation_history,
-            "known_events": projected_context["known_events"],
-        },
-    )
-
-
-def _project_v9_model_action_context_with_metadata(
-    context: dict[str, Any],
-    *,
-    players: tuple[V2ModelPlayerReference, ...],
-    projection_at_seq: int | None,
-    prompt_template_version: int,
-    known_events_schema_version: int,
-    ledger_schema_version: int,
-    model_view_schema_version: int,
-    include_win_condition_contract: bool,
-) -> V2ProjectedModelContext:
-    if not players:
-        projected = dict(context)
-        return V2ProjectedModelContext(
-            context=projected,
-            projection_metadata={},
-        )
-
-    source = _project_value(context, players=players)
-    private_facts = source.pop("private_authoritative_facts", None)
-    private_facts = private_facts if isinstance(private_facts, list) else []
-    public_history = context.get("public_history")
-    if isinstance(public_history, (list, tuple)):
-        statements, _vote_snapshots, public_events = _project_public_history(
-            public_history,
-            players=players,
-        )
-    else:
-        statements = []
-        public_events = []
-
-    identity = source.get("self_identity")
-    identity = identity if isinstance(identity, dict) else {}
-    actor_ref = identity.get("player_id")
-    actor_ref = actor_ref if isinstance(actor_ref, str) else None
-    hard_rules = _model_hard_rules(
-        source.get("public_rule_contract"),
-        include_win_condition_contract=include_win_condition_contract,
-    )
-    task_at_seq = _action_at_seq(
-        projection_at_seq,
-        source=source,
-        public_events=public_events,
-        private_facts=private_facts,
-    )
-    visible_statements = _statements_visible_at_seq(statements, task_at_seq=task_at_seq)
-    current_round_no = _current_round_no(source, statements=visible_statements)
-    task = _model_task_v9(source, at_seq=task_at_seq, actor_ref=actor_ref)
-    candidates = source.get("candidates")
-    candidates = candidates if isinstance(candidates, list) else []
-    candidate_refs = [
-        str(candidate["player_id"])
-        for candidate in candidates
-        if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
-    ]
-    ledger = build_public_discourse_ledger(
-        visible_statements,
-        current_round_no=current_round_no,
-        actor_ref=actor_ref,
-        ledger_schema_version=ledger_schema_version,
-    )
-    model_view, _model_view_metadata = build_discourse_model_view(
-        ledger,
-        actor_ref=actor_ref,
-        task=task,
-        candidate_refs=candidate_refs,
-        latest_vote_result_ref=None,
-        model_view_schema_version=model_view_schema_version,
-    )
-
-    teammate_refs = _current_living_werewolf_teammates(
-        source,
-        private_facts=private_facts,
-        self_ref=actor_ref,
-    )
-    teammate_facts_removed = [
-        fact
-        for fact in private_facts
-        if not isinstance(fact, dict)
-        or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
-    ]
-    selected_events = _known_events(
-        public_events=public_events,
-        statements=visible_statements,
-        private_facts=teammate_facts_removed,
-        task_at_seq=task_at_seq,
-        current_round_no=current_round_no,
-        schema_version=known_events_schema_version,
-    )
-    is_werewolf = identity.get("role_key") == "werewolf"
-    configured_werewolf_count = hard_rules.get("werewolf_count")
-    if is_werewolf and isinstance(configured_werewolf_count, int) and configured_werewolf_count > 1:
-        selected_events.append(
-            _canonical_living_werewolf_teammates_event(
-                teammate_refs=teammate_refs,
-                task_at_seq=task_at_seq,
-                source=source,
-                current_round_no=current_round_no,
-            )
-        )
-        selected_events.sort(key=_known_event_sort_key)
-
-    questions, relations = _v9_discourse_projection(
-        model_view,
-        selected_events=selected_events,
-        current_round_no=current_round_no,
-        include_reply_opportunity=_is_scheduled_speech_action(task),
-    )
-    state = _model_public_state(source)
-    if task_at_seq is not None:
-        state["as_of_seq"] = task_at_seq
-    living_werewolf_count = (
-        1 + len(teammate_refs)
-        if is_werewolf and isinstance(configured_werewolf_count, int)
-        else None
-    )
-    projected_context = {
-        "model_context_schema_version": 9,
-        "prompt_template_version": prompt_template_version,
-        "task": task,
-        "self": _model_self_v9(source, hard_rules=hard_rules),
-        "rules": _model_action_rules_v9(
-            source,
-            hard_rules=hard_rules,
-            living_werewolf_count=living_werewolf_count,
-        ),
-        "state": state,
-        "known_events": {
-            "schema_version": known_events_schema_version,
-            "events": selected_events,
-            "questions": questions,
-            "relations": relations,
-        },
-        "persona": _compact_persona(source.get("actor_profile")),
-        "candidates": candidates,
-        "response": (
-            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
-        ),
-        "player_reference_format": "seat_N",
-    }
-    projection_metadata = _v9_projection_metadata(
-        ledger=ledger,
-        projected_context=projected_context,
-        selected_events=selected_events,
-        questions=questions,
-        relations=relations,
-        current_round_no=current_round_no,
-        model_view_schema_version=model_view_schema_version,
-    )
-
-    observation_task = _model_task(source)
-    observation_speech_progress = _model_speech_progress(
-        observation_task,
-        actor_ref=actor_ref,
-    )
-    if observation_speech_progress is not None:
-        observation_task["speech_progress"] = observation_speech_progress
-    observation_history, _observation_metadata = build_discourse_model_view(
-        ledger,
-        actor_ref=actor_ref,
-        task=observation_task,
-        candidate_refs=candidate_refs,
-        latest_vote_result_ref=None,
-        model_view_schema_version=model_view_schema_version,
-    )
-    return V2ProjectedModelContext(
-        context=projected_context,
-        projection_metadata=projection_metadata,
-        observation_context={
-            "task": observation_task,
-            "hard_rules": hard_rules,
-            "public_timeline": _model_public_timeline(public_events),
-            "history": observation_history,
-            "known_events": projected_context["known_events"],
-        },
-    )
-
-
-def _project_v10_model_action_context_with_metadata(
+def _project_v11_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
@@ -529,11 +112,7 @@ def _project_v10_model_action_context_with_metadata(
     model_view_schema_version: int,
 ) -> V2ProjectedModelContext:
     if not players:
-        projected = dict(context)
-        return V2ProjectedModelContext(
-            context=projected,
-            projection_metadata={},
-        )
+        raise V2ModelContextProjectionInvariantError("players_required")
 
     source = _project_value(context, players=players)
     private_facts = source.pop("private_authoritative_facts", None)
@@ -565,7 +144,8 @@ def _project_v10_model_action_context_with_metadata(
     )
     visible_statements = _statements_visible_at_seq(statements, task_at_seq=task_at_seq)
     current_round_no = _current_round_no(source, statements=visible_statements)
-    task = _model_task_v9(source, at_seq=task_at_seq, actor_ref=actor_ref)
+    task = _model_task_v11(source, at_seq=task_at_seq, actor_ref=actor_ref)
+    task["round_no"] = current_round_no
     candidates = source.get("candidates")
     candidates = candidates if isinstance(candidates, list) else []
     candidate_refs = [
@@ -578,8 +158,20 @@ def _project_v10_model_action_context_with_metadata(
         current_round_no=current_round_no,
         actor_ref=actor_ref,
         ledger_schema_version=ledger_schema_version,
+        role_keys={
+            item.get("role_key")
+            for item in hard_rules.get("roles", [])
+            if isinstance(item, dict) and isinstance(item.get("role_key"), str)
+        },
+        team_keys={
+            item.get("team")
+            for item in hard_rules.get("roles", [])
+            if isinstance(item, dict) and isinstance(item.get("team"), str)
+        },
+        player_refs={player.ref for player in players},
+        current_night_no=_positive_int(source.get("night_no")) or current_round_no,
     )
-    model_view, _model_view_metadata = build_discourse_model_view(
+    model_view, model_view_metadata = build_discourse_model_view(
         ledger,
         actor_ref=actor_ref,
         task=task,
@@ -599,6 +191,9 @@ def _project_v10_model_action_context_with_metadata(
         if not isinstance(fact, dict)
         or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
     ]
+    source_event_count = len(public_events) + sum(
+        isinstance(fact, dict) for fact in teammate_facts_removed
+    )
     selected_events = _known_events(
         public_events=public_events,
         statements=visible_statements,
@@ -610,22 +205,23 @@ def _project_v10_model_action_context_with_metadata(
     is_werewolf = identity.get("role_key") == "werewolf"
     configured_werewolf_count = hard_rules.get("werewolf_count")
     if is_werewolf and isinstance(configured_werewolf_count, int) and configured_werewolf_count > 1:
+        source_event_count += 1
         selected_events.append(
             _canonical_living_werewolf_teammates_event(
                 teammate_refs=teammate_refs,
                 task_at_seq=task_at_seq,
                 source=source,
                 current_round_no=current_round_no,
-                use_v10_temporal_semantics=True,
+                owner_ref=actor_ref,
             )
         )
         selected_events.sort(key=_known_event_sort_key)
 
-    _attach_v10_first_party_claim_annotations(
+    _attach_v11_first_party_claim_annotations(
         selected_events,
         model_view=model_view,
     )
-    questions, relations = _v10_discourse_projection(
+    questions, relations = _v11_discourse_projection(
         model_view,
         selected_events=selected_events,
         current_round_no=current_round_no,
@@ -633,7 +229,7 @@ def _project_v10_model_action_context_with_metadata(
     )
     state = _model_public_state(source)
     state.update(
-        _v10_temporal_state(
+        _v11_temporal_state(
             source,
             selected_events=selected_events,
             current_round_no=current_round_no,
@@ -647,11 +243,11 @@ def _project_v10_model_action_context_with_metadata(
         else None
     )
     projected_context = {
-        "model_context_schema_version": 10,
+        "model_context_schema_version": 11,
         "prompt_template_version": prompt_template_version,
         "task": task,
-        "self": _model_self_v9(source, hard_rules=hard_rules),
-        "rules": _model_action_rules_v9(
+        "self": _model_self_v11(source, hard_rules=hard_rules),
+        "rules": _model_action_rules_v11(
             source,
             hard_rules=hard_rules,
             living_werewolf_count=living_werewolf_count,
@@ -663,17 +259,27 @@ def _project_v10_model_action_context_with_metadata(
             "questions": questions,
             "relations": relations,
         },
-        "persona": _compact_persona(source.get("actor_profile")),
-        "candidates": candidates,
-        "response": (
-            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
+        "persona": _compact_persona(
+            source.get("actor_profile"),
+            include_delivery=_response_allows_speech(source.get("output_contract")),
         ),
+        "candidates": candidates,
+        "response": _model_response_v11(source.get("output_contract")),
         "player_reference_format": "seat_N",
     }
-    projection_metadata = _v10_projection_metadata(
+    validate_projected_model_context(
+        projected_context,
+        internal_contract=(
+            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
+        ),
+    )
+    projection_metadata = _v11_projection_metadata(
         ledger=ledger,
+        model_view_metadata=model_view_metadata,
         projected_context=projected_context,
         selected_events=selected_events,
+        source_event_count=source_event_count,
+        future_filtered_event_count=max(0, source_event_count - len(selected_events)),
         questions=questions,
         relations=relations,
         current_round_no=current_round_no,
@@ -708,64 +314,332 @@ def _project_v10_model_action_context_with_metadata(
     )
 
 
-def _model_task_v8(
+def validate_projected_model_context(
+    context: dict[str, Any],
+    internal_contract: dict[str, Any],
+) -> None:
+    def fail(code: str) -> None:
+        raise V2ModelContextProjectionInvariantError(code)
+
+    if context.get("model_context_schema_version") != 11:
+        fail("model_context_schema_version")
+    if context.get("prompt_template_version") != 3:
+        fail("prompt_template_version")
+    known_events = context.get("known_events")
+    if not isinstance(known_events, dict) or known_events.get("schema_version") != 5:
+        fail("known_events_schema_version")
+
+    task = context.get("task")
+    state = context.get("state")
+    if not isinstance(task, dict) or not isinstance(state, dict):
+        fail("task_state_shape")
+    task_at_seq = _positive_int(task.get("at_seq"))
+    if task_at_seq is None or task_at_seq != _positive_int(state.get("as_of_seq")):
+        fail("task_state_clock")
+    task_round_no = _positive_int(task.get("round_no"))
+    if task_round_no is None or task_round_no != _positive_int(state.get("current_round_no")):
+        fail("task_state_round")
+
+    response = context.get("response")
+    response = response if isinstance(response, dict) else {}
+    internal_kind = internal_contract.get("kind")
+    if internal_kind not in {"speech", "target", "boolean"}:
+        fail("internal_response_kind")
+    if response.get("kind") != internal_kind:
+        fail("response_kind")
+    response_speech = response.get("speech")
+    internal_speech = internal_contract.get("speech")
+    if not isinstance(response_speech, dict) or not isinstance(internal_speech, dict):
+        fail("response_speech_shape")
+    if response_speech.get("mode") != internal_speech.get("mode"):
+        fail("response_speech_mode")
+
+    candidates = context.get("candidates")
+    candidates = candidates if isinstance(candidates, list) else []
+    candidate_ids = [
+        item.get("player_id")
+        for item in candidates
+        if isinstance(item, dict) and isinstance(item.get("player_id"), str)
+    ]
+    if len(candidate_ids) != len(candidates) or len(candidate_ids) != len(set(candidate_ids)):
+        fail("candidate_shape")
+    if internal_kind == "target":
+        internal_target_policy = internal_contract.get("target_policy")
+        internal_target_policy = (
+            internal_target_policy if isinstance(internal_target_policy, dict) else {}
+        )
+        allowed_target_ids = internal_target_policy.get("allowed_target_ids")
+        if not isinstance(allowed_target_ids, list) or any(
+            not isinstance(item, str) for item in allowed_target_ids
+        ):
+            fail("internal_allowed_targets")
+        if set(candidate_ids) != set(allowed_target_ids):
+            fail("candidate_allowed_target_mismatch")
+        response_target_policy = response.get("target_policy")
+        if (
+            not isinstance(response_target_policy, dict)
+            or response_target_policy.get("mode") != internal_target_policy.get("mode")
+            or response_target_policy.get("candidate_source") != "candidates"
+        ):
+            fail("response_target_policy")
+    elif "target_policy" in response:
+        fail("response_target_policy_unexpected")
+    if internal_kind == "boolean" and response.get("field") != internal_contract.get("field"):
+        fail("response_boolean_field")
+
+    self_context = context.get("self")
+    self_context = self_context if isinstance(self_context, dict) else {}
+    identity = self_context.get("identity")
+    identity = identity if isinstance(identity, dict) else {}
+    actor_ref = identity.get("player_id")
+    office = self_context.get("public_office_capabilities")
+    office = office if isinstance(office, dict) else {}
+    sheriff_ref = state.get("sheriff_player_id")
+    sheriff_badge_state = state.get("sheriff_badge_state")
+    expected_is_sheriff = (
+        isinstance(actor_ref, str) and actor_ref == sheriff_ref and sheriff_badge_state == "held"
+    )
+    if office.get("is_current_sheriff") is not expected_is_sheriff:
+        fail("sheriff_holder_mismatch")
+    if sheriff_ref is not None and sheriff_badge_state != "held":
+        fail("sheriff_badge_state_mismatch")
+    if "sheriff_badge_state" in office:
+        fail("duplicate_sheriff_badge_state")
+
+    events = known_events.get("events")
+    questions = known_events.get("questions")
+    relations = known_events.get("relations")
+    if (
+        not isinstance(events, list)
+        or not isinstance(questions, list)
+        or not isinstance(relations, list)
+    ):
+        fail("known_events_shape")
+    event_by_ref: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            fail("event_shape")
+        event_ref = event.get("event_ref")
+        if not isinstance(event_ref, str) or not event_ref or event_ref in event_by_ref:
+            fail("event_ref")
+        if event.get("visibility") not in {"public", "actor_private"}:
+            fail("event_visibility")
+        known_at_seq = _positive_int(event.get("known_at_seq"))
+        if known_at_seq is None:
+            fail("event_sequence_missing")
+        if known_at_seq > task_at_seq:
+            fail("event_after_task")
+        record_seq = event.get("record_seq")
+        if record_seq is not None and (
+            _positive_int(record_seq) is None or int(record_seq) > task_at_seq
+        ):
+            fail("event_after_task")
+        if event.get("visibility") == "actor_private":
+            if (
+                event.get("owner_scope") != "player"
+                or not isinstance(actor_ref, str)
+                or event.get("owner_ref") != actor_ref
+            ):
+                fail("actor_private_owner")
+        elif "owner_scope" in event or "owner_ref" in event:
+            fail("public_event_owner")
+        if "source_event_id" in event:
+            fail("duplicate_source_event_id")
+        if "timeline_index" in event:
+            fail("timeline_index")
+        event_by_ref[event_ref] = event
+
+    rules = context.get("rules")
+    rules = rules if isinstance(rules, dict) else {}
+    role_summary = rules.get("role_summary")
+    role_summary = role_summary if isinstance(role_summary, list) else []
+    role_keys = {
+        item.get("role_key")
+        for item in role_summary
+        if isinstance(item, dict) and isinstance(item.get("role_key"), str)
+    }
+    team_keys = {
+        item.get("team")
+        for item in role_summary
+        if isinstance(item, dict) and isinstance(item.get("team"), str)
+    }
+    player_refs = {
+        ref
+        for key in ("alive_player_ids", "eliminated_player_ids")
+        for raw_refs in (state.get(key),)
+        if isinstance(raw_refs, list)
+        for ref in raw_refs
+        if isinstance(ref, str)
+    }
+    if isinstance(actor_ref, str):
+        player_refs.add(actor_ref)
+    for event in events:
+        raw_annotations = event.get("annotations")
+        if raw_annotations is None:
+            continue
+        if not isinstance(raw_annotations, list):
+            fail("claim_shape")
+        for claim in raw_annotations:
+            _validate_v11_claim(
+                claim,
+                role_keys=role_keys,
+                team_keys=team_keys,
+                player_refs=player_refs,
+                fail=fail,
+            )
+
+    question_by_id: dict[str, dict[str, Any]] = {}
+    for question in questions:
+        if not isinstance(question, dict):
+            fail("question_shape")
+        question_id = question.get("question_id")
+        source_ref = question.get("source_event_ref")
+        source_event = event_by_ref.get(source_ref) if isinstance(source_ref, str) else None
+        if (
+            not isinstance(question_id, str)
+            or not question_id
+            or question_id in question_by_id
+            or source_event is None
+        ):
+            fail("question_reference")
+        if question.get("source_authority") != source_event.get("authority"):
+            fail("question_authority")
+        asked_at_seq = _positive_int(question.get("asked_at_seq"))
+        if asked_at_seq is None or asked_at_seq > task_at_seq:
+            fail("question_after_task")
+        if not _is_complete_derivation(question.get("derivation")):
+            fail("question_derivation")
+        if question.get("response_status") not in {"none_detected", "response_detected"}:
+            fail("question_response_status")
+        address_resolution = question.get("address_resolution")
+        addressed_to = question.get("addressed_to")
+        if address_resolution == "resolved" and not isinstance(addressed_to, str):
+            fail("question_address")
+        if address_resolution == "unresolved" and addressed_to is not None:
+            fail("question_address")
+        if address_resolution not in {"resolved", "unresolved"}:
+            fail("question_address")
+        requested_fields = question.get("requested_fields")
+        if isinstance(requested_fields, list) and any(
+            field not in {"target_ref", "claimed_result"} for field in requested_fields
+        ):
+            fail("question_requested_fields")
+        question_by_id[question_id] = question
+
+    response_relation_counts = {question_id: 0 for question_id in question_by_id}
+    for relation in relations:
+        if not isinstance(relation, dict) or relation.get("type") != "response_to_question":
+            fail("relation_shape")
+        from_ref = relation.get("from_event_ref")
+        question_id = relation.get("to_question_id")
+        response_event = event_by_ref.get(from_ref) if isinstance(from_ref, str) else None
+        question = question_by_id.get(question_id) if isinstance(question_id, str) else None
+        if response_event is None or question is None:
+            fail("relation_reference")
+        if relation.get("temporal_order_valid") is not True:
+            fail("relation_temporal_flag")
+        if not _is_complete_derivation(relation.get("derivation")):
+            fail("relation_derivation")
+        response_seq = _positive_int(response_event.get("known_at_seq")) or _positive_int(
+            response_event.get("record_seq")
+        )
+        if response_seq is None or response_seq <= int(question["asked_at_seq"]):
+            fail("relation_temporal_order")
+        addressed_to = question.get("addressed_to")
+        if isinstance(addressed_to, str) and response_event.get("speaker_ref") != addressed_to:
+            fail("relation_responder")
+        response_relation_counts[str(question_id)] += 1
+    for question_id, question in question_by_id.items():
+        detected = response_relation_counts[question_id] > 0
+        if detected != (question.get("response_status") == "response_detected"):
+            fail("question_relation_status")
+
+
+def _validate_v11_claim(
+    claim: Any,
+    *,
+    role_keys: set[Any],
+    team_keys: set[Any],
+    player_refs: set[str],
+    fail: Any,
+) -> None:
+    if not isinstance(claim, dict) or not _is_complete_derivation(claim.get("derivation")):
+        fail("claim_derivation")
+    if claim.get("authority") != "player_claim_unverified":
+        fail("claim_authority")
+    claim_type = claim.get("claim_type")
+    if claim_type == "role_claim":
+        if claim.get("claimed_role") not in role_keys:
+            fail("claim_role")
+    elif claim_type == "team_claim":
+        if claim.get("claimed_team") not in team_keys:
+            fail("claim_team")
+    elif claim_type == "investigation_claim":
+        action_in = claim.get("claimed_action_in")
+        if (
+            not isinstance(action_in, dict)
+            or action_in.get("period") != "night"
+            or _positive_int(action_in.get("round_no")) is None
+            or claim.get("target_ref") not in player_refs
+            or claim.get("claimed_result") not in {"werewolves", "villagers"}
+        ):
+            fail("claim_investigation")
+    elif claim_type == "future_investigation_plan":
+        if claim.get("target_ref") not in player_refs or claim.get("specificity") not in {
+            "specific_target",
+            "direction_only",
+        }:
+            fail("claim_future_investigation")
+    else:
+        fail("claim_type")
+
+
+def _model_task_v11(
     source: dict[str, Any],
     *,
     at_seq: int | None,
     actor_ref: str | None,
 ) -> dict[str, Any]:
-    legacy = _model_task(source)
+    base = _model_task(source)
     task: dict[str, Any] = {
-        "type": legacy.pop("action_type", None),
-        "goal": legacy.pop("objective", None),
+        "type": base.pop("action_type", None),
+        "goal": base.pop("objective", None),
         "at_seq": at_seq,
-        **legacy,
+        **base,
     }
     speech_progress = _model_speech_progress(task, actor_ref=actor_ref)
     if speech_progress is not None:
         speech_progress.pop("instruction", None)
         task["speech_progress"] = speech_progress
-    return {key: value for key, value in task.items() if value is not None}
-
-
-def _model_task_v9(
-    source: dict[str, Any],
-    *,
-    at_seq: int | None,
-    actor_ref: str | None,
-) -> dict[str, Any]:
-    task = _model_task_v8(source, at_seq=at_seq, actor_ref=actor_ref)
-    extension = source.get("v9_action_extension")
+    extension = source.get("v11_action_extension")
     extension = extension if isinstance(extension, dict) else {}
     mechanical_effect = extension.get("mechanical_effect")
     if isinstance(mechanical_effect, dict):
         task["mechanical_effect"] = _without_explanations(mechanical_effect)
-    return task
+    return {key: value for key, value in task.items() if value is not None}
 
 
-def _model_self_v8(
+def _model_self_v11(
     source: dict[str, Any],
     *,
     hard_rules: dict[str, Any],
 ) -> dict[str, Any]:
     projected = _model_self(source, private_facts=[], hard_rules=hard_rules)
     projected.pop("private_judge_facts", None)
-    return projected
-
-
-def _model_self_v9(
-    source: dict[str, Any],
-    *,
-    hard_rules: dict[str, Any],
-) -> dict[str, Any]:
-    projected = _model_self_v8(source, hard_rules=hard_rules)
+    office = projected.get("public_office_capabilities")
+    if isinstance(office, dict):
+        office.pop("sheriff_badge_state", None)
+    restrictions = projected.get("state_restrictions")
+    if isinstance(restrictions, dict):
+        restrictions.pop("sheriff_badge_state", None)
     identity = source.get("self_identity")
     identity = identity if isinstance(identity, dict) else {}
     if identity.get("role_key") == "werewolf":
         projected["werewolf_coordination"] = (
             {"mode": "solo"} if hard_rules.get("werewolf_count") == 1 else {"mode": "team"}
         )
-    return projected
+    compacted = _drop_empty_collections(projected)
+    return compacted if isinstance(compacted, dict) else {}
 
 
 def _model_action_rules(
@@ -812,7 +686,7 @@ def _model_action_rules(
     }
 
 
-def _model_action_rules_v9(
+def _model_action_rules_v11(
     source: dict[str, Any],
     *,
     hard_rules: dict[str, Any],
@@ -948,10 +822,12 @@ def _known_events(
                 "known_at_seq": record_seq,
             }
         )
-        if schema_version == 1 and item.get("authority") == "player_claim_unverified":
-            item["authority"] = "player_statement"
+        if schema_version != 5:
+            raise ValueError("unsupported_known_events_schema_version")
+        item.pop("source_event_id", None)
+        item.pop("timeline_index", None)
         if record_seq is None:
-            item["sequence_status"] = "legacy_unknown"
+            item["sequence_status"] = "unknown"
         events.append(_drop_none_values(item))
 
     for index, fact in enumerate(private_facts, start=1):
@@ -976,6 +852,8 @@ def _known_events(
             "kind": fact.get("fact_type") or "private_judge_fact",
             "authority": fact.get("authority") or "judge_fact",
             "visibility": "actor_private",
+            "owner_scope": fact.get("owner_scope"),
+            "owner_ref": fact.get("owner_id"),
             "source_activation_id": fact.get("source_activation_id"),
             "record_seq": record_seq,
             "known_at_seq": known_at_seq,
@@ -983,7 +861,7 @@ def _known_events(
             "data": payload,
         }
         if known_at_seq is None:
-            item["sequence_status"] = "legacy_unknown"
+            item["sequence_status"] = "unknown"
         events.append(_drop_none_values(item))
     return sorted(events, key=_known_event_sort_key)
 
@@ -1048,44 +926,25 @@ def _canonical_living_werewolf_teammates_event(
     task_at_seq: int | None,
     source: dict[str, Any],
     current_round_no: int,
-    use_v10_temporal_semantics: bool = False,
+    owner_ref: str | None,
 ) -> dict[str, Any]:
     return {
         "event_ref": "current_living_werewolf_teammates",
         "kind": "living_werewolf_teammates",
         "authority": "judge_fact",
         "visibility": "actor_private",
+        "owner_scope": "player",
+        "owner_ref": owner_ref,
         "known_at_seq": task_at_seq,
-        "occurred_in": (
-            _v10_current_action_occurrence(
-                source,
-                current_round_no=current_round_no,
-            )
-            if use_v10_temporal_semantics
-            else _current_action_occurrence(
-                source,
-                current_round_no=current_round_no,
-            )
+        "occurred_in": _v11_current_action_occurrence(
+            source,
+            current_round_no=current_round_no,
         ),
         "data": {"teammate_refs": list(teammate_refs)},
     }
 
 
-def _current_action_occurrence(
-    source: dict[str, Any],
-    *,
-    current_round_no: int,
-) -> dict[str, Any]:
-    phase_id = source.get("phase_id")
-    night_no = _positive_int(source.get("night_no"))
-    if night_no is not None or (
-        isinstance(phase_id, str) and phase_id.startswith("night_")
-    ):
-        return {"period": "night", "round_no": night_no or current_round_no}
-    return {"period": "day", "round_no": current_round_no}
-
-
-def _v10_current_action_occurrence(
+def _v11_current_action_occurrence(
     source: dict[str, Any],
     *,
     current_round_no: int,
@@ -1101,7 +960,7 @@ def _v10_current_action_occurrence(
     return {"period": "day", "round_no": current_round_no}
 
 
-def _attach_v10_first_party_claim_annotations(
+def _attach_v11_first_party_claim_annotations(
     selected_events: list[dict[str, Any]],
     *,
     model_view: dict[str, Any],
@@ -1112,18 +971,18 @@ def _attach_v10_first_party_claim_annotations(
     for statement in timeline:
         if not isinstance(statement, dict):
             continue
-        source_event_id = statement.get("source_event_id")
+        source_event_ref = statement.get("source_event_id")
         raw_annotations = statement.get("annotations")
-        if not isinstance(source_event_id, str) or not isinstance(raw_annotations, list):
+        if not isinstance(source_event_ref, str) or not isinstance(raw_annotations, list):
             continue
         compact = [
             projected
             for annotation in raw_annotations
             if isinstance(annotation, dict)
-            and (projected := _v10_first_party_claim_annotation(annotation)) is not None
+            and (projected := _v11_first_party_claim_annotation(annotation)) is not None
         ]
         if compact:
-            annotations_by_source[source_event_id] = compact
+            annotations_by_source[source_event_ref] = compact
 
     for event in selected_events:
         event_ref = event.get("event_ref")
@@ -1134,29 +993,30 @@ def _attach_v10_first_party_claim_annotations(
             event["annotations"] = annotations
 
 
-def _v10_first_party_claim_annotation(
+def _v11_first_party_claim_annotation(
     annotation: dict[str, Any],
 ) -> dict[str, Any] | None:
     claim_type = annotation.get("claim_type")
     if claim_type not in {
         "role_claim",
+        "team_claim",
         "investigation_claim",
         "future_investigation_plan",
     }:
         return None
-    if (
-        annotation.get("source_kind") != "speaker_first_party_claim"
-        or annotation.get("confirmation_status") != "unverified"
-    ):
+    derivation = annotation.get("derivation")
+    if not _is_complete_derivation(derivation):
         return None
     result = {
         "claim_id": annotation.get("claim_id"),
         "claim_type": claim_type,
         "authority": "player_claim_unverified",
         "sentence_index": annotation.get("sentence_index"),
+        "derivation": derivation,
     }
     for key in (
         "claimed_role",
+        "claimed_team",
         "claimed_action_in",
         "target_ref",
         "claimed_result",
@@ -1167,13 +1027,22 @@ def _v10_first_party_claim_annotation(
     return _drop_none_values(result)
 
 
-def _v10_temporal_state(
+def _is_complete_derivation(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("kind") == "deterministic_heuristic"
+        and _positive_int(value.get("validator_version")) is not None
+        and value.get("validation_status") == "complete"
+    )
+
+
+def _v11_temporal_state(
     source: dict[str, Any],
     *,
     selected_events: list[dict[str, Any]],
     current_round_no: int,
 ) -> dict[str, Any]:
-    current_period = _v10_current_action_occurrence(
+    current_period = _v11_current_action_occurrence(
         source,
         current_round_no=current_round_no,
     )["period"]
@@ -1207,7 +1076,7 @@ def _v10_temporal_state(
     }
 
 
-def _v9_discourse_projection(
+def _v11_discourse_projection(
     model_view: dict[str, Any],
     *,
     selected_events: list[dict[str, Any]],
@@ -1229,145 +1098,39 @@ def _v9_discourse_projection(
         if not isinstance(asked_in, dict) or asked_in.get("round_no") != current_round_no:
             continue
         question_id = raw_question.get("question_id")
-        source_event_ref = raw_question.get("source_event_id")
-        status = raw_question.get("status")
-        if (
-            not isinstance(question_id, str)
-            or not isinstance(source_event_ref, str)
-            or source_event_ref not in event_by_ref
-            or status not in {"open", "answered", "unresolved_target"}
-        ):
-            continue
-        source_event = event_by_ref[source_event_ref]
-        asked_at_seq = _positive_int(raw_question.get("asked_record_seq"))
-        if asked_at_seq is None:
-            asked_at_seq = _positive_int(source_event.get("known_at_seq"))
-        item: dict[str, Any] = {
-            "question_id": question_id,
-            "source_event_ref": source_event_ref,
-            "asked_by": raw_question.get("asked_by"),
-            "addressed_to": raw_question.get("addressed_to"),
-            "asked_at_seq": asked_at_seq,
-            "topic": raw_question.get("topic"),
-            "status": status,
-        }
-        requested_fields = raw_question.get("requested_fields")
-        if isinstance(requested_fields, list):
-            retained_requested_fields = [
-                field
-                for field in requested_fields
-                if field in {"target_ref", "claimed_result"}
-            ]
-            if retained_requested_fields:
-                item["requested_fields"] = retained_requested_fields
-        referenced_night_no = _positive_int(raw_question.get("referenced_night_no"))
-        if referenced_night_no is not None:
-            item["referenced_night_no"] = referenced_night_no
-        reply_opportunity = raw_question.get("reply_opportunity")
-        if include_reply_opportunity and reply_opportunity in {
-            "awaiting_scheduled_turn",
-            "current_speaker_turn",
-            "scheduled_turn_passed",
-            "not_in_current_speech_order",
-        }:
-            item["reply_opportunity"] = reply_opportunity
-        prior_refs = raw_question.get("prior_relevant_statement_refs")
-        if isinstance(prior_refs, list):
-            retained_refs = [
-                item for item in prior_refs if isinstance(item, str) and item in event_by_ref
-            ]
-            if retained_refs:
-                item["prior_relevant_event_refs"] = retained_refs
-        questions.append(_drop_none_values(item))
-
-    question_by_id = {
-        question["question_id"]: question
-        for question in questions
-        if isinstance(question.get("question_id"), str)
-    }
-    raw_relations = model_view.get("relations")
-    raw_relations = raw_relations if isinstance(raw_relations, list) else []
-    relations: list[dict[str, Any]] = []
-    for raw_relation in raw_relations:
-        if not isinstance(raw_relation, dict):
-            continue
-        question_id = raw_relation.get("to_question_id")
-        from_event_ref = raw_relation.get("from_source_event_id")
-        question = question_by_id.get(question_id) if isinstance(question_id, str) else None
-        if (
-            question is None
-            or not isinstance(from_event_ref, str)
-            or from_event_ref not in event_by_ref
-            or question["source_event_ref"] not in event_by_ref
-            or raw_relation.get("temporal_order_valid") is not True
-        ):
-            continue
-        relations.append(
-            {
-                "relation_id": raw_relation.get("relation_id"),
-                "type": raw_relation.get("relation_type"),
-                "from_event_ref": from_event_ref,
-                "to_question_id": question_id,
-                "temporal_order_valid": True,
-            }
-        )
-    return questions, relations
-
-
-def _v10_discourse_projection(
-    model_view: dict[str, Any],
-    *,
-    selected_events: list[dict[str, Any]],
-    current_round_no: int,
-    include_reply_opportunity: bool,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    event_by_ref = {
-        str(event["event_ref"]): event
-        for event in selected_events
-        if isinstance(event, dict) and isinstance(event.get("event_ref"), str)
-    }
-    raw_questions = model_view.get("questions")
-    raw_questions = raw_questions if isinstance(raw_questions, list) else []
-    questions: list[dict[str, Any]] = []
-    for raw_question in raw_questions:
-        if not isinstance(raw_question, dict):
-            continue
-        asked_in = raw_question.get("asked_in")
-        if not isinstance(asked_in, dict) or asked_in.get("round_no") != current_round_no:
-            continue
-        question_id = raw_question.get("question_id")
-        source_event_ref = raw_question.get("source_event_id")
-        status = raw_question.get("status")
+        source_event_ref = raw_question.get("source_event_ref")
+        response_status = raw_question.get("response_status")
         address_resolution = raw_question.get("address_resolution")
+        derivation = raw_question.get("derivation")
         if (
             not isinstance(question_id, str)
             or not isinstance(source_event_ref, str)
             or source_event_ref not in event_by_ref
-            or status not in {"open", "answered"}
+            or response_status not in {"none_detected", "response_detected"}
             or address_resolution not in {"resolved", "unresolved"}
+            or not _is_complete_derivation(derivation)
         ):
             continue
         source_event = event_by_ref[source_event_ref]
-        asked_at_seq = _positive_int(raw_question.get("asked_record_seq"))
+        asked_at_seq = _positive_int(raw_question.get("asked_at_seq"))
         if asked_at_seq is None:
             asked_at_seq = _positive_int(source_event.get("known_at_seq"))
         item: dict[str, Any] = {
             "question_id": question_id,
             "source_event_ref": source_event_ref,
-            "source_authority": "player_claim_unverified",
+            "source_authority": raw_question.get("source_authority"),
             "asked_by": raw_question.get("asked_by"),
             "addressed_to": raw_question.get("addressed_to"),
             "address_resolution": address_resolution,
             "asked_at_seq": asked_at_seq,
             "topic": raw_question.get("topic"),
-            "status": status,
+            "response_status": response_status,
+            "derivation": derivation,
         }
         requested_fields = raw_question.get("requested_fields")
         if isinstance(requested_fields, list):
             retained_requested_fields = [
-                field
-                for field in requested_fields
-                if field in {"target_ref", "claimed_result"}
+                field for field in requested_fields if field in {"target_ref", "claimed_result"}
             ]
             if retained_requested_fields:
                 item["requested_fields"] = retained_requested_fields
@@ -1406,7 +1169,8 @@ def _v10_discourse_projection(
         if not isinstance(raw_relation, dict):
             continue
         question_id = raw_relation.get("to_question_id")
-        from_event_ref = raw_relation.get("from_source_event_id")
+        from_event_ref = raw_relation.get("from_event_ref")
+        derivation = raw_relation.get("derivation")
         question = question_by_id.get(question_id) if isinstance(question_id, str) else None
         if (
             question is None
@@ -1414,15 +1178,18 @@ def _v10_discourse_projection(
             or from_event_ref not in event_by_ref
             or question["source_event_ref"] not in event_by_ref
             or raw_relation.get("temporal_order_valid") is not True
+            or raw_relation.get("type") != "response_to_question"
+            or not _is_complete_derivation(derivation)
         ):
             continue
         relations.append(
             {
                 "relation_id": raw_relation.get("relation_id"),
-                "type": raw_relation.get("relation_type"),
+                "type": "response_to_question",
                 "from_event_ref": from_event_ref,
                 "to_question_id": question_id,
                 "temporal_order_valid": True,
+                "derivation": derivation,
             }
         )
     return questions, relations
@@ -1454,33 +1221,40 @@ def _private_fact_occurrence(payload: Any, *, current_round_no: int) -> dict[str
     return {"period": "current_action", "round_no": current_round_no}
 
 
-def _v8_projection_metadata(
+def _v11_projection_metadata(
     *,
     ledger: dict[str, Any],
+    model_view_metadata: dict[str, Any],
     projected_context: dict[str, Any],
     selected_events: list[dict[str, Any]],
+    source_event_count: int,
+    future_filtered_event_count: int,
+    questions: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
     current_round_no: int,
     model_view_schema_version: int,
 ) -> dict[str, Any]:
     statements = ledger.get("statements")
     statements = statements if isinstance(statements, list) else []
-    claims = ledger.get("claims")
-    claims = claims if isinstance(claims, list) else []
-    questions = ledger.get("questions")
-    questions = questions if isinstance(questions, list) else []
-    relations = ledger.get("relations")
-    relations = relations if isinstance(relations, list) else []
+    ledger_claims = ledger.get("claims")
+    ledger_claims = ledger_claims if isinstance(ledger_claims, list) else []
+    ledger_questions = ledger.get("questions")
+    ledger_questions = ledger_questions if isinstance(ledger_questions, list) else []
+    ledger_relations = ledger.get("relations")
+    ledger_relations = ledger_relations if isinstance(ledger_relations, list) else []
+    annotations = [
+        annotation
+        for event in selected_events
+        if isinstance(event.get("annotations"), list)
+        for annotation in event["annotations"]
+        if isinstance(annotation, dict)
+    ]
     selected_sequences = [
         sequence
         for event in selected_events
         for sequence in (_positive_int(event.get("known_at_seq")),)
         if sequence is not None
     ]
-    section_char_counts = {
-        key: _serialized_chars(value)
-        for key, value in projected_context.items()
-        if key not in {"model_context_schema_version", "prompt_template_version"}
-    }
     current_round_statements = [
         statement
         for statement in statements
@@ -1488,9 +1262,36 @@ def _v8_projection_metadata(
         and isinstance(statement.get("occurred_in"), dict)
         and statement["occurred_in"].get("round_no") == current_round_no
     ]
+
+    def count(name: str, fallback: int) -> int:
+        value = model_view_metadata.get(name)
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else fallback
+        )
+
+    source_claim_count = count("source_claim_candidate_count", len(ledger_claims))
+    validated_claim_count = count("emitted_claim_count", len(annotations))
+    emitted_claim_count = len(annotations)
+    source_question_count = count("source_question_count", len(ledger_questions))
+    out_of_scope_question_count = count("out_of_scope_question_count", 0)
+    emitted_question_count = count("emitted_question_count", len(questions))
+    current_scope_question_count = count(
+        "current_scope_question_count",
+        max(0, source_question_count - out_of_scope_question_count),
+    )
+    source_relation_count = count("source_relation_count", len(ledger_relations))
+    emitted_relation_count = count("emitted_relation_count", len(relations))
+    derivation_rejections = model_view_metadata.get("derivation_rejections")
+    derivation_rejections = (
+        [dict(item) for item in derivation_rejections if isinstance(item, dict)]
+        if isinstance(derivation_rejections, list)
+        else []
+    )
     return {
-        "prompt_schema_version": 8,
-        "model_context_schema_version": 8,
+        "prompt_schema_version": 11,
+        "model_context_schema_version": 11,
         "prompt_template_version": projected_context["prompt_template_version"],
         "known_events_schema_version": projected_context["known_events"]["schema_version"],
         "ledger_schema_version": (
@@ -1499,107 +1300,62 @@ def _v8_projection_metadata(
         "model_view_schema_version": model_view_schema_version,
         "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
         "serialized_char_count": _serialized_chars(projected_context),
-        "section_char_counts": section_char_counts,
+        "section_char_counts": {
+            key: _serialized_chars(value)
+            for key, value in projected_context.items()
+            if key not in {"model_context_schema_version", "prompt_template_version"}
+        },
         "ledger_statement_count": len(statements),
         "ledger_statement_char_count": sum(
             len(str(item.get("speech") or "")) for item in statements if isinstance(item, dict)
         ),
-        "ledger_claim_count": len(claims),
-        "ledger_question_count": len(questions),
-        "ledger_relation_count": len(relations),
-        "open_question_count": sum(
-            isinstance(question, dict) and question.get("status") == "open"
-            for question in questions
-        ),
-        "known_event_count": len(selected_events),
-        "known_event_total_count": len(selected_events),
-        "dropped_event_count": 0,
+        "ledger_claim_count": len(ledger_claims),
+        "ledger_question_count": len(ledger_questions),
+        "ledger_relation_count": len(ledger_relations),
+        "source_event_count": source_event_count,
+        "emitted_event_count": len(selected_events),
+        "future_filtered_event_count": future_filtered_event_count,
+        "budget_dropped_event_count": 0,
         "known_event_record_seq_min": min(selected_sequences, default=None),
         "known_event_record_seq_max": max(selected_sequences, default=None),
+        "source_claim_candidate_count": source_claim_count,
+        "emitted_claim_count": emitted_claim_count,
+        "out_of_scope_claim_count": max(0, validated_claim_count - emitted_claim_count),
+        "rejected_claim_count": count(
+            "rejected_claim_count",
+            max(0, source_claim_count - validated_claim_count),
+        ),
+        "source_question_count": source_question_count,
+        "current_scope_question_count": current_scope_question_count,
+        "emitted_question_count": emitted_question_count,
+        "out_of_scope_question_count": out_of_scope_question_count,
+        "invalid_question_count": count(
+            "invalid_question_count",
+            max(0, current_scope_question_count - emitted_question_count),
+        ),
+        "source_relation_count": source_relation_count,
+        "emitted_relation_count": emitted_relation_count,
+        "invalid_relation_count": count(
+            "invalid_relation_count",
+            max(0, source_relation_count - emitted_relation_count),
+        ),
+        "none_detected_question_count": sum(
+            question.get("response_status") == "none_detected" for question in questions
+        ),
+        "response_detected_question_count": sum(
+            question.get("response_status") == "response_detected" for question in questions
+        ),
+        "awaiting_scheduled_turn_question_count": sum(
+            question.get("reply_opportunity") == "awaiting_scheduled_turn" for question in questions
+        ),
         "current_round_statement_count": len(current_round_statements),
         "current_round_statement_char_count": sum(
             len(str(item.get("speech") or ""))
             for item in current_round_statements
             if isinstance(item, dict)
         ),
+        "derivation_rejections": derivation_rejections,
     }
-
-
-def _v9_projection_metadata(
-    *,
-    ledger: dict[str, Any],
-    projected_context: dict[str, Any],
-    selected_events: list[dict[str, Any]],
-    questions: list[dict[str, Any]],
-    relations: list[dict[str, Any]],
-    current_round_no: int,
-    model_view_schema_version: int,
-) -> dict[str, Any]:
-    metadata = _v8_projection_metadata(
-        ledger=ledger,
-        projected_context=projected_context,
-        selected_events=selected_events,
-        current_round_no=current_round_no,
-        model_view_schema_version=model_view_schema_version,
-    )
-    metadata.update(
-        {
-            "prompt_schema_version": 9,
-            "model_context_schema_version": 9,
-            "prompt_template_version": projected_context["prompt_template_version"],
-            "known_events_schema_version": projected_context["known_events"]["schema_version"],
-            "question_count": len(questions),
-            "relation_count": len(relations),
-            "open_question_count": sum(question.get("status") == "open" for question in questions),
-            "awaiting_scheduled_turn_question_count": sum(
-                question.get("reply_opportunity") == "awaiting_scheduled_turn"
-                for question in questions
-            ),
-            "dropped_question_count": 0,
-            "dropped_relation_count": 0,
-        }
-    )
-    return metadata
-
-
-def _v10_projection_metadata(
-    *,
-    ledger: dict[str, Any],
-    projected_context: dict[str, Any],
-    selected_events: list[dict[str, Any]],
-    questions: list[dict[str, Any]],
-    relations: list[dict[str, Any]],
-    current_round_no: int,
-    model_view_schema_version: int,
-) -> dict[str, Any]:
-    metadata = _v9_projection_metadata(
-        ledger=ledger,
-        projected_context=projected_context,
-        selected_events=selected_events,
-        questions=questions,
-        relations=relations,
-        current_round_no=current_round_no,
-        model_view_schema_version=model_view_schema_version,
-    )
-    annotations = [
-        annotation
-        for event in selected_events
-        if isinstance(event.get("annotations"), list)
-        for annotation in event["annotations"]
-        if isinstance(annotation, dict)
-    ]
-    metadata.update(
-        {
-            "prompt_schema_version": 10,
-            "model_context_schema_version": 10,
-            "structured_claim_count": len(annotations),
-            "prior_coverage_question_count": sum(
-                question.get("prior_coverage") == "already_publicly_reported"
-                for question in questions
-            ),
-        }
-    )
-    return metadata
 
 
 def _known_event_sort_key(event: dict[str, Any]) -> tuple[int, int, int, str]:
@@ -1625,6 +1381,16 @@ def _drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if item is not None}
 
 
+def _drop_empty_collections(value: Any) -> Any:
+    if isinstance(value, dict):
+        compacted = {key: _drop_empty_collections(item) for key, item in value.items()}
+        return {key: item for key, item in compacted.items() if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        compacted_items = [_drop_empty_collections(item) for item in value]
+        return [item for item in compacted_items if item not in (None, "", [], {})]
+    return value
+
+
 def _serialized_chars(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
@@ -1634,122 +1400,65 @@ def model_prompt_metadata(
     *,
     projection_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    history = context.get("history")
-    history = history if isinstance(history, dict) else {}
-    timeline = history.get("timeline")
-    questions = history.get("questions")
-    relations = history.get("relations")
-    timeline = timeline if isinstance(timeline, list) else []
-    questions = questions if isinstance(questions, list) else []
-    relations = relations if isinstance(relations, list) else []
+    if (
+        context.get("model_context_schema_version") != 11
+        or context.get("prompt_template_version") != 3
+    ):
+        raise ValueError("unsupported_model_prompt_contract")
     known_events = context.get("known_events")
     known_events = known_events if isinstance(known_events, dict) else {}
-    known_event_items = known_events.get("events")
-    known_event_items = known_event_items if isinstance(known_event_items, list) else []
-    if known_events.get("schema_version") in {3, 4}:
-        projected_questions = known_events.get("questions")
-        projected_relations = known_events.get("relations")
-        questions = projected_questions if isinstance(projected_questions, list) else []
-        relations = projected_relations if isinstance(projected_relations, list) else []
-    public_timeline = context.get("public_timeline")
-    public_timeline = public_timeline if isinstance(public_timeline, dict) else {}
-    public_events = public_timeline.get("events")
-    public_events = public_events if isinstance(public_events, list) else []
-    public_record_seqs = [
-        value
-        for item in public_events
-        if isinstance(item, dict)
-        for value in (item.get("record_seq"),)
-        if isinstance(value, int) and not isinstance(value, bool)
-    ]
-    public_timeline_kind_counts: dict[str, int] = {}
-    for item in public_events:
-        if not isinstance(item, dict):
-            continue
-        kind = item.get("kind")
-        if not isinstance(kind, str) or not kind:
-            continue
-        public_timeline_kind_counts[kind] = public_timeline_kind_counts.get(kind, 0) + 1
-    record_seqs = [
-        value
-        for item in timeline
-        if isinstance(item, dict)
-        for value in (item.get("record_seq"),)
-        if isinstance(value, int) and not isinstance(value, bool)
-    ]
-    current_round_no = history.get("current_round_no")
-    current_round_statements = [
-        item
-        for item in timeline
-        if isinstance(item, dict)
-        and isinstance(item.get("occurred_in"), dict)
-        and item["occurred_in"].get("round_no") == current_round_no
-    ]
+    if known_events.get("schema_version") != 5:
+        raise ValueError("unsupported_known_events_schema_version")
+    events = known_events.get("events")
+    questions = known_events.get("questions")
+    relations = known_events.get("relations")
+    events = events if isinstance(events, list) else []
+    questions = questions if isinstance(questions, list) else []
+    relations = relations if isinstance(relations, list) else []
     annotations = [
         annotation
-        for item in timeline
-        if isinstance(item, dict) and isinstance(item.get("annotations"), list)
-        for annotation in item["annotations"]
+        for event in events
+        if isinstance(event, dict) and isinstance(event.get("annotations"), list)
+        for annotation in event["annotations"]
         if isinstance(annotation, dict)
     ]
-    annotations.extend(
-        annotation
-        for item in known_event_items
-        if isinstance(item, dict) and isinstance(item.get("annotations"), list)
-        for annotation in item["annotations"]
-        if isinstance(annotation, dict)
-    )
-    metadata = {
-        "prompt_schema_version": context.get("prompt_schema_version"),
-        "model_context_schema_version": context.get("model_context_schema_version"),
-        "prompt_template_version": context.get("prompt_template_version"),
-        "serialized_char_count": len(
-            json.dumps(context, ensure_ascii=False, separators=(",", ":"))
-        ),
-        "ledger_schema_version": history.get("ledger_schema_version"),
-        "model_view_schema_version": history.get("model_view_schema_version"),
-        "public_timeline_schema_version": public_timeline.get("schema_version"),
-        "public_timeline_event_count": len(public_events),
-        "public_timeline_record_seq_min": min(public_record_seqs, default=None),
-        "public_timeline_record_seq_max": max(public_record_seqs, default=None),
-        "public_timeline_missing_record_seq_count": sum(
-            1
-            for item in public_events
-            if isinstance(item, dict)
-            and not (
-                isinstance(item.get("record_seq"), int)
-                and not isinstance(item.get("record_seq"), bool)
+    record_seqs = [
+        sequence
+        for event in events
+        if isinstance(event, dict)
+        for sequence in (_positive_int(event.get("record_seq")),)
+        if sequence is not None
+    ]
+    metadata: dict[str, Any] = {
+        "prompt_schema_version": 11,
+        "model_context_schema_version": 11,
+        "prompt_template_version": 3,
+        "known_events_schema_version": 5,
+        "serialized_char_count": _serialized_chars(context),
+        "known_event_count": len(events),
+        "known_event_record_seq_min": min(record_seqs, default=None),
+        "known_event_record_seq_max": max(record_seqs, default=None),
+        "known_event_kind_counts": {
+            kind: sum(isinstance(event, dict) and event.get("kind") == kind for event in events)
+            for kind in sorted(
+                {
+                    event.get("kind")
+                    for event in events
+                    if isinstance(event, dict) and isinstance(event.get("kind"), str)
+                }
             )
-        ),
-        "public_timeline_kind_counts": public_timeline_kind_counts,
-        "current_round_statement_count": len(current_round_statements),
-        "current_round_statement_char_count": sum(
-            len(str(item.get("speech") or ""))
-            for item in current_round_statements
-            if isinstance(item, dict)
-        ),
+        },
         "structured_claim_count": len(annotations),
-        "secondary_paraphrase_count": sum(
-            1
-            for item in annotations
-            if isinstance(item, dict) and item.get("claim_type") == "secondary_paraphrase"
-        ),
-        "unverified_reported_response_count": sum(
-            1
-            for item in annotations
-            if isinstance(item, dict)
-            and item.get("asserted_relation_type") == "reported_response"
-            and item.get("temporal_relation_status") == "unverified"
-        ),
         "question_count": len(questions),
-        "open_question_count": sum(
-            1
+        "none_detected_question_count": sum(
+            isinstance(question, dict) and question.get("response_status") == "none_detected"
             for question in questions
-            if isinstance(question, dict) and question.get("status") == "open"
+        ),
+        "response_detected_question_count": sum(
+            isinstance(question, dict) and question.get("response_status") == "response_detected"
+            for question in questions
         ),
         "relation_count": len(relations),
-        "source_record_seq_min": min(record_seqs, default=None),
-        "source_record_seq_max": max(record_seqs, default=None),
     }
     if projection_metadata:
         metadata.update(projection_metadata)
@@ -2033,7 +1742,7 @@ def _model_public_timeline(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "缺少 record_seq 的事件只能沿用输入位置，不得与其他事件推断精确先后"
             ),
             "duplicate_record_seq_rule": (
-                "若 legacy 输入出现相同 record_seq，则沿用输入顺序展示，"
+                "若输入出现相同 record_seq，则沿用输入顺序展示，"
                 "但不得推断这些同序事件之间的精确因果先后"
             ),
         },
@@ -2041,20 +1750,77 @@ def _model_public_timeline(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _compact_persona(value: Any) -> dict[str, Any]:
+def _response_allows_speech(value: Any) -> bool:
+    contract = value if isinstance(value, dict) else {}
+    speech = contract.get("speech")
+    speech = speech if isinstance(speech, dict) else {}
+    return speech.get("mode") in {"required", "optional", "required_if_true"}
+
+
+def _model_response_v11(value: Any) -> dict[str, Any]:
+    contract = value if isinstance(value, dict) else {}
+    kind = contract.get("kind")
+    speech = contract.get("speech")
+    speech = speech if isinstance(speech, dict) else {}
+    projected_speech = {
+        key: speech.get(key)
+        for key in ("mode", "max_chars", "max_sentences", "condition")
+        if speech.get(key) is not None
+    }
+    result: dict[str, Any] = {
+        "kind": kind,
+        "presentation_kind": contract.get("presentation_kind"),
+        "language": contract.get("language"),
+        "speech": projected_speech,
+    }
+    decision_note = contract.get("decision_note")
+    if isinstance(decision_note, dict):
+        result["decision_note"] = {
+            key: decision_note.get(key)
+            for key in ("mode", "max_chars")
+            if decision_note.get(key) is not None
+        }
+    if kind == "target":
+        target_policy = contract.get("target_policy")
+        target_policy = target_policy if isinstance(target_policy, dict) else {}
+        result["target_policy"] = {
+            "mode": target_policy.get("mode"),
+            "candidate_source": "candidates",
+        }
+    elif kind == "boolean":
+        result["field"] = contract.get("field")
+        boolean_contract = contract.get("boolean")
+        if isinstance(boolean_contract, dict):
+            result["boolean"] = {
+                key: boolean_contract.get(key)
+                for key in ("true_means", "false_means")
+                if boolean_contract.get(key) is not None
+            }
+    compacted = _drop_empty_collections(result)
+    return compacted if isinstance(compacted, dict) else {}
+
+
+def _compact_persona(value: Any, *, include_delivery: bool = True) -> dict[str, Any]:
     profile = value if isinstance(value, dict) else {}
     personality = profile.get("personality")
     if isinstance(personality, str) and len(personality) > _PERSONA_TEXT_LIMIT:
         personality = personality[:_PERSONA_TEXT_LIMIT].rstrip() + "…"
+    delivery = (
+        {
+            "delivery_mood": profile.get("base_delivery_mood"),
+            "delivery_intensity": profile.get("base_delivery_intensity"),
+            "delivery_pace": profile.get("base_delivery_pace"),
+            "delivery_instruction": profile.get("base_delivery_instruction"),
+        }
+        if include_delivery
+        else {}
+    )
     return {
         key: item
         for key, item in {
             "personality": personality,
             "strategy_profile": profile.get("strategy_profile"),
-            "delivery_mood": profile.get("base_delivery_mood"),
-            "delivery_intensity": profile.get("base_delivery_intensity"),
-            "delivery_pace": profile.get("base_delivery_pace"),
-            "delivery_instruction": profile.get("base_delivery_instruction"),
+            **delivery,
         }.items()
         if item not in (None, [], "")
     }
@@ -2623,18 +2389,29 @@ def _night_action_rules(
     return result
 
 
-def private_authoritative_facts(knowledge: Any) -> list[dict[str, Any]]:
+def private_authoritative_facts(
+    knowledge: Any,
+    *,
+    owner_scope: str | None = None,
+    owner_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if (owner_scope is None) != (owner_id is None):
+        raise ValueError("private_fact_owner_incomplete")
     if isinstance(knowledge, list):
-        return [dict(item) for item in knowledge if isinstance(item, dict)]
-    if not isinstance(knowledge, dict):
+        facts = [dict(item) for item in knowledge if isinstance(item, dict)]
+    elif isinstance(knowledge, dict):
+        facts = []
+        for fact_type, payload in knowledge.items():
+            if fact_type == "known_investigations" and isinstance(payload, list):
+                facts.extend(dict(item) for item in payload if isinstance(item, dict))
+                continue
+            facts.append({"fact_type": fact_type, "payload": payload})
+    else:
         return []
-
-    facts: list[dict[str, Any]] = []
-    for fact_type, payload in knowledge.items():
-        if fact_type == "known_investigations" and isinstance(payload, list):
-            facts.extend(dict(item) for item in payload if isinstance(item, dict))
-            continue
-        facts.append({"fact_type": fact_type, "payload": payload})
+    if owner_scope is not None and owner_id is not None:
+        for fact in facts:
+            fact.setdefault("owner_scope", owner_scope)
+            fact.setdefault("owner_id", owner_id)
     return facts
 
 

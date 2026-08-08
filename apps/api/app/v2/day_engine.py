@@ -26,7 +26,7 @@ from app.v2.model_context import (
     build_public_rule_contract,
     private_authoritative_facts,
 )
-from app.v2.model_context_contract import is_v9_or_later_model_context_contract
+from app.v2.model_context_contract import is_current_model_context_contract
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -683,19 +683,14 @@ class V2DayEngine:
             for candidate in candidates
         ]
         option_by_start = {str(option["target_player_id"]): option for option in options}
-        uses_compact_context = is_v9_or_later_model_context_contract(
-            state.model_context_contract
-        )
+        if not is_current_model_context_contract(state.model_context_contract):
+            raise V2DayRuntimeError("unsupported_model_context_contract")
         decision = await self._player_action(
             game_id=state.game_id,
             player=sheriff,
             broadcaster=broadcaster,
             action_type="sheriff_speech_order",
-            objective=(
-                "根据每个候选对应的完整发言顺序，选择本轮起始发言者。"
-                if uses_compact_context
-                else "选择本轮第一位发言者。"
-            ),
+            objective="根据每个候选对应的完整发言顺序，选择本轮起始发言者。",
             candidates=candidates,
             target_optional=False,
             output_kind="public_decision",
@@ -706,22 +701,18 @@ class V2DayEngine:
                 decision_note_mode="optional",
                 decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
             ),
-            extra_context=(
-                {
-                    "v9_action_extension": {
-                        "mechanical_effect": {
-                            "action_type": "sheriff_speech_order",
-                            "target_mode": "required",
-                            "selected_target_becomes_first_speaker": True,
-                            "sheriff_speaks_last": True,
-                            "options": options,
-                            "speech_has_gameplay_effect": False,
-                        }
+            extra_context={
+                "v11_action_extension": {
+                    "mechanical_effect": {
+                        "action_type": "sheriff_speech_order",
+                        "target_mode": "required",
+                        "selected_target_becomes_first_speaker": True,
+                        "sheriff_speaks_last": True,
+                        "options": options,
+                        "speech_has_gameplay_effect": False,
                     }
                 }
-                if uses_compact_context
-                else None
-            ),
+            },
         )
         start = decision.target_player_id
         selected_option = option_by_start.get(str(start))
@@ -1555,18 +1546,8 @@ class V2DayEngine:
         state: V2MatchSnapshot,
         broadcaster: V2BroadcastPort,
     ) -> bool:
-        prompt_template_version = state.model_context_contract.get("prompt_template_version")
-        if not is_v9_or_later_model_context_contract(state.model_context_contract) and (
-            not isinstance(prompt_template_version, int) or prompt_template_version < 3
-        ):
-            return await self._judge(
-                state=state,
-                broadcaster=broadcaster,
-                action_type="judge_day_summary",
-                objective=f"播报第{state.round_no}天流程结束并即将入夜",
-                success_phase_state=state.phase_state,
-                context={},
-            )
+        if not is_current_model_context_contract(state.model_context_contract):
+            raise V2DayRuntimeError("unsupported_model_context_contract")
 
         players = tuple(
             sorted(
@@ -1891,7 +1872,11 @@ class V2DayEngine:
                         private_facts=private_facts,
                         current_action_type=action_type,
                     ),
-                    "private_authoritative_facts": private_authoritative_facts(private_facts),
+                    "private_authoritative_facts": private_authoritative_facts(
+                        private_facts,
+                        owner_scope="player",
+                        owner_id=player.player_id,
+                    ),
                     "public_match_state": build_public_match_state(
                         round_no=state.round_no,
                         players=state.players,

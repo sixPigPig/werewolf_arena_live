@@ -1513,25 +1513,17 @@ def _admin_model_requests(
             if isinstance(response_payload.get("passive_observations"), list)
             else []
         )
-        binding_prior_failure_streak = _first_int(
-            payload.get("model_binding_prior_failure_streak")
-        )
-        binding_failed_streak = _first_int(
-            failure_payload.get("model_binding_failure_streak")
-        )
+        binding_prior_failure_streak = _first_int(payload.get("model_binding_prior_failure_streak"))
+        binding_failed_streak = _first_int(failure_payload.get("model_binding_failure_streak"))
         if response is not None and binding_prior_failure_streak is not None:
             binding_failure_streak = 0
             binding_health_status = "healthy"
             binding_recovered_after_failures = (
-                binding_prior_failure_streak
-                if binding_prior_failure_streak > 0
-                else None
+                binding_prior_failure_streak if binding_prior_failure_streak > 0 else None
             )
         elif binding_failed_streak is not None:
             binding_failure_streak = binding_failed_streak
-            raw_binding_health_status = failure_payload.get(
-                "model_binding_health_status"
-            )
+            raw_binding_health_status = failure_payload.get("model_binding_health_status")
             binding_health_status = (
                 raw_binding_health_status
                 if raw_binding_health_status in {"healthy", "impaired", "degraded"}
@@ -1621,6 +1613,11 @@ def _admin_model_requests(
                     if isinstance(payload.get("prompt_projection"), dict)
                     else None
                 ),
+                output_enforcement=(
+                    payload.get("output_enforcement")
+                    if isinstance(payload.get("output_enforcement"), dict)
+                    else None
+                ),
                 status=status,
                 request_payload=request_payload,
                 input_source=input_source,
@@ -1658,6 +1655,15 @@ def _admin_model_requests(
                 repair_kind=(
                     response_payload.get("repair_kind")
                     if isinstance(response_payload.get("repair_kind"), str)
+                    else None
+                ),
+                application_validation_result=(
+                    response_payload.get("application_validation_result")
+                    if response_payload.get("application_validation_result")
+                    in {"accepted", "rejected"}
+                    else failure_payload.get("application_validation_result")
+                    if failure_payload.get("application_validation_result")
+                    in {"accepted", "rejected"}
                     else None
                 ),
                 retryable=(
@@ -1740,9 +1746,7 @@ def _admin_model_requests(
                 ),
                 model_binding_failure_streak=binding_failure_streak,
                 model_binding_health_status=binding_health_status,
-                model_binding_recovered_after_failures=(
-                    binding_recovered_after_failures
-                ),
+                model_binding_recovered_after_failures=(binding_recovered_after_failures),
                 started_at=start.created_at,
                 completed_at=completed_at,
             )

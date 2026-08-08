@@ -32,6 +32,7 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.models.user import User
 from app.rule_sets.snapshots import compile_rule_set_config
 from app.rule_sets.validation import normalize_rule_set_config
+from app.v2 import action_engine as action_engine_module
 from app.v2.live_runtime import (
     V2ClientProtocolError,
     V2LiveRuntime,
@@ -55,7 +56,13 @@ from app.v2.day_engine import (
 from app.v2.execution import bind_v2_run_fence
 from app.v2.first_night_engine import V2NightEngine, _WorkingNight
 from app.v2.match_repository import V2DayVoteCommit, V2MatchRepository
-from app.v2.model_context import project_model_action_context
+from app.v2.model_context import (
+    V2ModelContextProjectionInvariantError,
+    V2ModelPlayerReference,
+    V2ProjectedModelContext,
+    project_model_action_context,
+)
+from app.v2.model_context_contract import current_model_context_contract
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
@@ -326,6 +333,29 @@ class FakeV2ModelClient:
             model_id=target.model_id,
             parameters=target.parameters,
         )
+
+    def output_enforcement_metadata(
+        self,
+        *,
+        action_context: dict[str, Any],
+        decision: bool,
+        target: V2ModelTarget,
+    ) -> dict[str, str | int | None]:
+        assert action_context["model_context_schema_version"] == 11
+        assert target.provider == "agent_plan"
+        if not decision:
+            return {
+                "requested_output_enforcement": "none",
+                "provider_output_enforcement": "none",
+                "output_schema_name": None,
+                "output_schema_version": None,
+            }
+        return {
+            "requested_output_enforcement": "strict_json_schema",
+            "provider_output_enforcement": "prompt_and_application_validation",
+            "output_schema_name": None,
+            "output_schema_version": None,
+        }
 
     async def generate_action_decision(
         self,
@@ -1294,12 +1324,12 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "judge_voice": game.judge_voice_snapshot,
             "delivery_snapshot": game.delivery_snapshot,
             "model_context_contract": {
-                "model_context_schema_version": 10,
-                "prompt_template_version": 2,
-                "known_events_schema_version": 4,
-                "ledger_schema_version": 4,
-                "model_view_schema_version": 4,
-                "model_view_selector_version": 1,
+                "model_context_schema_version": 11,
+                "prompt_template_version": 3,
+                "known_events_schema_version": 5,
+                "ledger_schema_version": 5,
+                "model_view_schema_version": 5,
+                "model_view_selector_version": 2,
             },
         }
         assert events[1].payload == {
@@ -2024,18 +2054,18 @@ def test_profile_library_mode_requires_inner_rule_revision(v2_context) -> None:
     assert response.status_code == 422
 
 
-def test_new_game_freezes_v10_prompt_v2_model_context_contract(v2_context) -> None:
+def test_new_game_freezes_v11_prompt_v3_model_context_contract(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "V10 契约冻结"})
+    created = client.post("/api/v2/games", json={"title": "V11 契约冻结"})
     assert created.status_code == 201, created.text
 
     expected = {
-        "model_context_schema_version": 10,
-        "prompt_template_version": 2,
-        "known_events_schema_version": 4,
-        "ledger_schema_version": 4,
-        "model_view_schema_version": 4,
-        "model_view_selector_version": 1,
+        "model_context_schema_version": 11,
+        "prompt_template_version": 3,
+        "known_events_schema_version": 5,
+        "ledger_schema_version": 5,
+        "model_view_schema_version": 5,
+        "model_view_selector_version": 2,
     }
     with session_factory() as db:
         game = db.get(V2GameRecord, created.json()["game_id"])
@@ -2196,7 +2226,7 @@ def test_live_snapshot_requires_complete_durable_terminal_evidence(v2_context) -
     assert complete.json()["completed_at"] is not None
 
 
-def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
+def test_non_v11_model_context_contracts_are_readable_but_cannot_resume(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -2219,10 +2249,13 @@ def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
     assert snapshot.json()["game_id"] == game_id
 
     runtime = client.app.state.v2_live_runtime
-    channel = asyncio.run(runtime._channel(game_id))
-    assert channel.game_id == game_id
+    with pytest.raises(
+        V2ClientProtocolError,
+        match="unsupported_model_context_contract",
+    ):
+        asyncio.run(runtime._channel(game_id))
 
-    v8_created = client.post("/api/v2/games", json={"title": "V8 旧模板可续跑"}).json()
+    v8_created = client.post("/api/v2/games", json={"title": "V8 旧模板不可续跑"}).json()
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, v8_created["game_id"])
         assert game is not None
@@ -2240,8 +2273,11 @@ def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
     v8_snapshot = client.get(v8_created["snapshot_url"])
     assert v8_snapshot.status_code == 200
     assert v8_snapshot.json()["game_id"] == v8_created["game_id"]
-    v8_channel = asyncio.run(runtime._channel(v8_created["game_id"]))
-    assert v8_channel.game_id == v8_created["game_id"]
+    with pytest.raises(
+        V2ClientProtocolError,
+        match="unsupported_model_context_contract",
+    ):
+        asyncio.run(runtime._channel(v8_created["game_id"]))
 
     unsupported = client.post("/api/v2/games", json={"title": "未知契约"}).json()
     with session_factory.begin() as db:
@@ -2256,11 +2292,12 @@ def test_legacy_model_context_contracts_can_resume_but_unknown_contract_cannot(
         asyncio.run(runtime._channel(unsupported["game_id"]))
 
     repository = V2ActionRepository(session_factory)
-    with pytest.raises(
-        V2RepositoryError,
-        match="unsupported_model_context_contract",
-    ):
-        repository.start_game(game_id=unsupported["game_id"], audience="player_public")
+    for blocked_game_id in (game_id, v8_created["game_id"], unsupported["game_id"]):
+        with pytest.raises(
+            V2RepositoryError,
+            match="unsupported_model_context_contract",
+        ):
+            repository.start_game(game_id=blocked_game_id, audience="player_public")
 
 
 def test_join_sample_cursor_is_atomic_with_audio_broadcast() -> None:
@@ -3700,13 +3737,12 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         for context in player_contexts
     )
     assert all(
-        context["model_context_schema_version"] == 10
-        and context["prompt_template_version"] == 2
+        context["model_context_schema_version"] == 11
+        and context["prompt_template_version"] == 3
         and "private_judge_facts" not in context["self"]
-        and "ability_runtime_state" in context["self"]
         and "mechanical_effect" in context["task"]
         and "state" in context
-        and context["known_events"]["schema_version"] == 4
+        and context["known_events"]["schema_version"] == 5
         and "events" in context["known_events"]
         and "questions" in context["known_events"]
         and "relations" in context["known_events"]
@@ -3762,8 +3798,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
             for fact in _private_known_facts(context)
         )
         and context["response"]["speech"]["mode"] == "forbidden"
-        and context["response"]["decision_note"]
-        == {"type": "string", "mode": "optional", "max_chars": 80}
+        and context["response"]["decision_note"] == {"mode": "optional", "max_chars": 80}
         and all(
             fact.get("fact_type") not in {"werewolf_first_round", "werewolf_second_round_so_far"}
             for fact in _private_known_facts(context)
@@ -3827,9 +3862,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
         }
         assert "decision_note" not in own_blind_decisions[0]["decision"]
         assert context["response"]["speech"] == {
-            "type": "string",
             "mode": "required",
-            "min_length": 1,
             "max_sentences": 1,
         }
         assert "decision_note" not in context["response"]
@@ -5082,25 +5115,28 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         ]
         assert model_request_events
         assert all(
-            event.payload["prompt_schema_version"] == 10
-            and event.payload["model_context_schema_version"] == 10
-            and event.payload["prompt_template_version"] == 2
-            and event.payload["model_view_selector_version"] == 1
-            and event.payload["prompt_projection"]["known_events_schema_version"] == 4
+            event.payload["prompt_schema_version"] == 11
+            and event.payload["model_context_schema_version"] == 11
+            and event.payload["prompt_template_version"] == 3
+            and event.payload["model_view_selector_version"] == 2
+            and event.payload["prompt_projection"]["known_events_schema_version"] == 5
             and "known_event_count" in event.payload["prompt_projection"]
-            and "known_event_total_count" in event.payload["prompt_projection"]
+            and "source_event_count" in event.payload["prompt_projection"]
+            and "emitted_event_count" in event.payload["prompt_projection"]
             and "known_event_record_seq_min" in event.payload["prompt_projection"]
             and "known_event_record_seq_max" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["ledger_schema_version"] == 4
-            and event.payload["prompt_projection"]["model_view_schema_version"] == 4
-            and event.payload["prompt_projection"]["model_view_selector_version"] == 1
+            and event.payload["prompt_projection"]["ledger_schema_version"] == 5
+            and event.payload["prompt_projection"]["model_view_schema_version"] == 5
+            and event.payload["prompt_projection"]["model_view_selector_version"] == 2
             and "current_round_statement_count" in event.payload["prompt_projection"]
-            and "open_question_count" in event.payload["prompt_projection"]
+            and "none_detected_question_count" in event.payload["prompt_projection"]
+            and "response_detected_question_count" in event.payload["prompt_projection"]
             and "question_count" in event.payload["prompt_projection"]
             and "relation_count" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["dropped_question_count"] == 0
-            and event.payload["prompt_projection"]["dropped_relation_count"] == 0
-            and event.payload["prompt_projection"]["dropped_event_count"] == 0
+            and "invalid_question_count" in event.payload["prompt_projection"]
+            and "invalid_relation_count" in event.payload["prompt_projection"]
+            and event.payload["prompt_projection"]["budget_dropped_event_count"] == 0
+            and "derivation_rejections" in event.payload["prompt_projection"]
             and "selection_budget_chars" not in event.payload["prompt_projection"]
             and "retained_event_refs" not in event.payload["prompt_projection"]
             and "dropped_event_refs" not in event.payload["prompt_projection"]
@@ -5238,17 +5274,15 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     )
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
-        context["model_context_schema_version"] == 10
-        and context["prompt_template_version"] == 2
-        and context["known_events"]["schema_version"] == 4
+        context["model_context_schema_version"] == 11
+        and context["prompt_template_version"] == 3
+        and context["known_events"]["schema_version"] == 5
         and "questions" in context["known_events"]
         and "relations" in context["known_events"]
         and "source_rules" not in context["known_events"]
         and context["response"]["speech"]
         == {
-            "type": "string",
             "mode": "required",
-            "min_length": 1,
             "max_chars": 300,
         }
         for context in speech_contexts
@@ -5314,8 +5348,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             context["response"]["kind"] == "boolean"
             and context["response"]["field"] == "run_for_sheriff"
             and context["response"]["speech"]["mode"] == "forbidden"
-            and context["response"]["decision_note"]
-            == {"type": "string", "mode": "optional", "max_chars": 80}
+            and context["response"]["decision_note"] == {"mode": "optional", "max_chars": 80}
             for context in sheriff_run_contexts
         )
         withdraw_contexts = [
@@ -5332,18 +5365,14 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
                 "presentation_kind": "sheriff_withdraw_decision",
                 "language": "zh-CN",
                 "speech": {
-                    "type": "string",
                     "mode": "forbidden",
                 },
                 "decision_note": {
-                    "type": "string",
                     "mode": "optional",
                     "max_chars": 80,
                 },
                 "field": "withdraw",
-                "required_fields": ["withdraw"],
                 "boolean": {
-                    "type": "boolean",
                     "true_means": "退水",
                     "false_means": "不退水",
                 },
@@ -5468,7 +5497,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
                 continue
             visible_vote_ids = [
                 tuple(
-                    item["source_event_id"]
+                    item["event_ref"]
                     for item in context["known_events"]["events"]
                     if item["kind"] in {"day_vote", "vote_result"}
                 )
@@ -5599,8 +5628,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
             context["response"]["kind"] == "boolean"
             and context["response"]["field"] == "explode"
             and context["response"]["speech"]["mode"] == "forbidden"
-            and context["response"]["decision_note"]
-            == {"type": "string", "mode": "optional", "max_chars": 80}
+            and context["response"]["decision_note"] == {"mode": "optional", "max_chars": 80}
             and context["task"]["mechanical_effect"]["target_mode"] == "none"
             and context["task"]["mechanical_effect"]["if_executed"]["actor_eliminated"] is True
             and context["task"]["mechanical_effect"]["if_executed"]["target_allowed"] is False
@@ -5648,8 +5676,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         assert blind_wolf_contexts
         assert all(
             context["response"]["speech"]["mode"] == "forbidden"
-            and context["response"]["decision_note"]
-            == {"type": "string", "mode": "optional", "max_chars": 80}
+            and context["response"]["decision_note"] == {"mode": "optional", "max_chars": 80}
             for context in blind_wolf_contexts
         )
         assert all(
@@ -5660,8 +5687,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         )
         assert all(
             context["response"]["speech"]["mode"] == "forbidden"
-            and context["response"]["decision_note"]
-            == {"type": "string", "mode": "optional", "max_chars": 80}
+            and context["response"]["decision_note"] == {"mode": "optional", "max_chars": 80}
             for context in non_wolf_ability_contexts
         )
         instances = {
@@ -6011,6 +6037,245 @@ def test_managed_model_queue_wait_is_observable_and_excluded_from_action_budget(
         assert response.payload["last_progress_ms"] == 27
 
 
+def test_model_context_projection_invariant_fails_before_provider_request(
+    tmp_path: Path,
+) -> None:
+    class ProjectionFailureRepository:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+            self.failed_action: dict[str, Any] | None = None
+
+        def claim_action(self, **values: Any) -> V2ActionClaim:
+            return V2ActionClaim(
+                game_id=values["game_id"],
+                run_id="v2_run_projection_failure",
+                action_id=values["action_id"],
+                phase_id=values["expected_phase_id"],
+                audience=values["audience"],
+                action_record_seq=1,
+                audio_mode="text_only",
+                model_context_contract=current_model_context_contract(),
+            )
+
+        def check_cancellation(self, _game_id: str) -> None:
+            return
+
+        def append_event(self, **values: Any) -> None:
+            self.events.append(values)
+
+        def fail_action(self, **values: Any) -> None:
+            self.failed_action = values
+
+    repository = ProjectionFailureRepository()
+    model_client = FakeV2ModelClient()
+    action_engine = V2ActionEngine(
+        repository=repository,  # type: ignore[arg-type]
+        model_client=model_client,
+        tts_client=None,
+        tts_client_factory=None,
+        tts_capability_enabled=False,
+        voice_root=tmp_path,
+        sample_rate=24_000,
+        judge_configuration_provider=lambda _game_id: None,  # type: ignore[arg-type]
+    )
+
+    decision = asyncio.run(
+        action_engine.run_player_decision(
+            game_id="v2_game_projection_failure",
+            broadcaster=_CollectingBroadcaster(),
+            spec=V2SpeechSpec(
+                action_type="exile_vote",
+                phase_id="day_1",
+                required_phase_state="exile_vote_open",
+                objective="选择放逐目标。",
+                success_live_state="ready",
+                success_phase_state="exile_vote_closed",
+                actor_kind="player",
+                actor_id="player-1",
+                model_provider="agent_plan",
+                model_id="test-model",
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    speech_mode="forbidden",
+                    target_mode="required",
+                ),
+                allowed_target_ids=("player-2",),
+                model_players=(),
+                defer_presentation=True,
+            ),
+        )
+    )
+
+    assert decision is None
+    assert model_client.call_count == 0
+    assert model_client.attempt_ids == []
+    assert not any(
+        event["event_type"] in {"model_request_started", "model_response_received"}
+        for event in repository.events
+    )
+    failure = next(
+        event for event in repository.events if event["event_type"] == "model_request_failed"
+    )
+    assert failure["payload"]["failure_kind"] == "model"
+    assert failure["payload"]["failure_code"] == "model_context_projection_invariant_failed"
+    assert failure["payload"]["invariant_code"] == "players_required"
+    assert failure["payload"]["retryable"] is False
+    assert failure["payload"]["terminal"] is True
+    assert repository.failed_action is not None
+    assert repository.failed_action["failure_code"] == ("model_context_projection_invariant_failed")
+
+
+def test_model_output_enforcement_and_application_validation_are_audited(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SuccessfulActionRepository:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+            self.completed = False
+
+        def claim_action(self, **values: Any) -> V2ActionClaim:
+            return V2ActionClaim(
+                game_id=values["game_id"],
+                run_id="v2_run_output_enforcement",
+                action_id=values["action_id"],
+                phase_id=values["expected_phase_id"],
+                audience=values["audience"],
+                action_record_seq=42,
+                audio_mode="text_only",
+            )
+
+        def check_cancellation(self, _game_id: str) -> None:
+            return
+
+        def append_event(self, **values: Any) -> None:
+            self.events.append(values)
+
+        def model_binding_failure_streak(self, **_values: Any) -> int:
+            return 0
+
+        def resolve_model_action_recovery(self, **_values: Any) -> None:
+            return
+
+        def complete_silent_action(self, **_values: Any) -> None:
+            self.completed = True
+
+        def fail_action(self, **values: Any) -> None:
+            pytest.fail(f"unexpected action failure: {values}")
+
+    players = (
+        V2ModelPlayerReference("player-1", 1, "1号"),
+        V2ModelPlayerReference("player-2", 2, "2号"),
+    )
+    projected_context = {
+        "model_context_schema_version": 11,
+        "prompt_template_version": 3,
+        "task": {"type": "exile_vote", "at_seq": 42, "round_no": 1},
+        "self": {
+            "identity": {
+                "player_id": "seat_1",
+                "seat": 1,
+                "role_key": "villager",
+                "team": "villagers",
+            }
+        },
+        "rules": {},
+        "state": {"as_of_seq": 42, "current_round_no": 1},
+        "known_events": {
+            "schema_version": 5,
+            "events": [],
+            "questions": [],
+            "relations": [],
+        },
+        "persona": {},
+        "candidates": [{"player_id": "seat_2", "seat": 2, "display_name": "2号"}],
+        "response": {
+            "kind": "target",
+            "presentation_kind": "private_vote",
+            "speech": {"mode": "forbidden"},
+            "decision_note": {"mode": "optional", "max_chars": 80},
+            "target_policy": {"mode": "required", "candidate_source": "candidates"},
+        },
+        "player_reference_format": "seat_N",
+    }
+    monkeypatch.setattr(
+        action_engine_module,
+        "project_model_action_context_with_metadata",
+        lambda *_args, **_kwargs: V2ProjectedModelContext(
+            context=projected_context,
+            observation_context={"hard_rules": {}},
+            projection_metadata={},
+        ),
+    )
+    repository = SuccessfulActionRepository()
+    model_client = FakeV2ModelClient()
+    model_client.duplicate_json_action_types.add("exile_vote")
+    action_engine = V2ActionEngine(
+        repository=repository,  # type: ignore[arg-type]
+        model_client=model_client,
+        tts_client=None,
+        tts_client_factory=None,
+        tts_capability_enabled=False,
+        voice_root=tmp_path,
+        sample_rate=24_000,
+        judge_configuration_provider=lambda _game_id: None,  # type: ignore[arg-type]
+    )
+
+    decision = asyncio.run(
+        action_engine.run_player_decision(
+            game_id="v2_game_output_enforcement",
+            broadcaster=_CollectingBroadcaster(),
+            spec=V2SpeechSpec(
+                action_type="exile_vote",
+                phase_id="day_1",
+                required_phase_state="exile_vote_open",
+                objective="选择放逐目标。",
+                success_live_state="ready",
+                success_phase_state="exile_vote_closed",
+                actor_kind="player",
+                actor_id="player-1",
+                audience="player_private",
+                model_provider="agent_plan",
+                model_id="test-model",
+                output_kind="private_vote",
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    speech_mode="forbidden",
+                    target_mode="required",
+                    decision_note_mode="optional",
+                    decision_note_max_chars=80,
+                ),
+                allowed_target_ids=("player-2",),
+                model_players=players,
+                defer_presentation=True,
+            ),
+        )
+    )
+
+    assert decision is not None
+    assert decision.target_player_id == "player-2"
+    assert repository.completed is True
+    started = next(
+        event for event in repository.events if event["event_type"] == "model_request_started"
+    )
+    assert started["payload"]["output_enforcement"] == {
+        "requested": "strict_json_schema",
+        "actual": "prompt_and_application_validation",
+        "schema_name": None,
+        "schema_version": None,
+    }
+    response = next(
+        event for event in repository.events if event["event_type"] == "model_response_received"
+    )
+    assert response["payload"]["application_validation_result"] == "accepted"
+    assert response["payload"]["repair_kind"] == "duplicate_identical_json_ignored"
+    assert any(
+        event["event_type"] == "model_response_repair_applied"
+        and event["payload"]["repair_kind"] == "duplicate_identical_json_ignored"
+        for event in repository.events
+    )
+
+
 def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(
     v2_context,
 ) -> None:
@@ -6331,8 +6596,7 @@ def test_public_speech_format_exhaustion_is_audited_and_skipped(v2_context) -> N
         assert all(event.payload.get("actor_id") for event in skipped)
         assert all(event.payload.get("phase_id") for event in skipped)
         assert all(
-            isinstance(event.payload.get("round_no"), int)
-            and event.payload["round_no"] >= 1
+            isinstance(event.payload.get("round_no"), int) and event.payload["round_no"] >= 1
             for event in skipped
         )
         assert skipped_action_ids <= {
@@ -6626,9 +6890,7 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-        action_starts = [
-            event for event in starts if event.payload.get("action_id") == action_id
-        ]
+        action_starts = [event for event in starts if event.payload.get("action_id") == action_id]
         assert len(action_starts) == 2
         assert action_starts[0].payload["model_binding_prior_failure_streak"] == 0
         assert action_starts[0].payload["model_binding_health_status"] == "healthy"
@@ -6666,9 +6928,7 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
     )
     assert request_page.status_code == 200, request_page.text
     action_requests = [
-        item
-        for item in request_page.json()["items"]
-        if item["action_id"] == action_id
+        item for item in request_page.json()["items"] if item["action_id"] == action_id
     ]
     assert [item["model_binding_failure_streak"] for item in action_requests] == [
         1,
@@ -6755,10 +7015,13 @@ def test_model_binding_failure_streak_follows_frozen_binding_across_phases(
             "consecutive_failure_count": 2,
         },
     )
-    assert repository.model_binding_failure_streak(
-        game_id=identifiers["game_id"],
-        **binding,
-    ) == 2
+    assert (
+        repository.model_binding_failure_streak(
+            game_id=identifiers["game_id"],
+            **binding,
+        )
+        == 2
+    )
 
     repository.append_event(
         game_id=identifiers["game_id"],
@@ -6771,10 +7034,13 @@ def test_model_binding_failure_streak_follows_frozen_binding_across_phases(
             "consecutive_failure_count": 0,
         },
     )
-    assert repository.model_binding_failure_streak(
-        game_id=identifiers["game_id"],
-        **binding,
-    ) == 0
+    assert (
+        repository.model_binding_failure_streak(
+            game_id=identifiers["game_id"],
+            **binding,
+        )
+        == 0
+    )
 
 
 def test_attempt_budget_timeout_is_retryable_within_action_budget(
@@ -7375,6 +7641,7 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
         )
         assert failure is not None
         assert failure.payload["failure_code"] == "model_decision_invalid_speech"
+        assert failure.payload["application_validation_result"] == "rejected"
         assert failure.payload["raw_response"] == '{"withdraw":true}'
         assert failure.payload["failure_category"] == "machine_format"
         assert failure.payload["terminal"] is False
@@ -7393,6 +7660,7 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
         if request["status"] == "failed" and request["action_type"] == "sheriff_withdraw"
     )
     assert failed_request["failure_code"] == "model_decision_invalid_speech"
+    assert failed_request["application_validation_result"] == "rejected"
     assert failed_request["output_source"] == "persisted"
     assert "request_payload" not in failed_request
     assert "raw_response" not in failed_request
@@ -7403,6 +7671,7 @@ def test_withdraw_quality_failure_persists_exact_raw_model_response(
         f"{failed_request['attempt_id']}"
     )
     assert request_detail.status_code == 200, request_detail.text
+    assert request_detail.json()["application_validation_result"] == "rejected"
     assert request_detail.json()["raw_response"] == '{"withdraw":true}'
 
 
@@ -8178,19 +8447,23 @@ def test_model_projection_override_requires_a_valid_frozen_batch_cutoff() -> Non
         projection_at_seq=40,
     )
     assert frozen.projection_at_seq == 40
-    assert (
+    with pytest.raises(
+        V2ModelContextProjectionInvariantError,
+        match="model_context_projection_invariant_failed",
+    ) as exc_info:
         project_model_action_context(
             {},
             players=(),
+            model_context_contract=current_model_context_contract(),
             action_record_seq=41,
             projection_at_seq=40,
         )
-        == {}
-    )
+    assert exc_info.value.invariant_code == "players_required"
     with pytest.raises(ValueError, match="cannot be later"):
         project_model_action_context(
             {},
             players=(),
+            model_context_contract=current_model_context_contract(),
             action_record_seq=39,
             projection_at_seq=40,
         )

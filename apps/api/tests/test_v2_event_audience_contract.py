@@ -14,7 +14,7 @@ from app.v2.action_engine import V2ActionEngine, V2DecisionContract, V2SpeechSpe
 from app.v2.control import _event_audience
 from app.v2.event_contract import canonical_event_payload, model_event_audience
 from app.v2.model_client import V2ModelDecision
-from app.v2.model_context_contract import v9_model_context_contract
+from app.v2.model_context_contract import current_model_context_contract
 from app.v2.models import (
     V2AbilityActivation,
     V2GameRecord,
@@ -350,7 +350,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
                 phase_seq=1,
                 phase_id="first_night",
                 phase_state="night_running",
-                rule_snapshot={"model_context_contract": v9_model_context_contract()},
+                rule_snapshot={"model_context_contract": current_model_context_contract()},
                 players_snapshot=[],
                 judge_voice_snapshot={},
                 delivery_snapshot={"schema_version": 1, "mode": "tts"},

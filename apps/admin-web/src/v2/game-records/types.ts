@@ -127,30 +127,58 @@ export type V2VoiceAsset = {
   completed_at: string | null;
 };
 
+export type V2DerivationRejection = Record<string, unknown> & {
+  source_event_ref: string;
+  kind: string;
+  reason: string;
+  missing_fields?: string[];
+};
+
 export type V2PromptProjection = Record<string, unknown> & {
   model_context_schema_version?: number | null;
   prompt_template_version?: number | null;
   known_events_schema_version?: number | null;
+  ledger_schema_version?: number | null;
   model_view_schema_version?: number | null;
   model_view_selector_version?: number | null;
-  known_event_count?: number;
-  known_event_total_count?: number;
-  dropped_event_count?: number;
+  serialized_char_count?: number;
+  section_char_counts?: Record<string, number>;
+  ledger_statement_count?: number;
+  ledger_statement_char_count?: number;
+  ledger_claim_count?: number;
+  ledger_question_count?: number;
+  ledger_relation_count?: number;
+  source_event_count?: number;
+  emitted_event_count?: number;
+  future_filtered_event_count?: number;
+  source_claim_candidate_count?: number;
+  emitted_claim_count?: number;
+  out_of_scope_claim_count?: number;
+  rejected_claim_count?: number;
+  source_question_count?: number;
+  current_scope_question_count?: number;
+  emitted_question_count?: number;
+  out_of_scope_question_count?: number;
+  invalid_question_count?: number;
+  source_relation_count?: number;
+  emitted_relation_count?: number;
+  invalid_relation_count?: number;
+  budget_dropped_event_count?: number;
+  none_detected_question_count?: number;
+  response_detected_question_count?: number;
+  awaiting_scheduled_turn_question_count?: number;
+  current_round_statement_count?: number;
+  current_round_statement_char_count?: number;
+  derivation_rejections?: V2DerivationRejection[];
   known_event_record_seq_min?: number | null;
   known_event_record_seq_max?: number | null;
-  selection_budget_chars?: number;
-  selection_used_chars?: number;
-  selection_budget_exceeded_by_required?: boolean;
-  retained_event_refs?: string[];
-  dropped_event_refs?: string[];
-  retention_reasons?: Record<string, string>;
-  section_char_counts?: Record<string, number>;
-  public_timeline_schema_version?: number | null;
-  public_timeline_event_count?: number;
-  public_timeline_record_seq_min?: number | null;
-  public_timeline_record_seq_max?: number | null;
-  public_timeline_missing_record_seq_count?: number;
-  public_timeline_kind_counts?: Record<string, number>;
+};
+
+export type V2OutputEnforcementAudit = {
+  requested: string | null;
+  actual: string | null;
+  schema_name: string | null;
+  schema_version: number | null;
 };
 
 export type V2ModelRequestAudienceSource =
@@ -200,6 +228,8 @@ export type V2ModelRequestSummary = {
   failure_code: string | null;
   failure_category?: string | null;
   repair_kind?: string | null;
+  output_enforcement?: V2OutputEnforcementAudit | null;
+  application_validation_result?: "accepted" | "rejected" | null;
   retryable: boolean | null;
   terminal: boolean | null;
   failure_stage: string | null;

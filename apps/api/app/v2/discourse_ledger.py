@@ -7,14 +7,25 @@ from typing import Any
 from app.v2.model_context_contract import DISCOURSE_LEDGER_SCHEMA_VERSION
 
 
-_SENTENCE = re.compile(r"[^。！？!?]+[。！？!?]?")
-_SENTENCE_V4 = re.compile(r"[^。！？!?；;]+[。！？!?；;]?")
+_SENTENCE = re.compile(r"[^。！？!?；;]+[。！？!?；;]?")
 _ENUMERATED_ITEM = re.compile(r"第[一二三四五六七八九十]+[、，,:：]")
 _SEAT_REFERENCE = re.compile(r"(?<!\d)(?:seat_)?(2[0-9]|1[0-9]|[1-9])号?")
 _ADDRESSED_SEAT = re.compile(
     r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?(?:你|请|先|能不能|为什么|怎么|到底)?"
 )
-_PAST_NIGHT = re.compile(r"(?:昨晚|昨夜|首夜|第一晚|第一夜)")
+_NUMBERED_SEAT_REFERENCE = re.compile(r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?")
+_EXPLICIT_DIRECT_ADDRESS = re.compile(
+    r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?\s*[，,:\uff1a]?\s*"
+    r"(?:你|请|先(?:解释|回应|说|别)|回答|解释|能不能|为什么|为何|怎么|到底)"
+)
+_LEADING_DIRECT_ADDRESS = re.compile(
+    r"^\s*(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?\s*[，,:\uff1a]?\s*"
+    r"(?:先别|别回避|给个|说一下|聊一下|解释|回应|回答)"
+)
+_CONDITIONAL_SEAT_SUBJECT = re.compile(
+    r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号?(?:玩家)?\s*"
+    r"(?:如果|假如|假设|要是|若|是狼|是好人|为狼|为好人)"
+)
 _FUTURE_NIGHT = re.compile(r"(?:今晚|今夜|明晚|明夜|下一晚|下晚|警徽流)")
 _PAST_INVESTIGATION_REFERENCE = re.compile(r"(?:昨晚|昨夜|首夜|第一晚|第一夜)")
 _IMPLICIT_PAST_INVESTIGATION_REFERENCE = re.compile(
@@ -22,9 +33,7 @@ _IMPLICIT_PAST_INVESTIGATION_REFERENCE = re.compile(
 )
 _INVESTIGATION = re.compile(r"(?:查验|验|摸)")
 _INVESTIGATION_RESULT = re.compile(r"(?:查杀|金水|狼人|好人)")
-_NEGATED_RESULT_PREFIX = re.compile(
-    r"(?:并非|并不是|不是|不算|不像|非)[^，,。！？!?；;]{0,3}$"
-)
+_NEGATED_RESULT_PREFIX = re.compile(r"(?:并非|并不是|不是|不算|不像|非)[^，,。！？!?；;]{0,3}$")
 _RESULT_CLAUSE_TRANSITION = re.compile(r"(?:但|不过|然而|可是|回头看|至于)")
 _FIRST_PARTY_FUTURE_INVESTIGATION = re.compile(
     r"(?:"
@@ -42,50 +51,51 @@ _INVESTIGATION_TARGET = re.compile(
 )
 _ROLE_CLAIM = re.compile(
     r"(?:我是|我跳|我拍|我底牌是|底牌)(?:一张|真)?"
-    r"(?P<role>预言家|女巫|猎人|白痴|守卫|村民|好人|狼人)"
+    r"(?P<role>预言家|女巫|猎人|白痴|守卫|村民|狼人)"
+)
+_TEAM_CLAIM = re.compile(
+    r"(?:我是|我底牌是|我底牌|底牌是|底牌)(?:一张|真)?"
+    r"(?P<team>好人(?:阵营)?|狼人阵营|狼队)"
 )
 _SELF_PAST_INVESTIGATION = re.compile(
     r"(?:我[^。！？]{0,8}(?:昨晚|昨夜|首夜|第一晚|第一夜)|"
     r"(?:昨晚|昨夜|首夜|第一晚|第一夜)[^。！？]{0,8}我)"
     r"[^。！？]{0,24}(?:查验|验|摸)"
 )
-_V4_SELF_FIRST_INVESTIGATION = re.compile(r"(?:我的?首验|我首验)")
-_V4_DIRECT_FIRST_INVESTIGATION = re.compile(
+_SELF_FIRST_INVESTIGATION = re.compile(r"(?:我的?首验|我首验)")
+_DIRECT_FIRST_INVESTIGATION = re.compile(
     r"^\s*首验(?:的?是|了)?(?:警上|警下)?(?:的)?"
     r"(?:2[0-9]|1[0-9]|[1-9])号"
 )
 _DIRECT_QUESTION = re.compile(
-    r"(?:我(?:现在|想|要)?问|请.{0,12}回答|"
+    r"(?:我(?:现在|想|要)?问|请.{0,12}(?:回答|解释|回应|说清)|"
     r"你.{0,18}(?:谁|什么|怎么|为什么|能不能|是否|哪|几号|号码))"
 )
 _DIRECT_SINGULAR_QUESTION = re.compile(
     r"你(?!们)[^。！？!?]{0,18}(?:谁|什么|怎么|为什么|为何|能不能|是否|哪|几号|号码)"
 )
 _SINGULAR_ADDRESSEE_CONTINUATION = re.compile(r"^\s*你(?!们)")
-_ENUMERATED_ADDRESSEE_CONTINUATION = re.compile(
-    r"^\s*第[一二三四五六七八九十]+[、，,:：]"
-)
-_V4_EXPLICIT_QUESTION_TARGET = re.compile(
+_ENUMERATED_ADDRESSEE_CONTINUATION = re.compile(r"^\s*第[一二三四五六七八九十]+[、，,:：]")
+_EXPLICIT_QUESTION_TARGET = re.compile(
     r"(?:"
     r"(?:问|追问|请问|请)\s*(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?"
     r"|给\s*(?P<given_seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?"
     r"(?:一|两|几)?个?(?:问题|提问)"
     r")"
 )
-_V4_PAST_INVESTIGATION_TARGET = re.compile(
+_PAST_INVESTIGATION_TARGET = re.compile(
     r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号(?:玩家)?"
     r"[^。！？!?；;]{0,10}(?:昨晚|昨夜|首夜|第一晚|第一夜)"
     r"[^。！？!?；;]{0,20}(?:查验|验|摸)"
 )
-_V4_IMPLICIT_QUESTION_CUE = re.compile(
+_IMPLICIT_QUESTION_CUE = re.compile(
     r"(?:"
     r"(?:查验|验|摸|首验)[^。！？!?；;]{0,12}(?:谁|什么结果|为什么|为何|哪(?:个|张|一)?|几号|号码)"
     r"|(?:什么结果|结果是什么)"
     r"|警徽流[^。！？!?；;]{0,10}怎么留"
     r")"
 )
-_OTHER_QUESTION_REPORT = re.compile(r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:问|追问)")
-_OTHER_QUESTION_REPORT_V4 = re.compile(
+_OTHER_QUESTION_REPORT = re.compile(
     r"(?<!\d)(?P<seat>2[0-9]|1[0-9]|[1-9])号.{0,12}(?:追问|问(?!题))"
 )
 _SECONDARY_REPORT = re.compile(
@@ -175,9 +185,31 @@ _ROLE_KEYS = {
     "白痴": "idiot",
     "守卫": "guard",
     "村民": "villager",
-    "好人": "good",
     "狼人": "werewolf",
 }
+_TEAM_KEYS = {
+    "好人": "villagers",
+    "好人阵营": "villagers",
+    "狼人阵营": "werewolves",
+    "狼队": "werewolves",
+}
+_DEFAULT_ROLE_KEYS = frozenset(_ROLE_KEYS.values())
+_DEFAULT_TEAM_KEYS = frozenset(_TEAM_KEYS.values())
+_DEFAULT_PLAYER_REFS = frozenset(f"seat_{seat}" for seat in range(1, 30))
+_INVESTIGATION_RESULTS = frozenset({"werewolves", "villagers"})
+_DERIVATION_KIND = "deterministic_heuristic"
+_DERIVATION_VALIDATOR_VERSION = 1
+_SUPPORTED_CLAIM_TYPES = frozenset(
+    {
+        "role_claim",
+        "team_claim",
+        "investigation_claim",
+        "future_investigation_plan",
+        "vote_stance",
+        "player_assessment",
+        "secondary_paraphrase",
+    }
+)
 
 
 def build_public_discourse_ledger(
@@ -186,11 +218,32 @@ def build_public_discourse_ledger(
     current_round_no: int,
     actor_ref: str | None = None,
     ledger_schema_version: int = DISCOURSE_LEDGER_SCHEMA_VERSION,
+    role_keys: Iterable[str] | None = None,
+    team_keys: Iterable[str] | None = None,
+    player_refs: Iterable[str] | None = None,
+    current_night_no: int | None = None,
 ) -> dict[str, Any]:
     del actor_ref
+    _require_current_schema_version(
+        ledger_schema_version,
+        expected=DISCOURSE_LEDGER_SCHEMA_VERSION,
+        kind="ledger",
+    )
+    allowed_role_keys = _validated_string_set(role_keys, default=_DEFAULT_ROLE_KEYS)
+    allowed_team_keys = _validated_string_set(team_keys, default=_DEFAULT_TEAM_KEYS)
+    allowed_player_refs = _validated_string_set(player_refs, default=_DEFAULT_PLAYER_REFS)
+    effective_current_night_no = (
+        current_night_no
+        if isinstance(current_night_no, int)
+        and not isinstance(current_night_no, bool)
+        and current_night_no > 0
+        else current_round_no
+    )
     utterances = _normalize_utterances(statements)
     claims: list[dict[str, Any]] = []
     questions: list[dict[str, Any]] = []
+    derivation_rejections: list[dict[str, Any]] = []
+    source_claim_candidate_count = 0
     fully_interpreted_sources: set[str] = set()
 
     for utterance in utterances:
@@ -200,23 +253,16 @@ def build_public_discourse_ledger(
             str(utterance["speech"]),
             ledger_schema_version=ledger_schema_version,
         )
-        utterance_claims_seer = (
-            any(
-                (
-                    match := _first_party_role_match(
-                        sentence,
-                        speaker_ref=str(utterance["speaker_ref"]),
-                    )
+        utterance_claims_seer = any(
+            (
+                match := _first_party_role_match(
+                    sentence,
+                    speaker_ref=str(utterance["speaker_ref"]),
                 )
-                is not None
-                and match.group("role") == "预言家"
-                for sentence in sentences
             )
-            if ledger_schema_version >= 4
-            else any(
-                match.group("role") == "预言家"
-                for match in _ROLE_CLAIM.finditer(str(utterance["speech"]))
-            )
+            is not None
+            and match.group("role") == "预言家"
+            for sentence in sentences
         )
         all_sentences_interpreted = bool(sentences)
         for sentence_index, sentence in enumerate(sentences, start=1):
@@ -225,7 +271,7 @@ def build_public_discourse_ledger(
                 sentence=sentence,
                 sentence_index=sentence_index,
                 last_addressed_to=last_addressed_to,
-                ledger_schema_version=ledger_schema_version,
+                allowed_player_refs=allowed_player_refs,
             )
             if question is not None:
                 questions.append(question)
@@ -235,10 +281,21 @@ def build_public_discourse_ledger(
                 sentence=sentence,
                 sentence_index=sentence_index,
                 utterance_claims_seer=utterance_claims_seer,
-                ledger_schema_version=ledger_schema_version,
             )
-            if sentence_claims:
-                claims.extend(sentence_claims)
+            source_claim_candidate_count += len(sentence_claims)
+            for candidate in sentence_claims:
+                validated, rejection = _validate_claim_candidate(
+                    candidate,
+                    source_statement=utterance,
+                    role_keys=allowed_role_keys,
+                    team_keys=allowed_team_keys,
+                    player_refs=allowed_player_refs,
+                    current_night_no=effective_current_night_no,
+                )
+                if validated is not None:
+                    claims.append(validated)
+                elif rejection is not None:
+                    derivation_rejections.append(rejection)
             if question is None and not sentence_claims:
                 all_sentences_interpreted = False
         if all_sentences_interpreted:
@@ -247,7 +304,6 @@ def build_public_discourse_ledger(
     resolved_questions, relations = _resolve_questions(
         questions,
         utterances=utterances,
-        ledger_schema_version=ledger_schema_version,
     )
 
     return {
@@ -258,23 +314,16 @@ def build_public_discourse_ledger(
             "first_party_source_priority": "higher_than_secondary_paraphrase",
             "statement_order": ("record_seq 升序；record_seq 缺失时沿用公开历史输入顺序"),
             "response_rule": (
-                "只有被提问者在问题之后产生的公开发言才能回答该问题；"
-                "record_seq 更小的发言绝不能回答 record_seq 更大的问题"
+                "只有被提问者在问题之后产生的公开发言才能被检测为回应；"
+                "response_to_question 不表示回应真实、充分、可信或有说服力"
             ),
-            "open_question_rule": (
-                "status=open 只表示尚无符合时间和说话人条件的后续回答；"
-                "不表示被提问者此前从未解释，也不表示其拒绝回应；"
-                "不得把问题之前的发言描述成对后来问题的回答"
+            "response_status_rule": (
+                "response_status=none_detected 只表示尚无符合时间、说话人和主题条件的后续回应；"
+                "不表示被提问者此前从未解释，也不表示其拒绝回应"
             ),
-            **(
-                {
-                    "question_address_rule": (
-                        "status 只表示问题是否已被后续发言回答；"
-                        "address_resolution 单独表示被提问者是否已解析"
-                    )
-                }
-                if ledger_schema_version >= 4
-                else {}
+            "question_address_rule": (
+                "address_resolution 只来自明确称呼、问句对象或经验证的指代；"
+                "条件句、怀疑、投票或转述中提到的玩家不因被提及而成为被提问者"
             ),
             "causality_rule": ("后发生的发言不能成为先发生行动的原因；必须区分当时信息与事后评价"),
         },
@@ -283,6 +332,12 @@ def build_public_discourse_ledger(
         "claims": claims,
         "questions": resolved_questions,
         "relations": relations,
+        "derivation_rejections": derivation_rejections,
+        "derivation_metadata": {
+            "source_claim_candidate_count": source_claim_candidate_count,
+            "emitted_claim_count": len(claims),
+            "rejected_claim_count": len(derivation_rejections),
+        },
         "unparsed_statement_refs": [
             str(utterance["source_event_id"])
             for utterance in utterances
@@ -339,12 +394,14 @@ def _public_utterance(utterance: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sentences(speech: str, *, ledger_schema_version: int) -> list[str]:
-    pattern = _SENTENCE_V4 if ledger_schema_version >= 4 else _SENTENCE
+    _require_current_schema_version(
+        ledger_schema_version,
+        expected=DISCOURSE_LEDGER_SCHEMA_VERSION,
+        kind="ledger",
+    )
     sentences = [
-        match.group(0).strip() for match in pattern.finditer(speech) if match.group(0).strip()
+        match.group(0).strip() for match in _SENTENCE.finditer(speech) if match.group(0).strip()
     ]
-    if ledger_schema_version < 4:
-        return sentences
     return [part for sentence in sentences for part in _split_enumerated_items(sentence)]
 
 
@@ -372,48 +429,47 @@ def _extract_question(
     sentence: str,
     sentence_index: int,
     last_addressed_to: str | None,
-    ledger_schema_version: int,
+    allowed_player_refs: frozenset[str],
 ) -> tuple[dict[str, Any] | None, str | None]:
     speaker_ref = str(utterance["speaker_ref"])
-    if ledger_schema_version >= 4:
-        addressed_to = _addressed_to_v4(sentence, speaker_ref=speaker_ref)
-    elif ledger_schema_version >= 3:
-        addressed_to = _addressed_to_v3(sentence, speaker_ref=speaker_ref)
-    else:
-        addressed_to = _addressed_to(sentence, speaker_ref=speaker_ref)
-    if addressed_to is not None:
-        last_addressed_to = addressed_to
-
+    reported_question = _OTHER_QUESTION_REPORT.search(sentence)
     continuation_question = last_addressed_to is not None and (
         _SINGULAR_ADDRESSEE_CONTINUATION.search(sentence) is not None
         or _ENUMERATED_ADDRESSEE_CONTINUATION.search(sentence) is not None
     )
-    explicit_v4_question_target = (
-        ledger_schema_version >= 4
-        and _V4_EXPLICIT_QUESTION_TARGET.search(sentence) is not None
-    )
+    explicit_question_target = _EXPLICIT_QUESTION_TARGET.search(sentence) is not None
     directly_asked = (
         "？" in sentence
         or "?" in sentence
         or _DIRECT_QUESTION.search(sentence)
         or (
-            ledger_schema_version >= 4
-            and _V4_IMPLICIT_QUESTION_CUE.search(sentence) is not None
-            and (explicit_v4_question_target or continuation_question)
+            _IMPLICIT_QUESTION_CUE.search(sentence) is not None
+            and (explicit_question_target or continuation_question)
         )
     )
-    reported_question = (
-        _OTHER_QUESTION_REPORT_V4.search(sentence)
-        if ledger_schema_version >= 4
-        else _OTHER_QUESTION_REPORT.search(sentence)
-    )
-    if not directly_asked or (
+    is_secondary_report = (
         reported_question is not None
         and f"seat_{reported_question.group('seat')}" != speaker_ref
         and "我问" not in sentence
         and "我追问" not in sentence
-    ):
+    )
+    if is_secondary_report:
         return None, last_addressed_to
+    if not directly_asked:
+        stable_address = _addressed_to_v5(
+            sentence,
+            speaker_ref=speaker_ref,
+            allowed_player_refs=allowed_player_refs,
+        )
+        return None, stable_address or last_addressed_to
+
+    addressed_to = _addressed_to_v5(
+        sentence,
+        speaker_ref=speaker_ref,
+        allowed_player_refs=allowed_player_refs,
+    )
+    if addressed_to is not None:
+        last_addressed_to = addressed_to
 
     target_ref = addressed_to
     if (
@@ -421,107 +477,93 @@ def _extract_question(
         and last_addressed_to is not None
         and (
             _SINGULAR_ADDRESSEE_CONTINUATION.search(sentence) is not None
-            or (
-                ledger_schema_version >= 4
-                and _ENUMERATED_ADDRESSEE_CONTINUATION.search(sentence) is not None
-            )
+            or (_ENUMERATED_ADDRESSEE_CONTINUATION.search(sentence) is not None)
         )
     ):
         target_ref = last_addressed_to
-    topic_source = (
-        _question_focus(sentence, addressed_to=target_ref)
-        if ledger_schema_version >= 3
-        else sentence
-    )
+    topic_source = _question_focus(sentence, addressed_to=target_ref)
     topic = _question_topic(
         topic_source,
-        vote_reason_enabled=ledger_schema_version >= 3,
-        ledger_schema_version=ledger_schema_version,
+        vote_reason_enabled=True,
     )
     source_id = str(utterance["source_event_id"])
     question = {
         "question_id": f"question_{source_id}_{sentence_index}",
-        "source_event_id": source_id,
+        "source_event_ref": source_id,
+        "source_authority": "player_claim_unverified",
         "source_sentence_id": f"sentence_{source_id}_{sentence_index}",
         "sentence_index": sentence_index,
         "asked_turn_index": utterance["turn_index"],
         "asked_by": speaker_ref,
-        "addressed_to": target_ref,
         "asked_in": utterance["occurred_in"],
         "stage": utterance["stage"],
         "topic": topic,
         "exact_quote": sentence,
-        "status": (
-            "open"
-            if ledger_schema_version >= 4 or target_ref is not None
-            else "unresolved_target"
-        ),
-        "confirmation_status": "speaker_asked_publicly",
+        "response_status": "none_detected",
+        "derivation": _complete_derivation(),
     }
-    if ledger_schema_version >= 4:
-        question["address_resolution"] = (
-            "resolved" if target_ref is not None else "unresolved"
+    question["address_resolution"] = "resolved" if target_ref is not None else "unresolved"
+    if target_ref is not None:
+        question["addressed_to"] = target_ref
+    if topic == "past_investigation_result":
+        question["requested_fields"] = _past_investigation_requested_fields(topic_source)
+        referenced_night_no = _referenced_investigation_night_no(
+            topic_source,
+            asked_in=utterance["occurred_in"],
         )
-        if topic == "past_investigation_result":
-            question["requested_fields"] = _past_investigation_requested_fields(
-                topic_source
-            )
-            referenced_night_no = _referenced_investigation_night_no(
-                topic_source,
-                asked_in=utterance["occurred_in"],
-            )
-            if referenced_night_no is not None:
-                question["referenced_night_no"] = referenced_night_no
+        if referenced_night_no is not None:
+            question["referenced_night_no"] = referenced_night_no
     if "record_seq" in utterance:
-        question["asked_record_seq"] = utterance["record_seq"]
+        question["asked_at_seq"] = utterance["record_seq"]
     return question, last_addressed_to
 
 
-def _addressed_to(sentence: str, *, speaker_ref: str) -> str | None:
-    preferred: list[str] = []
-    explicit: list[str] = []
-    for match in _ADDRESSED_SEAT.finditer(sentence):
-        ref = f"seat_{match.group('seat')}"
-        if ref == speaker_ref:
-            continue
-        prefix = sentence[: match.start()].rstrip()
-        suffix = sentence[match.end() : match.end() + 3]
-        if "你" in match.group(0) or suffix.startswith("你"):
-            preferred.append(ref)
-        elif match.start() <= 1 or prefix.endswith(("问", "请", "请问", "追问")):
-            explicit.append(ref)
-    if preferred:
-        return preferred[0]
-    return explicit[0] if explicit else None
+def _addressed_to_v5(
+    sentence: str,
+    *,
+    speaker_ref: str,
+    allowed_player_refs: frozenset[str],
+) -> str | None:
+    """Resolve only explicit question addressees, never mere topic mentions."""
 
-
-def _addressed_to_v3(sentence: str, *, speaker_ref: str) -> str | None:
-    anchors = list(_DIRECT_SINGULAR_QUESTION.finditer(sentence))
-    if anchors:
-        anchor = anchors[-1].start()
-        preceding = [
-            f"seat_{match.group('seat')}"
-            for match in _ADDRESSED_SEAT.finditer(sentence)
-            if match.end() <= anchor and f"seat_{match.group('seat')}" != speaker_ref
-        ]
-        if preceding:
-            return preceding[-1]
-    return _addressed_to(sentence, speaker_ref=speaker_ref)
-
-
-def _addressed_to_v4(sentence: str, *, speaker_ref: str) -> str | None:
-    addressed_to = _addressed_to_v3(sentence, speaker_ref=speaker_ref)
-    if addressed_to is not None:
-        return addressed_to
-    for pattern in (_V4_EXPLICIT_QUESTION_TARGET, _V4_PAST_INVESTIGATION_TARGET):
+    for pattern in (
+        _EXPLICIT_DIRECT_ADDRESS,
+        _LEADING_DIRECT_ADDRESS,
+        _EXPLICIT_QUESTION_TARGET,
+        _PAST_INVESTIGATION_TARGET,
+    ):
         for match in pattern.finditer(sentence):
             seat = match.groupdict().get("seat") or match.groupdict().get("given_seat")
             if seat is None:
                 continue
             ref = f"seat_{seat}"
-            if ref != speaker_ref:
+            if ref != speaker_ref and ref in allowed_player_refs:
                 return ref
-    return None
+
+    direct_question = _DIRECT_SINGULAR_QUESTION.search(sentence)
+    if direct_question is None:
+        return None
+    conditional_refs = {
+        f"seat_{match.group('seat')}" for match in _CONDITIONAL_SEAT_SUBJECT.finditer(sentence)
+    }
+    preceding_refs = {
+        f"seat_{match.group('seat')}"
+        for match in _NUMBERED_SEAT_REFERENCE.finditer(sentence)
+        if match.end() <= direct_question.start()
+        and f"seat_{match.group('seat')}" != speaker_ref
+        and f"seat_{match.group('seat')}" in allowed_player_refs
+        and f"seat_{match.group('seat')}" not in conditional_refs
+    }
+    if len(preceding_refs) == 1:
+        return next(iter(preceding_refs))
+    candidate_refs = {
+        f"seat_{match.group('seat')}"
+        for match in _NUMBERED_SEAT_REFERENCE.finditer(sentence)
+        if f"seat_{match.group('seat')}" != speaker_ref
+        and f"seat_{match.group('seat')}" in allowed_player_refs
+        and f"seat_{match.group('seat')}" not in conditional_refs
+    }
+    return next(iter(candidate_refs)) if len(candidate_refs) == 1 else None
 
 
 def _question_focus(sentence: str, *, addressed_to: str | None) -> str:
@@ -548,7 +590,6 @@ def _question_topic(
     sentence: str,
     *,
     vote_reason_enabled: bool = False,
-    ledger_schema_version: int = 2,
 ) -> str:
     if (
         vote_reason_enabled
@@ -556,28 +597,20 @@ def _question_topic(
         and _VOTE_REASON_QUESTION.search(sentence) is not None
     ):
         return "vote_reason"
-    if ledger_schema_version >= 4:
-        if (
-            _has_past_investigation_reference(sentence)
-            and _INVESTIGATION.search(sentence) is not None
-        ):
-            if any(term in sentence for term in ("为什么", "为何", "理由", "心路")):
-                return "investigation_reason"
-            return "past_investigation_result"
-        if "警徽流" in sentence:
-            return "sheriff_plan"
-        if _INVESTIGATION.search(sentence):
-            if any(term in sentence for term in ("为什么", "为何", "理由", "心路")):
-                return "investigation_reason"
-            return "future_investigation_plan"
-    if _INVESTIGATION.search(sentence):
-        if any(term in sentence for term in ("为什么", "理由", "心路")):
+    if _has_past_investigation_reference(sentence) and _INVESTIGATION.search(sentence) is not None:
+        if any(term in sentence for term in ("为什么", "为何", "理由", "心路")):
             return "investigation_reason"
-        if any(term in sentence for term in ("谁", "几号", "号码", "具体", "锁", "方向")):
-            return "future_investigation_target"
-        return "investigation_plan"
+        return "past_investigation_result"
     if "警徽流" in sentence:
         return "sheriff_plan"
+    if _INVESTIGATION.search(sentence):
+        if any(term in sentence for term in ("为什么", "为何", "理由", "心路")):
+            return "investigation_reason"
+        return "future_investigation_plan"
+    if any(term in sentence for term in ("刀", "夜死", "袭击")) and any(
+        term in sentence for term in ("为什么", "为何", "理由", "收益")
+    ):
+        return "night_kill_reason"
     if any(term in sentence for term in ("投", "票", "归票", "出谁")):
         return "vote_stance"
     return "general"
@@ -621,6 +654,24 @@ def _first_party_role_match(
     speaker_ref: str,
 ) -> re.Match[str] | None:
     for match in _ROLE_CLAIM.finditer(sentence):
+        if _claim_is_nonassertive(sentence, claim_start=match.start()):
+            continue
+        if _claim_is_attributed(
+            sentence,
+            claim_start=match.start(),
+            speaker_ref=speaker_ref,
+        ):
+            continue
+        return match
+    return None
+
+
+def _first_party_team_match(
+    sentence: str,
+    *,
+    speaker_ref: str,
+) -> re.Match[str] | None:
+    for match in _TEAM_CLAIM.finditer(sentence):
         if _claim_is_nonassertive(sentence, claim_start=match.start()):
             continue
         if _claim_is_attributed(
@@ -723,9 +774,7 @@ def _claimed_investigation_result(sentence: str) -> str | None:
         prefix = local_clause[max(0, match.start() - 8) : match.start()]
         if _NEGATED_RESULT_PREFIX.search(prefix) is not None:
             continue
-        claimed_result = (
-            "werewolves" if match.group(0) in {"查杀", "狼人"} else "villagers"
-        )
+        claimed_result = "werewolves" if match.group(0) in {"查杀", "狼人"} else "villagers"
     return claimed_result
 
 
@@ -735,7 +784,6 @@ def _extract_claims(
     sentence: str,
     sentence_index: int,
     utterance_claims_seer: bool,
-    ledger_schema_version: int,
 ) -> list[dict[str, Any]]:
     claims: list[dict[str, Any]] = []
     speaker_ref = str(utterance["speaker_ref"])
@@ -743,7 +791,6 @@ def _extract_claims(
     reported_speaker_ref = _secondary_reported_speaker(
         sentence,
         speaker_ref=speaker_ref,
-        ledger_schema_version=ledger_schema_version,
     )
     if reported_speaker_ref is not None:
         claims.append(
@@ -765,11 +812,7 @@ def _extract_claims(
             )
         )
 
-    role_match = (
-        _first_party_role_match(sentence, speaker_ref=speaker_ref)
-        if ledger_schema_version >= 4
-        else _ROLE_CLAIM.search(sentence)
-    )
+    role_match = _first_party_role_match(sentence, speaker_ref=speaker_ref)
     if role_match is not None:
         claims.append(
             _claim(
@@ -781,11 +824,22 @@ def _extract_claims(
             )
         )
 
+    team_match = _first_party_team_match(sentence, speaker_ref=speaker_ref)
+    if team_match is not None:
+        claims.append(
+            _claim(
+                utterance,
+                sentence=sentence,
+                sentence_index=sentence_index,
+                claim_type="team_claim",
+                attributes={"claimed_team": _TEAM_KEYS[team_match.group("team")]},
+            )
+        )
+
     if _is_first_party_investigation(
         sentence,
         speaker_ref=speaker_ref,
         utterance_claims_seer=utterance_claims_seer,
-        ledger_schema_version=ledger_schema_version,
     ):
         attributes: dict[str, Any] = {
             "claimed_action_in": {
@@ -793,24 +847,13 @@ def _extract_claims(
                 "round_no": _claimed_night_round(
                     sentence,
                     occurred_in=utterance["occurred_in"],
-                    ledger_schema_version=ledger_schema_version,
                 ),
             }
         }
         target_match = _INVESTIGATION_TARGET.search(sentence)
         if target_match is not None:
             attributes["target_ref"] = f"seat_{target_match.group('seat')}"
-        claimed_result = (
-            _claimed_investigation_result(sentence)
-            if ledger_schema_version >= 4
-            else (
-                "werewolves"
-                if "查杀" in sentence or "狼人" in sentence
-                else "villagers"
-                if "金水" in sentence or "好人" in sentence
-                else None
-            )
-        )
+        claimed_result = _claimed_investigation_result(sentence)
         if claimed_result is not None:
             attributes["claimed_result"] = claimed_result
         claims.append(
@@ -823,28 +866,13 @@ def _extract_claims(
             )
         )
 
-    future_match = (
-        _first_party_future_investigation_match(
-            sentence,
-            speaker_ref=speaker_ref,
-        )
-        if ledger_schema_version >= 4
-        else _FIRST_PARTY_FUTURE_INVESTIGATION.search(sentence)
-        if (
-            _FUTURE_NIGHT.search(sentence) is not None
-            and _INVESTIGATION.search(sentence) is not None
-            and "？" not in sentence
-            and "?" not in sentence
-            and _DIRECT_QUESTION.search(sentence) is None
-        )
-        else None
+    future_match = _first_party_future_investigation_match(
+        sentence,
+        speaker_ref=speaker_ref,
     )
     if future_match is not None:
-        if ledger_schema_version >= 4:
-            target_matches = list(_INVESTIGATION_TARGET.finditer(future_match.group(0)))
-            target_match = target_matches[-1] if target_matches else None
-        else:
-            target_match = _INVESTIGATION_TARGET.search(sentence)
+        target_matches = list(_INVESTIGATION_TARGET.finditer(future_match.group(0)))
+        target_match = target_matches[-1] if target_matches else None
         claims.append(
             _claim(
                 utterance,
@@ -916,7 +944,7 @@ def _claim(
     claim = {
         "claim_id": f"claim_{source_id}_{sentence_index}_{claim_type}",
         "claim_type": claim_type,
-        "source_event_id": source_id,
+        "source_event_ref": source_id,
         "source_sentence_id": f"sentence_{source_id}_{sentence_index}",
         "sentence_index": sentence_index,
         "source_kind": source_kind,
@@ -929,7 +957,6 @@ def _claim(
             _mentioned_player_refs(sentence),
             key=_seat_sort_key,
         ),
-        "confirmation_status": "unverified",
         **attributes,
     }
     if "record_seq" in utterance:
@@ -937,46 +964,169 @@ def _claim(
     return claim
 
 
+def _validate_claim_candidate(
+    candidate: dict[str, Any],
+    *,
+    source_statement: dict[str, Any],
+    role_keys: frozenset[str],
+    team_keys: frozenset[str],
+    player_refs: frozenset[str],
+    current_night_no: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate a deterministic claim candidate without consulting mutable state."""
+
+    claim_type = candidate.get("claim_type")
+    source_event_ref = candidate.get("source_event_ref")
+    source_speech = source_statement.get("speech")
+    exact_quote = candidate.get("exact_quote")
+    if claim_type not in _SUPPORTED_CLAIM_TYPES:
+        return None, _claim_rejection(
+            candidate,
+            reason="unsupported_claim_type",
+        )
+    if (
+        not isinstance(source_event_ref, str)
+        or source_event_ref != source_statement.get("source_event_id")
+        or not isinstance(source_speech, str)
+        or not isinstance(exact_quote, str)
+        or exact_quote not in source_speech
+    ):
+        return None, _claim_rejection(
+            candidate,
+            reason="source_sentence_mismatch",
+        )
+
+    missing_fields: list[str] = []
+    if claim_type == "role_claim":
+        claimed_role = candidate.get("claimed_role")
+        if not isinstance(claimed_role, str):
+            missing_fields.append("claimed_role")
+        elif claimed_role not in role_keys:
+            return None, _claim_rejection(candidate, reason="unknown_role_key")
+    elif claim_type == "team_claim":
+        claimed_team = candidate.get("claimed_team")
+        if not isinstance(claimed_team, str):
+            missing_fields.append("claimed_team")
+        elif claimed_team not in team_keys:
+            return None, _claim_rejection(candidate, reason="unknown_team_key")
+    elif claim_type == "investigation_claim":
+        claimed_action_in = candidate.get("claimed_action_in")
+        target_ref = candidate.get("target_ref")
+        claimed_result = candidate.get("claimed_result")
+        if not isinstance(claimed_action_in, dict):
+            missing_fields.append("claimed_action_in")
+        if not isinstance(target_ref, str):
+            missing_fields.append("target_ref")
+        if not isinstance(claimed_result, str):
+            missing_fields.append("claimed_result")
+        if not missing_fields:
+            night_no = claimed_action_in.get("round_no")
+            if (
+                claimed_action_in.get("period") != "night"
+                or not isinstance(night_no, int)
+                or isinstance(night_no, bool)
+                or night_no < 1
+                or night_no > current_night_no
+            ):
+                return None, _claim_rejection(candidate, reason="invalid_night_reference")
+            if target_ref not in player_refs:
+                return None, _claim_rejection(candidate, reason="unknown_player_ref")
+            if claimed_result not in _INVESTIGATION_RESULTS:
+                return None, _claim_rejection(candidate, reason="invalid_claimed_result")
+    elif claim_type == "future_investigation_plan":
+        target_ref = candidate.get("target_ref")
+        specificity = candidate.get("specificity")
+        if not isinstance(target_ref, str):
+            missing_fields.append("target_ref")
+        if specificity not in {"specific_target", "direction_only"}:
+            missing_fields.append("specificity")
+        if not missing_fields and target_ref not in player_refs:
+            return None, _claim_rejection(candidate, reason="unknown_player_ref")
+    elif claim_type == "vote_stance":
+        target_ref = candidate.get("target_ref")
+        if not isinstance(target_ref, str):
+            missing_fields.append("target_ref")
+        elif target_ref not in player_refs:
+            return None, _claim_rejection(candidate, reason="unknown_player_ref")
+    elif claim_type == "player_assessment":
+        subject_refs = candidate.get("subject_refs")
+        if not isinstance(subject_refs, list) or not subject_refs:
+            missing_fields.append("subject_refs")
+        elif any(ref not in player_refs for ref in subject_refs):
+            return None, _claim_rejection(candidate, reason="unknown_player_ref")
+    elif claim_type == "secondary_paraphrase":
+        reported_speaker_ref = candidate.get("reported_speaker_ref")
+        if not isinstance(reported_speaker_ref, str):
+            missing_fields.append("reported_speaker_ref")
+        elif reported_speaker_ref not in player_refs:
+            return None, _claim_rejection(candidate, reason="unknown_player_ref")
+
+    if missing_fields:
+        return None, _claim_rejection(
+            candidate,
+            reason="missing_required_fields",
+            missing_fields=missing_fields,
+        )
+    validated = dict(candidate)
+    validated["authority"] = "player_claim_unverified"
+    validated["derivation"] = _complete_derivation()
+    return validated, None
+
+
+def validate_claim_candidate(
+    candidate: dict[str, Any],
+    *,
+    source_statement: dict[str, Any],
+    role_keys: Iterable[str],
+    team_keys: Iterable[str],
+    player_refs: Iterable[str],
+    current_night_no: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Public pure validator used by V5 fixtures and projection callers."""
+
+    return _validate_claim_candidate(
+        dict(candidate),
+        source_statement=dict(source_statement),
+        role_keys=_validated_string_set(role_keys, default=frozenset()),
+        team_keys=_validated_string_set(team_keys, default=frozenset()),
+        player_refs=_validated_string_set(player_refs, default=frozenset()),
+        current_night_no=current_night_no,
+    )
+
+
+def _claim_rejection(
+    candidate: dict[str, Any],
+    *,
+    reason: str,
+    missing_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    rejection = {
+        "source_event_ref": candidate.get("source_event_ref"),
+        "kind": candidate.get("claim_type"),
+        "reason": reason,
+    }
+    if missing_fields:
+        rejection["missing_fields"] = missing_fields
+    return {key: value for key, value in rejection.items() if value is not None}
+
+
+def _complete_derivation() -> dict[str, Any]:
+    return {
+        "kind": _DERIVATION_KIND,
+        "validator_version": _DERIVATION_VALIDATOR_VERSION,
+        "validation_status": "complete",
+    }
+
+
 def _is_first_party_investigation(
     sentence: str,
     *,
     speaker_ref: str,
     utterance_claims_seer: bool,
-    ledger_schema_version: int,
 ) -> bool:
-    has_past_reference = (
-        _has_past_investigation_reference(sentence)
-        if ledger_schema_version >= 4
-        else _PAST_NIGHT.search(sentence) is not None
-    )
+    has_past_reference = _has_past_investigation_reference(sentence)
     if not has_past_reference or _INVESTIGATION.search(sentence) is None:
         return False
-    if ledger_schema_version < 4:
-        if (
-            _secondary_reported_speaker(
-                sentence,
-                speaker_ref=speaker_ref,
-                ledger_schema_version=ledger_schema_version,
-            )
-            is not None
-        ):
-            return False
-        normalized = sentence.replace(" ", "")
-        speaker_label = (
-            f"{speaker_ref.removeprefix('seat_')}号"
-            if speaker_ref.startswith("seat_")
-            else ""
-        )
-        speaker_leads_seer_claim = (
-            bool(speaker_label)
-            and normalized.startswith(speaker_label)
-            and "预言家" in normalized
-        )
-        return (
-            utterance_claims_seer
-            or speaker_leads_seer_claim
-            or _SELF_PAST_INVESTIGATION.search(normalized) is not None
-        )
     normalized = sentence.replace(" ", "")
     speaker_label = (
         f"{speaker_ref.removeprefix('seat_')}号" if speaker_ref.startswith("seat_") else ""
@@ -987,9 +1137,9 @@ def _is_first_party_investigation(
     explicit_self_claim = False
     self_matches = [
         *_SELF_PAST_INVESTIGATION.finditer(sentence),
-        *_V4_SELF_FIRST_INVESTIGATION.finditer(sentence),
+        *_SELF_FIRST_INVESTIGATION.finditer(sentence),
         *(
-            _V4_DIRECT_FIRST_INVESTIGATION.finditer(sentence)
+            _DIRECT_FIRST_INVESTIGATION.finditer(sentence)
             if "？" not in sentence and "?" not in sentence
             else ()
         ),
@@ -1015,7 +1165,6 @@ def _is_first_party_investigation(
         _secondary_reported_speaker(
             sentence,
             speaker_ref=speaker_ref,
-            ledger_schema_version=ledger_schema_version,
         )
         is not None
     ):
@@ -1035,17 +1184,14 @@ def _secondary_reported_speaker(
     sentence: str,
     *,
     speaker_ref: str,
-    ledger_schema_version: int,
 ) -> str | None:
-    patterns = [_SECONDARY_REPORT, _SECONDARY_ACTION_ACCOUNT]
-    if ledger_schema_version >= 4:
-        patterns.extend(
-            (
-                _SECONDARY_ACTION_ACCOUNT_PAST_FIRST,
-                _SECONDARY_QUOTED_ATTRIBUTION_PREFIX,
-                _SECONDARY_QUOTED_ATTRIBUTION_LEADING,
-            )
-        )
+    patterns = [
+        _SECONDARY_REPORT,
+        _SECONDARY_ACTION_ACCOUNT,
+        _SECONDARY_ACTION_ACCOUNT_PAST_FIRST,
+        _SECONDARY_QUOTED_ATTRIBUTION_PREFIX,
+        _SECONDARY_QUOTED_ATTRIBUTION_LEADING,
+    ]
     for pattern in patterns:
         match = pattern.search(sentence)
         if match is None:
@@ -1060,11 +1206,8 @@ def _claimed_night_round(
     sentence: str,
     *,
     occurred_in: dict[str, Any],
-    ledger_schema_version: int = 2,
 ) -> int:
-    if any(marker in sentence for marker in ("首夜", "第一晚", "第一夜")) or (
-        ledger_schema_version >= 4 and "首验" in sentence
-    ):
+    if any(marker in sentence for marker in ("首夜", "第一晚", "第一夜")) or ("首验" in sentence):
         return 1
     round_no = occurred_in.get("round_no")
     return round_no if isinstance(round_no, int) and round_no > 0 else 1
@@ -1074,7 +1217,6 @@ def _resolve_questions(
     questions: list[dict[str, Any]],
     *,
     utterances: list[dict[str, Any]],
-    ledger_schema_version: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     resolved_questions: list[dict[str, Any]] = []
     relations: list[dict[str, Any]] = []
@@ -1089,57 +1231,52 @@ def _resolve_questions(
                 not _utterance_follows_question(utterance, question=question)
                 or utterance["speaker_ref"] != target_ref
                 or utterance["round_no"] != question["asked_in"].get("round_no")
-                or not speech_matches_question_topic(
-                    str(utterance["speech"]),
-                    topic=str(question["topic"]),
-                    ledger_schema_version=ledger_schema_version,
-                )
-                or (
-                    ledger_schema_version >= 4
-                    and not _v4_response_covers_question(
-                        utterance,
-                        question=question,
-                    )
-                )
+                or not _response_covers_question(utterance, question=question)
             ):
                 continue
-            question["status"] = "answered"
-            question["answer_source_event_id"] = utterance["source_event_id"]
-            question["answer_turn_index"] = utterance["turn_index"]
-            if "record_seq" in utterance:
-                question["answer_record_seq"] = utterance["record_seq"]
+            question["response_status"] = "response_detected"
             relation = {
                 "relation_id": (
                     f"relation_{utterance['source_event_id']}_{question['question_id']}"
                 ),
-                "relation_type": "answers_question",
-                "from_source_event_id": utterance["source_event_id"],
-                "from_speaker_ref": utterance["speaker_ref"],
-                "from_turn_index": utterance["turn_index"],
+                "type": "response_to_question",
+                "from_event_ref": utterance["source_event_id"],
                 "to_question_id": question["question_id"],
-                "to_source_event_id": question["source_event_id"],
-                "to_turn_index": question["asked_turn_index"],
                 "temporal_order_valid": True,
-                "confirmation_status": "deterministic_speaker_time_and_topic_match",
+                "derivation": _complete_derivation(),
             }
-            if "record_seq" in utterance:
-                relation["from_record_seq"] = utterance["record_seq"]
-            if "asked_record_seq" in question:
-                relation["to_record_seq"] = question["asked_record_seq"]
             relations.append(relation)
-            break
         resolved_questions.append(question)
     return resolved_questions, relations
 
 
-def _v4_response_covers_question(
+def _response_covers_question(
     utterance: dict[str, Any],
     *,
     question: dict[str, Any],
 ) -> bool:
-    if question.get("topic") != "past_investigation_result":
-        return True
     speech = str(utterance.get("speech") or "")
+    topic = str(question.get("topic") or "")
+    if topic == "night_kill_reason":
+        return any(term in speech for term in ("刀", "夜死", "袭击", "死亡")) and any(
+            term in speech for term in ("因为", "理由", "收益", "所以", "判断")
+        )
+    if topic == "vote_stance":
+        return _VOTE_ACTION.search(speech) is not None
+    if topic == "general":
+        quote = str(question.get("exact_quote") or "")
+        shared_terms = {
+            term
+            for term in ("警徽", "站边", "狼坑", "刀", "死", "保", "抗推", "归票")
+            if term in quote and term in speech
+        }
+        return bool(shared_terms) and any(
+            marker in speech for marker in ("回应", "回答", "解释", "因为", "我的判断", "我认为")
+        )
+    if not speech_matches_question_topic(speech, topic=topic):
+        return False
+    if topic != "past_investigation_result":
+        return True
     requested_fields = question.get("requested_fields")
     required = (
         [field for field in requested_fields if isinstance(field, str)]
@@ -1159,7 +1296,6 @@ def _v4_response_covers_question(
             _claimed_night_round(
                 speech,
                 occurred_in=occurred_in,
-                ledger_schema_version=4,
             )
             != referenced_night_no
         ):
@@ -1173,7 +1309,7 @@ def _utterance_follows_question(
     question: dict[str, Any],
 ) -> bool:
     uttered_record_seq = utterance.get("record_seq")
-    asked_record_seq = question.get("asked_record_seq")
+    asked_record_seq = question.get("asked_at_seq")
     if (
         isinstance(uttered_record_seq, int)
         and not isinstance(uttered_record_seq, bool)
@@ -1188,9 +1324,8 @@ def speech_matches_question_topic(
     speech: str,
     *,
     topic: str,
-    ledger_schema_version: int = 3,
 ) -> bool:
-    if ledger_schema_version >= 4 and topic == "past_investigation_result":
+    if topic == "past_investigation_result":
         return (
             _has_past_investigation_reference(speech)
             and _INVESTIGATION.search(speech) is not None
@@ -1199,36 +1334,43 @@ def speech_matches_question_topic(
                 or _INVESTIGATION_RESULT.search(speech) is not None
             )
         )
-    if ledger_schema_version >= 4 and topic == "future_investigation_plan":
+    if topic == "future_investigation_plan":
         return (
-            _FUTURE_NIGHT.search(speech) is not None
-            and _INVESTIGATION.search(speech) is not None
+            _FUTURE_NIGHT.search(speech) is not None and _INVESTIGATION.search(speech) is not None
         )
-    if ledger_schema_version >= 4 and topic == "sheriff_plan":
+    if topic == "sheriff_plan":
         return "警徽流" in speech
-    if topic == "future_investigation_target":
-        return _INVESTIGATION.search(speech) is not None and (
-            _INVESTIGATION_TARGET.search(speech) is not None
-            or any(term in speech for term in ("警上", "警下", "最拧巴", "具体目标"))
-        )
     if topic == "investigation_reason":
         return _INVESTIGATION.search(speech) is not None and any(
             term in speech for term in ("原因", "理由", "因为", "为什么选", "心路", "随机", "随便")
         )
-    if topic in {"investigation_plan", "sheriff_plan"}:
-        return _INVESTIGATION.search(speech) is not None or "警徽流" in speech
     if topic == "vote_reason":
         return (
             _VOTE_ACTION.search(speech) is not None
             and _VOTE_REASON_ANSWER.search(speech) is not None
         )
     if topic == "vote_stance":
-        return False
+        return _VOTE_ACTION.search(speech) is not None
     return False
 
 
 def _mentioned_player_refs(speech: str) -> set[str]:
     return {f"seat_{match.group(1)}" for match in _SEAT_REFERENCE.finditer(speech)}
+
+
+def _validated_string_set(
+    value: Iterable[str] | None,
+    *,
+    default: frozenset[str],
+) -> frozenset[str]:
+    if value is None:
+        return default
+    return frozenset(item for item in value if isinstance(item, str) and item)
+
+
+def _require_current_schema_version(value: int, *, expected: int, kind: str) -> None:
+    if value != expected:
+        raise ValueError(f"unsupported_discourse_{kind}_schema_version")
 
 
 def _seat_sort_key(ref: str) -> tuple[int, str]:

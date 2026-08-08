@@ -17,6 +17,7 @@ from app.v2.director_projection import project_director_scene
 from app.v2.event_contract import model_event_audience
 from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
 from app.v2.model_context import (
+    V2ModelContextProjectionInvariantError,
     V2ModelPlayerReference,
     model_prompt_metadata,
     project_model_action_context_with_metadata,
@@ -74,6 +75,14 @@ class V2ModelPort(Protocol):
         decision: bool,
         target: V2ModelTarget,
     ) -> dict[str, Any]: ...
+
+    def output_enforcement_metadata(
+        self,
+        *,
+        action_context: dict[str, Any],
+        decision: bool,
+        target: V2ModelTarget,
+    ) -> dict[str, str | int | None]: ...
 
     async def generate_action_decision(
         self,
@@ -710,6 +719,17 @@ class V2ActionEngine:
                     model_context,
                     projection_metadata=(projected_model_context.projection_metadata),
                 )
+                output_enforcement_metadata = self._model_client.output_enforcement_metadata(
+                    action_context=model_context,
+                    decision=decision,
+                    target=model_target,
+                )
+                output_enforcement = {
+                    "requested": output_enforcement_metadata.get("requested_output_enforcement"),
+                    "actual": output_enforcement_metadata.get("provider_output_enforcement"),
+                    "schema_name": output_enforcement_metadata.get("output_schema_name"),
+                    "schema_version": output_enforcement_metadata.get("output_schema_version"),
+                }
                 request_payload = self._model_client.build_request_payload(
                     action_context=model_context,
                     decision=decision,
@@ -858,9 +878,7 @@ class V2ActionEngine:
                                     binding_prior_failure_streak
                                 ),
                                 "model_binding_health_status": (
-                                    _model_binding_health_status(
-                                        binding_prior_failure_streak
-                                    )
+                                    _model_binding_health_status(binding_prior_failure_streak)
                                 ),
                                 "model_parameters": dict(model_target.parameters),
                                 "configured_max_tokens": (
@@ -898,6 +916,7 @@ class V2ActionEngine:
                                     "model_view_selector_version"
                                 ),
                                 "prompt_projection": prompt_projection,
+                                "output_enforcement": output_enforcement,
                                 "request_payload": request_payload,
                             },
                         )
@@ -920,6 +939,7 @@ class V2ActionEngine:
                                 else "action_budget"
                             )
                             try:
+
                                 async def generate_once() -> V2ModelDecision:
                                     if progress_capable:
                                         return await progress_method(
@@ -1042,12 +1062,8 @@ class V2ActionEngine:
                                         0,
                                         round((model_deadline - time.monotonic()) * 1000),
                                     ),
-                                    model_binding_failure_streak=(
-                                        binding_failure_streak
-                                    ),
-                                    model_binding_health_status=(
-                                        binding_health_status
-                                    ),
+                                    model_binding_failure_streak=(binding_failure_streak),
+                                    model_binding_health_status=(binding_health_status),
                                 ),
                             )
                             self._repository.append_event(
@@ -1062,16 +1078,12 @@ class V2ActionEngine:
                                     "model_provider": model_target.provider,
                                     "model_id": model_target.model_id,
                                     "status": binding_health_status,
-                                    "consecutive_failure_count": (
-                                        binding_failure_streak
-                                    ),
+                                    "consecutive_failure_count": (binding_failure_streak),
                                     "failure_code": exc.code,
                                     "failure_category": disposition.category,
                                     "failure_stage": exc.failure_stage,
                                     "first_token_seen": exc.first_token_seen,
-                                    "response_headers_seen": (
-                                        exc.response_headers_seen
-                                    ),
+                                    "response_headers_seen": (exc.response_headers_seen),
                                 },
                             )
                             model_failure_recorded = True
@@ -1289,14 +1301,13 @@ class V2ActionEngine:
                         "parsed_output": parsed_output,
                         "passive_observations": passive_observations,
                         "repair_kind": model_decision.repair_kind,
+                        "application_validation_result": "accepted",
                         "first_token_ms": model_decision.first_token_ms,
                         "first_visible_text_ms": model_decision.first_visible_text_ms,
                         "completed_ms": model_decision.completed_ms,
                         "queue_wait_ms": model_decision.queue_wait_ms,
                         "provider_in_flight": model_decision.provider_in_flight,
-                        "provider_concurrency_limit": (
-                            model_decision.provider_concurrency_limit
-                        ),
+                        "provider_concurrency_limit": (model_decision.provider_concurrency_limit),
                         "reasoning_delta_count": model_decision.reasoning_delta_count,
                         "text_delta_count": model_decision.text_delta_count,
                         "max_inter_delta_ms": model_decision.max_inter_delta_ms,
@@ -1317,9 +1328,7 @@ class V2ActionEngine:
                             "model_id": model_target.model_id,
                             "status": "healthy",
                             "consecutive_failure_count": 0,
-                            "recovered_after_failure_count": (
-                                binding_prior_failure_streak
-                            ),
+                            "recovered_after_failure_count": (binding_prior_failure_streak),
                         },
                     )
                 if model_decision.repair_kind is not None:
@@ -1696,8 +1705,12 @@ class V2ActionEngine:
                         "retryable": False,
                         "terminal": True,
                     }
-                    if isinstance(exc, V2QualityError) and exc.raw_response is not None:
-                        failure_payload["raw_response"] = exc.raw_response
+                    if isinstance(exc, V2QualityError):
+                        failure_payload["application_validation_result"] = "rejected"
+                        if exc.raw_response is not None:
+                            failure_payload["raw_response"] = exc.raw_response
+                    if isinstance(exc, V2ModelContextProjectionInvariantError):
+                        failure_payload["invariant_code"] = exc.invariant_code
                     self._repository.append_event(
                         game_id=claim.game_id,
                         event_type="model_request_failed",
@@ -2152,8 +2165,10 @@ def _model_failure_payload(
         "max_inter_delta_ms": exc.max_inter_delta_ms,
         "last_progress_ms": exc.last_progress_ms,
     }
-    if isinstance(exc, V2QualityError) and exc.raw_response is not None:
-        payload["raw_response"] = exc.raw_response
+    if isinstance(exc, V2QualityError):
+        payload["application_validation_result"] = "rejected"
+        if exc.raw_response is not None:
+            payload["raw_response"] = exc.raw_response
     return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -2257,6 +2272,8 @@ def _failure(exc: Exception) -> tuple[str, str]:
         return "quality", "judge_template_invalid"
     if isinstance(exc, V2QualityError):
         return "quality", exc.code
+    if isinstance(exc, V2ModelContextProjectionInvariantError):
+        return "model", "model_context_projection_invariant_failed"
     if isinstance(exc, V2ModelError):
         return "model", exc.code
     if isinstance(exc, V2TtsError):

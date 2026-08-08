@@ -81,6 +81,9 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_v2_agent_plan_max_in_flight == 3
     assert settings.live_v2_ark_max_in_flight == 3
     assert settings.live_v2_deepseek_max_in_flight == 32
+    assert settings.live_v2_agent_plan_supports_strict_json_schema is False
+    assert settings.live_v2_ark_supports_strict_json_schema is False
+    assert settings.live_v2_deepseek_supports_strict_json_schema is False
     assert settings.live_v2_model_retry_base_delay_seconds == 0.5
     assert settings.live_v2_model_retry_jitter_seconds == 0.25
     assert settings.judge_voice_worker_poll_seconds == 2.0
@@ -115,6 +118,9 @@ def test_settings_reads_standard_ark_and_provider_concurrency_env(monkeypatch) -
     monkeypatch.setenv("LIVE_V2_AGENT_PLAN_MAX_IN_FLIGHT", "2")
     monkeypatch.setenv("LIVE_V2_ARK_MAX_IN_FLIGHT", "4")
     monkeypatch.setenv("LIVE_V2_DEEPSEEK_MAX_IN_FLIGHT", "40")
+    monkeypatch.setenv("LIVE_V2_AGENT_PLAN_SUPPORTS_STRICT_JSON_SCHEMA", "true")
+    monkeypatch.setenv("LIVE_V2_ARK_SUPPORTS_STRICT_JSON_SCHEMA", "true")
+    monkeypatch.setenv("LIVE_V2_DEEPSEEK_SUPPORTS_STRICT_JSON_SCHEMA", "true")
 
     settings = Settings(_env_file=None)
 
@@ -124,6 +130,9 @@ def test_settings_reads_standard_ark_and_provider_concurrency_env(monkeypatch) -
     assert settings.live_v2_agent_plan_max_in_flight == 2
     assert settings.live_v2_ark_max_in_flight == 4
     assert settings.live_v2_deepseek_max_in_flight == 40
+    assert settings.live_v2_agent_plan_supports_strict_json_schema is True
+    assert settings.live_v2_ark_supports_strict_json_schema is True
+    assert settings.live_v2_deepseek_supports_strict_json_schema is True
 
 
 def test_settings_rejects_v2_action_budget_shorter_than_attempt(monkeypatch) -> None:

@@ -711,6 +711,13 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             agent_plan_max_in_flight=config.live_v2_agent_plan_max_in_flight,
             ark_max_in_flight=config.live_v2_ark_max_in_flight,
             deepseek_max_in_flight=config.live_v2_deepseek_max_in_flight,
+            agent_plan_supports_strict_json_schema=(
+                config.live_v2_agent_plan_supports_strict_json_schema
+            ),
+            ark_supports_strict_json_schema=config.live_v2_ark_supports_strict_json_schema,
+            deepseek_supports_strict_json_schema=(
+                config.live_v2_deepseek_supports_strict_json_schema
+            ),
         ),
         tts_client=None,
         tts_client_factory=(
