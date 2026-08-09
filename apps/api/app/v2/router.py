@@ -37,7 +37,7 @@ from app.db.session import get_db
 from app.judge_configuration import build_judge_voice_snapshot, runtime_judge_configuration
 from app.model_catalog.defaults import (
     max_output_tokens_limit,
-    parameter_values_with_default_max_tokens,
+    normalize_model_parameters,
 )
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -166,88 +166,89 @@ def create_v2_game(
         ),
     }
     lobby = body.lobby_snapshot
-    rule_snapshot = None
-    players_snapshot = None
-    if lobby is not None:
-        frozen_rule_set = lobby.rule_set.model_dump(mode="json", exclude_none=True)
-        frozen_rule_revision_id = lobby.rule_set_revision_id
+    frozen_rule_set = lobby.rule_set.model_dump(mode="json", exclude_none=True)
+    frozen_rule_revision_id = lobby.rule_set_revision_id
+    if lobby.model_binding_mode == "profile_library":
+        frozen_rule_set, frozen_rule_revision_id = _resolve_library_rule_snapshot(
+            db,
+            lobby,
+        )
+    rule_snapshot = {
+        "schema_version": lobby.schema_version,
+        "source": "existing_mobile_lobby",
+        "model_binding_mode": lobby.model_binding_mode,
+        "rule_set_revision_id": frozen_rule_revision_id,
+        "seed": lobby.seed,
+        "max_rounds": lobby.max_rounds,
+        "allow_lineup_quality_warnings": lobby.allow_lineup_quality_warnings,
+        "lineup_quality_report": lobby.lineup_quality_report.model_dump(mode="json"),
+        "rule_set": frozen_rule_set,
+    }
+    players_snapshot = []
+    for item in lobby.player_configs:
+        player_snapshot = item.model_dump(mode="json", exclude_none=True)
         if lobby.model_binding_mode == "profile_library":
-            frozen_rule_set, frozen_rule_revision_id = _resolve_library_rule_snapshot(
-                db,
-                lobby,
-            )
-        rule_snapshot = {
-            "schema_version": lobby.schema_version,
-            "source": "existing_mobile_lobby",
-            "model_binding_mode": lobby.model_binding_mode,
-            "rule_set_revision_id": frozen_rule_revision_id,
-            "seed": lobby.seed,
-            "max_rounds": lobby.max_rounds,
-            "allow_lineup_quality_warnings": lobby.allow_lineup_quality_warnings,
-            "lineup_quality_report": lobby.lineup_quality_report.model_dump(mode="json"),
-            "rule_set": frozen_rule_set,
-        }
-        players_snapshot = []
-        for item in lobby.player_configs:
-            player_snapshot = item.model_dump(mode="json", exclude_none=True)
-            if lobby.model_binding_mode == "profile_library":
-                profile = db.get(VirtualPlayerProfile, item.profile_id)
-                if profile is None or profile.status != "published":
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "v2_player_profile_unavailable",
-                            "profile_id": item.profile_id,
-                        },
-                    )
-                submitted_binding = (item.model_provider, item.model)
-                if any(submitted_binding) and submitted_binding != (
-                    profile.model_provider,
-                    profile.model,
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "code": "v2_player_model_binding_mismatch",
-                            "profile_id": item.profile_id,
-                            "submitted_model_provider": item.model_provider,
-                            "submitted_model": item.model,
-                            "library_model_provider": profile.model_provider,
-                            "library_model": profile.model,
-                        },
-                    )
-                player_snapshot.update(_library_player_snapshot(profile))
-            model_configuration = db.get(
-                ModelConfigurationRecord,
-                (
-                    player_snapshot["model_provider"],
-                    player_snapshot["model"],
-                ),
-            )
-            if (
-                model_configuration is None
-                or not model_configuration.available
-                or not model_configuration.enabled
+            profile = db.get(VirtualPlayerProfile, item.profile_id)
+            if profile is None or profile.status != "published":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "v2_player_profile_unavailable",
+                        "profile_id": item.profile_id,
+                    },
+                )
+            submitted_binding = (item.model_provider, item.model)
+            if any(submitted_binding) and submitted_binding != (
+                profile.model_provider,
+                profile.model,
             ):
                 raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        "Player model is not enabled: "
-                        f"{player_snapshot['model_provider']}/{player_snapshot['model']}"
-                    ),
+                    status_code=409,
+                    detail={
+                        "code": "v2_player_model_binding_mismatch",
+                        "profile_id": item.profile_id,
+                        "submitted_model_provider": item.model_provider,
+                        "submitted_model": item.model,
+                        "library_model_provider": profile.model_provider,
+                        "library_model": profile.model,
+                    },
                 )
-            player_snapshot["model_parameters"] = parameter_values_with_default_max_tokens(
-                model_configuration.parameter_values,
-                supports_thinking=model_configuration.supports_thinking,
-                limit=max_output_tokens_limit(
-                    model_configuration.provider,
-                    model_configuration.model_id,
+            player_snapshot.update(_library_player_snapshot(profile))
+        model_configuration = db.get(
+            ModelConfigurationRecord,
+            (
+                player_snapshot["model_provider"],
+                player_snapshot["model"],
+            ),
+        )
+        if (
+            model_configuration is None
+            or not model_configuration.available
+            or not model_configuration.enabled
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Player model is not enabled: "
+                    f"{player_snapshot['model_provider']}/{player_snapshot['model']}"
                 ),
             )
-            player_snapshot["model_configuration_updated_at"] = (
-                model_configuration.updated_at.isoformat()
-            )
-            players_snapshot.append(player_snapshot)
+        player_snapshot["model_parameters"] = normalize_model_parameters(
+            model_configuration.provider,
+            model_configuration.model_id,
+            model_configuration.parameter_values,
+            supports_thinking=model_configuration.supports_thinking,
+            limit=max_output_tokens_limit(
+                model_configuration.provider,
+                model_configuration.model_id,
+            ),
+            enforce_auto_max_tokens=True,
+        )
+        player_snapshot["model_supports_thinking"] = model_configuration.supports_thinking
+        player_snapshot["model_configuration_updated_at"] = (
+            model_configuration.updated_at.isoformat()
+        )
+        players_snapshot.append(player_snapshot)
     game, run, god_view_access_token = create_waiting_game(
         db,
         title=body.title,
@@ -1455,6 +1456,7 @@ def _admin_model_requests(
                 context,
                 decision=request_kind == "decision",
                 model_id=model_id or "",
+                max_output_tokens=16_384,
             )
             input_source = "reconstructed"
         else:

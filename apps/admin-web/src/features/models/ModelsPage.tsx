@@ -27,7 +27,9 @@ import { adminModelKeys } from "@/features/models/query-keys";
 import type {
   AdminModel,
   AdminModelSource,
+  MaxTokensMode,
   ModelConfigurationInput,
+  ModelReasoningPolicy,
   ThinkingMode,
 } from "@/features/models/types";
 import { adminOperationErrorDescription } from "@/lib/admin-notification";
@@ -291,43 +293,81 @@ function ModelConfigurationForm({
   onSubmit: (input: ModelConfigurationInput) => void;
   pending: boolean;
 }) {
-  const DEFAULT_THINKING_MAX_TOKENS = 16_384;
-  const DEFAULT_NON_THINKING_MAX_TOKENS = 512;
+  const policy = model.reasoning_policy;
   const [thinking, setThinking] = useState<ThinkingMode>(model.parameters.thinking);
   const [maxTokens, setMaxTokens] = useState<number | null>(
     model.parameters.max_tokens,
+  );
+  const [maxTokensMode, setMaxTokensMode] = useState<MaxTokensMode>(
+    model.parameters.max_tokens_mode,
   );
   const [reasoningEffort, setReasoningEffort] = useState(
     model.parameters.thinking === "disabled"
       ? ""
       : model.parameters.reasoning_effort ?? "",
   );
+  const [linkageNotice, setLinkageNotice] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const samplingDisabled = model.provider === "deepseek" && thinking !== "disabled";
+  const samplingDisabled =
+    thinking === "enabled" &&
+    !policy.sampling_parameters_allowed_when_thinking;
+  const reasoningEffortSupported = policy.reasoning_effort_options.length > 0;
   const reasoningEffortDisabled =
-    thinking === "disabled" || model.reasoning_effort_options.length === 0;
+    thinking === "disabled" || !reasoningEffortSupported;
   const storedReasoningConflict =
     model.parameters.thinking === "disabled" &&
     Boolean(model.parameters.reasoning_effort);
 
   function handleThinkingChange(nextThinking: ThinkingMode) {
+    const nextReasoningEffort =
+      nextThinking === "enabled" ? policy.default_reasoning_effort ?? "" : "";
     setThinking(nextThinking);
-    setMaxTokens(
-      Math.min(
-        model.supports_thinking && nextThinking !== "disabled"
-          ? DEFAULT_THINKING_MAX_TOKENS
-          : DEFAULT_NON_THINKING_MAX_TOKENS,
-        model.max_output_tokens_limit,
-      ),
+    setReasoningEffort(nextReasoningEffort);
+    applyAutomaticMaxTokens(nextThinking, nextReasoningEffort);
+  }
+
+  function handleReasoningEffortChange(nextReasoningEffort: string) {
+    setReasoningEffort(nextReasoningEffort);
+    applyAutomaticMaxTokens(thinking, nextReasoningEffort);
+  }
+
+  function applyAutomaticMaxTokens(
+    nextThinking: ThinkingMode,
+    nextReasoningEffort: string,
+  ) {
+    const recommended = recommendedMaxTokens(
+      policy,
+      nextThinking,
+      nextReasoningEffort || null,
     );
+    if (recommended === null) {
+      setValidationError("模型策略未提供当前推理档位的推荐 token 上限。");
+      setLinkageNotice(null);
+      return;
+    }
+    setMaxTokens(recommended);
+    setMaxTokensMode("auto");
     setValidationError(null);
-    if (nextThinking === "disabled") setReasoningEffort("");
+    setLinkageNotice(
+      `已按推理档位更新最大输出 tokens 为 ${recommended.toLocaleString()}（自动联动）。`,
+    );
+  }
+
+  function handleMaxTokensChange(nextMaxTokens: number | null) {
+    setMaxTokens(nextMaxTokens);
+    setMaxTokensMode("manual");
+    setValidationError(null);
+    setLinkageNotice("最大输出 tokens 已切换为手动设置。修改 Thinking 或 Reasoning effort 会恢复自动联动。");
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (thinking === "disabled" && reasoningEffort) {
       setValidationError("关闭 Thinking 时不能同时设置 Reasoning effort。");
+      return;
+    }
+    if (thinking === "enabled" && reasoningEffortSupported && !reasoningEffort) {
+      setValidationError("开启 Thinking 时必须选择 Reasoning effort。");
       return;
     }
     if (maxTokens === null) {
@@ -345,6 +385,7 @@ function ModelConfigurationForm({
         temperature: samplingDisabled ? null : optionalNumber(form, "temperature"),
         top_p: samplingDisabled ? null : optionalNumber(form, "top_p"),
         max_tokens: maxTokens,
+        max_tokens_mode: maxTokensMode,
         frequency_penalty: samplingDisabled ? null : optionalNumber(form, "frequency_penalty"),
         presence_penalty: samplingDisabled ? null : optionalNumber(form, "presence_penalty"),
       },
@@ -370,44 +411,42 @@ function ModelConfigurationForm({
           >
             <Select
               aria-label="Thinking"
-              disabled={!model.supports_thinking}
+              disabled={policy.thinking_locked || policy.thinking_options.length <= 1}
               onChange={(value) => handleThinkingChange(value as ThinkingMode)}
-              options={[
-                { label: "跟随提供方默认", value: "default" },
-                { label: "开启", value: "enabled" },
-                { label: "关闭", value: "disabled" },
-              ]}
+              options={policy.thinking_options.map((option) => ({
+                label: `${option === "enabled" ? "开启" : "关闭"}${
+                  option === policy.default_thinking ? "（默认）" : ""
+                }`,
+                value: option,
+              }))}
               value={thinking}
             />
           </ModelParameterField>
-          <ModelParameterField
-            description="控制模型投入的推理强度。级别越高，通常会进行更深入的分析，但响应时间和 token 消耗也可能增加。可选级别由模型提供方决定。"
-            label="Reasoning effort"
-          >
-            <Select
-              aria-label="Reasoning effort"
-              disabled={reasoningEffortDisabled}
-              onChange={(value) => {
-                setReasoningEffort(value);
-                setValidationError(null);
-              }}
-              options={[
-                { label: "跟随提供方默认", value: "" },
-                ...model.reasoning_effort_options.map((option) => ({
+          {reasoningEffortSupported ? (
+            <ModelParameterField
+              description="控制模型投入的推理强度。级别越高，通常会进行更深入的分析，但响应时间和 token 消耗也可能增加。可选级别和推荐 token 上限由后端模型策略决定。"
+              label="Reasoning effort"
+            >
+              <Select
+                aria-label="Reasoning effort"
+                disabled={reasoningEffortDisabled}
+                onChange={handleReasoningEffortChange}
+                options={policy.reasoning_effort_options.map((option) => ({
                   label: option,
                   value: option,
-                })),
-              ]}
-              value={reasoningEffort}
-            />
-          </ModelParameterField>
+                }))}
+                placeholder={thinking === "disabled" ? "Thinking 已关闭" : undefined}
+                value={reasoningEffort || undefined}
+              />
+            </ModelParameterField>
+          ) : null}
           <NumberField
-            description={`限制模型单次响应最多生成的 token 数。当前模型上限为 ${model.max_output_tokens_limit.toLocaleString()}；该值会直接用于实际模型请求。切换 Thinking 时会自动恢复对应默认值。`}
+            description={`限制模型单次响应最多生成的 token 数。当前模型上限为 ${model.max_output_tokens_limit.toLocaleString()}；直接修改会切换为手动模式，修改 Thinking 或 Reasoning effort 会按后端策略恢复自动联动。`}
             label="最大输出 tokens"
             max={model.max_output_tokens_limit}
             min={1}
             name="max_tokens"
-            onChange={setMaxTokens}
+            onChange={handleMaxTokensChange}
             required
             step={1}
             value={maxTokens}
@@ -453,14 +492,38 @@ function ModelConfigurationForm({
             step={0.1}
           />
         </div>
+        <p
+          aria-live="polite"
+          className="model-token-linkage-status"
+          data-mode={maxTokensMode}
+        >
+          <strong>{maxTokensMode === "auto" ? "自动联动" : "手动设置"}</strong>
+          <span>
+            {linkageNotice ??
+              (maxTokensMode === "auto"
+                ? "当前值由后端模型策略决定。"
+                : "当前值由管理员手动指定。")}
+          </span>
+          {maxTokensMode === "manual" ? (
+            <button
+              className="model-token-linkage-reset"
+              onClick={() => applyAutomaticMaxTokens(thinking, reasoningEffort)}
+              type="button"
+            >
+              恢复自动联动
+            </button>
+          ) : null}
+        </p>
         {thinking === "disabled" ? (
           <p className="model-parameter-note">
             {storedReasoningConflict
               ? "检测到历史冲突配置：关闭 Thinking 时 Reasoning effort 不可用，本次保存会自动清空。"
               : "关闭 Thinking 时 Reasoning effort 不可用，保存时会保持为空。"}
           </p>
-        ) : model.provider === "deepseek" && samplingDisabled ? (
-          <p className="model-parameter-note">DeepSeek 官方说明：思考开启（含默认值）时，Temperature、Top P 与两类 penalty 不生效，保存时会自动清空。</p>
+        ) : policy.thinking_locked ? (
+          <p className="model-parameter-note">该模型的 Thinking 模式由模型能力锁定，不能关闭。</p>
+        ) : samplingDisabled ? (
+          <p className="model-parameter-note">该模型在 Thinking 开启时不使用 Temperature、Top P 与两类 penalty，保存时会自动清空。</p>
         ) : model.provider === "agent_plan" || model.provider === "ark" ? (
           <p className="model-parameter-note">Temperature 与 Top P 建议只配置一个；两类 penalty 仅用于 Chat 调用，V2 Responses 请求不会发送。</p>
         ) : (
@@ -474,6 +537,18 @@ function ModelConfigurationForm({
       </fieldset>
     </form>
   );
+}
+
+function recommendedMaxTokens(
+  policy: ModelReasoningPolicy,
+  thinking: ThinkingMode,
+  reasoningEffort: string | null,
+) {
+  if (thinking === "disabled") return policy.disabled_max_tokens;
+  if (reasoningEffort) {
+    return policy.max_tokens_by_effort[reasoningEffort] ?? null;
+  }
+  return policy.default_max_tokens;
 }
 
 function NumberField({

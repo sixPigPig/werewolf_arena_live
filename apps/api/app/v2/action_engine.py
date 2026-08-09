@@ -65,6 +65,7 @@ class V2ModelPort(Protocol):
         *,
         model_provider: str,
         model_id: str,
+        model_supports_thinking: bool,
         model_parameters: dict[str, Any],
     ) -> V2ModelTarget: ...
 
@@ -168,6 +169,7 @@ class V2SpeechSpec:
     dialect: str | None = None
     model_provider: str | None = None
     model_id: str | None = None
+    model_supports_thinking: bool | None = None
     model_parameters: dict[str, Any] | None = None
     activation_id: str | None = None
     output_kind: str = "public_speech"
@@ -700,10 +702,13 @@ class V2ActionEngine:
                 model_attempt_no = 1
                 if model_provider is None or model_id is None:
                     raise V2ModelError("model_not_configured")
+                if not isinstance(spec.model_supports_thinking, bool):
+                    raise V2ModelError("model_parameters_invalid")
                 model_parameters, thinking_source = _action_model_parameters(spec)
                 model_target = self._model_client.resolve_model_target(
                     model_provider=model_provider,
                     model_id=model_id,
+                    model_supports_thinking=spec.model_supports_thinking,
                     model_parameters=model_parameters,
                 )
                 projected_model_context = project_model_action_context_with_metadata(
@@ -735,7 +740,8 @@ class V2ActionEngine:
                     decision=decision,
                     target=model_target,
                 )
-                configured_max_tokens = model_target.parameters.get("max_tokens")
+                configured_max_tokens = model_target.parameters["max_tokens"]
+                max_tokens_mode = model_target.parameters["max_tokens_mode"]
                 effective_max_tokens = request_payload.get(
                     "max_output_tokens",
                     request_payload.get("max_tokens"),
@@ -881,23 +887,11 @@ class V2ActionEngine:
                                     _model_binding_health_status(binding_prior_failure_streak)
                                 ),
                                 "model_parameters": dict(model_target.parameters),
-                                "configured_max_tokens": (
-                                    configured_max_tokens
-                                    if isinstance(configured_max_tokens, int)
-                                    and not isinstance(configured_max_tokens, bool)
-                                    else None
-                                ),
+                                "configured_max_tokens": (configured_max_tokens),
                                 "effective_max_tokens": effective_max_tokens,
-                                "max_tokens_source": (
-                                    "model_configuration"
-                                    if isinstance(configured_max_tokens, int)
-                                    and not isinstance(configured_max_tokens, bool)
-                                    else "thinking_mode_default"
-                                ),
-                                "thinking": model_target.parameters.get(
-                                    "thinking",
-                                    "default",
-                                ),
+                                "max_tokens_source": "model_configuration",
+                                "max_tokens_mode": max_tokens_mode,
+                                "thinking": model_target.parameters["thinking"],
                                 "thinking_source": thinking_source,
                                 "judge_configuration_version": None,
                                 "actor_kind": spec.actor_kind,

@@ -35,6 +35,7 @@ def _player(player_id: str, seat: int, role_key: str) -> V2NightPlayer:
         tts_dialect=None,
         model_provider="agent_plan",
         model_id="test-model",
+        model_supports_thinking=False,
         model_parameters={},
         persona={},
     )

@@ -11,9 +11,10 @@ import unicodedata
 
 import httpx
 
-from app.model_catalog.defaults import (
-    DEFAULT_NON_THINKING_MAX_TOKENS,
-    DEFAULT_THINKING_MAX_TOKENS,
+from app.model_catalog.defaults import reasoning_policy_for_model
+from app.v2.model_parameters import (
+    V2FrozenModelParametersError,
+    validate_frozen_model_parameters,
 )
 
 
@@ -157,6 +158,7 @@ class ParsedDecisionObject:
 class V2ModelTarget:
     provider: str
     model_id: str
+    supports_thinking: bool
     parameters: dict[str, Any]
 
 
@@ -325,6 +327,7 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
         "model_not_configured",
         "model_provider_not_configured",
         "model_provider_credentials_missing",
+        "model_parameters_invalid",
     } or (exc.http_status is not None and 400 <= exc.http_status < 500):
         return V2FailureDisposition(
             category="provider_configuration",
@@ -437,6 +440,7 @@ class V2ModelClient:
         *,
         model_provider: str,
         model_id: str,
+        model_supports_thinking: bool,
         model_parameters: dict[str, Any],
     ) -> V2ModelTarget:
         provider = model_provider.strip()
@@ -448,10 +452,22 @@ class V2ModelClient:
             raise V2ModelError("model_provider_not_configured")
         if not route.api_key:
             raise V2ModelError("model_provider_credentials_missing")
+        if not isinstance(model_supports_thinking, bool):
+            raise V2ModelError("model_parameters_invalid")
+        try:
+            parameters = validate_frozen_model_parameters(
+                model_parameters,
+                provider=provider,
+                model_id=selected_model_id,
+                supports_thinking=model_supports_thinking,
+            )
+        except V2FrozenModelParametersError as exc:
+            raise V2ModelError("model_parameters_invalid") from exc
         return V2ModelTarget(
             provider=provider,
             model_id=selected_model_id,
-            parameters=dict(model_parameters),
+            supports_thinking=model_supports_thinking,
+            parameters=parameters,
         )
 
     def build_request_payload(
@@ -466,15 +482,19 @@ class V2ModelClient:
             return build_model_request_payload(
                 action_context,
                 decision=decision,
+                model_provider=target.provider,
                 model_id=target.model_id,
                 parameters=target.parameters,
+                supports_thinking=target.supports_thinking,
                 supports_strict_json_schema=route.supports_strict_json_schema,
             )
         return build_chat_completions_request_payload(
             action_context,
             decision=decision,
+            model_provider=target.provider,
             model_id=target.model_id,
             parameters=target.parameters,
+            supports_thinking=target.supports_thinking,
             supports_strict_json_schema=route.supports_strict_json_schema,
         )
 
@@ -678,18 +698,22 @@ class V2ModelClient:
             build_model_request_payload(
                 action_context,
                 decision=decision,
+                model_provider=target.provider,
                 model_id=target.model_id,
                 max_output_tokens=max_output_tokens,
                 parameters=target.parameters,
+                supports_thinking=target.supports_thinking,
                 supports_strict_json_schema=route.supports_strict_json_schema,
             )
             if route.protocol == "responses"
             else build_chat_completions_request_payload(
                 action_context,
                 decision=decision,
+                model_provider=target.provider,
                 model_id=target.model_id,
                 max_output_tokens=max_output_tokens,
                 parameters=target.parameters,
+                supports_thinking=target.supports_thinking,
                 supports_strict_json_schema=route.supports_strict_json_schema,
             )
         )
@@ -1271,9 +1295,11 @@ def build_model_request_payload(
     action_context: dict[str, Any],
     *,
     decision: bool,
+    model_provider: str = "agent_plan",
     model_id: str,
     max_output_tokens: int | None = None,
     parameters: dict[str, Any] | None = None,
+    supports_thinking: bool = False,
     supports_strict_json_schema: bool = False,
 ) -> dict[str, Any]:
     configured = dict(parameters or {})
@@ -1289,6 +1315,14 @@ def build_model_request_payload(
         payload,
         configured,
         include_penalties=False,
+        supports_thinking=supports_thinking,
+    )
+    _remove_disallowed_sampling_parameters(
+        payload,
+        configured,
+        model_provider=model_provider,
+        model_id=model_id,
+        supports_thinking=supports_thinking,
     )
     if decision and supports_strict_json_schema:
         payload["text"] = {
@@ -1306,9 +1340,11 @@ def build_chat_completions_request_payload(
     action_context: dict[str, Any],
     *,
     decision: bool,
+    model_provider: str = "agent_plan",
     model_id: str,
     max_output_tokens: int | None = None,
     parameters: dict[str, Any] | None = None,
+    supports_thinking: bool = False,
     supports_strict_json_schema: bool = False,
 ) -> dict[str, Any]:
     configured = dict(parameters or {})
@@ -1347,12 +1383,15 @@ def build_chat_completions_request_payload(
         payload,
         configured,
         include_penalties=True,
+        supports_thinking=supports_thinking,
     )
-    if configured.get("thinking", "default") != "disabled":
-        payload.pop("temperature", None)
-        payload.pop("top_p", None)
-        payload.pop("frequency_penalty", None)
-        payload.pop("presence_penalty", None)
+    _remove_disallowed_sampling_parameters(
+        payload,
+        configured,
+        model_provider=model_provider,
+        model_id=model_id,
+        supports_thinking=supports_thinking,
+    )
     return payload
 
 
@@ -1361,13 +1400,14 @@ def _effective_max_tokens(
     requested: int | None,
 ) -> int:
     configured = parameters.get("max_tokens")
-    if isinstance(configured, int) and not isinstance(configured, bool):
-        return configured
-    if isinstance(requested, int) and not isinstance(requested, bool):
-        return requested
-    if parameters.get("thinking", "default") == "disabled":
-        return DEFAULT_NON_THINKING_MAX_TOKENS
-    return DEFAULT_THINKING_MAX_TOKENS
+    candidates = [
+        value
+        for value in (configured, requested)
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    if candidates:
+        return min(candidates)
+    raise V2ModelError("model_parameters_invalid")
 
 
 def _apply_common_parameters(
@@ -1375,12 +1415,18 @@ def _apply_common_parameters(
     parameters: dict[str, Any],
     *,
     include_penalties: bool,
+    supports_thinking: bool,
 ) -> None:
-    thinking = parameters.get("thinking", "default")
-    if thinking in {"enabled", "disabled"}:
+    thinking = parameters.get("thinking")
+    if supports_thinking and thinking in {"enabled", "disabled"}:
         payload["thinking"] = {"type": thinking}
     reasoning_effort = parameters.get("reasoning_effort")
-    if thinking != "disabled" and isinstance(reasoning_effort, str) and reasoning_effort:
+    if (
+        supports_thinking
+        and thinking == "enabled"
+        and isinstance(reasoning_effort, str)
+        and reasoning_effort
+    ):
         payload["reasoning_effort"] = reasoning_effort
     parameter_names = ["temperature", "top_p"]
     if include_penalties:
@@ -1389,6 +1435,32 @@ def _apply_common_parameters(
         value = parameters.get(parameter)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             payload[parameter] = value
+
+
+def _remove_disallowed_sampling_parameters(
+    payload: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    model_provider: str,
+    model_id: str,
+    supports_thinking: bool,
+) -> None:
+    if not supports_thinking or parameters.get("thinking") != "enabled":
+        return
+    policy = reasoning_policy_for_model(
+        model_provider,
+        model_id,
+        supports_thinking=supports_thinking,
+    )
+    if policy.sampling_parameters_allowed_when_thinking:
+        return
+    for parameter in (
+        "temperature",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+    ):
+        payload.pop(parameter, None)
 
 
 def _model_input(action_context: dict[str, Any]) -> list[dict[str, Any]]:

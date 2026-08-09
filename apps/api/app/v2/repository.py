@@ -24,6 +24,10 @@ from app.v2.model_context_contract import (
     frozen_model_context_contract,
     supports_current_model_context_contract,
 )
+from app.v2.model_parameters import (
+    V2FrozenModelParametersError,
+    validate_players_snapshot_model_configurations,
+)
 from app.v2.execution import (
     V2RunFence,
     V2RunFenceRejected,
@@ -137,6 +141,10 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             if not supports_current_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
+            try:
+                validate_players_snapshot_model_configurations(game.players_snapshot)
+            except V2FrozenModelParametersError as exc:
+                raise V2RepositoryError("invalid frozen player model configuration") from exc
             if game.status != "waiting_to_start":
                 run = _run(db, game.current_run_id)
                 return V2ExecutionClaimResult(
@@ -372,11 +380,7 @@ class V2ActionRepository:
                 raise V2ExecutionOwnershipLost(str(exc)) from exc
             if game.status == "canceled" or run.status == "canceled":
                 return "canceled"
-            if (
-                game.status == "failed"
-                or game.phase_state == "failed"
-                or run.status == "failed"
-            ):
+            if game.status == "failed" or game.phase_state == "failed" or run.status == "failed":
                 return "failed"
             return "completed"
 
@@ -1067,9 +1071,7 @@ class V2ActionRepository:
                 payload={
                     "action_id": claim.action_id,
                     "activation_id": claim.activation_id,
-                    "presentation_id": (
-                        identity.presentation_id if identity is not None else None
-                    ),
+                    "presentation_id": (identity.presentation_id if identity is not None else None),
                     "tts_attempt_id": tts_attempt_id,
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
@@ -1611,8 +1613,7 @@ def _activation_audience(db: Session, activation: V2AbilityActivation) -> str:
         .where(
             V2GameRecordEvent.game_id == activation.game_id,
             V2GameRecordEvent.event_type == "ability_activation_opened",
-            V2GameRecordEvent.payload["activation_id"].as_string()
-            == activation.activation_id,
+            V2GameRecordEvent.payload["activation_id"].as_string() == activation.activation_id,
         )
         .order_by(V2GameRecordEvent.record_seq.desc())
         .limit(1)

@@ -5889,6 +5889,44 @@ a {
   line-height: 1.5;
 }
 
+.model-token-linkage-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin: 12px 0 0;
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.model-token-linkage-status strong {
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #175cd3;
+  background: #eff8ff;
+  font-size: 0.7rem;
+}
+
+.model-token-linkage-status[data-mode="manual"] strong {
+  color: #b54708;
+  background: #fffaeb;
+}
+
+.model-token-linkage-reset {
+  padding: 0;
+  border: 0;
+  color: #175cd3;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.model-token-linkage-reset:hover {
+  text-decoration: underline;
+}
+
 .model-form-actions {
   justify-content: space-between;
   margin-top: 14px;

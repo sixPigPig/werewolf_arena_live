@@ -20,7 +20,11 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.judge_configuration import configuration_from_voice_snapshot
+from app.judge_configuration import (
+    build_judge_voice_snapshot,
+    configuration_from_voice_snapshot,
+    runtime_judge_configuration,
+)
 from app.main import create_application
 from app.models.admin import AuditEvent
 from app.models.game_session import GameSessionRecord
@@ -180,6 +184,7 @@ def _create_rotating_werewolf_game(
                 {
                     **item,
                     "model_parameters": dict(model_configuration.parameter_values),
+                    "model_supports_thinking": model_configuration.supports_thinking,
                     "model_configuration_updated_at": (model_configuration.updated_at.isoformat()),
                 }
             )
@@ -211,6 +216,71 @@ def _create_rotating_werewolf_game(
         "god_view_websocket_url": f"/api/v2/god-view/games/{game_id}/ws",
         "god_view_access_token": god_view_access_token,
     }
+
+
+def _create_legacy_waiting_game(
+    *,
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    title: str,
+) -> dict[str, str]:
+    """Create a historical pre-cutover record without reopening the public API."""
+
+    audio_mode = client.app.state.v2_live_runtime.default_audio_mode
+    with session_factory() as db:
+        game, run, god_view_access_token = create_waiting_game(
+            db,
+            title=title,
+            delivery_snapshot={
+                "schema_version": 1,
+                "mode": audio_mode,
+                "source": "legacy_runtime_default",
+            },
+            judge_voice_snapshot=build_judge_voice_snapshot(
+                runtime_judge_configuration(
+                    db,
+                    default_tts_speaker=settings.live_v2_tts_judge_speaker,
+                )
+            ),
+        )
+    return {
+        "game_id": game.game_id,
+        "run_id": run.run_id,
+        "status": game.status,
+        "audio_mode": audio_mode,
+        "snapshot_url": f"/api/v2/live/games/{game.game_id}/snapshot",
+        "websocket_url": f"/api/v2/live/games/{game.game_id}/ws",
+        "director_snapshot_url": f"/api/v2/director/games/{game.game_id}/snapshot",
+        "director_websocket_url": f"/api/v2/director/games/{game.game_id}/ws",
+        "god_view_snapshot_url": (f"/api/v2/god-view/games/{game.game_id}/identity-snapshot"),
+        "god_view_websocket_url": f"/api/v2/god-view/games/{game.game_id}/ws",
+        "god_view_access_token": god_view_access_token,
+    }
+
+
+def _make_direct_game_model_snapshot_executable(
+    session_factory: sessionmaker[Session],
+    game_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        assert game is not None
+        game.players_snapshot = [
+            {
+                "seat": 1,
+                "profile_id": "test-direct-player",
+                "name": "测试玩家",
+                "model_provider": "agent_plan",
+                "model": "test-model",
+                "model_supports_thinking": False,
+                "model_parameters": {
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
+            }
+        ]
 
 
 def _unfenced_text_only_night_engine(
@@ -311,12 +381,15 @@ class FakeV2ModelClient:
         *,
         model_provider: str,
         model_id: str,
+        model_supports_thinking: bool,
         model_parameters: dict[str, Any],
     ) -> V2ModelTarget:
         assert model_provider == "agent_plan"
+        assert isinstance(model_supports_thinking, bool)
         return V2ModelTarget(
             provider=model_provider,
             model_id=model_id,
+            supports_thinking=model_supports_thinking,
             parameters=dict(model_parameters),
         )
 
@@ -332,6 +405,7 @@ class FakeV2ModelClient:
             decision=decision,
             model_id=target.model_id,
             parameters=target.parameters,
+            supports_thinking=target.supports_thinking,
         )
 
     def output_enforcement_metadata(
@@ -1123,9 +1197,11 @@ def v2_context(
                     available=True,
                     enabled=True,
                     is_default=model_id == "test-model",
-                    supports_thinking=True,
+                    supports_thinking=False,
                     parameter_values={
                         "thinking": "disabled",
+                        "reasoning_effort": None,
+                        "max_tokens_mode": "auto",
                         "max_tokens": 512,
                     },
                     source_details={"source": "test"},
@@ -1254,8 +1330,11 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "name": "阿青",
                 "model_provider": "agent_plan",
                 "model": "private-model-id",
+                "model_supports_thinking": False,
                 "model_parameters": {
                     "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
                     "max_tokens": 512,
                 },
                 "personality": "private personality prompt",
@@ -1269,8 +1348,11 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "name": "白石",
                 "model_provider": "agent_plan",
                 "model": "test-model",
+                "model_supports_thinking": False,
                 "model_parameters": {
                     "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
                     "max_tokens": 512,
                 },
             },
@@ -2056,7 +2138,9 @@ def test_profile_library_mode_requires_inner_rule_revision(v2_context) -> None:
 
 def test_new_game_freezes_v11_prompt_v3_model_context_contract(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "V11 契约冻结"})
+    request = _lobby_create_request()
+    request["title"] = "V11 契约冻结"
+    created = client.post("/api/v2/games", json=request)
     assert created.status_code == 201, created.text
 
     expected = {
@@ -2230,7 +2314,11 @@ def test_non_v11_model_context_contracts_are_readable_but_cannot_resume(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "旧契约只读"}).json()
+    created = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="旧契约只读",
+    )
     game_id = created["game_id"]
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, game_id)
@@ -2255,7 +2343,11 @@ def test_non_v11_model_context_contracts_are_readable_but_cannot_resume(
     ):
         asyncio.run(runtime._channel(game_id))
 
-    v8_created = client.post("/api/v2/games", json={"title": "V8 旧模板不可续跑"}).json()
+    v8_created = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="V8 旧模板不可续跑",
+    )
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, v8_created["game_id"])
         assert game is not None
@@ -2279,7 +2371,11 @@ def test_non_v11_model_context_contracts_are_readable_but_cannot_resume(
     ):
         asyncio.run(runtime._channel(v8_created["game_id"]))
 
-    unsupported = client.post("/api/v2/games", json={"title": "未知契约"}).json()
+    unsupported = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="未知契约",
+    )
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, unsupported["game_id"])
         assert game is not None
@@ -2885,7 +2981,7 @@ def test_execution_ownership_loss_does_not_fail_or_broadcast_failed_action(
     v2_context,
 ) -> None:
     client, _session_factory, _voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "过期 owner 行为"}).json()
+    created = client.post("/api/v2/games", json=_lobby_create_request()).json()
     runtime = client.app.state.v2_live_runtime
 
     class OwnershipLostRepository:
@@ -2947,7 +3043,12 @@ def test_voice_file_is_discarded_when_ownership_is_lost_after_finalize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, session_factory, voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "语音落盘后丢失 owner"}).json()
+    created = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="语音落盘后丢失 owner",
+    )
+    _make_direct_game_model_snapshot_executable(session_factory, created["game_id"])
     action_engine = client.app.state.v2_live_runtime._action_engine
     repository = action_engine._repository
     execution = repository.start_and_claim_execution(
@@ -3003,7 +3104,12 @@ def test_voice_file_is_discarded_when_ready_persistence_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, session_factory, voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "语音 ready 持久化失败"}).json()
+    created = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="语音 ready 持久化失败",
+    )
+    _make_direct_game_model_snapshot_executable(session_factory, created["game_id"])
     action_engine = client.app.state.v2_live_runtime._action_engine
     repository = action_engine._repository
     execution = repository.start_and_claim_execution(
@@ -3065,13 +3171,77 @@ def test_v2_lobby_create_rejects_incomplete_or_duplicate_lineups(v2_context) -> 
     assert client.post("/api/v2/games", json=invalid_roles).status_code == 422
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "缺少大厅快照"},
+        {"title": "空大厅快照", "lobby_snapshot": None},
+    ],
+)
+def test_v2_game_create_requires_complete_lobby_snapshot(
+    v2_context,
+    payload: dict[str, Any],
+) -> None:
+    client, session_factory, _voice_root = v2_context
+
+    response = client.post("/api/v2/games", json=payload)
+
+    assert response.status_code == 422
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(V2GameRecord)) == 0
+
+
+def test_legacy_game_without_frozen_model_binding_is_readable_but_not_executable(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="缺少冻结模型绑定",
+    )
+
+    snapshot = client.get(identifiers["snapshot_url"])
+    assert snapshot.status_code == 200
+    assert snapshot.json()["public_players"] == []
+
+    repository = client.app.state.v2_live_runtime._action_engine._repository
+    with pytest.raises(
+        V2RepositoryError,
+        match="invalid frozen player model configuration",
+    ):
+        repository.start_and_claim_execution(
+            game_id=identifiers["game_id"],
+            audience="player_public",
+            worker_id="v2_worker_invalid_legacy_binding",
+            lease_seconds=30,
+        )
+
+    with session_factory() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        run = db.get(V2GameRun, identifiers["run_id"])
+        assert game is not None and game.status == "waiting_to_start"
+        assert run is not None and run.status == "waiting_to_start"
+        assert run.worker_id is None
+        assert not list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "v2_run_execution_claimed",
+                )
+            )
+        )
+
+
 def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
     v2_context,
 ) -> None:
     client, session_factory, voice_root = v2_context
-    created = client.post("/api/v2/games", json={"title": "首句实时验收"})
-    assert created.status_code == 201, created.text
-    identifiers = created.json()
+    identifiers = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="首句实时验收",
+    )
     game_id = identifiers["game_id"]
 
     snapshot = client.get(identifiers["snapshot_url"])
@@ -3092,6 +3262,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         ).status_code
         == 409
     )
+    _make_direct_game_model_snapshot_executable(session_factory, game_id)
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         assert websocket.receive_json()["live_state"] == "waiting_to_start"
@@ -3237,8 +3408,13 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
 def test_admin_v2_record_exposes_saved_voice_only_through_authenticated_endpoint(
     v2_context,
 ) -> None:
-    client, _session_factory, _voice_root = v2_context
-    identifiers = client.post("/api/v2/games", json={"title": "Admin V2 语音"}).json()
+    client, session_factory, _voice_root = v2_context
+    identifiers = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="Admin V2 语音",
+    )
+    _make_direct_game_model_snapshot_executable(session_factory, identifiers["game_id"])
     _run_opening_to_nightfall(client, identifiers["websocket_url"])
 
     unauthorized = client.get(f"/api/v1/admin/v2/games/{identifiers['game_id']}")
@@ -3316,10 +3492,12 @@ def test_random_judge_voice_is_frozen_per_game_before_runtime_actions(
             )
         )
 
-    identifiers = client.post(
-        "/api/v2/games",
-        json={"title": "每局随机音色冻结"},
-    ).json()
+    identifiers = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="每局随机音色冻结",
+    )
+    _make_direct_game_model_snapshot_executable(session_factory, identifiers["game_id"])
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         assert game is not None
@@ -3555,7 +3733,7 @@ def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_stat
 
 def test_admin_viewer_cannot_stop_v2_game(v2_context) -> None:
     client, _session_factory, _voice_root = v2_context
-    identifiers = client.post("/api/v2/games", json={"title": "只读权限"}).json()
+    identifiers = client.post("/api/v2/games", json=_lobby_create_request()).json()
     session = client.post("/api/v1/admin/dev-login").json()
 
     response = client.post(
@@ -3575,7 +3753,7 @@ def test_admin_operator_can_stop_awaiting_observation_without_terminal_evidence(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
-    identifiers = client.post("/api/v2/games", json={"title": "终局证据不完整"}).json()
+    identifiers = client.post("/api/v2/games", json=_lobby_create_request()).json()
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, identifiers["game_id"])
         run = db.get(V2GameRun, identifiers["run_id"])
@@ -6094,6 +6272,13 @@ def test_model_context_projection_invariant_fails_before_provider_request(
                 actor_id="player-1",
                 model_provider="agent_plan",
                 model_id="test-model",
+                model_supports_thinking=False,
+                model_parameters={
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
                 decision_contract=V2DecisionContract(
                     kind="target",
                     speech_mode="forbidden",
@@ -6237,6 +6422,13 @@ def test_model_output_enforcement_and_application_validation_are_audited(
                 audience="player_private",
                 model_provider="agent_plan",
                 model_id="test-model",
+                model_supports_thinking=False,
+                model_parameters={
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
                 output_kind="private_vote",
                 decision_contract=V2DecisionContract(
                     kind="target",

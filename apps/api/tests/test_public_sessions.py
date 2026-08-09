@@ -103,8 +103,13 @@ def _seed_profiles(context: PublicTestContext) -> None:
                     available=True,
                     enabled=True,
                     is_default=True,
-                    supports_thinking=True,
-                    parameter_values={"thinking": "default"},
+                    supports_thinking=False,
+                    parameter_values={
+                        "thinking": "disabled",
+                        "reasoning_effort": None,
+                        "max_tokens_mode": "auto",
+                        "max_tokens": 512,
+                    },
                     source_details={"source": "test"},
                 ),
                 VirtualPlayerProfile(

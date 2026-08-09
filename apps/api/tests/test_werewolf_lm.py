@@ -6,6 +6,12 @@ import urllib.request
 
 import pytest
 
+from app.model_catalog.defaults import (
+    default_parameter_values,
+    max_output_tokens_limit,
+    reasoning_policy_for_model,
+)
+from app.model_catalog.runtime import RuntimeModelConfiguration
 from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
 from app.werewolf.lm import (
     FakeProvider,
@@ -21,6 +27,7 @@ from app.werewolf.providers import (
     ARK_AGENT_PLAN_MODELS,
     ArkAgentPlanProvider,
     DeepSeekProvider,
+    ModelRuntimeConfigurationError,
     QwenProvider,
     create_model_provider,
     default_model_name,
@@ -31,6 +38,48 @@ from app.werewolf.streaming import (
     action_visible_stream_field,
     extract_openai_chat_delta,
 )
+
+
+@pytest.fixture(autouse=True)
+def _strict_runtime_model_configuration(monkeypatch) -> None:
+    def enabled_catalog_models(provider: str) -> tuple[str, ...]:
+        return {
+            "agent_plan": ARK_AGENT_PLAN_MODELS,
+            "deepseek": ("deepseek-chat", "deepseek-v4-flash"),
+            "qwen": ("qwen3.6-plus",),
+        }.get(provider, ())
+
+    def configured_model(provider: str, model_id: str) -> RuntimeModelConfiguration:
+        policy = reasoning_policy_for_model(
+            provider,
+            model_id,
+            supports_thinking=False,
+        )
+        supports_thinking = "enabled" in policy.thinking_options
+        return RuntimeModelConfiguration(
+            provider=provider,
+            model_id=model_id,
+            supports_thinking=supports_thinking,
+            parameters=default_parameter_values(
+                provider,
+                model_id,
+                supports_thinking=supports_thinking,
+                limit=max_output_tokens_limit(provider, model_id),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.werewolf.providers.runtime_configuration_for_model",
+        configured_model,
+    )
+    monkeypatch.setattr(
+        "app.werewolf.providers.catalog_model_names",
+        enabled_catalog_models,
+    )
+    monkeypatch.setattr(
+        "app.werewolf.providers.runtime_default_model",
+        lambda: None,
+    )
 
 
 def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
@@ -352,18 +401,14 @@ def test_self_explosion_badge_impact_is_chinese_and_unknown_code_fails_closed() 
     world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
         sheriff_badge_bomb_policy="double",
     )
-    world_state["self_explosion_decision_context"] = {
-        "badge_impact": "badge_will_be_lost"
-    }
+    world_state["self_explosion_decision_context"] = {"badge_impact": "badge_will_be_lost"}
 
     prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
 
     assert "警徽影响：本次自爆将导致警徽流失" in prompt
     assert "badge_will_be_lost" not in prompt
 
-    world_state["self_explosion_decision_context"] = {
-        "badge_impact": "future_badge_impact"
-    }
+    world_state["self_explosion_decision_context"] = {"badge_impact": "future_badge_impact"}
     unknown_prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
 
     assert "未识别警徽影响，按没有额外警徽收益处理" in unknown_prompt
@@ -1671,11 +1716,7 @@ def test_provider_applies_remaining_budget_and_max_output_tokens(monkeypatch) ->
                 "call_options": call_options,
             }
         )
-        return {
-            "choices": [
-                {"message": {"content": '{"reasoning":"ok","vote":"1号玩家"}'}}
-            ]
-        }
+        return {"choices": [{"message": {"content": '{"reasoning":"ok","vote":"1号玩家"}'}}]}
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     provider = DeepSeekProvider(transport=fake_transport)
@@ -1738,9 +1779,7 @@ def test_format_retries_share_one_model_deadline() -> None:
     assert value == "2号玩家"
     assert provider.calls == 2
     assert all(option is not None for option in provider.options)
-    assert {option.deadline_at_monotonic for option in provider.options if option} == {
-        deadline
-    }
+    assert {option.deadline_at_monotonic for option in provider.options if option} == {deadline}
 
 
 def test_expired_model_deadline_fails_before_provider_call() -> None:
@@ -2256,17 +2295,10 @@ def test_model_provider_router_rejects_removed_agent_plan_model(
         provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
 
 
-def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, monkeypatch) -> None:
-    requests = []
-
-    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
-        requests.append({"url": url, "headers": headers, "payload": payload})
-        return {
-            "choices": [
-                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
-            ]
-        }
-
+def test_model_provider_router_rejects_qwen_without_catalog_entry(
+    tmp_path,
+    monkeypatch,
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
@@ -2275,19 +2307,29 @@ def test_model_provider_router_routes_qwen_alias_without_other_keys(tmp_path, mo
     monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
     monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
 
-    provider = create_model_provider(transport=fake_transport)
-    raw = provider.complete_json(
-        model="Qwen3.6-Plus",
-        prompt='请输出 json：{"vote":"老周"}',
-        temperature=0.3,
+    provider = create_model_provider(transport=lambda _url, _headers, _payload: {})
+
+    with pytest.raises(RuntimeError, match="No provider registered for model Qwen3.6-Plus"):
+        provider.complete_json(
+            model="Qwen3.6-Plus",
+            prompt='请输出 json：{"vote":"老周"}',
+            temperature=0.3,
+        )
+
+
+def test_model_provider_router_does_not_use_prefix_when_catalog_is_empty(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setattr(
+        "app.werewolf.providers.catalog_model_names",
+        lambda _provider: (),
     )
 
-    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert (
-        requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    )
-    assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
-    assert requests[0]["payload"]["model"] == "qwen3.6-plus"
+    provider = create_model_provider(transport=lambda _url, _headers, _payload: {})
+
+    with pytest.raises(RuntimeError, match="No provider registered for model deepseek-chat"):
+        provider.complete_json(model="deepseek-chat", prompt="{}", temperature=0.3)
 
 
 def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
@@ -2365,7 +2407,7 @@ def test_default_model_name_uses_agent_plan_lite_when_plan_key_is_configured(
     assert default_model_name() == "doubao-seed-2-0-lite-260215"
 
 
-def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
+def test_default_model_name_does_not_use_qwen_without_catalog_entry(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -2383,10 +2425,11 @@ def test_default_model_name_uses_qwen_when_only_dashscope_key_is_configured(
     monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
-    assert default_model_name() == "qwen3.6-plus"
+    with pytest.raises(ModelRuntimeConfigurationError, match="no_enabled_model_configuration"):
+        default_model_name()
 
 
-def test_default_model_name_falls_back_to_deepseek_flash_without_configured_keys(
+def test_default_model_name_rejects_missing_configured_keys(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -2397,7 +2440,8 @@ def test_default_model_name_falls_back_to_deepseek_flash_without_configured_keys
     monkeypatch.delenv("ARK_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
-    assert default_model_name() == "deepseek-v4-flash"
+    with pytest.raises(ModelRuntimeConfigurationError, match="no_enabled_model_configuration"):
+        default_model_name()
 
 
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:

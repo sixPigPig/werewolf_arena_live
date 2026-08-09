@@ -95,7 +95,12 @@ with TestingSessionLocal.begin() as session:
             enabled=True,
             is_default=True,
             supports_thinking=True,
-            parameter_values={"thinking": "default"},
+            parameter_values={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+            },
             source_details={"source": "test"},
         )
     )
@@ -893,6 +898,18 @@ def test_public_problem_extensions_cannot_override_core_problem_fields() -> None
 
 
 def test_list_model_options_returns_configured_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.werewolf.providers.catalog_model_names",
+        lambda provider: {
+            "agent_plan": ARK_AGENT_PLAN_MODELS,
+            "deepseek": ("deepseek-test",),
+            "qwen": ("qwen-test",),
+        }.get(provider, ()),
+    )
+    monkeypatch.setattr(
+        "app.werewolf.providers.runtime_default_model",
+        lambda: None,
+    )
     monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
     monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
     monkeypatch.delenv("ARK_API_KEY", raising=False)
@@ -923,17 +940,22 @@ def test_list_model_options_returns_configured_models(monkeypatch: pytest.Monkey
                 "model_id": "deepseek-test",
                 "label": "DeepSeek · deepseek-test",
             },
-            {
-                "id": "qwen-test",
-                "provider": "qwen",
-                "model_id": "qwen-test",
-                "label": "Qwen · qwen-test",
-            },
         ]
     }
 
 
 def test_list_model_options_prefers_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.werewolf.providers.catalog_model_names",
+        lambda provider: {
+            "agent_plan": ARK_AGENT_PLAN_MODELS,
+            "deepseek": ("deepseek-test",),
+        }.get(provider, ()),
+    )
+    monkeypatch.setattr(
+        "app.werewolf.providers.runtime_default_model",
+        lambda: None,
+    )
     monkeypatch.setenv("WEREWOLF_DEFAULT_MODEL", "minimax-m3")
     monkeypatch.setenv("ARK_AGENT_PLAN_API_KEY", "agent-plan-key")
     monkeypatch.delenv("ARK_API_KEY", raising=False)

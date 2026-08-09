@@ -93,6 +93,7 @@ def test_v11_prompt_prioritizes_raw_speech_and_marks_derived_indexes_inert() -> 
         _target_action_context(),
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 
@@ -150,6 +151,7 @@ def test_v11_prompt_only_explains_derived_fields_that_are_present() -> None:
         context,
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 
@@ -183,6 +185,7 @@ def test_model_client_rejects_every_non_v11_prompt_contract(
             context,
             decision=True,
             model_id="test-model",
+            max_output_tokens=16_384,
         )
 
 
@@ -192,9 +195,15 @@ def test_responses_strict_schema_uses_projected_candidate_enum_and_optional_note
         agent_plan_supports_strict_json_schema=True,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=False,
         model_provider="agent_plan",
         model_id="strict-model",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     context = _target_action_context()
 
@@ -235,9 +244,15 @@ def test_responses_strict_schema_uses_projected_candidate_enum_and_optional_note
 def test_provider_without_strict_capability_uses_prompt_and_application_validation() -> None:
     client = _client(lambda _request: httpx.Response(500))
     target = client.resolve_model_target(
+        model_supports_thinking=False,
         model_provider="agent_plan",
         model_id="fallback-model",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     context = _target_action_context()
 
@@ -266,9 +281,15 @@ def test_chat_completions_strict_schema_uses_protocol_native_wrapper() -> None:
         deepseek_supports_strict_json_schema=True,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=False,
         model_provider="deepseek",
         model_id="strict-chat-model",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     payload = client.build_request_payload(
@@ -285,6 +306,187 @@ def test_chat_completions_strict_schema_uses_protocol_native_wrapper() -> None:
         "seat_1",
         "seat_3",
     ]
+
+
+def test_model_target_rejects_legacy_frozen_parameter_schema() -> None:
+    client = _client(lambda _request: httpx.Response(500))
+
+    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+        client.resolve_model_target(
+            model_supports_thinking=True,
+            model_provider="agent_plan",
+            model_id="glm-5-2-260617",
+            model_parameters={
+                "thinking": "enabled",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8192,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "model_parameters"),
+    [
+        (
+            "glm-5-2-260617",
+            {
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "auto",
+                "max_tokens": 16_384,
+            },
+        ),
+        (
+            "glm-5-2-260617",
+            {
+                "thinking": "enabled",
+                "reasoning_effort": "low",
+                "max_tokens_mode": "manual",
+                "max_tokens": 4096,
+            },
+        ),
+        (
+            "kimi-k3",
+            {
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
+        ),
+    ],
+)
+def test_model_target_rejects_policy_inconsistent_frozen_parameters(
+    model_id: str,
+    model_parameters: dict[str, Any],
+) -> None:
+    client = _client(lambda _request: httpx.Response(500))
+
+    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+        client.resolve_model_target(
+            model_supports_thinking=True,
+            model_provider="agent_plan",
+            model_id=model_id,
+            model_parameters=model_parameters,
+        )
+
+
+def test_responses_payload_keeps_frozen_policy_but_omits_internal_mode() -> None:
+    client = _client(lambda _request: httpx.Response(500))
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="agent_plan",
+        model_id="doubao-seed-2-0-lite-260215",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "low",
+            "max_tokens_mode": "auto",
+            "max_tokens": 4096,
+        },
+    )
+
+    payload = client.build_request_payload(
+        action_context=_target_action_context(),
+        decision=True,
+        target=target,
+    )
+
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "low"
+    assert payload["max_output_tokens"] == 4096
+    assert "max_tokens_mode" not in payload
+
+
+def test_non_thinking_model_omits_unsupported_thinking_fields() -> None:
+    client = _client(lambda _request: httpx.Response(500))
+    target = client.resolve_model_target(
+        model_supports_thinking=False,
+        model_provider="agent_plan",
+        model_id="plain-model",
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "auto",
+            "max_tokens": 512,
+        },
+    )
+
+    payload = client.build_request_payload(
+        action_context=_target_action_context(),
+        decision=True,
+        target=target,
+    )
+
+    assert payload["max_output_tokens"] == 512
+    assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
+    assert "max_tokens_mode" not in payload
+
+
+def test_call_budget_caps_frozen_model_output_budget() -> None:
+    payload = build_model_request_payload(
+        _target_action_context(),
+        decision=True,
+        model_id="doubao-seed-2-0-lite-260215",
+        max_output_tokens=512,
+        parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "low",
+            "max_tokens_mode": "auto",
+            "max_tokens": 4096,
+        },
+        supports_thinking=True,
+    )
+
+    assert payload["max_output_tokens"] == 512
+    assert "max_tokens_mode" not in payload
+
+
+def test_request_payload_rejects_missing_output_budget() -> None:
+    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+        build_model_request_payload(
+            _target_action_context(),
+            decision=True,
+            model_id="plain-model",
+        )
+
+
+def test_responses_sampling_is_filtered_by_model_policy_not_provider() -> None:
+    deepseek_payload = build_model_request_payload(
+        _target_action_context(),
+        decision=True,
+        model_provider="agent_plan",
+        model_id="deepseek-v4-flash",
+        parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+            "temperature": 0.8,
+            "top_p": 0.9,
+        },
+        supports_thinking=True,
+    )
+    doubao_payload = build_model_request_payload(
+        _target_action_context(),
+        decision=True,
+        model_provider="agent_plan",
+        model_id="doubao-seed-2-0-lite-260215",
+        parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "low",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+            "temperature": 0.8,
+            "top_p": 0.9,
+        },
+        supports_thinking=True,
+    )
+
+    assert "temperature" not in deepseek_payload
+    assert "top_p" not in deepseek_payload
+    assert doubao_payload["temperature"] == 0.8
+    assert doubao_payload["top_p"] == 0.9
 
 
 def test_model_client_disables_environment_proxy(
@@ -314,9 +516,15 @@ def test_model_client_disables_environment_proxy(
     )
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     async def run_twice() -> tuple[V2ModelDecision, V2ModelDecision]:
@@ -356,9 +564,15 @@ def test_model_client_preserves_forbidden_speech_for_action_normalization() -> N
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     context = {
         "model_context_schema_version": 11,
@@ -397,9 +611,15 @@ def test_model_client_parses_optional_private_decision_note() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     context = {
         "model_context_schema_version": 11,
@@ -448,9 +668,15 @@ def test_model_client_repairs_identical_duplicate_json_once_and_preserves_raw() 
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     context = {
         "model_context_schema_version": 11,
@@ -496,9 +722,15 @@ def test_model_client_ambiguous_duplicate_json_keeps_exact_raw_response() -> Non
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     with pytest.raises(
@@ -541,9 +773,15 @@ def test_model_client_rejects_non_string_target_in_duplicate_json() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     with pytest.raises(V2QualityError, match="model_decision_invalid_target") as caught:
@@ -583,9 +821,15 @@ def test_model_client_treats_different_extra_payload_fields_as_ambiguous() -> No
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     with pytest.raises(
@@ -626,9 +870,15 @@ def test_model_client_rejects_truncated_second_speech_object_without_fragment_fa
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="minimax-m3",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     with pytest.raises(
@@ -673,9 +923,15 @@ def test_model_client_does_not_timeout_immediately_under_uvloop() -> None:
         total_seconds=0.5,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     decision = _run_with_uvloop(
@@ -709,10 +965,13 @@ def test_agent_plan_target_uses_ark_responses_endpoint_and_credentials() -> None
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="agent_plan",
         model_id="deepseek-v4-flash",
         model_parameters={
             "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
             "max_tokens": 512,
             "temperature": 0.2,
             "frequency_penalty": 0.4,
@@ -762,10 +1021,13 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
         model_parameters={
             "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
             "max_tokens": 2048,
             "temperature": 0.9,
         },
@@ -810,9 +1072,15 @@ def test_ark_target_uses_standard_responses_endpoint_and_credentials() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="ark",
         model_id="ep-glm-5-2",
-        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 16_384,
+        },
     )
 
     decision = asyncio.run(
@@ -870,14 +1138,26 @@ def test_provider_concurrency_is_bounded_without_serializing_other_providers() -
             deepseek_max_in_flight=2,
         )
         agent_target = client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="agent_plan",
             model_id="glm-5-2-260617",
-            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+            model_parameters={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "manual",
+                "max_tokens": 16_384,
+            },
         )
         deepseek_target = client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="deepseek",
             model_id="deepseek-v4-flash",
-            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+            model_parameters={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "manual",
+                "max_tokens": 16_384,
+            },
         )
         return await asyncio.gather(
             *[
@@ -925,9 +1205,15 @@ def test_provider_queue_wait_does_not_consume_first_token_or_hard_timeout() -> N
             agent_plan_max_in_flight=1,
         )
         target = client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="agent_plan",
             model_id="glm-5-2-260617",
-            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+            model_parameters={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "manual",
+                "max_tokens": 16_384,
+            },
         )
         return await asyncio.gather(
             *[
@@ -970,9 +1256,15 @@ def test_canceled_provider_queue_wait_returns_the_permit() -> None:
     async def run_requests() -> tuple[V2ModelDecision, V2ModelDecision]:
         client = _client(handler, agent_plan_max_in_flight=1)
         target = client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="agent_plan",
             model_id="glm-5-2-260617",
-            model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+            model_parameters={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "manual",
+                "max_tokens": 16_384,
+            },
         )
         first_task = asyncio.create_task(
             client.generate_action_decision(
@@ -1043,9 +1335,15 @@ def test_reasoning_progress_resets_stream_idle_timeout() -> None:
         total_seconds=0.2,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 16_384,
+        },
     )
 
     decision = asyncio.run(
@@ -1083,9 +1381,15 @@ def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
         total_seconds=0.2,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 16_384,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_stream_idle_timeout") as caught:
@@ -1122,9 +1426,15 @@ def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
         total_seconds=0.045,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 16_384},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 16_384,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
@@ -1172,9 +1482,15 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
     progress: list[V2ModelProgress] = []
 
@@ -1237,9 +1553,15 @@ def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> No
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
     decision = asyncio.run(
         client.generate_action_decision(
@@ -1290,9 +1612,15 @@ def test_sheriff_withdraw_quality_error_keeps_exact_raw_response() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "disabled", "max_tokens": 512},
+        model_parameters={
+            "thinking": "disabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
     )
 
     with pytest.raises(
@@ -1332,6 +1660,7 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
 
     with pytest.raises(V2ModelError, match="model_provider_credentials_missing"):
         client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="deepseek",
             model_id="deepseek-v4-flash",
             model_parameters={},
@@ -1339,6 +1668,7 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
 
     with pytest.raises(V2ModelError, match="model_provider_not_configured"):
         client.resolve_model_target(
+            model_supports_thinking=True,
             model_provider="unknown",
             model_id="deepseek-v4-flash",
             model_parameters={},
@@ -1354,9 +1684,15 @@ def test_transport_reset_preserves_retry_diagnostics() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_transport_failed") as caught:
@@ -1388,9 +1724,15 @@ def test_first_token_timeout_includes_response_header_wait() -> None:
         total_seconds=0.1,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_first_token_timeout") as caught:
@@ -1419,9 +1761,15 @@ def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
         total_seconds=0.02,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
@@ -1457,9 +1805,15 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
         total_seconds=0.02,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
@@ -1499,9 +1853,15 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
         total_seconds=0.02,
     )
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
@@ -1534,9 +1894,15 @@ def test_only_transient_http_statuses_are_retryable(
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match=f"model_http_{status_code}") as caught:
@@ -1563,9 +1929,15 @@ def test_rate_limit_preserves_retry_after_delay() -> None:
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_http_429") as caught:
@@ -1596,9 +1968,15 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
 
     client = _client(handler)
     target = client.resolve_model_target(
+        model_supports_thinking=True,
         model_provider="deepseek",
         model_id="deepseek-v4-flash",
-        model_parameters={"thinking": "enabled", "max_tokens": 2048},
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
     )
 
     with pytest.raises(V2ModelError, match="model_output_budget_exhausted"):

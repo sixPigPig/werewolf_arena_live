@@ -6,11 +6,14 @@ import AntApp from "antd/es/app";
 import { AdminSessionContext } from "@/features/auth/session-context";
 import ModelsPage from "@/features/models/ModelsPage";
 import { previewModelCatalog } from "@/features/models/preview";
+import type { AdminModelCatalog } from "@/features/models/types";
 import {
   expectAntdSelectLabel,
   selectAntdOption,
 } from "@/tests/antd-select";
 import { expectAdminNotification } from "@/tests/admin-notification";
+
+let catalog: AdminModelCatalog;
 
 function renderModelsPage() {
   const queryClient = new QueryClient({
@@ -52,17 +55,18 @@ function renderModelsPage() {
 
 describe("model management flow", () => {
   beforeEach(() => {
+    catalog = structuredClone(previewModelCatalog);
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input, init) => {
         const url = String(input);
         if (url.endsWith("/api/v1/admin/models") && (!init?.method || init.method === "GET")) {
-          return new Response(JSON.stringify(previewModelCatalog), {
+          return new Response(JSON.stringify(catalog), {
             headers: { "Content-Type": "application/json" },
           });
         }
         if (url.endsWith("/api/v1/admin/models/agent-plan/sync")) {
-          return new Response(JSON.stringify(previewModelCatalog), {
+          return new Response(JSON.stringify(catalog), {
             headers: { "Content-Type": "application/json" },
           });
         }
@@ -84,7 +88,7 @@ describe("model management flow", () => {
 
     expect(await screen.findByRole("heading", { name: "模型管理" })).toBeInTheDocument();
     expect(await screen.findByText("官方实时")).toBeInTheDocument();
-    expect(screen.getByText("手动同步")).toBeInTheDocument();
+    expect(screen.getAllByText("手动同步")).toHaveLength(2);
 
     await user.click(screen.getByRole("button", { name: "更新 Agent Plan 模型" }));
     await expectAdminNotification("Agent Plan 模型已同步");
@@ -117,7 +121,9 @@ describe("model management flow", () => {
         is_default: false,
         parameters: {
           thinking: "enabled",
-          max_tokens: 16_384,
+          reasoning_effort: "high",
+          max_tokens: 8_192,
+          max_tokens_mode: "auto",
         },
       });
     });
@@ -165,19 +171,24 @@ describe("model management flow", () => {
     const maxTokens = within(model!).getByLabelText("最大输出 tokens");
     expect(thinking).not.toBeDisabled();
     expect(reasoningEffort).not.toBeDisabled();
-    await selectAntdOption(user, reasoningEffort, "medium");
+    expectAntdSelectLabel(reasoningEffort, "high");
+    await selectAntdOption(user, reasoningEffort, "max");
+    expect(maxTokens).toHaveValue("16384");
     await user.clear(maxTokens);
     await user.type(maxTokens, "1000");
     expect(maxTokens).toHaveValue("1000");
+    expect(within(model!).getByText("手动设置")).toBeInTheDocument();
     await selectAntdOption(user, thinking, "关闭");
 
     expect(reasoningEffort).toBeDisabled();
     expect(maxTokens).toHaveValue("512");
+    expect(within(model!).getByText("自动联动")).toBeInTheDocument();
+    expect(within(model!).getByText(/已按推理档位更新最大输出 tokens 为 512/)).toBeInTheDocument();
     await selectAntdOption(user, thinking, "开启");
-    expect(maxTokens).toHaveValue("16384");
+    expectAntdSelectLabel(reasoningEffort, "high");
+    expect(maxTokens).toHaveValue("8192");
     await selectAntdOption(user, thinking, "关闭");
     expect(maxTokens).toHaveValue("512");
-    expectAntdSelectLabel(reasoningEffort, "跟随提供方默认");
     expect(within(model!).getByText(/关闭 Thinking 时 Reasoning effort 不可用/)).toBeInTheDocument();
 
     await user.click(within(model!).getByRole("button", { name: "保存配置" }));
@@ -192,8 +203,185 @@ describe("model management flow", () => {
           thinking: "disabled",
           reasoning_effort: null,
           max_tokens: 512,
+          max_tokens_mode: "auto",
         },
       });
     });
+  });
+
+  it("uses backend policy values and locks an always-on Thinking model", async () => {
+    const template = catalog.models.find((model) => model.model_id === "glm-5-2-260617");
+    expect(template).toBeDefined();
+    catalog.models.push({
+      ...structuredClone(template!),
+      model_id: "kimi-k3",
+      source_model_id: "kimi-k3",
+      display_name: "Kimi K3",
+      is_default: false,
+      parameters: {
+        ...template!.parameters,
+        thinking: "enabled",
+        reasoning_effort: "low",
+        max_tokens: 3_456,
+        max_tokens_mode: "auto",
+      },
+      reasoning_policy: {
+        thinking_options: ["enabled"],
+        default_thinking: "enabled",
+        thinking_locked: true,
+        reasoning_effort_options: ["low", "high", "max"],
+        default_reasoning_effort: "low",
+        max_tokens_by_effort: { low: 3_456, high: 6_789, max: 9_999 },
+        default_max_tokens: 3_456,
+        disabled_max_tokens: null,
+        sampling_parameters_allowed_when_thinking: true,
+      },
+    });
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    const model = (await screen.findByText("Kimi K3")).closest("details");
+    expect(model).not.toBeNull();
+    await user.click(within(model!).getByText("Kimi K3"));
+
+    const thinking = within(model!).getByLabelText("Thinking");
+    const effort = within(model!).getByLabelText("Reasoning effort");
+    const maxTokens = within(model!).getByLabelText("最大输出 tokens");
+    expect(thinking).toBeDisabled();
+    expectAntdSelectLabel(thinking, "开启");
+    expect(within(model!).getByText(/Thinking 模式由模型能力锁定/)).toBeInTheDocument();
+
+    await user.clear(maxTokens);
+    await user.type(maxTokens, "1111");
+    expect(within(model!).getByText("手动设置")).toBeInTheDocument();
+    await selectAntdOption(user, effort, "high");
+    expect(maxTokens).toHaveValue("6789");
+    expect(within(model!).getByText("自动联动")).toBeInTheDocument();
+    expect(within(model!).getByText(/6,789（自动联动）/)).toBeInTheDocument();
+  });
+
+  it("hides unsupported effort and uses default model-level token linkage", async () => {
+    const template = catalog.models.find((model) => model.model_id === "glm-5-2-260617");
+    expect(template).toBeDefined();
+    catalog.models.push({
+      ...structuredClone(template!),
+      model_id: "minimax-m3",
+      source_model_id: "minimax-m3",
+      display_name: "MiniMax M3",
+      is_default: false,
+      parameters: {
+        ...template!.parameters,
+        thinking: "enabled",
+        reasoning_effort: null,
+        max_tokens: 4_321,
+        max_tokens_mode: "auto",
+      },
+      reasoning_policy: {
+        thinking_options: ["enabled", "disabled"],
+        default_thinking: "enabled",
+        thinking_locked: false,
+        reasoning_effort_options: [],
+        default_reasoning_effort: null,
+        max_tokens_by_effort: {},
+        default_max_tokens: 4_321,
+        disabled_max_tokens: 321,
+        sampling_parameters_allowed_when_thinking: true,
+      },
+    });
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    const model = (await screen.findByText("MiniMax M3")).closest("details");
+    expect(model).not.toBeNull();
+    await user.click(within(model!).getByText("MiniMax M3"));
+
+    expect(within(model!).queryByLabelText("Reasoning effort")).not.toBeInTheDocument();
+    const thinking = within(model!).getByLabelText("Thinking");
+    const maxTokens = within(model!).getByLabelText("最大输出 tokens");
+    await selectAntdOption(user, thinking, "关闭");
+    expect(maxTokens).toHaveValue("321");
+    await selectAntdOption(user, thinking, "开启");
+    expect(maxTokens).toHaveValue("4321");
+  });
+
+  it("uses model-level sampling capability across providers", async () => {
+    const template = catalog.models.find(
+      (model) => model.model_id === "glm-5-2-260617",
+    );
+    expect(template).toBeDefined();
+    catalog.models.push({
+      ...structuredClone(template!),
+      model_id: "deepseek-v4-flash-260425",
+      source_model_id: "deepseek-v4-flash-260425",
+      display_name: "Agent Plan DeepSeek V4",
+      is_default: false,
+      parameters: {
+        ...template!.parameters,
+        temperature: 0.6,
+      },
+      reasoning_policy: {
+        ...template!.reasoning_policy,
+        sampling_parameters_allowed_when_thinking: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    const model = (await screen.findByText("Agent Plan DeepSeek V4")).closest(
+      "details",
+    );
+    expect(model).not.toBeNull();
+    await user.click(within(model!).getByText("Agent Plan DeepSeek V4"));
+
+    expect(within(model!).getByLabelText("Temperature")).toBeDisabled();
+    expect(
+      within(model!).getByText(/该模型在 Thinking 开启时不使用 Temperature/),
+    ).toBeInTheDocument();
+    await user.click(within(model!).getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => {
+      const patch = vi.mocked(fetch).mock.calls.find(([input, init]) =>
+        String(input).includes(
+          "/api/v1/admin/models/agent_plan/deepseek-v4-flash-260425",
+        ) && init?.method === "PATCH",
+      );
+      expect(patch).toBeDefined();
+      expect(JSON.parse(String(patch?.[1]?.body))).toMatchObject({
+        parameters: {
+          thinking: "enabled",
+          reasoning_effort: "high",
+          temperature: null,
+          top_p: null,
+          frequency_penalty: null,
+          presence_penalty: null,
+        },
+      });
+    });
+  });
+
+  it("can restore auto mode when Thinking and effort are locked", async () => {
+    const lockedModel = catalog.models.find(
+      (model) => model.model_id === "ep-example",
+    );
+    expect(lockedModel).toBeDefined();
+    lockedModel!.parameters.max_tokens = 999;
+    lockedModel!.parameters.max_tokens_mode = "manual";
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    const model = (await screen.findAllByText("ep-example"))[0].closest("details");
+    expect(model).not.toBeNull();
+    await user.click(within(model!).getAllByText("ep-example")[0]);
+
+    const thinking = within(model!).getByLabelText("Thinking");
+    const maxTokens = within(model!).getByLabelText("最大输出 tokens");
+    expect(thinking).toBeDisabled();
+    expect(maxTokens).toHaveValue("999");
+    await user.click(
+      within(model!).getByRole("button", { name: "恢复自动联动" }),
+    );
+
+    expect(maxTokens).toHaveValue("512");
+    expect(within(model!).getByText("自动联动")).toBeInTheDocument();
   });
 });

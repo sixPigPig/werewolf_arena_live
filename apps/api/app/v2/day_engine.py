@@ -1840,6 +1840,7 @@ class V2DayEngine:
                 dialect=player.tts_dialect,
                 model_provider=player.model_provider,
                 model_id=player.model_id,
+                model_supports_thinking=player.model_supports_thinking,
                 model_parameters=player.model_parameters,
                 output_kind=output_kind,
                 decision_contract=resolved_contract,

@@ -24,6 +24,10 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
+from app.model_catalog.defaults import (
+    default_parameter_values,
+    reasoning_policy_for_model,
+)
 from app.models.admin import AuditEvent
 from app.models.live import (
     LiveEventRecord,
@@ -52,6 +56,21 @@ class AdminProfilesContext:
     session_factory: sessionmaker[Session]
 
 
+def _exact_model_configuration(provider: str, model_id: str) -> tuple[bool, dict]:
+    policy = reasoning_policy_for_model(
+        provider,
+        model_id,
+        supports_thinking=True,
+    )
+    supports_thinking = "enabled" in policy.thinking_options
+    return supports_thinking, default_parameter_values(
+        provider,
+        model_id,
+        supports_thinking=supports_thinking,
+        limit=384_000,
+    )
+
+
 @pytest.fixture
 def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminProfilesContext, None, None]:
     monkeypatch.setattr(settings, "app_environment", "test")
@@ -76,6 +95,10 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminProfilesContext, 
     testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with testing_session.begin() as db:
         for index, option in enumerate(configured_model_options()):
+            supports_thinking, parameters = _exact_model_configuration(
+                option["provider"],
+                option["model_id"],
+            )
             db.add(
                 ModelConfigurationRecord(
                     provider=option["provider"],
@@ -85,8 +108,8 @@ def context(monkeypatch: pytest.MonkeyPatch) -> Generator[AdminProfilesContext, 
                     available=True,
                     enabled=True,
                     is_default=index == 0,
-                    supports_thinking=True,
-                    parameter_values={"thinking": "default"},
+                    supports_thinking=supports_thinking,
+                    parameter_values=parameters,
                     source_details={"source": "test"},
                 )
             )
@@ -1120,6 +1143,10 @@ def test_mapper_version_rejects_a_real_two_session_lost_update(
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with factory() as seed:
+        supports_thinking, parameters = _exact_model_configuration(
+            _model_provider(),
+            _model_name(),
+        )
         seed.add_all(
             [
                 ModelConfigurationRecord(
@@ -1130,8 +1157,8 @@ def test_mapper_version_rejects_a_real_two_session_lost_update(
                     available=True,
                     enabled=True,
                     is_default=True,
-                    supports_thinking=True,
-                    parameter_values={"thinking": "default"},
+                    supports_thinking=supports_thinking,
+                    parameter_values=parameters,
                     source_details={"source": "test"},
                 ),
                 VirtualPlayerProfile(

@@ -76,6 +76,25 @@ def fence_harness() -> Iterator[_FenceHarness]:
         )
         game_id = game.game_id
         run_id = run.run_id
+    with factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        assert game is not None
+        game.players_snapshot = [
+            {
+                "seat": 1,
+                "profile_id": "fence-player",
+                "name": "围栏测试玩家",
+                "model_provider": "agent_plan",
+                "model": "fence-model",
+                "model_supports_thinking": False,
+                "model_parameters": {
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
+            }
+        ]
 
     actions = V2ActionRepository(factory, enforce_execution_fence=True)
     execution = actions.start_and_claim_execution(

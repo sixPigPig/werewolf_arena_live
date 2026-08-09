@@ -15,6 +15,10 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.model_catalog.defaults import (
+    default_parameter_values,
+    reasoning_policy_for_model,
+)
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
@@ -41,6 +45,12 @@ TEST_MODEL_IDS = (
 )
 with TestingSessionLocal.begin() as session:
     for index, model_id in enumerate(TEST_MODEL_IDS):
+        policy = reasoning_policy_for_model(
+            TEST_MODEL_PROVIDER,
+            model_id,
+            supports_thinking=True,
+        )
+        supports_thinking = "enabled" in policy.thinking_options
         session.add(
             ModelConfigurationRecord(
                 provider=TEST_MODEL_PROVIDER,
@@ -50,8 +60,13 @@ with TestingSessionLocal.begin() as session:
                 available=True,
                 enabled=True,
                 is_default=index == 0,
-                supports_thinking=True,
-                parameter_values={"thinking": "default"},
+                supports_thinking=supports_thinking,
+                parameter_values=default_parameter_values(
+                    TEST_MODEL_PROVIDER,
+                    model_id,
+                    supports_thinking=supports_thinking,
+                    limit=384_000,
+                ),
                 source_details={"source": "test"},
             )
         )

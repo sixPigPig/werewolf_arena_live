@@ -70,7 +70,12 @@ def judge_admin_client(
                 display_name="Judge Model Pro",
                 available=True,
                 enabled=True,
-                parameter_values={},
+                parameter_values={
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
                 source_details={},
             )
         )
@@ -156,7 +161,12 @@ def test_judge_configuration_reads_defaults_and_persists_fixed_voice(
             model_id="judge-model-pro",
             enabled=False,
             is_default=False,
-            parameters={},
+            parameters={
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
         )
 
 

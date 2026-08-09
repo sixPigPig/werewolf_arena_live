@@ -4,6 +4,7 @@ import type {
   AdminModelSource,
   ModelParameters,
   ModelProvider,
+  ModelReasoningPolicy,
   ThinkingMode,
 } from "@/features/models/types";
 
@@ -21,12 +22,12 @@ function parseSource(value: unknown): AdminModelSource {
   return {
     provider: providerValue(record.provider),
     label: requiredString(record.label, "label"),
-    refresh_mode: record.refresh_mode === "automatic" ? "automatic" : "manual",
-    status: record.status === "error" ? "error" : "ok",
-    model_count: requiredNumber(record.model_count, "model_count"),
-    last_synced_at: nullableString(record.last_synced_at),
+    refresh_mode: refreshModeValue(record.refresh_mode),
+    status: sourceStatusValue(record.status),
+    model_count: requiredInteger(record.model_count, "model_count"),
+    last_synced_at: requiredNullableString(record.last_synced_at, "last_synced_at"),
     docs_url: requiredString(record.docs_url, "docs_url"),
-    error: nullableString(record.error),
+    error: requiredNullableString(record.error, "error"),
   };
 }
 
@@ -35,21 +36,21 @@ function parseModel(value: unknown): AdminModel {
   return {
     provider: providerValue(record.provider),
     model_id: requiredString(record.model_id, "model_id"),
-    source_model_id: nullableString(record.source_model_id),
+    source_model_id: requiredNullableString(record.source_model_id, "source_model_id"),
     display_name: requiredString(record.display_name, "display_name"),
-    description: nullableString(record.description),
+    description: requiredNullableString(record.description, "description"),
     available: requiredBoolean(record.available, "available"),
     enabled: requiredBoolean(record.enabled, "enabled"),
     is_default: requiredBoolean(record.is_default, "is_default"),
     selected_by_source: requiredBoolean(record.selected_by_source, "selected_by_source"),
     supports_thinking: requiredBoolean(record.supports_thinking, "supports_thinking"),
-    assigned_profile_count: requiredNumber(record.assigned_profile_count, "assigned_profile_count"),
+    assigned_profile_count: requiredInteger(
+      record.assigned_profile_count,
+      "assigned_profile_count",
+    ),
     parameters: parseParameters(record.parameters),
-    reasoning_effort_options: requiredArray(
-      record.reasoning_effort_options,
-      "reasoning_effort_options",
-    ).map((item) => requiredString(item, "reasoning_effort")),
-    max_output_tokens_limit: requiredNumber(
+    reasoning_policy: parseReasoningPolicy(record.reasoning_policy),
+    max_output_tokens_limit: requiredInteger(
       record.max_output_tokens_limit,
       "max_output_tokens_limit",
     ),
@@ -62,12 +63,64 @@ function parseParameters(value: unknown): ModelParameters {
   const record = requiredRecord(value, "model parameters");
   return {
     thinking: thinkingValue(record.thinking),
-    reasoning_effort: nullableString(record.reasoning_effort),
-    temperature: nullableNumber(record.temperature),
-    top_p: nullableNumber(record.top_p),
-    max_tokens: requiredNumber(record.max_tokens, "max_tokens"),
-    frequency_penalty: nullableNumber(record.frequency_penalty),
-    presence_penalty: nullableNumber(record.presence_penalty),
+    reasoning_effort: requiredNullableString(
+      record.reasoning_effort,
+      "reasoning_effort",
+    ),
+    temperature: requiredNullableNumber(record.temperature, "temperature"),
+    top_p: requiredNullableNumber(record.top_p, "top_p"),
+    max_tokens: requiredInteger(record.max_tokens, "max_tokens"),
+    max_tokens_mode: maxTokensModeValue(record.max_tokens_mode),
+    frequency_penalty: requiredNullableNumber(
+      record.frequency_penalty,
+      "frequency_penalty",
+    ),
+    presence_penalty: requiredNullableNumber(
+      record.presence_penalty,
+      "presence_penalty",
+    ),
+  };
+}
+
+function parseReasoningPolicy(value: unknown): ModelReasoningPolicy {
+  const record = requiredRecord(value, "reasoning policy");
+  const maxTokensRecord = requiredRecord(
+    record.max_tokens_by_effort,
+    "max_tokens_by_effort",
+  );
+  return {
+    thinking_options: requiredArray(
+      record.thinking_options,
+      "thinking_options",
+    ).map(thinkingValue),
+    default_thinking: thinkingValue(record.default_thinking),
+    thinking_locked: requiredBoolean(record.thinking_locked, "thinking_locked"),
+    reasoning_effort_options: requiredArray(
+      record.reasoning_effort_options,
+      "reasoning_effort_options",
+    ).map((item) => requiredString(item, "reasoning_effort")),
+    default_reasoning_effort: requiredNullableString(
+      record.default_reasoning_effort,
+      "default_reasoning_effort",
+    ),
+    max_tokens_by_effort: Object.fromEntries(
+      Object.entries(maxTokensRecord).map(([effort, tokens]) => [
+        effort,
+        requiredInteger(tokens, `max_tokens_by_effort.${effort}`),
+      ]),
+    ),
+    default_max_tokens: requiredInteger(
+      record.default_max_tokens,
+      "default_max_tokens",
+    ),
+    disabled_max_tokens: requiredNullableInteger(
+      record.disabled_max_tokens,
+      "disabled_max_tokens",
+    ),
+    sampling_parameters_allowed_when_thinking: requiredBoolean(
+      record.sampling_parameters_allowed_when_thinking,
+      "sampling_parameters_allowed_when_thinking",
+    ),
   };
 }
 
@@ -76,9 +129,24 @@ function providerValue(value: unknown): ModelProvider {
   throw new Error("Invalid model provider");
 }
 
+function refreshModeValue(value: unknown): "manual" | "automatic" {
+  if (value === "manual" || value === "automatic") return value;
+  throw new Error("Invalid refresh mode");
+}
+
+function sourceStatusValue(value: unknown): "ok" | "error" {
+  if (value === "ok" || value === "error") return value;
+  throw new Error("Invalid model source status");
+}
+
 function thinkingValue(value: unknown): ThinkingMode {
   if (value === "enabled" || value === "disabled") return value;
-  return "default";
+  throw new Error("Invalid thinking mode");
+}
+
+function maxTokensModeValue(value: unknown): "auto" | "manual" {
+  if (value === "auto" || value === "manual") return value;
+  throw new Error("Invalid max tokens mode");
 }
 
 function requiredRecord(value: unknown, label: string): Record<string, unknown> {
@@ -98,8 +166,9 @@ function requiredString(value: unknown, label: string): string {
   return value;
 }
 
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
+function requiredNullableString(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  return requiredString(value, label);
 }
 
 function requiredNumber(value: unknown, label: string): number {
@@ -109,8 +178,20 @@ function requiredNumber(value: unknown, label: string): number {
   return value;
 }
 
-function nullableNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function requiredInteger(value: unknown, label: string): number {
+  const number = requiredNumber(value, label);
+  if (!Number.isInteger(number)) throw new Error(`Invalid ${label}`);
+  return number;
+}
+
+function requiredNullableNumber(value: unknown, label: string): number | null {
+  if (value === null) return null;
+  return requiredNumber(value, label);
+}
+
+function requiredNullableInteger(value: unknown, label: string): number | null {
+  if (value === null) return null;
+  return requiredInteger(value, label);
 }
 
 function requiredBoolean(value: unknown, label: string): boolean {

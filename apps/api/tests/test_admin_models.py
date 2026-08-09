@@ -17,7 +17,16 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
-from app.model_catalog.service import DeepSeekCatalogClient, DiscoveredModel
+from app.model_catalog.defaults import (
+    default_parameter_values,
+    normalize_model_parameters,
+    reasoning_policy_for_model,
+)
+from app.model_catalog.service import (
+    DeepSeekCatalogClient,
+    DiscoveredModel,
+    validate_parameter_values,
+)
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 
@@ -163,7 +172,12 @@ def test_environment_bootstrap_repairs_glm_thinking_capability(
                 available=True,
                 enabled=True,
                 supports_thinking=False,
-                parameter_values={"thinking": "default"},
+                parameter_values={
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
                 source_details={"bootstrap": "environment"},
             )
         )
@@ -179,6 +193,16 @@ def test_environment_bootstrap_repairs_glm_thinking_capability(
         and item["model_id"] == "glm-5-2-260617"
     )
     assert glm["supports_thinking"] is True
+    assert glm["parameters"] == {
+        "thinking": "disabled",
+        "reasoning_effort": None,
+        "temperature": None,
+        "top_p": None,
+        "max_tokens_mode": "auto",
+        "max_tokens": 512,
+        "frequency_penalty": None,
+        "presence_penalty": None,
+    }
 
     with session_factory() as db:
         repaired = db.get(
@@ -213,13 +237,20 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     )
     assert bootstrapped_glm["supports_thinking"] is True
     assert bootstrapped_glm["parameters"]["thinking"] == "enabled"
-    assert bootstrapped_glm["parameters"]["max_tokens"] == 16_384
-    assert bootstrapped_glm["reasoning_effort_options"] == [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-    ]
+    assert bootstrapped_glm["parameters"]["reasoning_effort"] == "high"
+    assert bootstrapped_glm["parameters"]["max_tokens_mode"] == "auto"
+    assert bootstrapped_glm["parameters"]["max_tokens"] == 8_192
+    assert bootstrapped_glm["reasoning_policy"] == {
+        "thinking_options": ["enabled", "disabled"],
+        "default_thinking": "enabled",
+        "thinking_locked": False,
+        "reasoning_effort_options": ["high", "max"],
+        "default_reasoning_effort": "high",
+        "max_tokens_by_effort": {"high": 8_192, "max": 16_384},
+        "default_max_tokens": 8_192,
+        "disabled_max_tokens": 512,
+        "sampling_parameters_allowed_when_thinking": True,
+    }
     assert bootstrapped_glm["max_output_tokens_limit"] == 131_072
     standard_ark = next(
         item
@@ -228,7 +259,9 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     )
     assert standard_ark["supports_thinking"] is True
     assert standard_ark["parameters"]["thinking"] == "enabled"
-    assert standard_ark["parameters"]["max_tokens"] == 16_384
+    assert standard_ark["parameters"]["reasoning_effort"] == "high"
+    assert standard_ark["parameters"]["max_tokens"] == 8_192
+    assert standard_ark["max_output_tokens_limit"] == 131_072
     ark_source = next(source for source in listed_payload["sources"] if source["provider"] == "ark")
     assert ark_source["model_count"] == 1
     deepseek_source = next(
@@ -236,6 +269,18 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     )
     assert deepseek_source["refresh_mode"] == "automatic"
     assert deepseek_source["model_count"] == 2
+    deepseek_model = next(
+        item
+        for item in listed_payload["models"]
+        if item["provider"] == "deepseek"
+        and item["model_id"] == "deepseek-v4-flash"
+    )
+    assert (
+        deepseek_model["reasoning_policy"][
+            "sampling_parameters_allowed_when_thinking"
+        ]
+        is False
+    )
 
     synced = client.post(
         "/api/v1/admin/models/agent-plan/sync",
@@ -255,8 +300,17 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     ]
     agent_pro = next(item for item in agent_models if item["model_id"] == "agent-pro")
     assert not agent_pro["enabled"]
-    assert agent_pro["parameters"]["thinking"] == "enabled"
-    assert agent_pro["parameters"]["max_tokens"] == 16_384
+    assert agent_pro["supports_thinking"] is False
+    assert agent_pro["parameters"] == {
+        "thinking": "disabled",
+        "reasoning_effort": None,
+        "temperature": None,
+        "top_p": None,
+        "max_tokens_mode": "auto",
+        "max_tokens": 512,
+        "frequency_penalty": None,
+        "presence_penalty": None,
+    }
 
 
 def test_model_catalog_deletes_and_ignores_unsupported_auto(
@@ -274,7 +328,12 @@ def test_model_catalog_deletes_and_ignores_unsupported_auto(
                 enabled=False,
                 is_default=False,
                 supports_thinking=False,
-                parameter_values={"thinking": "default", "max_tokens": 512},
+                parameter_values={
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
                 source_details={"selected": False, "plan": "agent-plan"},
             )
         )
@@ -341,7 +400,8 @@ def test_glm_5_2_accepts_documented_reasoning_and_output_limit(
             "enabled": True,
             "parameters": {
                 "thinking": "enabled",
-                "reasoning_effort": "minimal",
+                "reasoning_effort": "max",
+                "max_tokens_mode": "manual",
                 "max_tokens": 131_072,
             },
         },
@@ -355,12 +415,30 @@ def test_glm_5_2_accepts_documented_reasoning_and_output_limit(
             "enabled": True,
             "parameters": {
                 "thinking": "enabled",
+                "reasoning_effort": "max",
+                "max_tokens_mode": "manual",
                 "max_tokens": 131_073,
             },
         },
     )
     assert rejected.status_code == 422
     assert "max_tokens must be between 1 and 131072" in rejected.text
+
+    invalid_effort = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "minimal",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+            },
+        },
+    )
+    assert invalid_effort.status_code == 422
+    assert "reasoning_effort must be one of: high, max" in invalid_effort.text
 
 
 def test_model_configuration_updates_default_and_provider_parameters(
@@ -375,16 +453,17 @@ def test_model_configuration_updates_default_and_provider_parameters(
     )
 
     response = client.patch(
-        "/api/v1/admin/models/agent_plan/agent-pro",
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
         headers={"X-CSRF-Token": csrf_token},
         json={
             "enabled": True,
             "is_default": True,
             "parameters": {
                 "thinking": "enabled",
-                "reasoning_effort": "medium",
+                "reasoning_effort": "high",
                 "temperature": 0.35,
                 "top_p": 0.8,
+                "max_tokens_mode": "manual",
                 "max_tokens": 2048,
                 "frequency_penalty": 0.1,
                 "presence_penalty": 0.2,
@@ -395,15 +474,18 @@ def test_model_configuration_updates_default_and_provider_parameters(
 
     refreshed = client.get("/api/v1/admin/models")
     configured = next(
-        item for item in refreshed.json()["models"] if item["model_id"] == "agent-pro"
+        item
+        for item in refreshed.json()["models"]
+        if item["model_id"] == "glm-5-2-260617"
     )
     assert configured["enabled"] is True
     assert configured["is_default"] is True
     assert configured["parameters"] == {
         "thinking": "enabled",
-        "reasoning_effort": "medium",
+        "reasoning_effort": "high",
         "temperature": 0.35,
         "top_p": 0.8,
+        "max_tokens_mode": "manual",
         "max_tokens": 2048,
         "frequency_penalty": 0.1,
         "presence_penalty": 0.2,
@@ -424,13 +506,34 @@ def test_deepseek_rejects_sampling_parameters_while_thinking_is_enabled(
             "enabled": True,
             "parameters": {
                 "thinking": "enabled",
+                "reasoning_effort": "high",
                 "temperature": 0.4,
+                "max_tokens_mode": "auto",
                 "max_tokens": 2048,
             },
         },
     )
     assert response.status_code == 422
     assert response.json()["code"] == "admin_model_configuration_invalid"
+
+
+def test_agent_plan_deepseek_rejects_sampling_by_model_policy() -> None:
+    with pytest.raises(
+        ValueError,
+        match="this model ignores sampling and penalty parameters",
+    ):
+        validate_parameter_values(
+            provider="agent_plan",
+            model_id="deepseek-v4-flash-260425",
+            supports_thinking=True,
+            values={
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+                "temperature": 0.4,
+            },
+        )
 
 
 def test_model_configuration_save_rejects_reasoning_effort_when_thinking_is_disabled(
@@ -445,13 +548,14 @@ def test_model_configuration_save_rejects_reasoning_effort_when_thinking_is_disa
     )
 
     response = client.patch(
-        "/api/v1/admin/models/agent_plan/agent-pro",
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
         headers={"X-CSRF-Token": csrf_token},
         json={
             "enabled": True,
             "parameters": {
                 "thinking": "disabled",
                 "reasoning_effort": "medium",
+                "max_tokens_mode": "auto",
                 "max_tokens": 512,
             },
         },
@@ -485,7 +589,12 @@ def test_disabling_a_model_used_by_active_profiles_is_rejected(model_admin_clien
         headers={"X-CSRF-Token": csrf_token},
         json={
             "enabled": False,
-            "parameters": {"thinking": "default", "max_tokens": 2048},
+            "parameters": {
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
         },
     )
     assert response.status_code == 409
@@ -502,7 +611,62 @@ def test_model_configuration_requires_max_tokens(model_admin_client) -> None:
         headers={"X-CSRF-Token": csrf_token},
         json={
             "enabled": True,
-            "parameters": {"thinking": "enabled"},
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_request_invalid"
+
+
+def test_model_configuration_rejects_unknown_request_fields(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/deepseek/deepseek-v4-flash",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "legacy_mode": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+                "legacy_budget": 123,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "admin_request_invalid"
+
+
+@pytest.mark.parametrize("invalid_max_tokens", [True, "12"])
+def test_model_configuration_rejects_coerced_max_tokens(
+    model_admin_client,
+    invalid_max_tokens: object,
+) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/deepseek/deepseek-v4-flash",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "high",
+                "max_tokens_mode": "auto",
+                "max_tokens": invalid_max_tokens,
+            },
         },
     )
 
@@ -523,6 +687,288 @@ def test_catalog_uses_explicit_thinking_defaults(
         (item["provider"], item["model_id"]): item["parameters"]
         for item in response.json()["models"]
     }
-    assert parameters[("agent_plan", "agent-fast")]["max_tokens"] == 512
+    assert parameters[("agent_plan", "agent-fast")] == {
+        "thinking": "disabled",
+        "reasoning_effort": None,
+        "temperature": None,
+        "top_p": None,
+        "max_tokens_mode": "auto",
+        "max_tokens": 512,
+        "frequency_penalty": None,
+        "presence_penalty": None,
+    }
     assert parameters[("deepseek", "deepseek-v4-flash")]["thinking"] == "enabled"
-    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 16_384
+    assert parameters[("deepseek", "deepseek-v4-flash")]["reasoning_effort"] == "high"
+    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens_mode"] == "auto"
+    assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 8_192
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "model_id",
+        "expected_efforts",
+        "expected_budgets",
+        "expected_default_effort",
+        "expected_default_max_tokens",
+        "expected_locked",
+    ),
+    [
+        (
+            "agent_plan",
+            "doubao-seed-2-0-lite-260215",
+            ("low", "medium", "high"),
+            {"low": 4_096, "medium": 8_192, "high": 16_384},
+            "low",
+            4_096,
+            False,
+        ),
+        (
+            "agent_plan",
+            "glm-5-2-260617",
+            ("high", "max"),
+            {"high": 8_192, "max": 16_384},
+            "high",
+            8_192,
+            False,
+        ),
+        (
+            "deepseek",
+            "deepseek-v4-flash",
+            ("high", "max"),
+            {"high": 8_192, "max": 16_384},
+            "high",
+            8_192,
+            False,
+        ),
+        (
+            "agent_plan",
+            "kimi-k3",
+            ("low", "high", "max"),
+            {"low": 4_096, "high": 8_192, "max": 16_384},
+            "low",
+            4_096,
+            True,
+        ),
+        (
+            "agent_plan",
+            "minimax-m3",
+            (),
+            {},
+            None,
+            8_192,
+            False,
+        ),
+    ],
+)
+def test_reasoning_policy_is_model_specific(
+    provider: str,
+    model_id: str,
+    expected_efforts: tuple[str, ...],
+    expected_budgets: dict[str, int],
+    expected_default_effort: str | None,
+    expected_default_max_tokens: int,
+    expected_locked: bool,
+) -> None:
+    policy = reasoning_policy_for_model(
+        provider,
+        model_id,
+        supports_thinking=True,
+    )
+    parameters = default_parameter_values(
+        provider,
+        model_id,
+        supports_thinking=True,
+        limit=384_000,
+    )
+
+    assert policy.reasoning_effort_options == expected_efforts
+    assert policy.max_tokens_by_effort == expected_budgets
+    assert policy.default_reasoning_effort == expected_default_effort
+    assert policy.default_max_tokens == expected_default_max_tokens
+    assert policy.thinking_locked is expected_locked
+    assert parameters["thinking"] == "enabled"
+    assert parameters["max_tokens_mode"] == "auto"
+    assert parameters["max_tokens"] == expected_default_max_tokens
+    assert parameters["reasoning_effort"] == expected_default_effort
+
+
+def test_unverified_legacy_model_does_not_inherit_provider_effort_options() -> None:
+    policy = reasoning_policy_for_model(
+        "agent_plan",
+        "kimi-k2.6",
+        supports_thinking=True,
+    )
+
+    assert policy.thinking_options == ("disabled",)
+    assert policy.reasoning_effort_options == ()
+    assert policy.default_max_tokens == 512
+
+
+def test_code_preview_remains_non_thinking_when_discovery_misreports_support() -> None:
+    policy = reasoning_policy_for_model(
+        "agent_plan",
+        "doubao-seed-2-0-code-preview-260215",
+        supports_thinking=True,
+    )
+
+    assert policy.thinking_options == ("disabled",)
+    assert policy.reasoning_effort_options == ()
+
+
+def test_core_contract_rejects_missing_reasoning_effort_key() -> None:
+    with pytest.raises(ValueError, match="missing required parameters: reasoning_effort"):
+        normalize_model_parameters(
+            "agent_plan",
+            "glm-5-2-260617",
+            {
+                "thinking": "enabled",
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+            },
+            supports_thinking=True,
+            limit=131_072,
+        )
+
+
+def test_verified_model_family_rejects_forged_non_thinking_capability() -> None:
+    policy = reasoning_policy_for_model(
+        "agent_plan",
+        "kimi-k3",
+        supports_thinking=False,
+    )
+    assert policy.thinking_options == ("enabled",)
+    assert policy.thinking_locked is True
+
+    with pytest.raises(
+        ValueError,
+        match="supports_thinking does not match the model reasoning policy",
+    ):
+        normalize_model_parameters(
+            "agent_plan",
+            "kimi-k3",
+            {
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
+            supports_thinking=False,
+            limit=384_000,
+        )
+
+
+def test_auto_max_tokens_is_relinked_by_backend(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "max",
+                "max_tokens_mode": "auto",
+                "max_tokens": 1,
+            },
+        },
+    )
+    assert response.status_code == 204, response.text
+
+    refreshed = client.get("/api/v1/admin/models")
+    configured = next(
+        item
+        for item in refreshed.json()["models"]
+        if item["provider"] == "agent_plan"
+        and item["model_id"] == "glm-5-2-260617"
+    )
+    assert configured["parameters"]["max_tokens"] == 16_384
+
+
+def test_reasoning_change_forces_auto_even_when_request_submits_manual(
+    model_admin_client,
+) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "max",
+                "max_tokens_mode": "manual",
+                "max_tokens": 123,
+            },
+        },
+    )
+    assert response.status_code == 204, response.text
+
+    refreshed = client.get("/api/v1/admin/models")
+    configured = next(
+        item
+        for item in refreshed.json()["models"]
+        if item["provider"] == "agent_plan"
+        and item["model_id"] == "glm-5-2-260617"
+    )
+    assert configured["parameters"]["max_tokens_mode"] == "auto"
+    assert configured["parameters"]["max_tokens"] == 16_384
+
+
+def test_disabling_thinking_forces_auto_512_budget(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/agent_plan/glm-5-2-260617",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "manual",
+                "max_tokens": 999,
+            },
+        },
+    )
+    assert response.status_code == 204, response.text
+
+    configured = next(
+        item
+        for item in client.get("/api/v1/admin/models").json()["models"]
+        if item["provider"] == "agent_plan"
+        and item["model_id"] == "glm-5-2-260617"
+    )
+    assert configured["parameters"]["max_tokens_mode"] == "auto"
+    assert configured["parameters"]["max_tokens"] == 512
+
+
+def test_enabled_thinking_requires_reasoning_effort(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    response = client.patch(
+        "/api/v1/admin/models/deepseek/deepseek-v4-flash",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 8_192,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "reasoning_effort is required" in response.text

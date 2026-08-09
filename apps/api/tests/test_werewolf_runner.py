@@ -9648,6 +9648,10 @@ def test_run_game_does_not_write_legacy_game_json_files(
     record_store: DatabaseReplayStore,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "app.werewolf.runner.default_model_name",
+        lambda: "deepseek-v4-flash",
+    )
 
     result = run_game(
         record_store=record_store,

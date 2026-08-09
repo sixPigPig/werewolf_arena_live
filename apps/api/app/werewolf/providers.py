@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.model_catalog.defaults import reasoning_policy_for_model
 from app.model_catalog.runtime import (
-    catalog_all_model_names,
     catalog_model_names,
     runtime_configuration_for_model,
     runtime_default_model,
@@ -30,6 +30,10 @@ STREAM_TOTAL_TIMEOUT_SECONDS = 180
 
 
 class StreamStalledError(RuntimeError):
+    pass
+
+
+class ModelRuntimeConfigurationError(RuntimeError):
     pass
 
 
@@ -112,7 +116,6 @@ QWEN_CONFIG = OpenAICompatibleProviderConfig(
 OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (
     ARK_AGENT_PLAN_CONFIG,
     DEEPSEEK_CONFIG,
-    QWEN_CONFIG,
 )
 
 
@@ -210,12 +213,27 @@ class OpenAICompatibleProvider:
         temperature: float,
         call_options: ModelCallOptions | None,
     ) -> dict[str, Any]:
-        runtime_configuration = runtime_configuration_for_model(
-            _catalog_provider_name(self.config),
+        catalog_provider = _catalog_provider_name(self.config)
+        try:
+            runtime_configuration = runtime_configuration_for_model(catalog_provider, model)
+        except (TypeError, ValueError) as exc:
+            raise ModelRuntimeConfigurationError(
+                f"model_runtime_configuration_invalid: {catalog_provider}/{model}"
+            ) from exc
+        if runtime_configuration is None:
+            raise ModelRuntimeConfigurationError(
+                f"model_runtime_configuration_missing: {catalog_provider}/{model}"
+            )
+        parameters = runtime_configuration.parameters
+        thinking = parameters.get("thinking")
+        reasoning_policy = reasoning_policy_for_model(
+            catalog_provider,
             model,
+            supports_thinking=runtime_configuration.supports_thinking,
         )
-        parameters = runtime_configuration.parameters if runtime_configuration else {}
-        thinking = parameters.get("thinking", "default")
+        sampling_parameters_allowed = (
+            thinking != "enabled" or reasoning_policy.sampling_parameters_allowed_when_thinking
+        )
         configured_temperature = parameters.get("temperature")
         effective_temperature = (
             configured_temperature
@@ -233,41 +251,42 @@ class OpenAICompatibleProvider:
             ],
             "stream": False,
         }
-        if not (self.config.env_prefix == "DEEPSEEK" and thinking != "disabled"):
+        if sampling_parameters_allowed:
             payload["temperature"] = effective_temperature
         if self.config.response_format is not None:
             payload["response_format"] = self.config.response_format
         configured_max_tokens = parameters.get("max_tokens")
         budget_max_tokens = call_options.max_output_tokens if call_options is not None else None
-        max_tokens = (
-            configured_max_tokens
-            if isinstance(configured_max_tokens, int)
-            and not isinstance(configured_max_tokens, bool)
-            else budget_max_tokens
-        )
+        max_token_candidates = [
+            value
+            for value in (configured_max_tokens, budget_max_tokens)
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        max_tokens = min(max_token_candidates) if max_token_candidates else None
         if max_tokens is not None:
             if (
                 self.config.env_prefix == "ARK_AGENT_PLAN"
-                and runtime_configuration is not None
                 and runtime_configuration.supports_thinking
                 and thinking != "disabled"
             ):
                 payload["max_completion_tokens"] = max_tokens
             else:
                 payload["max_tokens"] = max_tokens
-        if thinking in {"enabled", "disabled"}:
+        if runtime_configuration.supports_thinking and thinking in {"enabled", "disabled"}:
             payload["thinking"] = {"type": thinking}
         reasoning_effort = parameters.get("reasoning_effort")
         if (
-            thinking != "disabled"
+            runtime_configuration.supports_thinking
+            and thinking == "enabled"
             and isinstance(reasoning_effort, str)
             and reasoning_effort
         ):
             payload["reasoning_effort"] = reasoning_effort
-        for parameter in ("top_p", "frequency_penalty", "presence_penalty"):
-            value = parameters.get(parameter)
-            if isinstance(value, (int, float)):
-                payload[parameter] = value
+        if sampling_parameters_allowed:
+            for parameter in ("top_p", "frequency_penalty", "presence_penalty"):
+                value = parameters.get(parameter)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    payload[parameter] = value
         payload.update(self.config.extra_payload)
         return payload
 
@@ -290,9 +309,7 @@ class OpenAICompatibleProvider:
         for attempt in range(1, self.max_retries + 1):
             try:
                 attempt_options = (
-                    call_options.for_attempt(time.monotonic())
-                    if call_options
-                    else None
+                    call_options.for_attempt(time.monotonic()) if call_options else None
                 )
                 return _call_transport(
                     self.transport,
@@ -333,9 +350,7 @@ class OpenAICompatibleProvider:
         for attempt in range(1, self.max_retries + 1):
             try:
                 attempt_options = (
-                    call_options.for_attempt(time.monotonic())
-                    if call_options
-                    else None
+                    call_options.for_attempt(time.monotonic()) if call_options else None
                 )
                 stream = _call_transport(
                     self.stream_transport,
@@ -380,9 +395,7 @@ class OpenAICompatibleProvider:
         if call_options is not None:
             remaining = call_options.remaining_seconds(time.monotonic())
             if remaining <= delay:
-                raise ModelDeadlineExceeded(
-                    "model action deadline exhausted before provider retry"
-                )
+                raise ModelDeadlineExceeded("model action deadline exhausted before provider retry")
         self.sleep(delay)
 
 
@@ -590,21 +603,16 @@ def _registration_for_config(
     return ModelProviderRegistration(
         name=config.name,
         factory=factory,
-        model_prefixes=config.model_prefixes,
+        # The catalog is the complete runtime allowlist after the strict cutover.
+        # Prefixes must not re-enable disabled or unknown models.
+        model_prefixes=(),
         model_names=_configured_model_names(config),
     )
 
 
 def _configured_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
     provider_name = _catalog_provider_name(config)
-    catalog_names = catalog_model_names(provider_name)
-    if catalog_names is not None:
-        explicit_names = _explicit_process_model_names(config)
-        catalog_all_names = catalog_all_model_names(provider_name) or ()
-        if explicit_names and any(name not in catalog_all_names for name in explicit_names):
-            return explicit_names
-        return catalog_names
-    return environment_model_names(config)
+    return catalog_model_names(provider_name) or ()
 
 
 def environment_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str, ...]:
@@ -621,30 +629,20 @@ def environment_model_names(config: OpenAICompatibleProviderConfig) -> tuple[str
     return config.available_models
 
 
-def _explicit_process_model_names(
-    config: OpenAICompatibleProviderConfig,
-) -> tuple[str, ...]:
-    configured_models = os.getenv(f"{config.env_prefix}_MODELS")
-    if configured_models:
-        return _split_model_names(configured_models)
-    configured_model = os.getenv(f"{config.env_prefix}_MODEL")
-    return (configured_model,) if configured_model else ()
-
-
 def _split_model_names(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name.strip() for name in value.split(",") if name.strip()))
 
 
 def configured_model_options() -> list[dict[str, str]]:
-    default_model = default_model_name()
-    runtime_default = runtime_default_model()
     configured_options: list[dict[str, str]] = []
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
         if not _has_api_key(config):
             continue
 
         provider = _catalog_provider_name(config)
-        configured_names = _configured_model_names(config) or (config.default_model,)
+        configured_names = _configured_model_names(config)
+        if not configured_names:
+            continue
         configured_options.extend(
             {
                 "id": model_name,
@@ -654,6 +652,11 @@ def configured_model_options() -> list[dict[str, str]]:
             }
             for model_name in configured_names
         )
+
+    if not configured_options:
+        return []
+    default_model = default_model_name()
+    runtime_default = runtime_default_model()
 
     default_option = next(
         (
@@ -685,30 +688,64 @@ def configured_model_options() -> list[dict[str, str]]:
 
 def default_model_name() -> str:
     dotenv = _load_dotenv(Path(".env"), prefixes=("WEREWOLF",))
+    explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get("WEREWOLF_DEFAULT_MODEL")
+    configured: list[tuple[OpenAICompatibleProviderConfig, tuple[str, ...]]] = []
+    for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
+        if not _has_api_key(config):
+            continue
+        names = _configured_model_names(config)
+        if names:
+            configured.append((config, names))
+
+    if explicit_default:
+        canonical_default = _canonical_model_name(explicit_default)
+        for _config, names in configured:
+            if enabled_name := next(
+                (name for name in names if name.lower() == canonical_default.lower()),
+                None,
+            ):
+                return enabled_name
+
+    if catalog_default := runtime_default_model():
+        default_provider, default_model = catalog_default
+        matching_configuration = next(
+            (
+                (config, names)
+                for config, names in configured
+                if _catalog_provider_name(config) == default_provider
+            ),
+            None,
+        )
+        if matching_configuration is not None:
+            _config, names = matching_configuration
+            if default_model in names:
+                return default_model
+
+    for config, names in configured:
+        if config.default_model in names:
+            return config.default_model
+        return names[0]
+
+    raise ModelRuntimeConfigurationError("no_enabled_model_configuration")
+
+
+def bootstrap_default_model_name() -> str:
+    """Resolve the initial catalog default before catalog rows exist."""
+
+    dotenv = _load_dotenv(Path(".env"), prefixes=("WEREWOLF",))
     explicit_default = os.getenv("WEREWOLF_DEFAULT_MODEL") or dotenv.get(
         "WEREWOLF_DEFAULT_MODEL"
     )
     if explicit_default:
         return _canonical_model_name(explicit_default)
-    if catalog_default := runtime_default_model():
-        default_provider, default_model = catalog_default
-        matching_config = next(
-            (
-                config
-                for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS
-                if _catalog_provider_name(config) == default_provider
-            ),
-            None,
-        )
-        if matching_config is not None and _has_api_key(matching_config):
-            return default_model
     for config in OPENAI_COMPATIBLE_PROVIDER_CONFIGS:
-        if _has_api_key(config):
-            configured_names = _configured_model_names(config)
-            if config.default_model in configured_names:
-                return config.default_model
-            return configured_names[0] if configured_names else config.default_model
-
+        if not _has_api_key(config):
+            continue
+        configured_names = environment_model_names(config)
+        if config.default_model in configured_names:
+            return config.default_model
+        if configured_names:
+            return configured_names[0]
     return DEEPSEEK_CONFIG.default_model
 
 
@@ -851,8 +888,7 @@ def _urlopen_stream_transport(
         socket_timeout = min(
             socket_timeout,
             attempt_options.request_timeout_seconds,
-            attempt_options.first_token_timeout_seconds
-            or attempt_options.request_timeout_seconds,
+            attempt_options.first_token_timeout_seconds or attempt_options.request_timeout_seconds,
         )
     with open_url_direct(request, timeout=socket_timeout) as response:
         for line in response:

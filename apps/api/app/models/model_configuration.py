@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Index, String, Text, text, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -48,8 +49,18 @@ class ModelConfigurationRecord(Base):
         default=False,
         server_default="false",
     )
-    parameter_values: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    source_details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # JSON contract is validated centrally by model_catalog.defaults:
+    # thinking, explicit nullable reasoning_effort, max_tokens_mode, and max_tokens.
+    parameter_values: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+    source_details: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

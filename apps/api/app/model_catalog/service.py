@@ -13,8 +13,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.model_catalog.defaults import (
+    ReasoningPolicy,
+    default_parameter_values,
     max_output_tokens_limit,
-    parameter_values_with_default_max_tokens,
+    normalize_model_parameters,
+    reasoning_policy_for_model,
 )
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -22,13 +25,12 @@ from app.werewolf.providers import (
     ARK_AGENT_PLAN_CONFIG,
     DEEPSEEK_CONFIG,
     OpenAICompatibleProvider,
-    default_model_name,
+    bootstrap_default_model_name,
     environment_model_names,
     open_url_direct,
 )
 
 ModelProviderName = Literal["agent_plan", "ark", "deepseek"]
-ThinkingMode = Literal["default", "enabled", "disabled"]
 UNSUPPORTED_CATALOG_MODELS = frozenset({("agent_plan", "auto")})
 
 ARK_DOCS_URL = "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01"
@@ -78,7 +80,7 @@ class CatalogModelItem:
     supports_thinking: bool
     assigned_profile_count: int
     parameters: dict[str, Any]
-    reasoning_effort_options: tuple[str, ...]
+    reasoning_policy: ReasoningPolicy
     max_output_tokens_limit: int
     docs_url: str
     updated_at: datetime
@@ -267,12 +269,25 @@ def update_model_configuration(
         raise ModelConfigurationConflict("Select another default model before disabling this one.")
     if record.is_default and not is_default:
         raise ModelConfigurationConflict("Select another model as default instead of clearing it.")
-    supports_thinking = record.supports_thinking or (
+    advertised_supports_thinking = record.supports_thinking or (
         (record.source_details or {}).get("bootstrap") == "environment"
         and _bootstrap_supports_thinking(provider, model_id)
     )
-    if supports_thinking and not record.supports_thinking:
-        record.supports_thinking = True
+    policy = reasoning_policy_for_model(
+        provider,
+        model_id,
+        supports_thinking=advertised_supports_thinking,
+    )
+    supports_thinking = "enabled" in policy.thinking_options
+    record.supports_thinking = supports_thinking
+    previous_parameters = dict(record.parameter_values)
+    reasoning_changed = (
+        parameters.get("thinking") != previous_parameters.get("thinking")
+        or parameters.get("reasoning_effort")
+        != previous_parameters.get("reasoning_effort")
+    )
+    if reasoning_changed:
+        parameters = {**parameters, "max_tokens_mode": "auto"}
     normalized_parameters = validate_parameter_values(
         provider=provider,
         model_id=model_id,
@@ -305,64 +320,34 @@ def validate_parameter_values(
     supports_thinking: bool,
     values: dict[str, Any],
 ) -> dict[str, Any]:
-    allowed_keys = {
-        "thinking",
-        "reasoning_effort",
-        "temperature",
-        "top_p",
-        "max_tokens",
-        "frequency_penalty",
-        "presence_penalty",
-    }
-    unknown = sorted(set(values) - allowed_keys)
-    if unknown:
-        raise ValueError(f"unsupported parameters: {', '.join(unknown)}")
-    thinking = values.get("thinking", "default")
-    if thinking not in {"default", "enabled", "disabled"}:
-        raise ValueError("thinking must be default, enabled, or disabled")
-    if thinking != "default" and not supports_thinking:
-        raise ValueError("this model does not advertise thinking support")
-    reasoning_effort = values.get("reasoning_effort")
-    if thinking == "disabled" and reasoning_effort is not None:
-        raise ValueError("reasoning_effort must be empty when thinking is disabled")
-    effort_options = _reasoning_effort_options(
+    normalized = normalize_model_parameters(
         provider,
-        supports_thinking,
+        model_id,
+        values,
+        supports_thinking=supports_thinking,
+        limit=_max_output_tokens_limit(provider, model_id),
     )
-    if reasoning_effort is not None and reasoning_effort not in effort_options:
-        raise ValueError(
-            f"reasoning_effort must be one of: {', '.join(effort_options)}"
-        )
-    normalized: dict[str, Any] = {"thinking": thinking}
-    if reasoning_effort is not None:
-        normalized["reasoning_effort"] = reasoning_effort
-    _copy_optional_number(values, normalized, "temperature", minimum=0, maximum=2)
-    _copy_optional_number(values, normalized, "top_p", minimum=0, maximum=1)
-    _copy_optional_number(values, normalized, "frequency_penalty", minimum=-2, maximum=2)
-    _copy_optional_number(values, normalized, "presence_penalty", minimum=-2, maximum=2)
-    max_tokens = values.get("max_tokens")
-    if max_tokens is None:
-        raise ValueError("max_tokens is required")
-    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
-        raise ValueError("max_tokens must be an integer")
-    max_output_tokens_limit = _max_output_tokens_limit(provider, model_id)
-    if not 1 <= max_tokens <= max_output_tokens_limit:
-        raise ValueError(
-            "max_tokens must be between 1 and "
-            f"{max_output_tokens_limit}"
-        )
-    normalized["max_tokens"] = max_tokens
+    thinking = normalized["thinking"]
     sampling_parameters = {
         "temperature",
         "top_p",
         "frequency_penalty",
         "presence_penalty",
     }
-    if provider == "deepseek" and thinking != "disabled" and any(
-        parameter in normalized for parameter in sampling_parameters
+    policy = reasoning_policy_for_model(
+        provider,
+        model_id,
+        supports_thinking=supports_thinking,
+    )
+    if (
+        thinking != "disabled"
+        and not policy.sampling_parameters_allowed_when_thinking
+        and any(
+            parameter in normalized for parameter in sampling_parameters
+        )
     ):
         raise ValueError(
-            "DeepSeek ignores sampling and penalty parameters unless thinking is disabled"
+            "this model ignores sampling and penalty parameters unless thinking is disabled"
         )
     return normalized
 
@@ -370,7 +355,7 @@ def validate_parameter_values(
 def bootstrap_environment_catalog(db: Session) -> None:
     _delete_unsupported_catalog_models(db)
     now = datetime.now(tz=UTC)
-    default_model = default_model_name()
+    default_model = bootstrap_default_model_name()
     providers: tuple[tuple[ModelProviderName, Any], ...] = (
         ("agent_plan", ARK_AGENT_PLAN_CONFIG),
         ("ark", None),
@@ -396,12 +381,9 @@ def bootstrap_environment_catalog(db: Session) -> None:
                 model_id,
             )
             if record is None:
-                parameter_values = parameter_values_with_default_max_tokens(
-                    {
-                        "thinking": (
-                            "enabled" if bootstrap_supports_thinking else "default"
-                        )
-                    },
+                parameter_values = default_parameter_values(
+                    provider_name,
+                    model_id,
                     supports_thinking=bootstrap_supports_thinking,
                     limit=_max_output_tokens_limit(provider_name, model_id),
                 )
@@ -425,11 +407,19 @@ def bootstrap_environment_catalog(db: Session) -> None:
                 if record.is_default:
                     has_default = 1
             elif (record.source_details or {}).get("bootstrap") == "environment":
-                record.supports_thinking = bootstrap_supports_thinking
-                record.parameter_values = parameter_values_with_default_max_tokens(
-                    record.parameter_values,
+                policy = reasoning_policy_for_model(
+                    provider_name,
+                    model_id,
                     supports_thinking=bootstrap_supports_thinking,
+                )
+                record.supports_thinking = "enabled" in policy.thinking_options
+                record.parameter_values = normalize_model_parameters(
+                    provider_name,
+                    model_id,
+                    record.parameter_values,
+                    supports_thinking=record.supports_thinking,
                     limit=_max_output_tokens_limit(provider_name, model_id),
+                    enforce_auto_max_tokens=True,
                 )
                 record.updated_at = now
 
@@ -458,10 +448,17 @@ def _sync_discovered_models(
             continue
         discovered_ids.add(model.model_id)
         record = db.get(ModelConfigurationRecord, (provider, model.model_id))
+        reasoning_policy = reasoning_policy_for_model(
+            provider,
+            model.model_id,
+            supports_thinking=model.supports_thinking,
+        )
+        supports_thinking = "enabled" in reasoning_policy.thinking_options
         if record is None:
-            parameter_values = parameter_values_with_default_max_tokens(
-                {"thinking": "enabled" if model.supports_thinking else "default"},
-                supports_thinking=model.supports_thinking,
+            parameter_values = default_parameter_values(
+                provider,
+                model.model_id,
+                supports_thinking=supports_thinking,
                 limit=_max_output_tokens_limit(provider, model.model_id),
             )
             record = ModelConfigurationRecord(
@@ -477,13 +474,29 @@ def _sync_discovered_models(
         record.display_name = model.display_name
         record.description = model.description
         record.available = True
-        record.supports_thinking = model.supports_thinking
-        record.parameter_values = parameter_values_with_default_max_tokens(
-            record.parameter_values,
-            supports_thinking=model.supports_thinking,
-            limit=_max_output_tokens_limit(provider, model.model_id),
+        capability_changed = record.supports_thinking != supports_thinking
+        record.supports_thinking = supports_thinking
+        record.parameter_values = (
+            default_parameter_values(
+                provider,
+                model.model_id,
+                supports_thinking=supports_thinking,
+                limit=_max_output_tokens_limit(provider, model.model_id),
+            )
+            if capability_changed
+            else normalize_model_parameters(
+                provider,
+                model.model_id,
+                record.parameter_values,
+                supports_thinking=supports_thinking,
+                limit=_max_output_tokens_limit(provider, model.model_id),
+                enforce_auto_max_tokens=True,
+            )
         )
-        record.source_details = model.source_details
+        record.source_details = {
+            **model.source_details,
+            "advertised_supports_thinking": model.supports_thinking,
+        }
         record.last_synced_at = now
         record.updated_at = now
     stale_records = list(
@@ -546,17 +559,21 @@ def _snapshot_from_database(
                 (record.provider, record.model_id),
                 0,
             ),
-            parameters=parameter_values_with_default_max_tokens(
+            parameters=normalize_model_parameters(
+                record.provider,
+                record.model_id,
                 record.parameter_values,
                 supports_thinking=record.supports_thinking,
                 limit=_max_output_tokens_limit(
                     record.provider,  # type: ignore[arg-type]
                     record.model_id,
                 ),
+                enforce_auto_max_tokens=True,
             ),
-            reasoning_effort_options=_reasoning_effort_options(
+            reasoning_policy=reasoning_policy_for_model(
                 record.provider,  # type: ignore[arg-type]
-                record.supports_thinking,
+                record.model_id,
+                supports_thinking=record.supports_thinking,
             ),
             max_output_tokens_limit=_max_output_tokens_limit(
                 record.provider,  # type: ignore[arg-type]
@@ -643,30 +660,22 @@ def _assigned_profile_counts(db: Session) -> dict[tuple[str, str], int]:
     }
 
 
-def _reasoning_effort_options(
-    provider: ModelProviderName,
-    supports_thinking: bool,
-) -> tuple[str, ...]:
-    if not supports_thinking:
-        return ()
-    if provider == "deepseek":
-        return ("high", "max")
-    return ("minimal", "low", "medium", "high")
-
-
 def _bootstrap_supports_thinking(
     provider: ModelProviderName,
     model_id: str,
 ) -> bool:
-    if provider == "deepseek":
-        return True
-    if provider == "ark":
-        return True
     normalized = model_id.lower()
-    return normalized.startswith(
-        (
-            "doubao-seed-2",
-            "glm-5-2-",
+    if "doubao-seed-2-0-code-preview" in normalized:
+        return False
+    if provider == "deepseek":
+        return normalized.startswith("deepseek-v4")
+    return any(
+        family in normalized
+        for family in (
+            "doubao-",
+            "glm-5-2",
+            "deepseek-v4",
+            "kimi-k3",
             "minimax-m3",
         )
     )
@@ -677,24 +686,6 @@ def _max_output_tokens_limit(
     model_id: str,
 ) -> int:
     return max_output_tokens_limit(provider, model_id)
-
-
-def _copy_optional_number(
-    source: dict[str, Any],
-    target: dict[str, Any],
-    key: str,
-    *,
-    minimum: float,
-    maximum: float,
-) -> None:
-    value = source.get(key)
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be a number")
-    if not minimum <= value <= maximum:
-        raise ValueError(f"{key} must be between {minimum:g} and {maximum:g}")
-    target[key] = float(value)
 
 
 def _non_empty_string(value: Any) -> str | None:

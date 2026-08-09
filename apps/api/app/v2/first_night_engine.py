@@ -1743,6 +1743,7 @@ class V2NightEngine:
                 dialect=player.tts_dialect,
                 model_provider=player.model_provider,
                 model_id=player.model_id,
+                model_supports_thinking=player.model_supports_thinking,
                 model_parameters=player.model_parameters,
                 activation_id=activation.activation_id,
                 output_kind=(

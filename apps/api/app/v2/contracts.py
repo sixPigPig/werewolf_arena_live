@@ -206,7 +206,7 @@ class V2GameCreateRequest(BaseModel):
 
     title: str = Field(default="Live V2 实时对局", min_length=1, max_length=120)
     audio_mode: V2RequestedAudioMode | None = None
-    lobby_snapshot: V2LobbyCreateSnapshot | None = None
+    lobby_snapshot: V2LobbyCreateSnapshot
 
     @field_validator("title")
     @classmethod

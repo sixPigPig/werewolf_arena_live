@@ -1,4 +1,8 @@
-import type { AdminModelCatalog } from "@/features/models/types";
+import type {
+  AdminModel,
+  AdminModelCatalog,
+  ModelReasoningPolicy,
+} from "@/features/models/types";
 
 export const previewModelCatalog: AdminModelCatalog = {
   generated_at: "2026-07-15T12:00:00+08:00",
@@ -48,7 +52,74 @@ function previewModel(
   modelId: string,
   enabled: boolean,
   isDefault: boolean,
-) {
+): AdminModel {
+  const usesHighMaxPolicy =
+    provider === "deepseek" ||
+    modelId.includes("glm-5-2") ||
+    modelId.includes("deepseek-v4");
+  const usesDoubaoPolicy = modelId.startsWith("doubao-");
+  const supportsThinking = usesHighMaxPolicy || usesDoubaoPolicy;
+  const parameters = supportsThinking
+    ? {
+        thinking: "enabled" as const,
+        reasoning_effort: usesHighMaxPolicy ? "high" : "low",
+        temperature: null,
+        top_p: null,
+        max_tokens: usesHighMaxPolicy ? 8_192 : 4_096,
+        max_tokens_mode: "auto" as const,
+        frequency_penalty: null,
+        presence_penalty: null,
+      }
+    : {
+        thinking: "disabled" as const,
+        reasoning_effort: null,
+        temperature: null,
+        top_p: null,
+        max_tokens: 512,
+        max_tokens_mode: "auto" as const,
+        frequency_penalty: null,
+        presence_penalty: null,
+      };
+  const reasoningPolicy: ModelReasoningPolicy = usesHighMaxPolicy
+    ? {
+        thinking_options: ["enabled", "disabled"],
+        default_thinking: "enabled",
+        thinking_locked: false,
+        reasoning_effort_options: ["high", "max"],
+        default_reasoning_effort: "high",
+        max_tokens_by_effort: { high: 8_192, max: 16_384 },
+        default_max_tokens: 8_192,
+        disabled_max_tokens: 512,
+        sampling_parameters_allowed_when_thinking:
+          !modelId.includes("deepseek-v4"),
+      }
+    : usesDoubaoPolicy
+      ? {
+          thinking_options: ["enabled", "disabled"],
+          default_thinking: "enabled",
+          thinking_locked: false,
+          reasoning_effort_options: ["low", "medium", "high"],
+          default_reasoning_effort: "low",
+          max_tokens_by_effort: {
+            low: 4_096,
+            medium: 8_192,
+            high: 16_384,
+          },
+          default_max_tokens: 4_096,
+          disabled_max_tokens: 512,
+          sampling_parameters_allowed_when_thinking: true,
+        }
+      : {
+          thinking_options: ["disabled"],
+          default_thinking: "disabled",
+          thinking_locked: true,
+          reasoning_effort_options: [],
+          default_reasoning_effort: null,
+          max_tokens_by_effort: {},
+          default_max_tokens: 512,
+          disabled_max_tokens: 512,
+          sampling_parameters_allowed_when_thinking: true,
+        };
   return {
     provider,
     model_id: modelId,
@@ -64,23 +135,13 @@ function previewModel(
     enabled,
     is_default: isDefault,
     selected_by_source: isDefault,
-    supports_thinking: true,
+    supports_thinking: supportsThinking,
     assigned_profile_count: enabled ? 3 : 0,
-    parameters: {
-      thinking: "enabled" as const,
-      reasoning_effort: null,
-      temperature: null,
-      top_p: null,
-      max_tokens: 16_384,
-      frequency_penalty: null,
-      presence_penalty: null,
-    },
-    reasoning_effort_options:
-      provider === "deepseek"
-        ? ["high", "max"]
-        : ["minimal", "low", "medium", "high"],
+    parameters,
+    reasoning_policy: reasoningPolicy,
     max_output_tokens_limit:
-      provider === "agent_plan" && modelId.startsWith("glm-5-2-")
+      (provider === "agent_plan" || provider === "ark") &&
+      modelId.includes("glm-5-2")
         ? 131072
         : 384000,
     docs_url:

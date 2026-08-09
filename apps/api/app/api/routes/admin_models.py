@@ -139,7 +139,7 @@ def configure_admin_model(
             model_id=model_id,
             enabled=payload.enabled,
             is_default=payload.is_default,
-            parameters=payload.parameters.model_dump(exclude_none=True),
+            parameters=payload.parameters.model_dump(),
         )
     except LookupError as exc:
         raise AdminAPIProblem(
@@ -189,7 +189,18 @@ def _catalog_response(snapshot: CatalogSnapshot) -> AdminModelCatalogResponse:
             AdminModelItem(
                 **{
                     **item.__dict__,
-                    "reasoning_effort_options": list(item.reasoning_effort_options),
+                    "reasoning_policy": {
+                        **item.reasoning_policy.__dict__,
+                        "thinking_options": list(
+                            item.reasoning_policy.thinking_options
+                        ),
+                        "reasoning_effort_options": list(
+                            item.reasoning_policy.reasoning_effort_options
+                        ),
+                        "max_tokens_by_effort": dict(
+                            item.reasoning_policy.max_tokens_by_effort
+                        ),
+                    },
                 }
             )
             for item in snapshot.models

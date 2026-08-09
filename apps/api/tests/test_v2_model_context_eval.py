@@ -91,6 +91,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
         context,
         decision=True,
         model_id="eval-model",
+        max_output_tokens=16_384,
     )
     system_text = request["input"][0]["content"][0]["text"]
     assert len(system_text) < 1_200

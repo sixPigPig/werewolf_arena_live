@@ -979,7 +979,12 @@ def test_v11_prompt_separates_event_occurrence_from_delayed_announcement() -> No
     assert events[1]["occurred_in"] == {"period": "night", "round_no": 1}
     assert events[1]["announced_in"] == {"period": "dawn", "round_no": 1}
 
-    request = build_model_request_payload(projected, decision=True, model_id="test-model")
+    request = build_model_request_payload(
+        projected,
+        decision=True,
+        model_id="test-model",
+        max_output_tokens=16_384,
+    )
     system_text = request["input"][0]["content"][0]["text"]
     assert projected["prompt_template_version"] == 3
     assert "known_at_seq/record_seq 表示获知和记录顺序" in system_text
@@ -2313,6 +2318,7 @@ def test_v11_player_prompt_explains_information_authority_and_time() -> None:
         },
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 
@@ -2388,6 +2394,7 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
         },
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 
@@ -2425,6 +2432,7 @@ def test_v11_prompt_identifies_the_public_win_condition_contract() -> None:
         },
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 
@@ -2458,6 +2466,7 @@ def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
         },
         decision=True,
         model_id="test-model",
+        max_output_tokens=16_384,
     )
     system_text = payload["input"][0]["content"][0]["text"]
 

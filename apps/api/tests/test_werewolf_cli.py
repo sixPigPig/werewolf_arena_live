@@ -33,7 +33,7 @@ class FakeSession:
         pass
 
 
-def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
+def test_run_game_command_uses_catalog_default_and_prints_chinese_result(
     tmp_path,
     capsys,
     monkeypatch,
@@ -51,6 +51,7 @@ def test_run_game_command_defaults_to_deepseek_and_prints_chinese_result(
 
     monkeypatch.setattr("app.cli.run_game", fake_run_game)
     monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(cli, "default_model_name", lambda: "deepseek-v4-flash")
 
     exit_code = main(["run-game", "--seed", "13", "--max-rounds", "8"])
 

@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.session import SessionLocal
 from app.model_catalog.defaults import (
     max_output_tokens_limit,
-    parameter_values_with_default_max_tokens,
+    normalize_model_parameters,
 )
 from app.models.model_configuration import ModelConfigurationRecord
 
@@ -31,7 +31,9 @@ def catalog_model_names(provider: str) -> tuple[str, ...] | None:
                 db.scalars(
                     select(ModelConfigurationRecord)
                     .where(ModelConfigurationRecord.provider == provider)
-                    .order_by(ModelConfigurationRecord.created_at, ModelConfigurationRecord.model_id)
+                    .order_by(
+                        ModelConfigurationRecord.created_at, ModelConfigurationRecord.model_id
+                    )
                 )
             )
     except SQLAlchemyError:
@@ -89,9 +91,12 @@ def runtime_configuration_for_model(
         provider=record.provider,
         model_id=record.model_id,
         supports_thinking=record.supports_thinking,
-        parameters=parameter_values_with_default_max_tokens(
+        parameters=normalize_model_parameters(
+            record.provider,
+            record.model_id,
             record.parameter_values,
             supports_thinking=record.supports_thinking,
             limit=max_output_tokens_limit(record.provider, record.model_id),
+            enforce_auto_max_tokens=True,
         ),
     )

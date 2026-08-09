@@ -1,5 +1,6 @@
 export type ModelProvider = "agent_plan" | "ark" | "deepseek";
-export type ThinkingMode = "default" | "enabled" | "disabled";
+export type ThinkingMode = "enabled" | "disabled";
+export type MaxTokensMode = "auto" | "manual";
 
 export type ModelParameters = {
   thinking: ThinkingMode;
@@ -7,8 +8,21 @@ export type ModelParameters = {
   temperature: number | null;
   top_p: number | null;
   max_tokens: number;
+  max_tokens_mode: MaxTokensMode;
   frequency_penalty: number | null;
   presence_penalty: number | null;
+};
+
+export type ModelReasoningPolicy = {
+  thinking_options: ThinkingMode[];
+  default_thinking: ThinkingMode;
+  thinking_locked: boolean;
+  reasoning_effort_options: string[];
+  default_reasoning_effort: string | null;
+  max_tokens_by_effort: Record<string, number>;
+  default_max_tokens: number;
+  disabled_max_tokens: number | null;
+  sampling_parameters_allowed_when_thinking: boolean;
 };
 
 export type AdminModelSource = {
@@ -35,7 +49,7 @@ export type AdminModel = {
   supports_thinking: boolean;
   assigned_profile_count: number;
   parameters: ModelParameters;
-  reasoning_effort_options: string[];
+  reasoning_policy: ModelReasoningPolicy;
   max_output_tokens_limit: number;
   docs_url: string;
   updated_at: string;

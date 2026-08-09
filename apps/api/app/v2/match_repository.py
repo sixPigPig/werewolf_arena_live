@@ -13,6 +13,10 @@ from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
 from app.v2.event_contract import canonical_event_payload
 from app.v2.model_context_contract import frozen_model_context_contract
+from app.v2.model_parameters import (
+    V2FrozenModelParametersError,
+    frozen_player_model_configuration,
+)
 from app.v2.models import (
     V2GameRecord,
     V2GameRecordEvent,
@@ -46,7 +50,8 @@ class V2MatchPlayer:
     tts_speaker: str | None
     tts_dialect: str | None
     model_provider: str
-    model_id: str | None
+    model_id: str
+    model_supports_thinking: bool
     model_parameters: dict[str, Any]
     persona: dict[str, Any]
     state: dict[str, Any]
@@ -776,6 +781,10 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
         if state is None:
             raise V2RepositoryError("player state is incomplete")
         profile = profiles.get(assignment.player_id, {})
+        try:
+            frozen_model = frozen_player_model_configuration(profile)
+        except V2FrozenModelParametersError as exc:
+            raise V2RepositoryError("invalid frozen player model configuration") from exc
         players.append(
             V2MatchPlayer(
                 player_id=assignment.player_id,
@@ -786,9 +795,10 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
                 alive=state.alive,
                 tts_speaker=(str(profile["tts_speaker"]) if profile.get("tts_speaker") else None),
                 tts_dialect=(str(profile["tts_dialect"]) if profile.get("tts_dialect") else None),
-                model_provider=str(profile["model_provider"]),
-                model_id=str(profile["model"]),
-                model_parameters=dict(profile.get("model_parameters") or {}),
+                model_provider=frozen_model.provider,
+                model_id=frozen_model.model_id,
+                model_supports_thinking=frozen_model.supports_thinking,
+                model_parameters=frozen_model.parameters,
                 persona={
                     key: profile[key]
                     for key in (
