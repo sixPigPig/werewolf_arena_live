@@ -45,6 +45,10 @@ from app.v2.model_client import V2ModelClient
 from app.v2.model_context_contract import (
     supports_model_context_contract,
 )
+from app.v2.model_generation_policy_contract import (
+    V2ModelGenerationPolicyContractError,
+    resolve_model_generation_policy_contract,
+)
 from app.v2.night_repository import V2NightRepository
 from app.v2.match_repository import V2MatchRepository
 from app.v2.models import V2GameRecord, V2GameRun
@@ -681,6 +685,12 @@ class V2LiveRuntime:
                     game = get_game(db, game_id)
                     if not supports_model_context_contract(game.rule_snapshot):
                         raise V2ClientProtocolError("unsupported_model_context_contract")
+                    try:
+                        resolve_model_generation_policy_contract(game.rule_snapshot)
+                    except V2ModelGenerationPolicyContractError as exc:
+                        raise V2ClientProtocolError(
+                            "unsupported_model_generation_policy_contract"
+                        ) from exc
                 channel = _GameChannel(
                     game_id=game_id,
                     snapshot_factory=self.snapshot,

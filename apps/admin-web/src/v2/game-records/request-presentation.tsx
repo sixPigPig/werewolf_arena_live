@@ -14,6 +14,10 @@ import { useState, type ReactNode } from "react";
 import { isAdminApiError } from "@/api/problem-details";
 import { readV2GameEvent } from "@/v2/game-records/api";
 import {
+  classifyV2ModelContextContract,
+  structuredModelContextFromRequestPayload,
+} from "@/v2/game-records/model-context-contract";
+import {
   actionLabel,
   formatClock,
   phaseLabel,
@@ -321,13 +325,24 @@ export function ReadableModelInput({
   if (!request?.request_payload) {
     return <Empty description="这一步没有模型输入" />;
   }
-  if (request.model_context_schema_version !== 11) {
+  const promptContext = structuredModelContextFromRequestPayload(
+    request.request_payload,
+  );
+  const presentationKind = classifyV2ModelContextContract(
+    request,
+    promptContext,
+  );
+  if (presentationKind === "unsupported") {
     return <HistoricalRawModelInput request={request} />;
   }
   const messages = requestMessages(request.request_payload);
+  const knownEventsValue =
+    promptContext && isRecord(promptContext.known_events)
+      ? promptContext.known_events
+      : null;
   const knownEvents = summarizeKnownEvents(
     request.prompt_projection,
-    knownEventsFromMessages(messages),
+    knownEventsValue,
   );
   const serializedCharCount = numericField(
     request.prompt_projection,
@@ -357,6 +372,14 @@ export function ReadableModelInput({
           showIcon
           title="历史输入为重建结果"
           type="warning"
+        />
+      ) : null}
+      {presentationKind === "v11_canonical" ? (
+        <Alert
+          description="仅按持久化请求中的 Canonical Known Events V5 展示；Admin 不把它改写成 V12，也不推断缺失字段。"
+          showIcon
+          title="V11 历史合同（只读）"
+          type="info"
         />
       ) : null}
       <Descriptions
@@ -437,6 +460,7 @@ export function ReadableModelInput({
           {
             key: "model-view-schema",
             label: "模型视图",
+            span: 2,
             children:
               modelViewSchemaVersion === null
                 ? "—"
@@ -468,7 +492,16 @@ export function ReadableModelInput({
         ]}
         size="small"
       />
-      <V11ProjectionAudit projection={request.prompt_projection} />
+      {presentationKind === "v12_compact" ? (
+        <V12CompactionAudit
+          expandedKnownEvents={request.expanded_known_events}
+          expansionStatus={request.known_events_expansion_status}
+          knownEvents={knownEventsValue}
+          projection={request.prompt_projection}
+        />
+      ) : (
+        <V11ProjectionAudit projection={request.prompt_projection} />
+      )}
       {knownEvents && request.prompt_projection && hasSectionCharCounts ? (
         <Collapse
           items={[
@@ -510,16 +543,14 @@ export function ReadableModelOutput({
   request: V2ModelRequest | null;
 }) {
   if (!request) return <Empty description="这一步没有模型输出" />;
-  if (request.model_context_schema_version !== 11) {
-    if (request.output_source === "unavailable") {
-      return <Empty description="模型尚未返回，或历史记录没有可恢复的输出" />;
-    }
+  if (classifyV2ModelContextContract(request) === "unsupported") {
     return <HistoricalRawModelOutput request={request} />;
   }
   if (request.output_source === "unavailable") {
     return (
       <div className="v2-inspector-panel">
-        <V11OutputEnforcementAudit request={request} />
+        <ModelOutputDiagnostics request={request} />
+        <OutputEnforcementAudit request={request} />
         <Empty description="模型尚未返回，或没有可恢复的输出" />
       </div>
     );
@@ -540,10 +571,15 @@ export function ReadableModelOutput({
           value={{
             application_validation_result:
               request.application_validation_result ?? null,
+            finish_reason: request.finish_reason,
             output_enforcement: request.output_enforcement ?? null,
+            provider_usage: request.provider_usage,
             raw_response: request.raw_response,
             parsed_output: request.parsed_output,
             repair_kind: request.repair_kind ?? null,
+            usage_conflict_observed: request.usage_conflict_observed,
+            usage_consistency: request.usage_consistency,
+            usage_update_count: request.usage_update_count,
           }}
         />
       </div>
@@ -555,7 +591,8 @@ export function ReadableModelOutput({
           type="warning"
         />
       ) : null}
-      <V11OutputEnforcementAudit request={request} />
+      <ModelOutputDiagnostics request={request} />
+      <OutputEnforcementAudit request={request} />
       {request.passive_observations.length ? (
         <>
           <Alert
@@ -623,7 +660,97 @@ export function ReadableModelOutput({
   );
 }
 
+export function ModelOutputDiagnostics({
+  request,
+}: {
+  request: V2ModelRequest;
+}) {
+  const usage = request.provider_usage;
+  const unavailable = "unavailable（Provider 未返回）";
+  const tokenCount = (value: number | undefined) =>
+    value === undefined ? unavailable : value.toLocaleString("zh-CN");
+  const outputCharacterCount =
+    request.raw_response === null
+      ? unavailable
+      : Array.from(request.raw_response).length.toLocaleString("zh-CN");
+  return (
+    <section aria-label="模型输出与用量诊断">
+      <Typography.Text strong>模型输出与用量诊断</Typography.Text>
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "finish-reason",
+            label: "结束原因",
+            children: finishReasonLabel(request.finish_reason),
+          },
+          {
+            key: "output-characters",
+            label: "原始输出字符数",
+            children: outputCharacterCount,
+          },
+          {
+            key: "input-tokens",
+            label: "输入 Token",
+            children: usage ? tokenCount(usage.input_tokens) : unavailable,
+          },
+          {
+            key: "output-tokens",
+            label: "输出 Token",
+            children: usage ? tokenCount(usage.output_tokens) : unavailable,
+          },
+          {
+            key: "reasoning-tokens",
+            label: "推理 Token（输出子集）",
+            children: usage ? tokenCount(usage.reasoning_tokens) : unavailable,
+          },
+          {
+            key: "total-tokens",
+            label: "Provider 总 Token",
+            children: usage ? tokenCount(usage.total_tokens) : unavailable,
+          },
+          {
+            key: "cached-input-tokens",
+            label: "缓存输入 Token",
+            children: usage
+              ? tokenCount(usage.cached_input_tokens)
+              : unavailable,
+          },
+          {
+            key: "usage-snapshots",
+            label: "合法 usage 快照",
+            children:
+              request.usage_update_count === null
+                ? unavailable
+                : String(request.usage_update_count),
+          },
+          {
+            key: "usage-consistency",
+            label: "Token 一致性",
+            children: usageConsistencyLabel(request.usage_consistency),
+          },
+          {
+            key: "usage-conflict",
+            label: "usage 快照冲突",
+            children:
+              request.usage_conflict_observed === null
+                ? "—"
+                : request.usage_conflict_observed
+                  ? "是"
+                  : "否",
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
 function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
+  const contractVersion =
+    request.model_context_schema_version === null
+      ? "版本未知"
+      : `V${request.model_context_schema_version}`;
   return (
     <div className="v2-inspector-panel">
       <div className="v2-inspector-actions">
@@ -635,8 +762,8 @@ function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
       <Alert
         description={
           request.input_source === "reconstructed"
-            ? "这份旧合同输入由历史动作上下文重建，并非逐字原始请求；Admin 不再使用旧版专用解析器。"
-            : "Admin 不再使用 V7～V10 或未知合同的专用解析器，以下仅展示持久化 JSON。"
+            ? `${contractVersion} 模型上下文合同不受支持；这份输入由历史动作上下文重建，并非逐字原始请求。`
+            : `${contractVersion} 模型上下文合同不受支持；Admin 不推断其结构或语义，以下仅展示持久化 JSON。`
         }
         showIcon
         title="历史或未知合同仅提供通用 JSON"
@@ -653,12 +780,17 @@ function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
   const value = {
     application_validation_result:
       request.application_validation_result ?? null,
+    finish_reason: request.finish_reason,
     output_enforcement: request.output_enforcement ?? null,
     output_source: request.output_source,
     parsed_output: request.parsed_output,
     passive_observations: request.passive_observations,
+    provider_usage: request.provider_usage,
     raw_response: request.raw_response,
     repair_kind: request.repair_kind ?? null,
+    usage_conflict_observed: request.usage_conflict_observed,
+    usage_consistency: request.usage_consistency,
+    usage_update_count: request.usage_update_count,
   };
   return (
     <div className="v2-inspector-panel">
@@ -666,14 +798,43 @@ function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
         <JsonCopyButton label="复制完整输出 JSON" value={value} />
       </div>
       <Alert
-        description="Admin 不推断旧合同的采用语义、输出约束或修复阶段；以下仅展示保存的数据。"
+        description={`${
+          request.model_context_schema_version === null
+            ? "版本未知"
+            : `V${request.model_context_schema_version}`
+        } 模型上下文合同不受支持；Admin 不推断其采用语义、输出约束或修复阶段，以下仅展示保存的数据。`}
         showIcon
         title="历史或未知合同仅提供通用 JSON"
         type="warning"
       />
+      <ModelOutputDiagnostics request={request} />
       <pre aria-label="历史模型输出原始 JSON">{prettyJson(value)}</pre>
     </div>
   );
+}
+
+function finishReasonLabel(reason: V2ModelRequest["finish_reason"]) {
+  const labels: Record<NonNullable<V2ModelRequest["finish_reason"]>, string> = {
+    completed: "Provider 完成（completed）",
+    stop: "正常停止（stop）",
+    length: "长度上限（length）",
+    max_output_tokens: "输出 Token 上限（max_output_tokens）",
+    content_filter: "内容过滤（content_filter）",
+    tool_calls: "工具调用（tool_calls）",
+    unknown: "未知（unknown）",
+  };
+  return reason === null ? "—" : labels[reason];
+}
+
+function usageConsistencyLabel(
+  consistency: V2ModelRequest["usage_consistency"],
+) {
+  if (consistency === null) return "—";
+  if (consistency === "exact") return "完整一致（exact）";
+  if (consistency === "provider_total_mismatch") {
+    return "Provider 总数不一致（保留原值）";
+  }
+  return "无法判断（unavailable）";
 }
 
 const v11ProjectionAuditFields = [
@@ -819,6 +980,252 @@ function V11ProjectionAudit({
   );
 }
 
+const v12CompactionAuditFields = [
+  "canonical_serialized_char_count",
+  "compact_serialized_char_count",
+  "compaction_saved_chars",
+  "compaction_ratio",
+  "verbatim_speech_count",
+  "verbatim_speech_chars",
+  "retained_event_refs",
+  "dropped_event_refs",
+  "canonical_sha256",
+  "round_trip_verified",
+] as const;
+
+function V12CompactionAudit({
+  expandedKnownEvents,
+  expansionStatus,
+  knownEvents,
+  projection,
+}: {
+  expandedKnownEvents: Record<string, unknown> | null;
+  expansionStatus: V2ModelRequest["known_events_expansion_status"];
+  knownEvents: Record<string, unknown> | null;
+  projection: V2PromptProjection | null;
+}) {
+  const missingFields = v12CompactionAuditFields.filter(
+    (key) =>
+      projection === null ||
+      !Object.prototype.hasOwnProperty.call(projection, key),
+  );
+  const schemaVersion = integerNumber(knownEvents?.schema_version);
+  const encoding =
+    typeof knownEvents?.encoding === "string" ? knownEvents.encoding : null;
+  const compactContractSupported =
+    schemaVersion === 6 && encoding === "lossless_refs_v1";
+  const scopeCatalog = isRecord(knownEvents?.scope_catalog)
+    ? knownEvents.scope_catalog
+    : null;
+  const occurrenceCatalog = isRecord(knownEvents?.occurrence_catalog)
+    ? knownEvents.occurrence_catalog
+    : null;
+  const defaults = isRecord(knownEvents?.defaults)
+    ? knownEvents.defaults
+    : null;
+  const canonicalChars = numericField(
+    projection,
+    "canonical_serialized_char_count",
+  );
+  const compactChars = numericField(
+    projection,
+    "compact_serialized_char_count",
+  );
+  const savedChars = numericField(projection, "compaction_saved_chars");
+  const ratio = numericField(projection, "compaction_ratio");
+  const speechCount = numericField(projection, "verbatim_speech_count");
+  const speechChars = numericField(projection, "verbatim_speech_chars");
+  const retainedRefs = Array.isArray(projection?.retained_event_refs)
+    ? projection.retained_event_refs.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : null;
+  const droppedRefs = Array.isArray(projection?.dropped_event_refs)
+    ? projection.dropped_event_refs.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : null;
+  const canonicalHash =
+    typeof projection?.canonical_sha256 === "string"
+      ? projection.canonical_sha256
+      : null;
+  const roundTripVerified =
+    typeof projection?.round_trip_verified === "boolean"
+      ? projection.round_trip_verified
+      : null;
+  const auditComplete =
+    compactContractSupported && missingFields.length === 0;
+
+  return (
+    <section aria-label="V12 无损压缩审计">
+      <Flex align="center" justify="space-between" wrap>
+        <Typography.Text strong>V12 无损压缩审计</Typography.Text>
+        <Tag color={auditComplete ? "success" : "warning"}>
+          {auditComplete ? "审计字段完整" : "审计字段不完整"}
+        </Tag>
+      </Flex>
+      {!auditComplete ? (
+        <Alert
+          description="未记录项统一显示为未知；Admin 不根据请求体反推 Canonical 长度、压缩收益、事件保留或回环校验结果。"
+          showIcon
+          title="V12 压缩审计信息缺失"
+          type="warning"
+        />
+      ) : null}
+      {roundTripVerified === false ? (
+        <Alert
+          description="持久化审计明确记录 round_trip_verified=false；该请求仍按原始 JSON 展示，不能视为通过无损校验。"
+          showIcon
+          title="V12 无损回环校验失败"
+          type="error"
+        />
+      ) : null}
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "compact-contract",
+            label: "Known Events 压缩合同",
+            children: (
+              <Space size={6} wrap>
+                <Tag color={schemaVersion === 6 ? "blue" : "warning"}>
+                  {schemaVersion === null ? "版本未知" : `V${schemaVersion}`}
+                </Tag>
+                <Typography.Text>
+                  {encoding ?? "encoding 未记录"}
+                </Typography.Text>
+              </Space>
+            ),
+          },
+          {
+            key: "catalog-size",
+            label: "可读目录规模",
+            children: `scope ${scopeCatalog ? Object.keys(scopeCatalog).length : "未知"} / occurrence ${
+              occurrenceCatalog ? Object.keys(occurrenceCatalog).length : "未知"
+            }`,
+          },
+          {
+            key: "backend-expansion",
+            label: "后端 Canonical 展开",
+            children:
+              expansionStatus === "verified" ? (
+                <Tag color="success">
+                  已验证 V
+                  {integerNumber(expandedKnownEvents?.schema_version) ?? "?"} ·{" "}
+                  {Array.isArray(expandedKnownEvents?.events)
+                    ? expandedKnownEvents.events.length
+                    : 0}{" "}
+                  个事件
+                </Tag>
+              ) : expansionStatus === "not_applicable" ? (
+                <Tag>不适用</Tag>
+              ) : expansionStatus === "invalid" ? (
+                <Tag color="error">无效，禁止展开</Tag>
+              ) : (
+                <Tag color="warning">不可用，禁止推断</Tag>
+              ),
+          },
+          {
+            key: "serialized-characters",
+            label: "Canonical → Compact 字符数",
+            children: `${auditNumber(canonicalChars)} → ${auditNumber(
+              compactChars,
+            )}`,
+          },
+          {
+            key: "saved-characters",
+            label: "节省字符",
+            children: auditNumber(savedChars),
+          },
+          {
+            key: "compaction-ratio",
+            label: "Compact / Canonical 比率",
+            children:
+              ratio === null
+                ? "未知"
+                : `${ratio.toFixed(4)}（${(ratio * 100).toFixed(2)}%）`,
+          },
+          {
+            key: "verbatim-speech",
+            label: "逐字发言保留",
+            children: `${auditNumber(speechCount)} 条 / ${auditNumber(
+              speechChars,
+            )} 字符`,
+          },
+          {
+            key: "round-trip",
+            label: "Canonical 回环校验",
+            children:
+              roundTripVerified === null ? (
+                "未知"
+              ) : roundTripVerified ? (
+                <Tag color="success">通过</Tag>
+              ) : (
+                <Tag color="error">失败</Tag>
+              ),
+          },
+          {
+            key: "event-refs",
+            label: "保留 / 丢弃事件引用",
+            children: `${retainedRefs?.length ?? "未知"} / ${droppedRefs?.length ?? "未知"}`,
+          },
+          {
+            key: "canonical-hash",
+            label: "Canonical SHA-256",
+            children: canonicalHash ?? "未知",
+          },
+        ]}
+        size="small"
+      />
+      <Collapse
+        items={[
+          {
+            children: (
+              <div className="v2-readable-groups">
+                <ReadableGroup
+                  label="V6 默认还原规则"
+                  value={defaults ?? "未记录"}
+                />
+                <ReadableGroup
+                  label="作用域目录（scope_catalog）"
+                  value={scopeCatalog ?? "未记录"}
+                />
+                <ReadableGroup
+                  label="发生阶段目录（occurrence_catalog）"
+                  value={occurrenceCatalog ?? "未记录"}
+                />
+              </div>
+            ),
+            key: "v12-compaction-contract",
+            label: "查看 V6 默认规则与可读目录",
+          },
+          {
+            children: (
+              <div className="v2-readable-groups">
+                <ReadableGroup
+                  label="保留事件引用"
+                  value={retainedRefs ?? "未记录"}
+                />
+                <ReadableGroup
+                  label="丢弃事件引用"
+                  value={droppedRefs ?? "未记录"}
+                />
+              </div>
+            ),
+            key: "v12-event-refs",
+            label: "查看保留与丢弃事件引用",
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
+function auditNumber(value: number | null) {
+  return value === null ? "未知" : value.toLocaleString("zh-CN");
+}
+
 function auditFlow(
   projection: V2PromptProjection | null,
   fields: Array<
@@ -842,7 +1249,7 @@ function auditFlow(
   );
 }
 
-function V11OutputEnforcementAudit({
+function OutputEnforcementAudit({
   request,
 }: {
   request: V2ModelRequest;
@@ -1234,6 +1641,9 @@ function KnownEventsGroup({
 }: {
   value: Record<string, unknown>;
 }) {
+  if (integerNumber(value.schema_version) === 6) {
+    return <V12KnownEventsGroup value={value} />;
+  }
   const events = Array.isArray(value.events) ? value.events : [];
   const claims = events.flatMap((event) =>
     isRecord(event) && Array.isArray(event.annotations)
@@ -1284,6 +1694,121 @@ function KnownEventsGroup({
             ),
             key: "known-events-derived-index",
             label: `查看通过校验的派生索引（${derivedCount} 项）`,
+          },
+        ]}
+        size="small"
+      />
+    </section>
+  );
+}
+
+function V12KnownEventsGroup({
+  value,
+}: {
+  value: Record<string, unknown>;
+}) {
+  const events = Array.isArray(value.events) ? value.events : [];
+  const annotations = Array.isArray(value.annotations) ? value.annotations : [];
+  const questions = Array.isArray(value.questions) ? value.questions : [];
+  const relations = Array.isArray(value.relations) ? value.relations : [];
+  const defaults = isRecord(value.defaults) ? value.defaults : {};
+  const scopeCatalog = isRecord(value.scope_catalog) ? value.scope_catalog : {};
+  const occurrenceCatalog = isRecord(value.occurrence_catalog)
+    ? value.occurrence_catalog
+    : {};
+  const encoding =
+    typeof value.encoding === "string" ? value.encoding : "未记录";
+  return (
+    <section className="v2-readable-group">
+      <Typography.Text className="v2-readable-group-title" strong>
+        动作发生前已知事件（V12 无损压缩载荷）
+      </Typography.Text>
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "schema",
+            label: "Compact Schema",
+            children: "V6",
+          },
+          {
+            key: "encoding",
+            label: "Encoding",
+            children: encoding,
+          },
+          {
+            key: "catalogs",
+            label: "目录规模",
+            children: `scope ${Object.keys(scopeCatalog).length} / occurrence ${
+              Object.keys(occurrenceCatalog).length
+            }`,
+          },
+          {
+            key: "payload-counts",
+            label: "载荷数量",
+            children: `事件 ${events.length} / 注解 ${
+              annotations.length
+            } / 提问 ${questions.length} / 关系 ${relations.length}`,
+          },
+        ]}
+        size="small"
+      />
+      <Collapse
+        items={[
+          {
+            children: events.length ? (
+              <div className="v2-readable-list">
+                {events.map((event, index) => (
+                  <div className="v2-readable-list-item" key={index}>
+                    <KnownEventHeader event={event} index={index} />
+                    <ReadableValue value={event} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty description="当前动作没有压缩事件" />
+            ),
+            key: "v12-compact-events",
+            label: `查看全局顺序的 Compact 事件（${events.length} 个）`,
+          },
+          {
+            children: annotations.length ? (
+              <ReadableValue value={annotations} />
+            ) : (
+              <Empty description="当前载荷没有顶层注解" />
+            ),
+            key: "v12-annotations",
+            label: `查看顶层注解及来源索引（${annotations.length} 项）`,
+          },
+          {
+            children: (
+              <div className="v2-readable-groups">
+                <ReadableGroup label="V6 默认还原规则" value={defaults} />
+                <ReadableGroup label="作用域目录" value={scopeCatalog} />
+                <ReadableGroup
+                  label="发生阶段目录"
+                  value={occurrenceCatalog}
+                />
+              </div>
+            ),
+            key: "v12-catalogs",
+            label: "查看默认规则与可读目录",
+          },
+          {
+            children: (
+              <div className="v2-readable-groups">
+                <ReadableGroup
+                  label={`提问（${questions.length}）`}
+                  value={questions}
+                />
+                <ReadableGroup
+                  label={`回应关系（${relations.length}）`}
+                  value={relations}
+                />
+              </div>
+            ),
+            key: "v12-derived-indexes",
+            label: `查看原序派生索引（${questions.length + relations.length} 项）`,
           },
         ]}
         size="small"
@@ -1414,18 +1939,6 @@ function ReadableValue({
     );
   }
   return displayScalar(value, fieldKey);
-}
-
-function knownEventsFromMessages(
-  messages: RequestMessage[],
-): Record<string, unknown> | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const structured = parseStructuredPrompt(messages[index].text);
-    if (structured && isRecord(structured.value.known_events)) {
-      return structured.value.known_events;
-    }
-  }
-  return null;
 }
 
 function summarizeKnownEvents(

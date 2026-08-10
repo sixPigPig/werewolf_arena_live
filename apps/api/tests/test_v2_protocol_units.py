@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ import wave
 
 import pytest
 
+from app.v2 import tts_client as v2_tts
 from app.v2.action_engine import (
     V2ActionFailure,
     V2ActionResult,
@@ -19,6 +21,13 @@ from app.v2.action_engine import (
     V2SpeechSpec,
     _action_model_parameters,
     _constrain_model_speech,
+    _effective_model_attempt_limit,
+    _enrich_model_error_from_decision,
+    _is_blocking_required_target,
+    _model_generation_policy_audit_payload,
+    _required_retry_window_seconds,
+    _resolved_reasoning_only_elapsed_ms,
+    _validate_model_target_decision,
 )
 from app.v2.director_projection import project_director_scene
 from app.v2.god_view_access import (
@@ -30,6 +39,7 @@ from app.v2.god_view_projection import (
     project_god_view_player_identities,
 )
 from app.v2.model_client import (
+    V2ModelDecision,
     V2ModelError,
     V2QualityError,
     _decision_model_input,
@@ -41,6 +51,24 @@ from app.v2.model_client import (
     _sse_data,
     _next_with_cancellation,
     model_failure_disposition,
+)
+from app.v2.model_failure_episode import (
+    derive_failure_episodes,
+    open_failure_episode_ids,
+    stable_failure_episode_id,
+)
+from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_contract import (
+    MODEL_CONTEXT_SCHEMA_VERSION,
+    PROMPT_TEMPLATE_VERSION,
+)
+from app.v2.model_generation_policy_contract import (
+    V2ModelGenerationPolicyContractError,
+    current_model_generation_policy_contract,
+    freeze_model_generation_policy_contract,
+    is_supported_model_generation_policy_contract,
+    resolve_model_generation_action_policy,
+    resolve_model_generation_policy_contract,
 )
 from app.v2.live_runtime import _audience_targets
 from app.v2.protocol import V2LiveProtocolError, audio_frame
@@ -66,8 +94,484 @@ from app.v2.tts_client import (
     _encode_event,
     _receive,
 )
-from app.v2 import tts_client as v2_tts
 from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
+
+
+def _empty_v12_known_events() -> dict[str, Any]:
+    return encode_known_events_v6(
+        {
+            "schema_version": 5,
+            "events": [],
+            "questions": [],
+            "relations": [],
+        }
+    )
+
+
+def _failure_episode_event(
+    record_seq: int,
+    event_type: str,
+    *,
+    payload: dict[str, Any],
+    game_id: str = "v2_game_episode",
+    run_id: str = "v2_run_episode",
+) -> dict[str, Any]:
+    return {
+        "game_id": game_id,
+        "run_id": run_id,
+        "event_id": record_seq,
+        "record_seq": record_seq,
+        "event_type": event_type,
+        "payload": payload,
+    }
+
+
+def test_v2_failure_episode_id_and_unresolved_pre_provider_failure_are_stable() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_failed",
+            payload={
+                "action_id": "v2_action_episode",
+                "attempt_id": "v2_model_episode_1",
+                "retry_cycle": 1,
+                "failure_code": "model_not_configured",
+                "failure_episode_id": episode_id,
+                "audience": "player_private",
+            },
+        )
+    ]
+
+    episodes = derive_failure_episodes(events)
+
+    assert (
+        stable_failure_episode_id(
+            game_id="v2_game_episode",
+            run_id="v2_run_episode",
+            action_id="v2_action_episode",
+            retry_cycle=1,
+            first_failed_attempt_id="v2_model_episode_1",
+        )
+        == episode_id
+    )
+    assert len(episodes) == 1
+    assert episodes[0].resolution == "unresolved"
+    assert episodes[0].invariant_errors == ()
+    assert episodes[0].source_attempt_ids == ("v2_model_episode_1",)
+    assert open_failure_episode_ids(events) == (episode_id,)
+
+
+def test_v2_failure_episode_derives_accepted_retry_success() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "failure_episode_id": episode_id,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={
+                **{key: value for key, value in common.items() if key != "failure_episode_id"},
+                "attempt_id": "v2_model_episode_1",
+            },
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_retry_scheduled",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "next_attempt_id": "v2_model_episode_2",
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "model_request_started",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_2",
+                "retry_of_attempt_id": "v2_model_episode_1",
+            },
+        ),
+        _failure_episode_event(
+            5,
+            "model_response_received",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_2",
+                "application_validation_result": "accepted",
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "automatic_retry_success"
+    assert episode.resolution_event_record_seq == 5
+    assert episode.resolution_updated_at_record_seq == 5
+    assert episode.invariant_errors == ()
+    assert episode.source_attempt_ids == (
+        "v2_model_episode_1",
+        "v2_model_episode_2",
+    )
+    assert open_failure_episode_ids(events) == ()
+
+
+def test_v2_failure_episode_rejects_accepted_response_for_failed_attempt() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={**common, "attempt_id": "v2_model_episode_1"},
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_response_received",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_episode_id": episode_id,
+                "application_validation_result": "accepted",
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "invariant_conflict"
+    assert "response_attempt_already_failed" in episode.invariant_errors
+    assert "response_lineage_discontinuous" in episode.invariant_errors
+
+
+def test_v2_failure_episode_rejects_retry_schedule_before_failure() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={**common, "attempt_id": "v2_model_episode_1"},
+        ),
+        _failure_episode_event(
+            2,
+            "model_retry_scheduled",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "next_attempt_id": "v2_model_episode_2",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+                "failure_episode_id": episode_id,
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "invariant_conflict"
+    assert "retry_schedule_precedes_failure" in episode.invariant_errors
+
+
+def test_v2_failure_episode_rejects_retry_start_with_wrong_predecessor() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={**common, "attempt_id": "v2_model_episode_1"},
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_retry_scheduled",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "next_attempt_id": "v2_model_episode_2",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "model_request_started",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_2",
+                "retry_of_attempt_id": "v2_model_wrong",
+                "failure_episode_id": episode_id,
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "invariant_conflict"
+    assert "physical_start_retry_of_mismatch" in episode.invariant_errors
+
+
+def test_v2_failure_episode_rejects_duplicate_retry_successor() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={**common, "attempt_id": "v2_model_episode_1"},
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_retry_scheduled",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "next_attempt_id": "v2_model_episode_2",
+                "failure_episode_id": episode_id,
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "model_retry_scheduled",
+            payload={
+                **common,
+                "attempt_id": "v2_model_unrelated",
+                "next_attempt_id": "v2_model_episode_2",
+                "failure_episode_id": episode_id,
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "invariant_conflict"
+    assert "duplicate_retry_successor" in episode.invariant_errors
+
+
+def test_v2_failure_episode_requires_technical_support_and_action_success_pair() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "failure_episode_id": episode_id,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={
+                **{key: value for key, value in common.items() if key != "failure_episode_id"},
+                "attempt_id": "v2_model_episode_1",
+            },
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_total_timeout",
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "action_skipped_technical",
+            payload={
+                "action_id": "v2_action_episode",
+                "failure_episode_id": episode_id,
+                "audience": "public",
+            },
+        ),
+    ]
+
+    assert derive_failure_episodes(events)[0].resolution == "unresolved"
+
+    events.append(
+        _failure_episode_event(
+            4,
+            "action_succeeded",
+            payload={
+                "action_id": "v2_action_episode",
+                "failure_episode_id": episode_id,
+                "technical_outcome_record_seq": 3,
+                "audience": "public",
+            },
+        )
+    )
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "technical_skip"
+    assert episode.resolution_event_record_seq == 4
+    assert episode.supporting_event_record_seq == 3
+    assert episode.invariant_errors == ()
+
+
+def test_v2_failure_episode_reports_terminal_conflict_without_guessing_priority() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_episode",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_episode_1",
+    )
+    common = {
+        "action_id": "v2_action_episode",
+        "retry_cycle": 1,
+        "failure_episode_id": episode_id,
+        "audience": "player_private",
+    }
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={
+                **{key: value for key, value in common.items() if key != "failure_episode_id"},
+                "attempt_id": "v2_model_episode_1",
+            },
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                **common,
+                "attempt_id": "v2_model_episode_1",
+                "failure_code": "model_empty_stream",
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "model_action_paused",
+            payload={
+                "action_id": "v2_action_episode",
+                "failure_episode_id": episode_id,
+                "audience": "player_private",
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "game_canceled",
+            payload={
+                "canceled_failure_episode_ids": [episode_id],
+                "audience": "all",
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "invariant_conflict"
+    assert "mutually_exclusive_terminal_evidence" in episode.invariant_errors
+    assert [ref.record_seq for ref in episode.terminal_event_refs] == [3, 4]
 
 
 def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
@@ -76,6 +580,475 @@ def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
     assert policy.max_attempts == 3
     assert policy.attempt_total_seconds == 180.0
     assert policy.action_total_seconds == 300.0
+
+
+def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is_disabled() -> None:
+    expected = {
+        "schema_version": 1,
+        "classification_version": 1,
+        "enforcement": "observe_only",
+        "reasoning_parameter_mode": "inherit_frozen_model_configuration",
+        "default_profile": "strategic_full",
+        "profiles": {
+            "strategic_full": {
+                "reasoning_only_timeout_ms": None,
+                "timeout_max_attempts": 2,
+            },
+            "recoverable_public_speech": {
+                "reasoning_only_timeout_ms": 180_000,
+                "timeout_max_attempts": 1,
+            },
+            "isolated_auxiliary": {
+                "reasoning_only_timeout_ms": 240_000,
+                "timeout_max_attempts": 1,
+            },
+        },
+        "action_profiles": {
+            "day_debate_speech": "recoverable_public_speech",
+            "sheriff_campaign_speech": "recoverable_public_speech",
+            "sheriff_pk_speech": "recoverable_public_speech",
+            "exile_pk_speech": "recoverable_public_speech",
+            "exile_last_words": "recoverable_public_speech",
+            "first_night_last_words": "recoverable_public_speech",
+            "private_round_memory": "isolated_auxiliary",
+        },
+    }
+
+    assert current_model_generation_policy_contract() == expected
+    assert resolve_model_generation_policy_contract({}) is None
+    frozen = freeze_model_generation_policy_contract(
+        {
+            "rule_set": {"id": "classic"},
+            "model_generation_policy_contract": {"schema_version": 999},
+        }
+    )
+    assert frozen["model_generation_policy_contract"] == expected
+    resolved = resolve_model_generation_policy_contract(frozen)
+    assert resolved == expected
+    assert resolved is not frozen["model_generation_policy_contract"]
+    assert is_supported_model_generation_policy_contract(resolved) is True
+    assert (
+        project_public_rule_snapshot(
+            {
+                "model_context_contract": {"model_context_schema_version": 11},
+                "model_generation_policy_contract": expected,
+            }
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.update(schema_version=2),
+        lambda value: value.update(enforcement="enabled"),
+        lambda value: value.update(extra=True),
+        lambda value: value["profiles"]["strategic_full"].update(timeout_max_attempts=True),
+        lambda value: value["profiles"]["strategic_full"].update(reasoning_only_timeout_ms=1),
+        lambda value: value["profiles"]["recoverable_public_speech"].update(
+            reasoning_only_timeout_ms=0
+        ),
+        lambda value: value["profiles"]["isolated_auxiliary"].update(timeout_max_attempts=4),
+        lambda value: value["action_profiles"].pop("private_round_memory"),
+    ],
+)
+def test_model_generation_policy_present_unknown_or_malformed_fails_closed(
+    mutate: Any,
+) -> None:
+    contract = current_model_generation_policy_contract()
+    mutate(contract)
+
+    assert is_supported_model_generation_policy_contract(contract) is False
+    with pytest.raises(
+        V2ModelGenerationPolicyContractError,
+        match="unsupported_model_generation_policy_contract",
+    ):
+        resolve_model_generation_policy_contract({"model_generation_policy_contract": contract})
+
+
+def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frozen = freeze_model_generation_policy_contract({})
+    original = frozen["model_generation_policy_contract"]
+    changed = current_model_generation_policy_contract()
+    changed["profiles"]["recoverable_public_speech"]["reasoning_only_timeout_ms"] = 195_000
+    changed["profiles"]["isolated_auxiliary"]["reasoning_only_timeout_ms"] = 255_000
+    changed["profiles"]["recoverable_public_speech"]["timeout_max_attempts"] = 2
+    monkeypatch.setattr(
+        "app.v2.model_generation_policy_contract.current_model_generation_policy_contract",
+        lambda: changed,
+    )
+
+    assert resolve_model_generation_policy_contract(frozen) == original
+    assert (
+        freeze_model_generation_policy_contract({})["model_generation_policy_contract"] == changed
+    )
+    resolved = resolve_model_generation_action_policy(
+        original,
+        action_type="day_debate_speech",
+    )
+    assert resolved.reasoning_only_timeout_ms == 180_000
+    assert resolved.timeout_max_attempts == 1
+
+
+@pytest.mark.parametrize(
+    ("action_type", "profile"),
+    [
+        ("day_debate_speech", "recoverable_public_speech"),
+        ("sheriff_campaign_speech", "recoverable_public_speech"),
+        ("sheriff_pk_speech", "recoverable_public_speech"),
+        ("exile_pk_speech", "recoverable_public_speech"),
+        ("exile_last_words", "recoverable_public_speech"),
+        ("first_night_last_words", "recoverable_public_speech"),
+        ("private_round_memory", "isolated_auxiliary"),
+    ],
+)
+def test_model_generation_policy_resolves_explicit_action_profiles(
+    action_type: str,
+    profile: str,
+) -> None:
+    resolved = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=action_type,
+    )
+
+    assert resolved.status == "supported"
+    assert resolved.enforcement == "observe_only"
+    assert resolved.profile == profile
+    assert resolved.source == "explicit_action_profile"
+    assert resolved.schema_version == 1
+    assert resolved.classification_version == 1
+    assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
+    assert resolved.reasoning_only_timeout_ms == (
+        240_000 if profile == "isolated_auxiliary" else 180_000
+    )
+    assert resolved.timeout_max_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "action_type",
+    [
+        "exile_vote",
+        "ability_guard.protect_decision",
+        "werewolf_self_explosion",
+        "unknown_future_action",
+    ],
+)
+def test_model_generation_policy_unknown_actions_fall_back_to_strategic_full(
+    action_type: str,
+) -> None:
+    resolved = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=action_type,
+    )
+
+    assert resolved.status == "supported"
+    assert resolved.enforcement == "observe_only"
+    assert resolved.profile == "strategic_full"
+    assert resolved.source == "default_profile"
+    assert resolved.reasoning_only_timeout_ms is None
+    assert resolved.timeout_max_attempts == 2
+
+
+def test_model_generation_policy_legacy_missing_resolves_disabled_metadata() -> None:
+    resolved = resolve_model_generation_action_policy(
+        None,
+        action_type="day_debate_speech",
+    )
+
+    assert resolved.status == "legacy_disabled"
+    assert resolved.enforcement == "disabled"
+    assert resolved.profile is None
+    assert resolved.source == "legacy_missing_contract"
+    assert resolved.schema_version is None
+    assert resolved.classification_version is None
+    assert resolved.reasoning_parameter_mode is None
+    assert resolved.reasoning_only_timeout_ms is None
+    assert resolved.timeout_max_attempts is None
+
+
+def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_threshold() -> None:
+    policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type="day_debate_speech",
+    )
+
+    started = _model_generation_policy_audit_payload(
+        policy=policy,
+        action_type="day_debate_speech",
+        model_provider="agent_plan",
+        model_id="glm-test",
+    )
+    assert started["reasoning_only_elapsed_ms"] is None
+    assert started["shadow_would_timeout"] is None
+
+    completed = _model_generation_policy_audit_payload(
+        policy=policy,
+        action_type="day_debate_speech",
+        model_provider="agent_plan",
+        model_id="glm-test",
+        first_token_ms=2_000,
+        first_visible_text_ms=182_000,
+        terminal_elapsed_ms=190_000,
+    )
+    assert completed == {
+        "model_provider": "agent_plan",
+        "model_id": "glm-test",
+        "action_type": "day_debate_speech",
+        "model_generation_policy_contract_status": "supported",
+        "model_generation_policy_schema_version": 1,
+        "model_generation_policy_classification_version": 1,
+        "model_generation_policy_enforcement": "observe_only",
+        "model_generation_policy_profile": "recoverable_public_speech",
+        "model_generation_policy_profile_source": "explicit_action_profile",
+        "model_generation_policy_reasoning_parameter_mode": ("inherit_frozen_model_configuration"),
+        "reasoning_only_timeout_ms": 180_000,
+        "timeout_max_attempts": 1,
+        "reasoning_only_elapsed_ms": 180_000,
+        "shadow_would_timeout": True,
+    }
+
+
+def test_generation_policy_audit_preserves_explicit_elapsed_and_legacy_null_shadow() -> None:
+    assert (
+        _resolved_reasoning_only_elapsed_ms(
+            explicit=7,
+            first_token_ms=20,
+            first_visible_text_ms=30,
+            terminal_elapsed_ms=40,
+        )
+        == 7
+    )
+    assert (
+        _resolved_reasoning_only_elapsed_ms(
+            explicit=None,
+            first_token_ms=20,
+            first_visible_text_ms=None,
+            terminal_elapsed_ms=55,
+        )
+        == 35
+    )
+    legacy = resolve_model_generation_action_policy(
+        None,
+        action_type="day_debate_speech",
+    )
+    audit = _model_generation_policy_audit_payload(
+        policy=legacy,
+        action_type="day_debate_speech",
+        model_provider="agent_plan",
+        model_id="glm-test",
+        explicit_reasoning_only_elapsed_ms=250_000,
+    )
+    assert audit["model_generation_policy_contract_status"] == "legacy_disabled"
+    assert audit["reasoning_only_elapsed_ms"] == 250_000
+    assert audit["reasoning_only_timeout_ms"] is None
+    assert audit["shadow_would_timeout"] is None
+
+
+def _blocking_required_target_spec() -> V2SpeechSpec:
+    return V2SpeechSpec(
+        action_type="ability_werewolf.attack_decision",
+        phase_id="night_1",
+        required_phase_state="werewolf_action_open",
+        objective="选择袭击目标并说明理由。",
+        success_live_state="ready",
+        success_phase_state="werewolf_action_closed",
+        actor_kind="player",
+        actor_id="player-wolf",
+        allowed_target_ids=("player-1", "player-2"),
+        decision_contract=V2DecisionContract(
+            kind="target",
+            target_mode="required",
+            speech_mode="required",
+        ),
+    )
+
+
+def test_blocking_required_target_predicate_uses_frozen_contract_not_action_name() -> None:
+    eligible = _blocking_required_target_spec()
+
+    assert _is_blocking_required_target(eligible) is True
+    assert _is_blocking_required_target(replace(eligible, action_type="unlisted_target")) is True
+    assert _is_blocking_required_target(replace(eligible, defer_presentation=True)) is True
+    assert _is_blocking_required_target(replace(eligible, allowed_target_ids=())) is False
+    assert _is_blocking_required_target(replace(eligible, best_effort=True)) is False
+    assert _is_blocking_required_target(replace(eligible, isolated_failure=True)) is False
+    assert (
+        _is_blocking_required_target(
+            replace(
+                eligible,
+                decision_contract=V2DecisionContract(kind="speech"),
+            )
+        )
+        is False
+    )
+    assert (
+        _is_blocking_required_target(
+            replace(
+                eligible,
+                decision_contract=V2DecisionContract(
+                    kind="boolean",
+                    boolean_field="withdraw",
+                ),
+            )
+        )
+        is False
+    )
+    assert (
+        _is_blocking_required_target(
+            replace(
+                eligible,
+                decision_contract=V2DecisionContract(
+                    kind="target",
+                    target_mode="optional",
+                ),
+            )
+        )
+        is False
+    )
+
+
+def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> None:
+    eligible = _blocking_required_target_spec()
+    policy = V2ModelRetryPolicy(max_attempts=3)
+    exhausted = V2ModelError("model_output_budget_exhausted")
+    disposition = model_failure_disposition(exhausted)
+
+    assert disposition.category == "output_budget"
+    assert (
+        _effective_model_attempt_limit(
+            spec=eligible,
+            exc=exhausted,
+            disposition=disposition,
+            policy=policy,
+        )
+        == 3
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=replace(eligible, isolated_failure=True),
+            exc=exhausted,
+            disposition=disposition,
+            policy=policy,
+        )
+        == 2
+    )
+    for ineligible_contract in (
+        V2DecisionContract(kind="speech"),
+        V2DecisionContract(kind="boolean", boolean_field="withdraw"),
+    ):
+        assert (
+            _effective_model_attempt_limit(
+                spec=replace(eligible, decision_contract=ineligible_contract),
+                exc=exhausted,
+                disposition=disposition,
+                policy=policy,
+            )
+            == 2
+        )
+    assert (
+        _effective_model_attempt_limit(
+            spec=eligible,
+            exc=exhausted,
+            disposition=disposition,
+            policy=replace(policy, max_attempts=2),
+        )
+        == 2
+    )
+
+    timeout = V2ModelError("model_attempt_hard_timeout")
+    assert (
+        _effective_model_attempt_limit(
+            spec=eligible,
+            exc=timeout,
+            disposition=model_failure_disposition(timeout),
+            policy=policy,
+        )
+        == 2
+    )
+    transport = V2ModelError("model_transport_failed")
+    assert (
+        _effective_model_attempt_limit(
+            spec=eligible,
+            exc=transport,
+            disposition=model_failure_disposition(transport),
+            policy=policy,
+        )
+        == 3
+    )
+
+
+@pytest.mark.parametrize("elapsed_ms", [None, 0, -1, True])
+def test_third_output_budget_window_fails_closed_for_invalid_elapsed(
+    elapsed_ms: int | None,
+) -> None:
+    policy = V2ModelRetryPolicy(
+        max_attempts=3,
+        attempt_total_seconds=180,
+        action_total_seconds=300,
+    )
+    exhausted = V2ModelError(
+        "model_output_budget_exhausted",
+        elapsed_ms=elapsed_ms,
+    )
+
+    assert (
+        _required_retry_window_seconds(
+            spec=_blocking_required_target_spec(),
+            disposition=model_failure_disposition(exhausted),
+            exc=exhausted,
+            policy=policy,
+            cycle_output_budget_failure_count=2,
+        )
+        == policy.attempt_total_seconds
+    )
+
+
+def test_only_second_cycle_output_budget_failure_requires_observed_third_window() -> None:
+    policy = V2ModelRetryPolicy(
+        max_attempts=3,
+        attempt_total_seconds=180,
+        action_total_seconds=300,
+    )
+    exhausted = V2ModelError(
+        "model_output_budget_exhausted",
+        elapsed_ms=42_500,
+    )
+    disposition = model_failure_disposition(exhausted)
+    eligible = _blocking_required_target_spec()
+
+    assert (
+        _required_retry_window_seconds(
+            spec=eligible,
+            disposition=disposition,
+            exc=exhausted,
+            policy=policy,
+            cycle_output_budget_failure_count=1,
+        )
+        == 0
+    )
+    assert (
+        _required_retry_window_seconds(
+            spec=eligible,
+            disposition=disposition,
+            exc=exhausted,
+            policy=policy,
+            cycle_output_budget_failure_count=2,
+        )
+        == 42.5
+    )
+    assert (
+        _required_retry_window_seconds(
+            spec=replace(eligible, isolated_failure=True),
+            disposition=disposition,
+            exc=exhausted,
+            policy=policy,
+            cycle_output_budget_failure_count=2,
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -117,6 +1090,65 @@ def test_v2_model_failure_disposition_is_explicit(
     assert disposition.category == category
     assert disposition.max_attempts == max_attempts
     assert disposition.pausable is pausable
+
+
+def test_v2_required_target_validation_preserves_returned_stream_diagnostics() -> None:
+    decision = V2ModelDecision(
+        target_player_id=None,
+        speech=None,
+        provider_request_id="provider-required-target",
+        first_token_ms=12,
+        completed_ms=98,
+        raw_response='{"target_player_id":null}',
+        first_visible_text_ms=73,
+        reasoning_delta_count=7,
+        text_delta_count=2,
+        max_inter_delta_ms=31,
+        last_progress_ms=97,
+        finish_reason="completed",
+        provider_usage={
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "reasoning_tokens": 12,
+            "total_tokens": 120,
+        },
+        usage_update_count=2,
+        usage_conflict_observed=True,
+        usage_consistency="exact",
+        reasoning_only_elapsed_ms=61,
+    )
+    spec = V2SpeechSpec(
+        action_type="exile_vote",
+        phase_id="day_1",
+        required_phase_state="exile_vote_open",
+        objective="选择放逐目标。",
+        success_live_state="ready",
+        success_phase_state="exile_vote_closed",
+        actor_kind="player",
+        actor_id="player-1",
+        decision_contract=V2DecisionContract(
+            kind="target",
+            speech_mode="forbidden",
+            target_mode="required",
+        ),
+        allowed_target_ids=("player-2",),
+    )
+
+    with pytest.raises(V2QualityError) as captured:
+        _validate_model_target_decision(decision, spec=spec)
+    _enrich_model_error_from_decision(captured.value, decision)
+
+    error = captured.value
+    assert error.finish_reason == "completed"
+    assert error.provider_usage == decision.provider_usage
+    assert error.usage_update_count == 2
+    assert error.usage_conflict_observed is True
+    assert error.usage_consistency == "exact"
+    assert error.reasoning_only_elapsed_ms == 61
+    assert error.reasoning_delta_count == 7
+    assert error.text_delta_count == 2
+    assert error.max_inter_delta_ms == 31
+    assert error.last_progress_ms == 97
 
 
 def test_v2_decision_parser_repairs_one_extra_trailing_brace() -> None:
@@ -711,20 +1743,35 @@ def test_machine_format_failure_result_requires_complete_lineage() -> None:
         V2ActionResult(failure=failure)
 
 
+def test_output_budget_failure_result_requires_independent_lineage() -> None:
+    with pytest.raises(ValueError, match="output-budget failure lineage is required"):
+        V2ActionFailure(
+            code="model_output_budget_exhausted",
+            category="output_budget",
+            terminal_attempt_id="v2_model_terminal",
+            output_budget_failure_count=2,
+        )
+
+    failure = V2ActionFailure(
+        code="model_output_budget_exhausted",
+        category="output_budget",
+        terminal_attempt_id="v2_model_terminal",
+        output_budget_failure_count=2,
+        last_output_budget_attempt_id="v2_model_terminal",
+        last_output_budget_failure_code="model_output_budget_exhausted",
+    )
+    assert failure.machine_format_failure_count == 0
+
+
 def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_example() -> None:
     context = {
-        "model_context_schema_version": 11,
-        "prompt_template_version": 4,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "task": {"type": "sheriff_vote", "at_seq": 42, "round_no": 1},
         "self": {},
         "rules": {},
         "state": {"as_of_seq": 42, "current_round_no": 1},
-        "known_events": {
-            "schema_version": 5,
-            "events": [],
-            "questions": [],
-            "relations": [],
-        },
+        "known_events": _empty_v12_known_events(),
         "persona": {},
         "candidates": [{"player_id": "seat_1", "seat": 1, "display_name": "1号"}],
         "response": {
@@ -748,7 +1795,7 @@ def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_exam
     assert '"speech"' not in example
 
 
-def test_legacy_v3_decision_prompt_does_not_silently_use_v4_template() -> None:
+def test_historical_v11_decision_prompt_fails_closed() -> None:
     context = {
         "model_context_schema_version": 11,
         "prompt_template_version": 3,
@@ -773,26 +1820,19 @@ def test_legacy_v3_decision_prompt_does_not_silently_use_v4_template() -> None:
         "player_reference_format": "seat_N",
     }
 
-    prompt = _decision_model_input(context)[0]["content"][0]["text"]
-
-    assert "本次输出仍须遵守 response 合同" in prompt
-    assert "response 仅用于描述本次输出合同" not in prompt
+    with pytest.raises(V2ModelError, match="model_prompt_template_unsupported"):
+        _decision_model_input(context)
 
 
-def test_v4_boolean_prompt_shows_both_values_without_strategy_anchor() -> None:
+def test_v5_boolean_prompt_shows_both_values_without_strategy_anchor() -> None:
     context = {
-        "model_context_schema_version": 11,
-        "prompt_template_version": 4,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "task": {"type": "sheriff_withdraw", "at_seq": 42, "round_no": 1},
         "self": {},
         "rules": {},
         "state": {"as_of_seq": 42, "current_round_no": 1},
-        "known_events": {
-            "schema_version": 5,
-            "events": [],
-            "questions": [],
-            "relations": [],
-        },
+        "known_events": _empty_v12_known_events(),
         "persona": {},
         "candidates": [],
         "response": {

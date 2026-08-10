@@ -379,7 +379,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("parses V11 projection rejections and output enforcement without inference", () => {
-    const request = parseV2ModelRequest({
+    const rawRequest = {
       attempt_id: "v2_model_v11",
       action_id: "v2_action_v11",
       run_id: item.current_run_id,
@@ -450,7 +450,8 @@ describe("V2 game record parsers", () => {
       failure_code: null,
       started_at: item.created_at,
       completed_at: item.updated_at,
-    });
+    };
+    const request = parseV2ModelRequest(rawRequest);
 
     expect(request.prompt_projection).toMatchObject({
       ledger_schema_version: 5,
@@ -479,7 +480,103 @@ describe("V2 game record parsers", () => {
       vote_batch_stage: null,
       automatic_machine_format_attempt_count: null,
       automatic_machine_format_budget: null,
+      prior_output_budget_failures: null,
+      output_budget_failure_count: null,
+      automatic_output_budget_attempt_count: null,
+      automatic_output_budget_budget: null,
+      model_generation_policy_contract_status: null,
+      model_generation_policy_schema_version: null,
+      model_generation_policy_classification_version: null,
+      model_generation_policy_enforcement: null,
+      model_generation_policy_reasoning_parameter_mode: null,
+      model_generation_policy_profile: null,
+      model_generation_policy_profile_source: null,
+      reasoning_only_timeout_ms: null,
+      timeout_max_attempts: null,
+      shadow_would_timeout: null,
     });
+
+    const v12Projection = {
+      ...rawRequest.prompt_projection,
+      model_context_schema_version: 12,
+      prompt_template_version: 5,
+      known_events_schema_version: 6,
+      canonical_serialized_char_count: 4_000,
+      compact_serialized_char_count: 2_500,
+      compaction_saved_chars: 1_500,
+      compaction_ratio: 0.625,
+      verbatim_speech_count: 2,
+      verbatim_speech_chars: 38,
+      retained_event_refs: ["1403", "1442"],
+      dropped_event_refs: [],
+      canonical_sha256: "a".repeat(64),
+      round_trip_verified: true,
+    };
+    const v12Request = parseV2ModelRequest({
+      ...rawRequest,
+      model_context_schema_version: 12,
+      prompt_template_version: 5,
+      prompt_projection: v12Projection,
+      expanded_known_events: {
+        schema_version: 5,
+        events: [],
+        questions: [],
+        relations: [],
+      },
+      known_events_expansion_status: "verified",
+    });
+    expect(v12Request.prompt_projection).toMatchObject({
+      known_events_schema_version: 6,
+      compact_serialized_char_count: 2_500,
+      compaction_ratio: 0.625,
+      retained_event_refs: ["1403", "1442"],
+      dropped_event_refs: [],
+      round_trip_verified: true,
+    });
+    expect(v12Request.known_events_expansion_status).toBe("verified");
+    expect(v12Request.expanded_known_events).toEqual({
+      schema_version: 5,
+      events: [],
+      questions: [],
+      relations: [],
+    });
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        model_context_schema_version: 12,
+        prompt_template_version: 5,
+        prompt_projection: { ...v12Projection, compaction_ratio: "0.625" },
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
+    expect(
+      parseV2ModelRequest({
+        ...rawRequest,
+        model_context_schema_version: 12,
+        prompt_template_version: 5,
+        prompt_projection: {
+          ...v12Projection,
+          model_view_schema_version: 4,
+          compaction_ratio: "hybrid-contract-raw",
+        },
+      }).prompt_projection,
+    ).toMatchObject({
+      model_context_schema_version: 12,
+      model_view_schema_version: 4,
+      compaction_ratio: "hybrid-contract-raw",
+    });
+    expect(
+      parseV2ModelRequest({
+        ...rawRequest,
+        model_context_schema_version: 99,
+        prompt_projection: { compaction_ratio: "unknown-contract-raw" },
+      }).prompt_projection,
+    ).toEqual({ compaction_ratio: "unknown-contract-raw" });
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        known_events_expansion_status: "guessed",
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
   });
 
   it("parses an idempotent V2 stop result", () => {
@@ -514,6 +611,10 @@ describe("V2 game record parsers", () => {
           vote_batch_stage: "sequential_recovery",
           automatic_machine_format_attempt_count: 2,
           automatic_machine_format_budget: 2,
+          prior_output_budget_failures: 2,
+          output_budget_failure_count: 1,
+          automatic_output_budget_attempt_count: 3,
+          automatic_output_budget_budget: 3,
           attempt_no: 3,
           cycle_attempt_no: 1,
           retry_cycle: 2,
@@ -572,6 +673,10 @@ describe("V2 game record parsers", () => {
       vote_batch_stage: "sequential_recovery",
       automatic_machine_format_attempt_count: 2,
       automatic_machine_format_budget: 2,
+      prior_output_budget_failures: 2,
+      output_budget_failure_count: 1,
+      automatic_output_budget_attempt_count: 3,
+      automatic_output_budget_budget: 3,
       attempt_no: 3,
       cycle_attempt_no: 1,
       retry_cycle: 2,
@@ -609,6 +714,172 @@ describe("V2 game record parsers", () => {
       action_id: "v2_action_opening",
       replayed: false,
     });
+  });
+
+  it("parses normalized stream diagnostics and server-derived failure resolution", () => {
+    const rawRequest = {
+      attempt_id: "v2_model_diag_1",
+      action_id: "v2_action_diag_1",
+      run_id: item.current_run_id,
+      phase_id: "opening",
+      action_type: "judge_opening_speech",
+      actor_kind: "judge",
+      actor_id: "judge",
+      audience: "private",
+      request_kind: "speech",
+      model_id: null,
+      model_provider: null,
+      judge_configuration_version: null,
+      status: "failed",
+      input_source: "unavailable",
+      output_source: "unavailable",
+      provider_request_id: "provider-diag-1",
+      finish_reason: "max_output_tokens",
+      provider_usage: {
+        input_tokens: 120,
+        output_tokens: 64,
+        reasoning_tokens: 48,
+        total_tokens: 184,
+        cached_input_tokens: 20,
+      },
+      usage_update_count: 2,
+      usage_conflict_observed: false,
+      usage_consistency: "exact",
+      queue_wait_ms: 11,
+      provider_in_flight: 2,
+      provider_concurrency_limit: 4,
+      first_token_ms: 19,
+      reasoning_only_elapsed_ms: 31,
+      completed_ms: null,
+      reasoning_delta_count: 7,
+      text_delta_count: 2,
+      max_inter_delta_ms: 17,
+      last_progress_ms: 72,
+      failure_kind: "model",
+      failure_code: "model_output_budget_exhausted",
+      effective_attempt_limit: 2,
+      retry_delay_ms: 250,
+      required_retry_window_ms: 1_250,
+      automatic_retry_scheduled: false,
+      automatic_retry_stop_reason: "insufficient_action_budget",
+      prior_output_budget_failures: 2,
+      output_budget_failure_count: 1,
+      automatic_output_budget_attempt_count: 3,
+      automatic_output_budget_budget: 3,
+      model_generation_policy_contract_status: "supported",
+      model_generation_policy_schema_version: 1,
+      model_generation_policy_classification_version: 1,
+      model_generation_policy_enforcement: "observe_only",
+      model_generation_policy_reasoning_parameter_mode:
+        "inherit_frozen_model_configuration",
+      model_generation_policy_profile: "recoverable_public_speech",
+      model_generation_policy_profile_source: "explicit_action_profile",
+      reasoning_only_timeout_ms: 180_000,
+      timeout_max_attempts: 1,
+      shadow_would_timeout: true,
+      failure_episode_id: "v2_mfep_0123456789abcdef01234567",
+      failure_resolution: "run_canceled",
+      failure_episode_source_attempt_ids: ["v2_model_diag_1"],
+      failure_episode_source_event_refs: [
+        {
+          event_type: "model_request_failed",
+          event_id: 40,
+          record_seq: 40,
+        },
+      ],
+      failure_episode_terminal_event_refs: [
+        { event_type: "game_canceled", event_id: 44, record_seq: 44 },
+      ],
+      resolution_event_type: "game_canceled",
+      resolution_event_id: 44,
+      resolution_event_record_seq: 44,
+      supporting_event_type: null,
+      supporting_event_id: null,
+      supporting_event_record_seq: null,
+      resolution_updated_at_record_seq: 44,
+      failure_episode_invariant_errors: [],
+      started_at: item.created_at,
+      completed_at: item.updated_at,
+      request_payload: null,
+      raw_response: null,
+      parsed_output: null,
+      passive_observations: [],
+    };
+
+    const request = parseV2ModelRequest(rawRequest);
+
+    expect(request).toMatchObject({
+      finish_reason: "max_output_tokens",
+      provider_usage: {
+        input_tokens: 120,
+        output_tokens: 64,
+        reasoning_tokens: 48,
+        total_tokens: 184,
+        cached_input_tokens: 20,
+      },
+      usage_update_count: 2,
+      usage_conflict_observed: false,
+      usage_consistency: "exact",
+      reasoning_only_elapsed_ms: 31,
+      reasoning_delta_count: 7,
+      text_delta_count: 2,
+      max_inter_delta_ms: 17,
+      last_progress_ms: 72,
+      effective_attempt_limit: 2,
+      automatic_retry_scheduled: false,
+      automatic_retry_stop_reason: "insufficient_action_budget",
+      prior_output_budget_failures: 2,
+      output_budget_failure_count: 1,
+      automatic_output_budget_attempt_count: 3,
+      automatic_output_budget_budget: 3,
+      model_generation_policy_contract_status: "supported",
+      model_generation_policy_schema_version: 1,
+      model_generation_policy_classification_version: 1,
+      model_generation_policy_enforcement: "observe_only",
+      model_generation_policy_reasoning_parameter_mode:
+        "inherit_frozen_model_configuration",
+      model_generation_policy_profile: "recoverable_public_speech",
+      model_generation_policy_profile_source: "explicit_action_profile",
+      reasoning_only_timeout_ms: 180_000,
+      timeout_max_attempts: 1,
+      shadow_would_timeout: true,
+      failure_resolution: "run_canceled",
+      failure_episode_terminal_event_refs: [
+        { event_type: "game_canceled", event_id: 44, record_seq: 44 },
+      ],
+      resolution_updated_at_record_seq: 44,
+    });
+    expect(
+      parseV2ModelRequest({
+        ...rawRequest,
+        failure_episode_id: undefined,
+        failure_resolution: undefined,
+      }).failure_resolution,
+    ).toBe("legacy_unavailable");
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        provider_usage: { output_tokens: -1 },
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        automatic_output_budget_attempt_count: -1,
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        shadow_would_timeout: "true",
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        model_generation_policy_schema_version: 0,
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
   });
 
   it("rejects a malformed sequence", () => {

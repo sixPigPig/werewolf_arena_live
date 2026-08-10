@@ -7,7 +7,11 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_context_contract import PROMPT_TEMPLATE_VERSION
+from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_contract import (
+    MODEL_CONTEXT_SCHEMA_VERSION,
+    PROMPT_TEMPLATE_VERSION,
+)
 from app.v2.model_client import (
     V2ModelClient,
     V2ModelDecision,
@@ -15,6 +19,7 @@ from app.v2.model_client import (
     V2ModelProgress,
     V2QualityError,
     build_model_request_payload,
+    model_failure_disposition,
 )
 
 
@@ -53,9 +58,10 @@ def _client(
 
 def _action_context() -> dict[str, Any]:
     return {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "action_type": "day_speech",
+        "known_events": _compact_known_events(),
         "candidates": [],
         "response": {
             "kind": "speech",
@@ -66,10 +72,10 @@ def _action_context() -> dict[str, Any]:
 
 def _target_action_context() -> dict[str, Any]:
     return {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "task": {"type": "exile_vote", "at_seq": 42},
-        "known_events": {"schema_version": 5, "events": [], "questions": [], "relations": []},
+        "known_events": _compact_known_events(),
         "candidates": [
             {"player_id": "seat_1", "seat": 1, "display_name": "1号"},
             {"player_id": "seat_3", "seat": 3, "display_name": "3号"},
@@ -82,6 +88,22 @@ def _target_action_context() -> dict[str, Any]:
             "target_policy": {"mode": "required", "candidate_source": "candidates"},
         },
     }
+
+
+def _compact_known_events(
+    events: list[dict[str, Any]] | None = None,
+    *,
+    questions: list[dict[str, Any]] | None = None,
+    relations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return encode_known_events_v6(
+        {
+            "schema_version": 5,
+            "events": events or [],
+            "questions": questions or [],
+            "relations": relations or [],
+        }
+    )
 
 
 def _run_with_uvloop(coroutine: Any, uvloop: Any) -> Any:
@@ -121,32 +143,48 @@ def test_v11_prompt_only_explains_derived_fields_that_are_present() -> None:
             "post_elimination_resolution": "immediate",
         }
     }
-    context["known_events"] = {
-        "schema_version": 5,
-        "events": [
+    context["known_events"] = _compact_known_events(
+        [
+            {
+                "event_ref": "39",
+                "kind": "player_statement",
+                "authority": "player_claim_unverified",
+                "visibility": "public",
+                "record_seq": 39,
+                "known_at_seq": 39,
+                "speech": "请说明你的验人信息。",
+            },
             {
                 "event_ref": "40",
                 "kind": "speech_turn_skipped_technical",
                 "authority": "judge_fact",
+                "visibility": "public",
                 "record_seq": 40,
                 "known_at_seq": 40,
                 "occurred_in": {"period": "day", "round_no": 2},
                 "announced_in": {"period": "day", "round_no": 2},
             }
         ],
-        "questions": [
+        questions=[
             {
-                "question_id": "question_40_1",
+                "question_id": "question_39_1",
+                "source_event_ref": "39",
                 "address_resolution": "resolved",
                 "response_status": "response_detected",
                 "requested_fields": ["target_ref", "claimed_result"],
                 "referenced_night_no": 1,
                 "reply_opportunity": "awaiting_scheduled_turn",
-                "prior_relevant_event_refs": ["39"],
+                "prior_relevant_event_refs": [],
             }
         ],
-        "relations": [{"type": "response_to_question"}],
-    }
+        relations=[
+            {
+                "type": "response_to_question",
+                "from_event_ref": "40",
+                "to_question_id": "question_39_1",
+            }
+        ],
+    )
 
     payload = build_model_request_payload(
         context,
@@ -507,6 +545,11 @@ def test_model_client_disables_environment_proxy(
             text=(
                 'data: {"type":"response.output_text.delta",'
                 '"delta":"{\\"speech\\":\\"直连响应\\"}"}\n\n'
+                'data: {"type":"response.completed","response":'
+                '{"id":"resp-direct","status":"completed","usage":'
+                '{"input_tokens":20,"output_tokens":4,"total_tokens":24,'
+                '"output_tokens_details":{"reasoning_tokens":1},'
+                '"input_tokens_details":{"cached_tokens":3}}}}\n\n'
                 "data: [DONE]\n\n"
             ),
         )
@@ -546,6 +589,18 @@ def test_model_client_disables_environment_proxy(
 
     assert decision.speech == "直连响应"
     assert repeated_decision.speech == "直连响应"
+    assert decision.provider_request_id == "resp-direct"
+    assert decision.finish_reason == "completed"
+    assert decision.provider_usage == {
+        "input_tokens": 20,
+        "output_tokens": 4,
+        "reasoning_tokens": 1,
+        "total_tokens": 24,
+        "cached_input_tokens": 3,
+    }
+    assert decision.usage_update_count == 1
+    assert decision.usage_conflict_observed is False
+    assert decision.usage_consistency == "exact"
     assert len(captured_client_options) == 1
     assert captured_client_options[0]["trust_env"] is False
 
@@ -576,8 +631,9 @@ def test_model_client_preserves_forbidden_speech_for_action_normalization() -> N
         },
     )
     context = {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "known_events": _compact_known_events(),
         "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
@@ -624,8 +680,9 @@ def test_model_client_parses_optional_private_decision_note() -> None:
         },
     )
     context = {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "known_events": _compact_known_events(),
         "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
@@ -679,7 +736,6 @@ def test_model_client_recovers_exact_response_wrapper_and_preserves_raw() -> Non
         },
     )
     context = _target_action_context()
-    context["prompt_template_version"] = 4
 
     decision = asyncio.run(
         client.generate_action_decision(
@@ -730,8 +786,9 @@ def test_model_client_repairs_identical_duplicate_json_once_and_preserves_raw() 
         },
     )
     context = {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "known_events": _compact_known_events(),
         "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
@@ -792,8 +849,9 @@ def test_model_client_ambiguous_duplicate_json_keeps_exact_raw_response() -> Non
         asyncio.run(
             client.generate_action_decision(
                 action_context={
-                    "model_context_schema_version": 11,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                     "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "known_events": _compact_known_events(),
                     "candidates": [
                         {"player_id": "seat_5"},
                         {"player_id": "seat_6"},
@@ -844,8 +902,9 @@ def test_model_client_rejects_non_string_target_in_duplicate_json() -> None:
         asyncio.run(
             client.generate_action_decision(
                 action_context={
-                    "model_context_schema_version": 11,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                     "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "known_events": _compact_known_events(),
                     "candidates": [{"player_id": "seat_1"}],
                     "response": {
                         "kind": "target",
@@ -896,8 +955,9 @@ def test_model_client_treats_different_extra_payload_fields_as_ambiguous() -> No
         asyncio.run(
             client.generate_action_decision(
                 action_context={
-                    "model_context_schema_version": 11,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                     "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "known_events": _compact_known_events(),
                     "candidates": [{"player_id": "seat_6"}],
                     "response": {
                         "kind": "target",
@@ -946,8 +1006,9 @@ def test_model_client_rejects_truncated_second_speech_object_without_fragment_fa
         asyncio.run(
             client.generate_action_decision(
                 action_context={
-                    "model_context_schema_version": 11,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                     "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "known_events": _compact_known_events(),
                     "response": {
                         "kind": "speech",
                         "speech": {"mode": "required"},
@@ -1244,7 +1305,7 @@ def test_provider_concurrency_is_bounded_without_serializing_other_providers() -
 
 def test_provider_queue_wait_does_not_consume_first_token_or_hard_timeout() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.08)
         return httpx.Response(
             200,
             text=(
@@ -1257,9 +1318,9 @@ def test_provider_queue_wait_does_not_consume_first_token_or_hard_timeout() -> N
     async def run_requests() -> list:
         client = _client(
             handler,
-            first_token_seconds=0.05,
-            stream_idle_seconds=0.05,
-            total_seconds=0.05,
+            first_token_seconds=0.15,
+            stream_idle_seconds=0.15,
+            total_seconds=0.15,
             agent_plan_max_in_flight=1,
         )
         target = client.resolve_model_target(
@@ -1287,8 +1348,9 @@ def test_provider_queue_wait_does_not_consume_first_token_or_hard_timeout() -> N
     decisions = asyncio.run(run_requests())
 
     assert [decision.speech for decision in decisions] == ["排队后完成", "排队后完成"]
-    assert decisions[1].queue_wait_ms >= 20
-    assert decisions[1].completed_ms < 50
+    assert decisions[1].queue_wait_ms >= 60
+    assert decisions[1].completed_ms < 150
+    assert decisions[1].queue_wait_ms + decisions[1].completed_ms > 150
 
 
 def test_canceled_provider_queue_wait_returns_the_permit() -> None:
@@ -1417,6 +1479,64 @@ def test_reasoning_progress_resets_stream_idle_timeout() -> None:
     assert decision.text_delta_count == 1
     assert decision.max_inter_delta_ms is not None
     assert decision.max_inter_delta_ms < 25
+
+
+def test_whitespace_text_delta_starts_token_clock_but_not_visible_text_clock() -> None:
+    class WhitespaceThenVisibleSSEStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"id":"chatcmpl-whitespace","choices":[{"delta":{"content":"   "}}]}\n\n'
+            )
+            await asyncio.sleep(0.02)
+            yield (
+                'data: {"id":"chatcmpl-whitespace","choices":[{"delta":'
+                '{"content":"{\\"speech\\":\\"空白后完成\\"}"}}]}\n\n'
+            ).encode()
+            yield b"data: [DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=WhitespaceThenVisibleSSEStream())
+
+    client = _client(
+        handler,
+        first_token_seconds=0.05,
+        stream_idle_seconds=0.05,
+        total_seconds=0.2,
+    )
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 16_384,
+        },
+    )
+    progress: list[V2ModelProgress] = []
+
+    decision = asyncio.run(
+        client.generate_action_decision_with_progress(
+            action_context=_action_context(),
+            attempt_id="v2_model_whitespace_then_visible",
+            target=target,
+            on_progress=progress.append,
+        )
+    )
+
+    assert decision.speech == "空白后完成"
+    assert decision.text_delta_count == 2
+    assert decision.first_visible_text_ms is not None
+    assert decision.first_visible_text_ms > decision.first_token_ms
+    assert decision.reasoning_only_elapsed_ms == (
+        decision.first_visible_text_ms - decision.first_token_ms
+    )
+    assert decision.reasoning_only_elapsed_ms >= 10
+    first_token = next(item for item in progress if item.stage == "first_token")
+    first_text = next(item for item in progress if item.stage == "first_text")
+    assert first_token.token_kind == "text"
+    assert first_text.elapsed_ms > first_token.elapsed_ms
 
 
 def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
@@ -1624,8 +1744,9 @@ def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> No
     decision = asyncio.run(
         client.generate_action_decision(
             action_context={
-                "model_context_schema_version": 11,
+                "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                 "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                "known_events": _compact_known_events(),
                 "action_type": "sheriff_withdraw",
                 "candidates": [],
                 "response": {
@@ -1688,8 +1809,9 @@ def test_sheriff_withdraw_quality_error_keeps_exact_raw_response() -> None:
         asyncio.run(
             client.generate_action_decision(
                 action_context={
-                    "model_context_schema_version": 11,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                     "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "known_events": _compact_known_events(),
                     "action_type": "sheriff_withdraw",
                     "candidates": [],
                     "response": {
@@ -2015,10 +2137,86 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
+            headers={
+                "x-request-id": "header-budget-id",
+                "x-ratelimit-remaining-requests": "9",
+                "authorization": "Bearer must-not-persist",
+            },
             text=(
                 'data: {"id":"chatcmpl-budget","choices":[{"delta":'
                 '{"reasoning_content":"先分析场上发言。"},"finish_reason":null}]}\n\n'
                 'data: {"id":"chatcmpl-budget","choices":[{"delta":{},'
+                '"finish_reason":"length"}],"usage":{"prompt_tokens":100,'
+                '"completion_tokens":20,"total_tokens":120,'
+                '"completion_tokens_details":{"reasoning_tokens":18},'
+                '"prompt_tokens_details":{"cached_tokens":5}}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+
+    with pytest.raises(V2ModelError, match="model_output_budget_exhausted") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_test_budget",
+                target=target,
+            )
+        )
+
+    error = caught.value
+    assert model_failure_disposition(error).category == "output_budget"
+    assert error.failure_stage == "stream"
+    assert error.provider_request_id == "chatcmpl-budget"
+    assert error.response_headers_seen is True
+    assert error.response_headers["x-request-id"] == "header-budget-id"
+    assert error.response_headers["x-ratelimit-remaining-requests"] == "9"
+    assert "authorization" not in error.response_headers
+    assert error.first_token_seen is True
+    assert error.first_token_ms is not None
+    assert error.first_token_kind == "reasoning"
+    assert error.first_visible_text_ms is None
+    assert error.elapsed_ms is not None
+    assert error.queue_wait_ms is not None
+    assert error.provider_in_flight == 1
+    assert error.provider_concurrency_limit == 32
+    assert error.reasoning_delta_count == 1
+    assert error.text_delta_count == 0
+    assert error.last_progress_ms is not None
+    assert error.finish_reason == "length"
+    assert error.provider_usage == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "reasoning_tokens": 18,
+        "total_tokens": 120,
+        "cached_input_tokens": 5,
+    }
+    assert error.usage_update_count == 1
+    assert error.usage_conflict_observed is False
+    assert error.usage_consistency == "exact"
+    assert error.reasoning_only_elapsed_ms is not None
+
+
+def test_length_after_visible_text_remains_machine_format_failure() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"id":"chatcmpl-truncated","choices":[{"delta":'
+                '{"content":"{\\"speech\\":"},"finish_reason":null}]}\n\n'
+                'data: {"id":"chatcmpl-truncated","choices":[{"delta":{},'
                 '"finish_reason":"length"}]}\n\n'
                 "data: [DONE]\n\n"
             ),
@@ -2037,11 +2235,240 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_output_budget_exhausted"):
+    with pytest.raises(V2QualityError) as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
-                attempt_id="v2_model_test_budget",
+                attempt_id="v2_model_visible_truncated",
                 target=target,
             )
         )
+
+    error = caught.value
+    assert error.code != "model_output_budget_exhausted"
+    assert model_failure_disposition(error).category == "machine_format"
+    assert error.finish_reason == "length"
+    assert error.first_visible_text_ms is not None
+    assert error.text_delta_count == 1
+
+
+def test_responses_incomplete_max_output_tokens_preserves_usage_diagnostics() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "header-response-budget"},
+            text=(
+                'data: {"type":"response.reasoning_text.delta","delta":"分析",'
+                '"response":{"id":"resp-budget"}}\n\n'
+                'data: {"type":"response.incomplete","response":'
+                '{"id":"resp-budget","status":"incomplete",'
+                '"incomplete_details":{"reason":"max_output_tokens"},'
+                '"usage":{"input_tokens":80,"output_tokens":12,"total_tokens":92,'
+                '"output_tokens_details":{"reasoning_tokens":12},'
+                '"input_tokens_details":{"cached_tokens":7}}}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="agent_plan",
+        model_id="doubao-test",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+
+    with pytest.raises(V2ModelError, match="model_output_budget_exhausted") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_responses_budget",
+                target=target,
+            )
+        )
+
+    error = caught.value
+    assert error.finish_reason == "max_output_tokens"
+    assert error.provider_request_id == "resp-budget"
+    assert error.response_headers["x-request-id"] == "header-response-budget"
+    assert error.first_token_kind == "reasoning"
+    assert error.provider_usage == {
+        "input_tokens": 80,
+        "output_tokens": 12,
+        "reasoning_tokens": 12,
+        "total_tokens": 92,
+        "cached_input_tokens": 7,
+    }
+    assert error.usage_update_count == 1
+    assert error.usage_conflict_observed is False
+    assert error.usage_consistency == "exact"
+
+
+def test_chat_success_prefers_terminal_usage_and_audits_conflict_and_mismatch() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"id":"chatcmpl-usage","choices":[{"delta":'
+                '{"reasoning_content":"分析"},"finish_reason":null}],'
+                '"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11,'
+                '"completion_tokens_details":{"reasoning_tokens":1},'
+                '"prompt_tokens_details":{"cached_tokens":2}}}\n\n'
+                'data: {"id":"chatcmpl-usage","choices":[{"delta":'
+                '{"content":"{\\"speech\\":\\"完成\\"}"},"finish_reason":null}]}\n\n'
+                'data: {"id":"chatcmpl-usage","choices":[{"delta":{},'
+                '"finish_reason":"stop"}],"usage":{"prompt_tokens":10,'
+                '"completion_tokens":5,"total_tokens":16,'
+                '"completion_tokens_details":{"reasoning_tokens":4},'
+                '"prompt_tokens_details":{"cached_tokens":2}}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_usage_conflict",
+            target=target,
+        )
+    )
+
+    assert decision.speech == "完成"
+    assert decision.finish_reason == "stop"
+    assert decision.provider_usage == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "reasoning_tokens": 4,
+        "total_tokens": 16,
+        "cached_input_tokens": 2,
+    }
+    assert decision.usage_update_count == 2
+    assert decision.usage_conflict_observed is True
+    assert decision.usage_consistency == "provider_total_mismatch"
+    assert decision.reasoning_only_elapsed_ms is not None
+
+
+def test_unknown_finish_reason_is_bounded_and_invalid_usage_is_ignored() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"id":"chatcmpl-unknown","choices":[{"delta":'
+                '{"content":"{\\"speech\\":\\"完成\\"}"},"finish_reason":null}]}\n\n'
+                'data: {"id":"chatcmpl-unknown","choices":[{"delta":{},'
+                '"finish_reason":"provider_private_finish_value"}],'
+                '"usage":{"prompt_tokens":true,"completion_tokens":-1,'
+                '"total_tokens":"2","completion_tokens_details":'
+                '{"reasoning_tokens":false},"prompt_tokens_details":'
+                '{"cached_tokens":-3}}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=_action_context(),
+            attempt_id="v2_model_unknown_finish",
+            target=target,
+        )
+    )
+
+    assert decision.finish_reason == "unknown"
+    assert decision.provider_usage is None
+    assert decision.usage_update_count == 0
+    assert decision.usage_conflict_observed is False
+    assert decision.usage_consistency == "unavailable"
+
+
+def test_empty_stream_preserves_terminal_headers_usage_and_elapsed_diagnostics() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "header-empty"},
+            text=(
+                'data: {"id":"chatcmpl-empty","choices":[{"delta":{},'
+                '"finish_reason":"stop"}],"usage":{"prompt_tokens":9,'
+                '"completion_tokens":0,"total_tokens":9}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+
+    with pytest.raises(V2ModelError, match="model_empty_stream") as caught:
+        asyncio.run(
+            client.generate_action_decision(
+                action_context=_action_context(),
+                attempt_id="v2_model_empty_diagnostics",
+                target=target,
+            )
+        )
+
+    error = caught.value
+    assert error.failure_stage == "stream"
+    assert error.provider_request_id == "chatcmpl-empty"
+    assert error.response_headers["x-request-id"] == "header-empty"
+    assert error.first_token_seen is False
+    assert error.first_token_ms is None
+    assert error.first_token_kind is None
+    assert error.first_visible_text_ms is None
+    assert error.elapsed_ms is not None
+    assert error.queue_wait_ms is not None
+    assert error.provider_in_flight == 1
+    assert error.provider_concurrency_limit == 32
+    assert error.reasoning_delta_count == 0
+    assert error.text_delta_count == 0
+    assert error.max_inter_delta_ms is None
+    assert error.last_progress_ms is None
+    assert error.finish_reason == "stop"
+    assert error.provider_usage == {
+        "input_tokens": 9,
+        "output_tokens": 0,
+        "total_tokens": 9,
+    }
+    assert error.usage_update_count == 1
+    assert error.usage_conflict_observed is False
+    assert error.usage_consistency == "exact"
+    assert error.reasoning_only_elapsed_ms is None

@@ -3,14 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 
-MODEL_CONTEXT_SCHEMA_VERSION = 11
-PROMPT_TEMPLATE_VERSION = 4
-# Before bumping the current template, explicitly add the outgoing version to
-# this legacy set so frozen games remain resumable across deployments.
-LEGACY_PROMPT_TEMPLATE_VERSIONS = frozenset({3})
-SUPPORTED_PROMPT_TEMPLATE_VERSIONS = LEGACY_PROMPT_TEMPLATE_VERSIONS | {PROMPT_TEMPLATE_VERSION}
+MODEL_CONTEXT_SCHEMA_VERSION = 12
+PROMPT_TEMPLATE_VERSION = 5
+# Runtime support is deliberately exact. V11 prompt versions remain readable
+# history, but a V11 snapshot must never resume under the V12 encoder/prompt.
+LEGACY_PROMPT_TEMPLATE_VERSIONS: frozenset[int] = frozenset()
+SUPPORTED_PROMPT_TEMPLATE_VERSIONS = frozenset({PROMPT_TEMPLATE_VERSION})
 MODEL_PROMPT_SCHEMA_VERSION = MODEL_CONTEXT_SCHEMA_VERSION
-KNOWN_EVENTS_SCHEMA_VERSION = 5
+KNOWN_EVENTS_SCHEMA_VERSION = 6
 PUBLIC_TIMELINE_SCHEMA_VERSION = 1
 DISCOURSE_LEDGER_SCHEMA_VERSION = 5
 CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION = DISCOURSE_LEDGER_SCHEMA_VERSION
@@ -18,6 +18,10 @@ DISCOURSE_MODEL_VIEW_SCHEMA_VERSION = 5
 MODEL_VIEW_SELECTOR_VERSION = 2
 
 _CONTRACT_KEY = "model_context_contract"
+
+HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION = 11
+HISTORICAL_V11_PROMPT_TEMPLATE_VERSIONS = frozenset({3, 4})
+HISTORICAL_V11_KNOWN_EVENTS_SCHEMA_VERSION = 5
 
 
 def current_model_context_contract() -> dict[str, int]:
@@ -69,19 +73,34 @@ def is_current_model_context_contract(contract: dict[str, Any] | None) -> bool:
 
 
 def is_supported_model_context_contract(contract: dict[str, Any] | None) -> bool:
-    expected = current_model_context_contract()
-    if not isinstance(contract, dict) or set(contract) != set(expected):
+    return is_current_model_context_contract(contract)
+
+
+def is_historical_v11_model_context_contract(
+    contract: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(contract, dict):
         return False
+    expected_keys = set(current_model_context_contract())
+    if set(contract) != expected_keys:
+        return False
+    expected = {
+        "model_context_schema_version": HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION,
+        "known_events_schema_version": HISTORICAL_V11_KNOWN_EVENTS_SCHEMA_VERSION,
+        "ledger_schema_version": CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+        "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
+    }
     for key, value in expected.items():
         actual = contract.get(key)
-        if not isinstance(actual, int) or isinstance(actual, bool):
+        if not isinstance(actual, int) or isinstance(actual, bool) or actual != value:
             return False
-        if key == "prompt_template_version":
-            if actual not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS:
-                return False
-        elif actual != value:
-            return False
-    return True
+    prompt_version = contract.get("prompt_template_version")
+    return (
+        isinstance(prompt_version, int)
+        and not isinstance(prompt_version, bool)
+        and prompt_version in HISTORICAL_V11_PROMPT_TEMPLATE_VERSIONS
+    )
 
 
 def supports_current_model_context_contract(

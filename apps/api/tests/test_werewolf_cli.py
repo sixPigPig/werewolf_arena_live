@@ -119,6 +119,7 @@ def test_run_game_command_returns_nonzero_on_engine_failure(capsys, monkeypatch)
 
     monkeypatch.setattr("app.cli.run_game", fake_run_game)
     monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(cli, "default_model_name", lambda: "test-model")
 
     exit_code = main(["run-game", "--seed", "13", "--max-rounds", "0"])
 

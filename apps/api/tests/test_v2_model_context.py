@@ -22,9 +22,16 @@ from app.v2.model_context import (
     sanitize_model_speech,
 )
 from app.v2.model_client import build_model_request_payload
+from app.v2.model_context_compaction import (
+    encode_known_events_v6,
+    expand_known_events_v6,
+)
 from app.v2.model_context_contract import (
+    KNOWN_EVENTS_SCHEMA_VERSION,
+    MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
     current_model_context_contract,
+    is_historical_v11_model_context_contract,
     supports_model_context_contract,
 )
 
@@ -168,6 +175,28 @@ def _assert_contains(actual: dict[str, object], expected: dict[str, object]) -> 
     assert {key: actual.get(key) for key in expected} == expected
 
 
+def _canonical_known_events(context: dict[str, object]) -> dict[str, object]:
+    compact = context.get("known_events")
+    assert isinstance(compact, dict)
+    return expand_known_events_v6(compact)
+
+
+def _compact_known_events(
+    events: list[dict[str, object]] | None = None,
+    *,
+    questions: list[dict[str, object]] | None = None,
+    relations: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return encode_known_events_v6(
+        {
+            "schema_version": 5,
+            "events": events or [],
+            "questions": questions or [],
+            "relations": relations or [],
+        }
+    )
+
+
 def test_model_context_uses_only_seat_references_and_unifies_public_events() -> None:
     projected = project_model_action_context(
         {
@@ -253,7 +282,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "沈砚" not in serialized
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
-    assert projected["model_context_schema_version"] == 11
+    assert projected["model_context_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
     assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
@@ -269,7 +298,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     }
     private_fact = next(
         event
-        for event in projected["known_events"]["events"]
+        for event in _canonical_known_events(projected)["events"]
         if event["visibility"] == "actor_private"
     )
     assert private_fact == {
@@ -305,7 +334,9 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
         },
     )
     public_events = [
-        event for event in projected["known_events"]["events"] if event["visibility"] == "public"
+        event
+        for event in _canonical_known_events(projected)["events"]
+        if event["visibility"] == "public"
     ]
     assert [item["kind"] for item in public_events] == [
         "night_result",
@@ -321,16 +352,16 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert public_events[1]["event_ref"] == "history_2"
     assert public_events[2]["public_reason"] == "exile"
     assert public_events[2]["role_revealed"] is False
-    assert projected["known_events"]["schema_version"] == 5
-    assert projected["known_events"]["questions"] == []
-    assert projected["known_events"]["relations"] == []
+    assert projected["known_events"]["schema_version"] == KNOWN_EVENTS_SCHEMA_VERSION
+    assert _canonical_known_events(projected)["questions"] == []
+    assert _canonical_known_events(projected)["relations"] == []
     assert "history" not in projected
     assert "public_timeline" not in projected
     assert "source_rules" not in serialized
-    assert "annotations" not in serialized
+    assert projected["known_events"]["annotations"] == []
     metadata = model_prompt_metadata(projected)
-    assert metadata["prompt_schema_version"] == 11
-    assert metadata["model_context_schema_version"] == 11
+    assert metadata["prompt_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
+    assert metadata["model_context_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
     assert metadata["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
@@ -369,7 +400,7 @@ def test_v11_projects_public_technical_speech_skip() -> None:
         players=PLAYERS,
         action_record_seq=1400,
     )
-    assert projected["known_events"]["events"] == [
+    assert _canonical_known_events(projected)["events"] == [
         {
             "kind": "speech_turn_skipped_technical",
             "authority": "judge_fact",
@@ -384,6 +415,57 @@ def test_v11_projects_public_technical_speech_skip() -> None:
             "known_at_seq": 1345,
         }
     ]
+
+
+def test_v11_strips_failure_episode_audit_from_public_history() -> None:
+    context = {
+        "round_no": 3,
+        "phase_id": "day_3",
+        "action_type": "judge_game_completed",
+        "self_identity": {
+            "player_id": "system-player-01",
+            "seat": 2,
+            "role_key": "villager",
+            "team": "villagers",
+        },
+        "public_history": [
+            {
+                "source_event_id": "cancel-1",
+                "record_seq": 1401,
+                "event_type": "game_canceled",
+                "payload": {
+                    "reason_code": "operator_interrupted",
+                    "failure_episode_id": "v2_mfep_secret",
+                    "source_failure_episode_ids": ["v2_mfep_source"],
+                    "failed_failure_episode_ids": ["v2_mfep_failed"],
+                    "canceled_failure_episode_ids": ["v2_mfep_canceled"],
+                    "technical_outcome_record_seq": 1399,
+                    "failure_episode_disposition": "run_canceled",
+                    "model_generation_policy_profile": "recoverable_public_speech",
+                    "model_generation_policy_enforcement": "observe_only",
+                    "reasoning_only_timeout_ms": 180000,
+                    "reasoning_only_elapsed_ms": 200000,
+                    "shadow_would_timeout": True,
+                    "nested": {"failure_episode_id": "v2_mfep_nested"},
+                },
+            }
+        ],
+    }
+
+    projected = project_model_action_context(
+        context,
+        players=PLAYERS,
+        action_record_seq=1402,
+    )
+
+    serialized = json.dumps(projected, ensure_ascii=False)
+    assert "operator_interrupted" in serialized
+    assert "failure_episode" not in serialized
+    assert "technical_outcome_record_seq" not in serialized
+    assert "model_generation_policy" not in serialized
+    assert "reasoning_only" not in serialized
+    assert "shadow_would_timeout" not in serialized
+    assert "v2_mfep_" not in serialized
 
 
 def test_v11_projects_prior_public_investigation_report_without_rewriting_causality() -> None:
@@ -440,7 +522,7 @@ def test_v11_projects_prior_public_investigation_report_without_rewriting_causal
         action_record_seq=764,
     )
 
-    events = projected.context["known_events"]["events"]
+    events = _canonical_known_events(projected.context)["events"]
     first_party_report = next(event for event in events if event["event_ref"] == "460")
     assert [item["claim_type"] for item in first_party_report["annotations"]] == [
         "role_claim",
@@ -460,7 +542,7 @@ def test_v11_projects_prior_public_investigation_report_without_rewriting_causal
         and item["derivation"]["validation_status"] == "complete"
         for item in first_party_report["annotations"]
     )
-    questions = projected.context["known_events"]["questions"]
+    questions = _canonical_known_events(projected.context)["questions"]
     assert len(questions) == 1
     _assert_contains(
         questions[0],
@@ -482,7 +564,7 @@ def test_v11_projects_prior_public_investigation_report_without_rewriting_causal
         },
     )
     assert questions[0]["derivation"]["validation_status"] == "complete"
-    assert projected.context["known_events"]["relations"] == []
+    assert _canonical_known_events(projected.context)["relations"] == []
     assert projected.projection_metadata["emitted_claim_count"] == 2
     assert projected.projection_metadata["emitted_question_count"] == 1
 
@@ -582,11 +664,12 @@ def test_v11_night_state_anchor_distinguishes_current_from_completed_night() -> 
             "as_of_seq": 40,
         },
     )
-    assert hunter_dawn["known_events"]["events"][0]["occurred_in"] == {
+    hunter_dawn_events = _canonical_known_events(hunter_dawn)["events"]
+    assert hunter_dawn_events[0]["occurred_in"] == {
         "period": "night",
         "round_no": 1,
     }
-    assert hunter_dawn["known_events"]["events"][0]["announced_in"] == {
+    assert hunter_dawn_events[0]["announced_in"] == {
         "period": "dawn",
         "round_no": 1,
     }
@@ -629,7 +712,7 @@ def test_private_round_memory_keeps_subjective_actor_authority() -> None:
         action_record_seq=31,
     )
 
-    memory = projected["known_events"]["events"][0]
+    memory = _canonical_known_events(projected)["events"][0]
     assert memory == {
         "event_ref": "v2_fact_memory_1",
         "kind": "private_round_memory",
@@ -708,7 +791,7 @@ def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> 
         players=players,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [(item["record_seq"], item["kind"]) for item in events] == [
         (448, "player_statement"),
         (562, "day_vote"),
@@ -837,7 +920,7 @@ def test_known_events_preserve_input_order_for_duplicate_sequence() -> None:
         players=PLAYERS,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [event["event_ref"] for event in events] == ["562", "legacy-duplicate"]
     assert all("source_event_id" not in event for event in events)
     assert all("timeline_index" not in event for event in events)
@@ -907,7 +990,7 @@ def test_v11_known_events_place_private_investigation_before_later_public_speech
         action_record_seq=501,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [(event["event_ref"], event["known_at_seq"]) for event in events] == [
         ("knowledge-seer-night-1", 258),
         ("472", 472),
@@ -969,7 +1052,7 @@ def test_v11_prompt_separates_event_occurrence_from_delayed_announcement() -> No
         action_record_seq=639,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [(event["event_ref"], event["known_at_seq"]) for event in events] == [
         ("608", 608),
         ("624", 624),
@@ -992,10 +1075,10 @@ def test_v11_prompt_separates_event_occurrence_from_delayed_announcement() -> No
     assert "occurred_in 表示事件实际发生阶段" in system_text
     assert "announced_in 只表示公布阶段，公布更晚不代表发生更晚" in system_text
     assert "带 seq 的信息按 seq 判断先后" not in system_text
-    assert len(system_text) < 1_200
+    assert len(system_text) < 1_400
 
 
-def test_current_contract_projects_v11_only_shape() -> None:
+def test_current_contract_projects_v12_compact_shape() -> None:
     projected = project_model_action_context(
         {
             "action_type": "day_debate_speech",
@@ -1016,11 +1099,12 @@ def test_current_contract_projects_v11_only_shape() -> None:
         model_context_contract=current_model_context_contract(),
     )
 
-    assert projected["model_context_schema_version"] == 11
+    assert projected["model_context_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
     assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected["task"]["type"] == "day_debate_speech"
     assert projected["response"] == {"kind": "speech", "speech": {"mode": "required"}}
-    assert projected["known_events"] == {
+    assert projected["known_events"] == _compact_known_events()
+    assert _canonical_known_events(projected) == {
         "schema_version": 5,
         "events": [],
         "questions": [],
@@ -1064,68 +1148,33 @@ def test_v11_keeps_player_statement_unverified_authority() -> None:
     )
 
     assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
-    assert projected["known_events"]["schema_version"] == 5
-    statement = projected["known_events"]["events"][0]
+    assert projected["known_events"]["schema_version"] == KNOWN_EVENTS_SCHEMA_VERSION
+    statement = _canonical_known_events(projected)["events"][0]
     assert statement["authority"] == "player_claim_unverified"
     assert statement["event_ref"] == "20"
     assert "source_event_id" not in statement
     assert "timeline_index" not in statement
 
 
-def test_current_and_explicit_legacy_v3_model_context_contracts_are_supported() -> None:
+def test_current_contract_is_supported_and_v11_is_history_only() -> None:
     assert supports_model_context_contract(
         {"model_context_contract": current_model_context_contract()}
     )
-
-
-def test_legacy_v3_contract_preserves_projection_metadata_and_prompt_template() -> None:
-    legacy = current_model_context_contract()
-    legacy["prompt_template_version"] = 3
-    projected = project_model_action_context(
-        {
-            "action_type": "day_debate_speech",
-            "objective": "发表白天发言。",
-            "self_identity": {
-                "player_id": "system-player-01",
-                "seat": 2,
-                "role_key": "villager",
-                "team": "villagers",
-            },
-            "public_history": [],
-            "output_contract": {
-                "kind": "speech",
-                "speech": {"mode": "required"},
-            },
-        },
-        players=PLAYERS,
-        model_context_contract=legacy,
-    )
-
-    metadata = model_prompt_metadata(projected)
-    request = build_model_request_payload(
-        projected,
-        decision=True,
-        model_id="test-model",
-        max_output_tokens=16_384,
-    )
-    system_text = request["input"][0]["content"][0]["text"]
-
-    assert projected["prompt_template_version"] == 3
-    assert metadata["prompt_template_version"] == 3
-    assert "本次输出仍须遵守 response 合同" in system_text
-    assert "response 仅用于描述本次输出合同" not in system_text
-    legacy = current_model_context_contract()
-    legacy["prompt_template_version"] = 3
-    assert supports_model_context_contract({"model_context_contract": legacy})
-
-    assert not supports_model_context_contract(
-        {
-            "model_context_contract": {
-                **legacy,
-                "prompt_template_version": 2,
-            },
+    for prompt_version in (3, 4):
+        historical = {
+            **current_model_context_contract(),
+            "model_context_schema_version": 11,
+            "prompt_template_version": prompt_version,
+            "known_events_schema_version": 5,
         }
-    )
+        assert is_historical_v11_model_context_contract(historical)
+        assert not supports_model_context_contract({"model_context_contract": historical})
+        with pytest.raises(ValueError, match="unsupported_model_context_contract"):
+            project_model_action_context(
+                {},
+                players=PLAYERS,
+                model_context_contract=historical,
+            )
 
 
 def test_projector_rejects_missing_frozen_model_context_contract() -> None:
@@ -1405,7 +1454,7 @@ def test_v11_projects_current_round_question_relations_with_reference_closure() 
         action_record_seq=25,
     )
 
-    known_before = projected_before_answer.context["known_events"]
+    known_before = _canonical_known_events(projected_before_answer.context)
     assert [event["event_ref"] for event in known_before["events"]] == ["10", "20"]
     assert len(known_before["questions"]) == 1
     _assert_contains(
@@ -1437,7 +1486,7 @@ def test_v11_projects_current_round_question_relations_with_reference_closure() 
         model_context_contract=current_model_context_contract(),
         action_record_seq=35,
     )
-    known_after = projected_after_answer.context["known_events"]
+    known_after = _canonical_known_events(projected_after_answer.context)
     assert known_after["questions"][0]["response_status"] == "response_detected"
     assert len(known_after["relations"]) == 1
     _assert_contains(
@@ -1525,7 +1574,7 @@ def test_v11_reply_opportunity_covers_all_scheduled_turn_states() -> None:
             model_context_contract=current_model_context_contract(),
             action_record_seq=25,
         )
-        assert projected["known_events"]["questions"][0]["reply_opportunity"] == expected
+        assert _canonical_known_events(projected)["questions"][0]["reply_opportunity"] == expected
 
 
 def test_v11_non_speech_action_omits_reply_opportunity_even_with_an_order() -> None:
@@ -1568,7 +1617,7 @@ def test_v11_non_speech_action_omits_reply_opportunity_even_with_an_order() -> N
         action_record_seq=25,
     )
 
-    assert "reply_opportunity" not in projected["known_events"]["questions"][0]
+    assert "reply_opportunity" not in _canonical_known_events(projected)["questions"][0]
 
 
 def test_v11_uses_one_canonical_current_living_werewolf_teammate_event() -> None:
@@ -1638,7 +1687,7 @@ def test_v11_uses_one_canonical_current_living_werewolf_teammate_event() -> None
     assert projected["self"]["werewolf_coordination"] == {"mode": "team"}
     teammate_events = [
         event
-        for event in projected["known_events"]["events"]
+        for event in _canonical_known_events(projected)["events"]
         if event["kind"] in {"werewolf_teammates", "living_werewolf_teammates"}
     ]
     assert teammate_events == [
@@ -1718,11 +1767,13 @@ def test_v11_single_wolf_and_non_wolf_do_not_receive_teammate_events() -> None:
 
     assert wolf["self"]["werewolf_coordination"] == {"mode": "solo"}
     assert all(
-        event["kind"] != "living_werewolf_teammates" for event in wolf["known_events"]["events"]
+        event["kind"] != "living_werewolf_teammates"
+        for event in _canonical_known_events(wolf)["events"]
     )
     assert "werewolf_coordination" not in villager["self"]
     assert all(
-        event["kind"] != "living_werewolf_teammates" for event in villager["known_events"]["events"]
+        event["kind"] != "living_werewolf_teammates"
+        for event in _canonical_known_events(villager)["events"]
     )
 
 
@@ -1800,7 +1851,7 @@ def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> 
         players=PLAYERS,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert {item["event_ref"] for item in events} == {
         "101",
         "102",
@@ -1813,7 +1864,7 @@ def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> 
     )
     assert all("source_event_id" not in item for item in events)
     assert all("timeline_index" not in item for item in events)
-    assert "annotations" not in json.dumps(projected, ensure_ascii=False)
+    assert projected["known_events"]["annotations"] == []
 
 
 def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
@@ -1844,7 +1895,7 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     )
 
     projected = projection.context
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     metadata = projection.projection_metadata
     assert metadata["ledger_statement_count"] == 40
     assert metadata["source_event_count"] == 40
@@ -1852,8 +1903,14 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     assert metadata["future_filtered_event_count"] == 0
     assert metadata["budget_dropped_event_count"] == 0
     assert "selection_budget_chars" not in metadata
-    assert "retained_event_refs" not in metadata
-    assert "dropped_event_refs" not in metadata
+    assert metadata["retained_event_refs"] == [str(index) for index in range(1, 41)]
+    assert metadata["dropped_event_refs"] == []
+    assert metadata["round_trip_verified"] is True
+    assert metadata["canonical_serialized_char_count"] > metadata[
+        "compact_serialized_char_count"
+    ]
+    assert metadata["compaction_saved_chars"] > 0
+    assert len(metadata["canonical_sha256"]) == 64
     assert "retention_reasons" not in metadata
     assert all("speech_truncated" not in item for item in events)
     assert all(len(item["speech"]) > 1_800 for item in events)
@@ -1921,7 +1978,7 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
         players=PLAYERS,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [statement["event_ref"] for statement in events] == [
         "11",
         "20",
@@ -2034,7 +2091,7 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
         players=players,
     )
 
-    events = projected["known_events"]["events"]
+    events = _canonical_known_events(projected)["events"]
     assert [(item["speaker_ref"], item["record_seq"]) for item in events] == [
         ("seat_6", 400),
         ("seat_8", 417),
@@ -2073,7 +2130,7 @@ def test_model_context_preserves_first_party_claim_time_before_later_paraphrases
         and annotation["derivation"]["validation_status"] == "complete"
         for annotation in annotations
     )
-    assert projected["known_events"]["schema_version"] == 5
+    assert projected["known_events"]["schema_version"] == KNOWN_EVENTS_SCHEMA_VERSION
     assert model_prompt_metadata(projected)["structured_claim_count"] == len(annotations)
     assert "source_rules" not in json.dumps(projected, ensure_ascii=False)
 
@@ -2331,18 +2388,17 @@ def test_private_authoritative_facts_flattens_known_investigations() -> None:
     ]
 
 
-def test_v11_player_prompt_explains_information_authority_and_time() -> None:
+def test_v12_player_prompt_explains_information_authority_and_time() -> None:
     payload = build_model_request_payload(
         {
-            "model_context_schema_version": 11,
+            "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
             "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
             "state": {"current_round_no": 1, "as_of_seq": 472},
-            "known_events": {
-                "schema_version": 5,
-                "events": [
+            "known_events": _compact_known_events(
+                [
                     {
                         "event_ref": "400",
                         "kind": "night_result",
@@ -2352,10 +2408,8 @@ def test_v11_player_prompt_explains_information_authority_and_time() -> None:
                         "occurred_in": {"period": "night", "round_no": 1},
                         "announced_in": {"period": "dawn", "round_no": 1},
                     }
-                ],
-                "questions": [],
-                "relations": [],
-            },
+                ]
+            ),
             "response": {"kind": "speech", "speech": {"mode": "required"}},
         },
         decision=True,
@@ -2368,6 +2422,14 @@ def test_v11_player_prompt_explains_information_authority_and_time() -> None:
     assert "authority=player_claim_unverified 是玩家说法" in system_text
     assert "authority=actor_memory 和 declared_reason 是主观历史" in system_text
     assert "annotations、questions、relations 只是确定性启发式检索索引" in system_text
+    assert "known_events 使用 lossless_refs_v1 无损编码" in system_text
+    assert "scope_ref 和 occurred_in_ref 必须从对应 catalog 展开" in system_text
+    assert "defaults.scope_ref_by_kind 和 defaults.occurred_in_ref_by_kind" in system_text
+    assert "事件显式 ref 优先，occurred_in_ref=null 表示没有 occurred_in" in system_text
+    assert "省略 record_seq 表示它等于 known_at_seq" in system_text
+    assert "record_seq=null 表示源记录序号未知" in system_text
+    assert "不能用 known_at_seq 代替" in system_text
+    assert "顶层 annotations 通过 source_event_ref" in system_text
     assert "known_at_seq/record_seq 表示获知和记录顺序" in system_text
     assert "occurred_in 表示事件实际发生阶段" in system_text
     assert "公布更晚不代表发生更晚" in system_text
@@ -2376,26 +2438,34 @@ def test_v11_player_prompt_explains_information_authority_and_time() -> None:
     assert "public_timeline" not in system_text
     assert "history" not in system_text
     assert "source_rules" not in system_text
-    assert len(system_text) < 1_200
+    assert len(system_text) < 1_400
 
 
-def test_v11_prompt_explains_compact_question_response_semantics() -> None:
+def test_v12_prompt_explains_compact_question_response_semantics() -> None:
     payload = build_model_request_payload(
         {
-            "model_context_schema_version": 11,
+            "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
             "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
             "state": {"current_round_no": 1, "as_of_seq": 472},
-            "known_events": {
-                "schema_version": 5,
-                "events": [
+            "known_events": _compact_known_events(
+                [
+                    {
+                        "event_ref": "10",
+                        "kind": "player_statement",
+                        "authority": "player_claim_unverified",
+                        "visibility": "public",
+                        "known_at_seq": 10,
+                        "speech": "我先说明验人思路。",
+                    },
                     {
                         "event_ref": "20",
                         "kind": "player_statement",
                         "authority": "player_claim_unverified",
                         "visibility": "public",
+                        "known_at_seq": 20,
                         "speech": "2号你首验为什么选4号？",
                     },
                     {
@@ -2403,6 +2473,7 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
                         "kind": "player_statement",
                         "authority": "player_claim_unverified",
                         "visibility": "public",
+                        "known_at_seq": 30,
                         "speech": "回应4号，查验理由就是先看边角位。",
                     },
                     {
@@ -2410,9 +2481,10 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
                         "kind": "speech_turn_skipped_technical",
                         "authority": "judge_fact",
                         "visibility": "public",
+                        "known_at_seq": 40,
                     },
                 ],
-                "questions": [
+                questions=[
                     {
                         "question_id": "question_20_1",
                         "source_event_ref": "20",
@@ -2424,14 +2496,14 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
                         "prior_relevant_event_refs": ["10"],
                     }
                 ],
-                "relations": [
+                relations=[
                     {
                         "type": "response_to_question",
                         "from_event_ref": "30",
                         "to_question_id": "question_20_1",
                     }
                 ],
-            },
+            ),
             "response": {"kind": "speech", "speech": {"mode": "required"}},
         },
         decision=True,
@@ -2448,24 +2520,19 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
     assert "prior_relevant_event_refs 是提问前的相关说明" in system_text
     assert "因技术故障未能发言，不得解读为拒绝回应或策略性沉默" in system_text
     assert "策略、身份伪装和表达由你自主决定" in system_text
-    assert len(system_text) < 1_500
+    assert len(system_text) < 1_700
 
 
-def test_v11_prompt_identifies_the_public_win_condition_contract() -> None:
+def test_v12_prompt_identifies_the_public_win_condition_contract() -> None:
     payload = build_model_request_payload(
         {
-            "model_context_schema_version": 11,
+            "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
             "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "hunter_death_shot", "goal": "决定是否发动猎人技能。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "hunter"}},
             "rules": {"win_condition_contract": {"mode": "slaughter_side"}},
             "state": {"current_round_no": 1, "as_of_seq": 472},
-            "known_events": {
-                "schema_version": 5,
-                "events": [],
-                "questions": [],
-                "relations": [],
-            },
+            "known_events": _compact_known_events(),
             "candidates": [],
             "response": {
                 "kind": "target",
@@ -2486,7 +2553,7 @@ def test_v11_prompt_identifies_the_public_win_condition_contract() -> None:
 def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
     payload = build_model_request_payload(
         {
-            "model_context_schema_version": 11,
+            "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
             "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {
                 "type": "private_round_memory",
@@ -2495,12 +2562,7 @@ def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {},
             "state": {"current_round_no": 1, "as_of_seq": 100},
-            "known_events": {
-                "schema_version": 5,
-                "events": [],
-                "questions": [],
-                "relations": [],
-            },
+            "known_events": _compact_known_events(),
             "response": {
                 "kind": "speech",
                 "presentation_kind": "private_round_memory",
@@ -2827,7 +2889,7 @@ def test_model_context_states_single_wolf_rule_without_generic_teammate_prompt()
     assert "ability_rules" not in projected["rules"]
     assert "current_ability" not in projected["rules"]
     assert projected["self"]["werewolf_coordination"] == {"mode": "solo"}
-    assert projected["known_events"]["events"] == []
+    assert _canonical_known_events(projected)["events"] == []
     assert "狼人队友" not in json.dumps(projected, ensure_ascii=False)
 
 
@@ -2955,7 +3017,7 @@ def test_model_context_separates_reveals_claims_and_vote_snapshot() -> None:
         players=PLAYERS,
     )
 
-    public_events = projected["known_events"]["events"]
+    public_events = _canonical_known_events(projected)["events"]
     assert public_events[0]["speech"] == "我是预言家，2号是我的金水。"
     assert projected["state"]["as_of_seq"] == 41
     vote_snapshot = next(item for item in public_events if item["kind"] == "vote_result")

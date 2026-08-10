@@ -29,6 +29,15 @@ from app.player_avatar_asset_migration import (
 from app.player_profile_import import PlayerProfileImportError, import_player_profiles
 from app.models.user import User
 from app.rule_sets.snapshots import resolve_rule_set_snapshot
+from app.v2.model_concurrency_canary import (
+    DEFAULT_E1_CANARY_CORPUS_PATH,
+    E1CanaryContractError,
+    build_e1_canary_dry_run_report,
+    load_e1_canary_budget_ledger,
+    load_e1_canary_corpus,
+    validate_e1_canary_live_prerequisites,
+)
+from app.v2.model_context_cutover import preflight_v12_model_context_cutover
 from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 from app.werewolf.providers import default_model_name
 from app.werewolf.replay import DatabaseReplayStore
@@ -71,9 +80,8 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_game_parser = subparsers.add_parser("run-game", help="Run one Werewolf game.")
-    default_model = default_model_name()
-    run_game_parser.add_argument("--villager-model", default=default_model)
-    run_game_parser.add_argument("--werewolf-model", default=default_model)
+    run_game_parser.add_argument("--villager-model")
+    run_game_parser.add_argument("--werewolf-model")
     run_game_parser.add_argument("--seed", type=int, default=None)
     run_game_parser.add_argument("--max-rounds", type=int, default=8)
     run_game_parser.set_defaults(func=_run_game_command)
@@ -300,20 +308,63 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     redact_private_memory_parser.set_defaults(func=_redact_private_round_memory_command)
 
+    v12_cutover_parser = subparsers.add_parser(
+        "preflight-v12-model-context-cutover",
+        help="Read-only check that every V11 V2 game is safe history before V12 cutover.",
+    )
+    v12_cutover_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the complete machine-readable cutover report.",
+    )
+    v12_cutover_parser.set_defaults(func=_preflight_v12_model_context_cutover_command)
+
+    e1_canary_parser = subparsers.add_parser(
+        "run-v2-agent-plan-canary",
+        help="Validate the fixed E1 Agent Plan workload without external calls by default.",
+    )
+    e1_canary_parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=DEFAULT_E1_CANARY_CORPUS_PATH,
+    )
+    e1_canary_parser.add_argument(
+        "--caps",
+        nargs="+",
+        type=int,
+        choices=(3, 4, 6),
+        default=[3, 4],
+    )
+    e1_canary_parser.add_argument("--json", action="store_true")
+    e1_canary_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Request live mode. This build still fails closed before creating a client.",
+    )
+    e1_canary_parser.add_argument("--confirm-external-model-calls", action="store_true")
+    e1_canary_parser.add_argument("--confirm-billing-authorized", action="store_true")
+    e1_canary_parser.add_argument("--budget-ledger", type=Path)
+    e1_canary_parser.set_defaults(func=_run_v2_agent_plan_canary_command)
+
     return parser
 
 
 def _run_game_command(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
+        default_model = (
+            default_model_name()
+            if args.villager_model is None or args.werewolf_model is None
+            else None
+        )
         compiled = resolve_rule_set_snapshot(
             freeze_rule_set_snapshot(get_rule_set(DEFAULT_RULE_SET_ID))
         )
         result = run_game(
             record_store=DatabaseReplayStore(db),
             compiled_rule_set=compiled,
-            villager_model=args.villager_model,
-            werewolf_model=args.werewolf_model,
+            villager_model=args.villager_model or default_model,
+            werewolf_model=args.werewolf_model or default_model,
             seed=args.seed,
             max_rounds=args.max_rounds,
         )
@@ -360,6 +411,79 @@ def _redact_private_round_memory_command(args: argparse.Namespace) -> int:
     if not result.applied and (result.event_count or result.voice_count):
         print("未传入 --apply，数据库未修改。")
     return 0
+
+
+def _preflight_v12_model_context_cutover_command(args: argparse.Namespace) -> int:
+    try:
+        with SessionLocal() as db:
+            report = preflight_v12_model_context_cutover(db)
+    except Exception as exc:
+        print(
+            f"V12 model-context cutover preflight failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.json:
+        print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(
+            "cutover=v11_to_v12 read_only=true "
+            f"scanned={report.scanned_game_count} candidates={report.candidate_count} "
+            f"safe={report.safe_history_count} blocking={report.blocking_count}"
+        )
+        for finding in report.findings:
+            if finding.is_safe_history:
+                continue
+            print(
+                f"BLOCK game_id={finding.game_id} run_id={finding.current_run_id} "
+                f"prompt={finding.prompt_template_version} "
+                f"match_status={finding.match_status} "
+                f"execution_state={finding.execution_state} "
+                f"reasons={','.join(finding.reason_codes)}"
+            )
+    return 0 if report.deployable else 1
+
+
+def _run_v2_agent_plan_canary_command(args: argparse.Namespace) -> int:
+    try:
+        corpus = load_e1_canary_corpus(args.corpus)
+        if not args.execute:
+            report = build_e1_canary_dry_run_report(corpus, caps=args.caps)
+            if args.json:
+                print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+            else:
+                print(
+                    "e1_canary=dry_run external_requests=0 http_client_created=false "
+                    f"attempts_per_cap={report['attempts_per_cap']} "
+                    f"caps={','.join(str(cap) for cap in report['caps'])} "
+                    f"configured_tokens_per_cap={report['configured_output_tokens_per_cap']}"
+                )
+                print(
+                    f"corpus_sha256={report['corpus_sha256']} "
+                    f"schedule_sha256={report['schedule_sha256']}"
+                )
+            return 0
+
+        if args.budget_ledger is None:
+            raise E1CanaryContractError("canary_budget_ledger_required")
+        ledger = load_e1_canary_budget_ledger(args.budget_ledger)
+        validate_e1_canary_live_prerequisites(
+            corpus,
+            caps=args.caps,
+            confirm_external_model_calls=args.confirm_external_model_calls,
+            confirm_billing_authorized=args.confirm_billing_authorized,
+            ledger=ledger,
+        )
+    except E1CanaryContractError as exc:
+        print(f"E1 Agent Plan canary refused: {exc.code}", file=sys.stderr)
+        return 2
+
+    print(
+        "E1 Agent Plan canary refused: live_execution_not_implemented; no HTTP client was created.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _serve_command(args: argparse.Namespace) -> int:
@@ -602,9 +726,7 @@ def _run_quality_evaluator_command(args: argparse.Namespace) -> int:
             lease_seconds=settings.quality_evaluation_lease_seconds,
             max_attempts=settings.quality_evaluation_max_attempts,
             backoff_seconds=settings.quality_evaluation_backoff_seconds,
-            on_job=lambda evaluation_id: print(
-                f"evaluation_id={evaluation_id}", flush=True
-            ),
+            on_job=lambda evaluation_id: print(f"evaluation_id={evaluation_id}", flush=True),
         )
     except Exception as exc:
         print(f"quality evaluator failed: {type(exc).__name__}", file=sys.stderr)
@@ -697,11 +819,7 @@ def _export_liveness_review_command(args: argparse.Namespace) -> int:
 def _analyze_liveness_review_command(args: argparse.Namespace) -> int:
     try:
         answer_key = json.loads(args.answer_key.read_text(encoding="utf-8"))
-        ratings = [
-            rating
-            for path in args.ratings
-            for rating in load_ratings(path)
-        ]
+        ratings = [rating for path in args.ratings for rating in load_ratings(path)]
         result = analyze_review_ratings(
             answer_key=answer_key,
             ratings=ratings,

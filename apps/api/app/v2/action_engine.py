@@ -33,6 +33,11 @@ from app.v2.model_client import (
     V2QualityError,
     model_failure_disposition,
 )
+from app.v2.model_failure_episode import stable_failure_episode_id
+from app.v2.model_generation_policy_contract import (
+    V2ResolvedModelGenerationPolicy,
+    resolve_model_generation_action_policy,
+)
 from app.v2.model_observation import observe_model_speech
 from app.v2.protocol import (
     V2LiveProtocolError,
@@ -185,16 +190,25 @@ class V2SpeechSpec:
     decision_family_id: str | None = None
     prior_machine_format_failures: int = 0
     automatic_machine_format_budget: int | None = None
+    prior_output_budget_failures: int = 0
+    automatic_output_budget_budget: int | None = None
     preflight_pause_failure: V2PreflightPauseFailure | None = None
 
     def __post_init__(self) -> None:
         if self.prior_machine_format_failures < 0:
             raise ValueError("prior_machine_format_failures must be non-negative")
+        if self.prior_output_budget_failures < 0:
+            raise ValueError("prior_output_budget_failures must be non-negative")
         if (
             self.automatic_machine_format_budget is not None
             and self.automatic_machine_format_budget < 0
         ):
             raise ValueError("automatic_machine_format_budget must be non-negative")
+        if (
+            self.automatic_output_budget_budget is not None
+            and self.automatic_output_budget_budget < 0
+        ):
+            raise ValueError("automatic_output_budget_budget must be non-negative")
         if self.preflight_pause_failure is not None and self.isolated_failure:
             raise ValueError("preflight pause requires a blocking action")
         if isinstance(self.context, dict) and "projection_at_seq" in self.context:
@@ -228,6 +242,8 @@ class V2PreflightPauseFailure:
     source_action_id: str
     source_attempt_id: str
     automatic_machine_format_attempt_count: int
+    automatic_output_budget_attempt_count: int = 0
+    source_failure_episode_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -238,6 +254,10 @@ class V2ActionFailure:
     machine_format_failure_count: int = 0
     last_machine_format_attempt_id: str | None = None
     last_machine_format_failure_code: str | None = None
+    output_budget_failure_count: int = 0
+    last_output_budget_attempt_id: str | None = None
+    last_output_budget_failure_code: str | None = None
+    failure_episode_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.machine_format_failure_count < 0:
@@ -246,6 +266,12 @@ class V2ActionFailure:
             not self.last_machine_format_attempt_id or not self.last_machine_format_failure_code
         ):
             raise ValueError("machine-format failure lineage is required")
+        if self.output_budget_failure_count < 0:
+            raise ValueError("output_budget_failure_count must be non-negative")
+        if self.output_budget_failure_count > 0 and (
+            not self.last_output_budget_attempt_id or not self.last_output_budget_failure_code
+        ):
+            raise ValueError("output-budget failure lineage is required")
 
 
 @dataclass(frozen=True)
@@ -276,6 +302,29 @@ class V2ModelRetryPolicy:
             raise ValueError("action_total_seconds must be at least attempt_total_seconds")
         if self.base_delay_seconds < 0 or self.jitter_seconds < 0:
             raise ValueError("retry delays must not be negative")
+
+
+def _is_blocking_required_target(spec: V2SpeechSpec) -> bool:
+    contract = spec.decision_contract
+    return (
+        contract.kind == "target"
+        and contract.target_mode == "required"
+        and bool(spec.allowed_target_ids)
+        and not spec.best_effort
+        and not spec.isolated_failure
+    )
+
+
+def _effective_model_attempt_limit(
+    *,
+    spec: V2SpeechSpec,
+    exc: V2ModelError,
+    disposition: V2FailureDisposition,
+    policy: V2ModelRetryPolicy,
+) -> int:
+    if exc.code == "model_output_budget_exhausted" and _is_blocking_required_target(spec):
+        return min(policy.max_attempts, 3)
+    return min(policy.max_attempts, disposition.max_attempts)
 
 
 @dataclass
@@ -453,11 +502,14 @@ class V2ActionEngine:
         self,
         *,
         claim: V2ActionClaim,
-        attempt_id: str,
+        attempt_id: str | None,
         failure_code: str,
         recovery: dict[str, Any],
         broadcaster: V2BroadcastPort,
         audience: str,
+        failure_episode_id: str | None = None,
+        source_failure_episode_ids: tuple[str, ...] = (),
+        on_paused: Callable[[], None] | None = None,
     ) -> None:
         waiter = _PausedModelActionWaiter(
             action_id=claim.action_id,
@@ -474,7 +526,11 @@ class V2ActionEngine:
                 attempt_id=attempt_id,
                 failure_code=failure_code,
                 recovery=recovery,
+                failure_episode_id=failure_episode_id,
+                source_failure_episode_ids=source_failure_episode_ids,
             )
+            if on_paused is not None:
+                on_paused()
             await broadcaster.broadcast_json(
                 live_state(
                     game_id=claim.game_id,
@@ -705,12 +761,30 @@ class V2ActionEngine:
         model_attempt_no: int | None = None
         model_request_completed = False
         model_failure_recorded = False
+        active_failure_episode_id: str | None = None
+        resolved_generation_policy: V2ResolvedModelGenerationPolicy | None = None
+        resolved_model_provider = spec.model_provider
+        resolved_model_id = spec.model_id
         machine_format_failure_count = 0
         last_machine_format_attempt_id: str | None = None
         last_machine_format_failure_code: str | None = None
+        output_budget_failure_count = 0
+        last_output_budget_attempt_id: str | None = None
+        last_output_budget_failure_code: str | None = None
         tts_attempt_id: str | None = None
+        retry_cycle = 1
+
+        def clear_active_failure_episode() -> None:
+            nonlocal active_failure_episode_id
+            active_failure_episode_id = None
+
         try:
             check_cancellation()
+            resolved_generation_policy = resolve_model_generation_action_policy(
+                claim.model_generation_policy_contract,
+                action_type=spec.action_type,
+            )
+            assert resolved_generation_policy is not None
             if not spec.best_effort and not spec.defer_presentation:
                 await broadcaster.broadcast_json(
                     director_scene_changed(
@@ -773,6 +847,8 @@ class V2ActionEngine:
                     model_supports_thinking=spec.model_supports_thinking,
                     model_parameters=model_parameters,
                 )
+                resolved_model_provider = model_target.provider
+                resolved_model_id = model_target.model_id
                 projected_model_context = project_model_action_context_with_metadata(
                     context,
                     players=spec.model_players,
@@ -812,7 +888,6 @@ class V2ActionEngine:
                 manages_attempt_timeout = bool(
                     getattr(self._model_client, "manages_attempt_timeout", False)
                 )
-                retry_cycle = 1
                 previous_attempt_id: str | None = None
                 model_attempt_no = 0
                 if spec.preflight_pause_failure is not None:
@@ -831,6 +906,14 @@ class V2ActionEngine:
                             "automatic_machine_format_attempt_count": (
                                 preflight.automatic_machine_format_attempt_count
                             ),
+                            "automatic_output_budget_attempt_count": (
+                                preflight.automatic_output_budget_attempt_count
+                            ),
+                            "prior_output_budget_failures": (spec.prior_output_budget_failures),
+                            "automatic_output_budget_budget": (spec.automatic_output_budget_budget),
+                            "source_failure_episode_ids": list(
+                                preflight.source_failure_episode_ids
+                            ),
                             "suppression_reason": "decision_family_budget_exhausted",
                         },
                     )
@@ -847,9 +930,11 @@ class V2ActionEngine:
                             attempt_no=0,
                             retry_cycle=retry_cycle,
                             machine_format_failure_count=0,
+                            output_budget_failure_count=0,
                         ),
                         broadcaster=broadcaster,
                         audience=spec.audience,
+                        source_failure_episode_ids=(preflight.source_failure_episode_ids),
                     )
                     previous_attempt_id = preflight.source_attempt_id
                     retry_cycle += 1
@@ -857,6 +942,11 @@ class V2ActionEngine:
                     model_started_at = time.monotonic()
                     model_deadline = model_started_at + retry_policy.action_total_seconds
                     model_queue_wait_seconds = 0.0
+                    # Operator resume starts a new retry cycle.  The observed
+                    # window for a possible third output-budget attempt is
+                    # therefore cycle-local, while the decision-family counter
+                    # below only consumes automatic failures from cycle one.
+                    cycle_output_budget_failure_count = 0
                     attempt_ids = [
                         (
                             model_attempt_id
@@ -951,6 +1041,19 @@ class V2ActionEngine:
                                     if spec.automatic_machine_format_budget is not None
                                     else None
                                 ),
+                                "prior_output_budget_failures": (spec.prior_output_budget_failures),
+                                "automatic_output_budget_budget": (
+                                    spec.automatic_output_budget_budget
+                                ),
+                                "automatic_output_budget_attempt_count": (
+                                    min(
+                                        spec.prior_output_budget_failures
+                                        + output_budget_failure_count,
+                                        spec.automatic_output_budget_budget,
+                                    )
+                                    if spec.automatic_output_budget_budget is not None
+                                    else None
+                                ),
                                 "attempt_no": model_attempt_no,
                                 "cycle_attempt_no": cycle_attempt_no,
                                 "retry_cycle": retry_cycle,
@@ -993,6 +1096,11 @@ class V2ActionEngine:
                                     round((model_deadline - time.monotonic()) * 1000),
                                 ),
                                 "retry_of_attempt_id": previous_attempt_id,
+                                **(
+                                    {"failure_episode_id": (active_failure_episode_id)}
+                                    if active_failure_episode_id is not None
+                                    else {}
+                                ),
                                 "request_kind": "decision" if decision else "speech",
                                 "model_id": model_target.model_id,
                                 "model_provider": model_target.provider,
@@ -1028,6 +1136,12 @@ class V2ActionEngine:
                                 "prompt_projection": prompt_projection,
                                 "output_enforcement": output_enforcement,
                                 "request_payload": request_payload,
+                                **_model_generation_policy_audit_payload(
+                                    policy=resolved_generation_policy,
+                                    action_type=spec.action_type,
+                                    model_provider=resolved_model_provider,
+                                    model_id=resolved_model_id,
+                                ),
                             },
                         )
                         check_cancellation()
@@ -1110,6 +1224,8 @@ class V2ActionEngine:
                                 attempt_progress,
                                 progress_capable=progress_capable,
                             )
+                            if model_decision is not None:
+                                _enrich_model_error_from_decision(exc, model_decision)
                             # Validation errors are raised after the client has
                             # returned a decision object. Never carry that invalid
                             # object across an automatic or operator-triggered retry.
@@ -1120,15 +1236,35 @@ class V2ActionEngine:
                                     machine_format_failure_count += 1
                                 last_machine_format_attempt_id = model_attempt_id
                                 last_machine_format_failure_code = exc.code
+                            if disposition.category == "output_budget":
+                                cycle_output_budget_failure_count += 1
+                                if retry_cycle == 1:
+                                    output_budget_failure_count += 1
+                                last_output_budget_attempt_id = model_attempt_id
+                                last_output_budget_failure_code = exc.code
                             family_machine_format_attempt_count = (
                                 spec.prior_machine_format_failures + machine_format_failure_count
                             )
-                            family_retry_available = (
+                            family_machine_format_retry_available = (
                                 disposition.category != "machine_format"
                                 or retry_cycle > 1
                                 or spec.automatic_machine_format_budget is None
                                 or family_machine_format_attempt_count
                                 < spec.automatic_machine_format_budget
+                            )
+                            family_output_budget_attempt_count = (
+                                spec.prior_output_budget_failures + output_budget_failure_count
+                            )
+                            family_output_budget_retry_available = (
+                                disposition.category != "output_budget"
+                                or retry_cycle > 1
+                                or spec.automatic_output_budget_budget is None
+                                or family_output_budget_attempt_count
+                                < spec.automatic_output_budget_budget
+                            )
+                            family_retry_available = (
+                                family_machine_format_retry_available
+                                and family_output_budget_retry_available
                             )
                             remaining = model_deadline - time.monotonic()
                             delay_seconds = _model_retry_delay_seconds(
@@ -1142,18 +1278,59 @@ class V2ActionEngine:
                                 disposition=disposition,
                                 exc=exc,
                                 policy=retry_policy,
+                                cycle_output_budget_failure_count=(
+                                    cycle_output_budget_failure_count
+                                ),
                             )
+                            effective_attempt_limit = _effective_model_attempt_limit(
+                                spec=spec,
+                                exc=exc,
+                                disposition=disposition,
+                                policy=retry_policy,
+                            )
+                            if (
+                                disposition.category == "output_budget"
+                                and retry_cycle == 1
+                                and spec.automatic_output_budget_budget is not None
+                            ):
+                                family_remaining = max(
+                                    0,
+                                    spec.automatic_output_budget_budget
+                                    - family_output_budget_attempt_count,
+                                )
+                                effective_attempt_limit = min(
+                                    effective_attempt_limit,
+                                    cycle_attempt_no + family_remaining,
+                                )
                             retryable = (
                                 disposition.retryable
                                 and family_retry_available
-                                and cycle_attempt_no
-                                < min(retry_policy.max_attempts, disposition.max_attempts)
+                                and cycle_attempt_no < effective_attempt_limit
                                 and remaining > delay_seconds + required_retry_window
                             )
+                            if not disposition.retryable:
+                                automatic_retry_stop_reason = "not_retryable"
+                            elif not family_retry_available:
+                                automatic_retry_stop_reason = "decision_family_budget_exhausted"
+                            elif cycle_attempt_no >= effective_attempt_limit:
+                                automatic_retry_stop_reason = "attempt_limit_reached"
+                            elif remaining <= delay_seconds + required_retry_window:
+                                automatic_retry_stop_reason = "insufficient_action_budget"
+                            else:
+                                automatic_retry_stop_reason = None
                             binding_failure_streak = binding_prior_failure_streak + 1
                             binding_health_status = _model_binding_health_status(
                                 binding_failure_streak
                             )
+                            failure_episode_id = active_failure_episode_id
+                            if failure_episode_id is None:
+                                failure_episode_id = stable_failure_episode_id(
+                                    game_id=claim.game_id,
+                                    run_id=claim.run_id,
+                                    action_id=claim.action_id,
+                                    retry_cycle=retry_cycle,
+                                    first_failed_attempt_id=model_attempt_id,
+                                )
                             failure_payload = _model_failure_payload(
                                 action_id=claim.action_id,
                                 attempt_id=model_attempt_id,
@@ -1179,6 +1356,30 @@ class V2ActionEngine:
                                 model_binding_failure_streak=(binding_failure_streak),
                                 model_binding_health_status=(binding_health_status),
                             )
+                            failure_payload.update(
+                                _model_generation_policy_audit_payload(
+                                    policy=resolved_generation_policy,
+                                    action_type=spec.action_type,
+                                    model_provider=resolved_model_provider,
+                                    model_id=resolved_model_id,
+                                    explicit_reasoning_only_elapsed_ms=(
+                                        exc.reasoning_only_elapsed_ms
+                                    ),
+                                    first_token_ms=exc.first_token_ms,
+                                    first_visible_text_ms=exc.first_visible_text_ms,
+                                    terminal_elapsed_ms=exc.elapsed_ms,
+                                )
+                            )
+                            failure_payload["failure_episode_id"] = failure_episode_id
+                            failure_payload.update(
+                                {
+                                    "effective_attempt_limit": effective_attempt_limit,
+                                    "retry_delay_ms": round(delay_seconds * 1000),
+                                    "required_retry_window_ms": round(required_retry_window * 1000),
+                                    "automatic_retry_scheduled": retryable,
+                                    "automatic_retry_stop_reason": (automatic_retry_stop_reason),
+                                }
+                            )
                             if spec.decision_family_id is not None:
                                 failure_payload["decision_family_id"] = spec.decision_family_id
                             if disposition.category == "machine_format":
@@ -1193,12 +1394,42 @@ class V2ActionEngine:
                                 failure_payload["automatic_machine_format_budget"] = (
                                     spec.automatic_machine_format_budget
                                 )
+                            if disposition.category == "output_budget":
+                                failure_payload.update(
+                                    {
+                                        "output_budget_failure_count": (
+                                            output_budget_failure_count
+                                        ),
+                                        "last_output_budget_attempt_id": (
+                                            last_output_budget_attempt_id
+                                        ),
+                                        "last_output_budget_failure_code": (
+                                            last_output_budget_failure_code
+                                        ),
+                                        "prior_output_budget_failures": (
+                                            spec.prior_output_budget_failures
+                                        ),
+                                        "automatic_output_budget_attempt_count": (
+                                            min(
+                                                family_output_budget_attempt_count,
+                                                spec.automatic_output_budget_budget,
+                                            )
+                                            if spec.automatic_output_budget_budget is not None
+                                            else family_output_budget_attempt_count
+                                        ),
+                                        "automatic_output_budget_budget": (
+                                            spec.automatic_output_budget_budget
+                                        ),
+                                    }
+                                )
                             self._repository.append_event(
                                 game_id=claim.game_id,
                                 event_type="model_request_failed",
                                 audience=model_audience,
                                 payload=failure_payload,
                             )
+                            model_failure_recorded = True
+                            active_failure_episode_id = failure_episode_id
                             self._repository.append_event(
                                 game_id=claim.game_id,
                                 event_type="model_binding_health_updated",
@@ -1219,7 +1450,6 @@ class V2ActionEngine:
                                     "response_headers_seen": (exc.response_headers_seen),
                                 },
                             )
-                            model_failure_recorded = True
                             previous_attempt_id = model_attempt_id
                             if retryable:
                                 next_attempt_id = attempt_ids[cycle_attempt_index + 1]
@@ -1237,8 +1467,13 @@ class V2ActionEngine:
                                         "cycle_attempt_no": cycle_attempt_no,
                                         "retry_cycle": retry_cycle,
                                         "max_attempts": retry_policy.max_attempts,
+                                        "effective_attempt_limit": (effective_attempt_limit),
                                         "failure_code": exc.code,
+                                        "failure_episode_id": failure_episode_id,
                                         "delay_ms": round(delay_seconds * 1000),
+                                        "required_retry_window_ms": round(
+                                            required_retry_window * 1000
+                                        ),
                                         "retry_after_ms": (
                                             round(exc.retry_after_seconds * 1000)
                                             if exc.retry_after_seconds is not None
@@ -1247,6 +1482,30 @@ class V2ActionEngine:
                                         "action_remaining_ms": max(
                                             0,
                                             round((model_deadline - time.monotonic()) * 1000),
+                                        ),
+                                        **(
+                                            {
+                                                "output_budget_failure_count": (
+                                                    output_budget_failure_count
+                                                ),
+                                                "prior_output_budget_failures": (
+                                                    spec.prior_output_budget_failures
+                                                ),
+                                                "automatic_output_budget_attempt_count": (
+                                                    min(
+                                                        family_output_budget_attempt_count,
+                                                        spec.automatic_output_budget_budget,
+                                                    )
+                                                    if spec.automatic_output_budget_budget
+                                                    is not None
+                                                    else family_output_budget_attempt_count
+                                                ),
+                                                "automatic_output_budget_budget": (
+                                                    spec.automatic_output_budget_budget
+                                                ),
+                                            }
+                                            if disposition.category == "output_budget"
+                                            else {}
                                         ),
                                     },
                                 )
@@ -1262,13 +1521,14 @@ class V2ActionEngine:
                             )
                             if technical_outcome is not None:
                                 technical_decision, event_type = technical_outcome
-                                self._repository.append_event(
+                                technical_outcome_record_seq = self._repository.append_event(
                                     game_id=claim.game_id,
                                     event_type=event_type,
                                     audience=claim.audience,
                                     payload={
                                         "action_id": claim.action_id,
                                         "attempt_id": model_attempt_id,
+                                        "failure_episode_id": failure_episode_id,
                                         "action_type": spec.action_type,
                                         "actor_id": spec.actor_id,
                                         "phase_id": spec.phase_id,
@@ -1291,7 +1551,10 @@ class V2ActionEngine:
                                     next_live_state=spec.success_live_state,
                                     next_phase_state=spec.success_phase_state,
                                     best_effort=spec.best_effort,
+                                    failure_episode_id=failure_episode_id,
+                                    technical_outcome_record_seq=(technical_outcome_record_seq),
                                 )
+                                clear_active_failure_episode()
                                 if not spec.best_effort and not spec.defer_presentation:
                                     await broadcaster.broadcast_json(
                                         live_state(
@@ -1324,9 +1587,12 @@ class V2ActionEngine:
                                         attempt_no=model_attempt_no,
                                         retry_cycle=retry_cycle,
                                         machine_format_failure_count=(machine_format_failure_count),
+                                        output_budget_failure_count=(output_budget_failure_count),
                                     ),
                                     broadcaster=broadcaster,
                                     audience=spec.audience,
+                                    failure_episode_id=failure_episode_id,
+                                    on_paused=clear_active_failure_episode,
                                 )
                                 retry_cycle += 1
                                 resumed_after_pause = True
@@ -1427,6 +1693,12 @@ class V2ActionEngine:
                     payload={
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
+                        "retry_cycle": retry_cycle,
+                        **(
+                            {"failure_episode_id": active_failure_episode_id}
+                            if active_failure_episode_id is not None
+                            else {}
+                        ),
                         "provider_request_id": model_decision.provider_request_id,
                         "raw_response": (
                             model_decision.raw_response
@@ -1450,8 +1722,28 @@ class V2ActionEngine:
                         "text_delta_count": model_decision.text_delta_count,
                         "max_inter_delta_ms": model_decision.max_inter_delta_ms,
                         "last_progress_ms": model_decision.last_progress_ms,
+                        "finish_reason": model_decision.finish_reason,
+                        "provider_usage": model_decision.provider_usage,
+                        "usage_update_count": model_decision.usage_update_count,
+                        "usage_conflict_observed": (model_decision.usage_conflict_observed),
+                        "usage_consistency": model_decision.usage_consistency,
+                        "reasoning_only_elapsed_ms": (model_decision.reasoning_only_elapsed_ms),
+                        **_model_generation_policy_audit_payload(
+                            policy=resolved_generation_policy,
+                            action_type=spec.action_type,
+                            model_provider=resolved_model_provider,
+                            model_id=resolved_model_id,
+                            explicit_reasoning_only_elapsed_ms=(
+                                model_decision.reasoning_only_elapsed_ms
+                            ),
+                            first_token_ms=model_decision.first_token_ms,
+                            first_visible_text_ms=(model_decision.first_visible_text_ms),
+                            terminal_elapsed_ms=model_decision.completed_ms,
+                        ),
                     },
                 )
+                model_request_completed = True
+                clear_active_failure_episode()
                 if binding_prior_failure_streak > 0:
                     self._repository.append_event(
                         game_id=claim.game_id,
@@ -1536,7 +1828,6 @@ class V2ActionEngine:
                             ),
                         },
                     )
-                model_request_completed = True
                 normalized_target = resolved_target
                 normalization_reason: str | None = None
                 if spec.decision_contract.kind != "target":
@@ -1840,19 +2131,69 @@ class V2ActionEngine:
                 model_attempt_id is not None
                 and not model_request_completed
                 and not model_failure_recorded
+                and isinstance(
+                    exc,
+                    (V2ModelError, V2ModelContextProjectionInvariantError),
+                )
             ):
                 try:
+                    failure_episode_id = stable_failure_episode_id(
+                        game_id=claim.game_id,
+                        run_id=claim.run_id,
+                        action_id=claim.action_id,
+                        retry_cycle=retry_cycle,
+                        first_failed_attempt_id=model_attempt_id,
+                    )
                     failure_payload: dict[str, Any] = {
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
                         "decision_family_id": spec.decision_family_id,
                         "attempt_no": model_attempt_no,
+                        "cycle_attempt_no": 1,
+                        "retry_cycle": retry_cycle,
                         "max_attempts": self._model_retry_policy.max_attempts,
                         "failure_kind": failure_kind,
                         "failure_code": failure_code,
+                        "failure_category": (
+                            model_failure_disposition(exc).category
+                            if isinstance(exc, V2ModelError)
+                            else "internal_invariant"
+                        ),
+                        "failure_episode_id": failure_episode_id,
+                        "pre_provider_failure": True,
                         "retryable": False,
+                        "effective_attempt_limit": 1,
+                        "retry_delay_ms": 0,
+                        "required_retry_window_ms": 0,
+                        "automatic_retry_scheduled": False,
+                        "automatic_retry_stop_reason": "not_retryable",
                         "terminal": True,
                     }
+                    if resolved_generation_policy is not None:
+                        failure_payload.update(
+                            _model_generation_policy_audit_payload(
+                                policy=resolved_generation_policy,
+                                action_type=spec.action_type,
+                                model_provider=resolved_model_provider,
+                                model_id=resolved_model_id,
+                                explicit_reasoning_only_elapsed_ms=(
+                                    exc.reasoning_only_elapsed_ms
+                                    if isinstance(exc, V2ModelError)
+                                    else None
+                                ),
+                                first_token_ms=(
+                                    exc.first_token_ms if isinstance(exc, V2ModelError) else None
+                                ),
+                                first_visible_text_ms=(
+                                    exc.first_visible_text_ms
+                                    if isinstance(exc, V2ModelError)
+                                    else None
+                                ),
+                                terminal_elapsed_ms=(
+                                    exc.elapsed_ms if isinstance(exc, V2ModelError) else None
+                                ),
+                            )
+                        )
                     if isinstance(exc, V2QualityError):
                         failure_payload["application_validation_result"] = "rejected"
                         if exc.raw_response is not None:
@@ -1865,6 +2206,8 @@ class V2ActionEngine:
                         audience=model_audience,
                         payload=failure_payload,
                     )
+                    model_failure_recorded = True
+                    active_failure_episode_id = failure_episode_id
                 except Exception:
                     logger.exception("Live V2 could not persist model request failure")
             logger.warning(
@@ -1888,6 +2231,12 @@ class V2ActionEngine:
                     identity=identity,
                     tts_attempt_id=tts_attempt_id,
                     best_effort=spec.best_effort,
+                    failure_episode_id=active_failure_episode_id,
+                    failure_episode_disposition=(
+                        "isolated_action_failure"
+                        if spec.isolated_failure or spec.best_effort or spec.defer_presentation
+                        else "run_failure"
+                    ),
                 )
             except Exception:
                 logger.exception("Live V2 could not persist action failure")
@@ -1926,6 +2275,10 @@ class V2ActionEngine:
                         machine_format_failure_count=machine_format_failure_count,
                         last_machine_format_attempt_id=(last_machine_format_attempt_id),
                         last_machine_format_failure_code=(last_machine_format_failure_code),
+                        output_budget_failure_count=output_budget_failure_count,
+                        last_output_budget_attempt_id=(last_output_budget_attempt_id),
+                        last_output_budget_failure_code=(last_output_budget_failure_code),
+                        failure_episode_id=active_failure_episode_id,
                     ),
                 )
             return None
@@ -2191,6 +2544,7 @@ def _model_action_recovery_snapshot(
     attempt_no: int,
     retry_cycle: int,
     machine_format_failure_count: int,
+    output_budget_failure_count: int,
 ) -> dict[str, Any]:
     canonical_request = json.dumps(
         request_payload,
@@ -2209,6 +2563,17 @@ def _model_action_recovery_snapshot(
         if spec.automatic_machine_format_budget is not None
         else None
     )
+    family_output_budget_failure_count = (
+        spec.prior_output_budget_failures + output_budget_failure_count
+    )
+    automatic_output_budget_attempt_count = (
+        min(
+            family_output_budget_failure_count,
+            spec.automatic_output_budget_budget,
+        )
+        if spec.automatic_output_budget_budget is not None
+        else None
+    )
     return {
         "action_type": spec.action_type,
         "actor_id": spec.actor_id,
@@ -2216,6 +2581,9 @@ def _model_action_recovery_snapshot(
         "prior_machine_format_failures": family_machine_format_failure_count,
         "automatic_machine_format_attempt_count": (automatic_machine_format_attempt_count),
         "automatic_machine_format_budget": spec.automatic_machine_format_budget,
+        "prior_output_budget_failures": family_output_budget_failure_count,
+        "automatic_output_budget_attempt_count": (automatic_output_budget_attempt_count),
+        "automatic_output_budget_budget": spec.automatic_output_budget_budget,
         "exhaustion_scope": (
             "decision_family" if spec.preflight_pause_failure is not None else "action"
         ),
@@ -2299,6 +2667,76 @@ def _technical_exhaustion_outcome(
     return None
 
 
+def _model_generation_policy_audit_payload(
+    *,
+    policy: V2ResolvedModelGenerationPolicy,
+    action_type: str,
+    model_provider: str | None,
+    model_id: str | None,
+    explicit_reasoning_only_elapsed_ms: int | None = None,
+    first_token_ms: int | None = None,
+    first_visible_text_ms: int | None = None,
+    terminal_elapsed_ms: int | None = None,
+) -> dict[str, Any]:
+    reasoning_only_elapsed_ms = _resolved_reasoning_only_elapsed_ms(
+        explicit=explicit_reasoning_only_elapsed_ms,
+        first_token_ms=first_token_ms,
+        first_visible_text_ms=first_visible_text_ms,
+        terminal_elapsed_ms=terminal_elapsed_ms,
+    )
+    reasoning_only_timeout_ms = policy.reasoning_only_timeout_ms
+    shadow_would_timeout = (
+        reasoning_only_elapsed_ms >= reasoning_only_timeout_ms
+        if policy.enforcement == "observe_only"
+        and reasoning_only_elapsed_ms is not None
+        and reasoning_only_timeout_ms is not None
+        else None
+    )
+    return {
+        "model_provider": model_provider,
+        "model_id": model_id,
+        "action_type": action_type,
+        "model_generation_policy_contract_status": policy.status,
+        "model_generation_policy_schema_version": policy.schema_version,
+        "model_generation_policy_classification_version": (policy.classification_version),
+        "model_generation_policy_enforcement": policy.enforcement,
+        "model_generation_policy_profile": policy.profile,
+        "model_generation_policy_profile_source": policy.source,
+        "model_generation_policy_reasoning_parameter_mode": (policy.reasoning_parameter_mode),
+        "reasoning_only_timeout_ms": reasoning_only_timeout_ms,
+        "timeout_max_attempts": policy.timeout_max_attempts,
+        "reasoning_only_elapsed_ms": reasoning_only_elapsed_ms,
+        "shadow_would_timeout": shadow_would_timeout,
+    }
+
+
+def _resolved_reasoning_only_elapsed_ms(
+    *,
+    explicit: int | None,
+    first_token_ms: int | None,
+    first_visible_text_ms: int | None,
+    terminal_elapsed_ms: int | None,
+) -> int | None:
+    if isinstance(explicit, int) and not isinstance(explicit, bool) and explicit >= 0:
+        return explicit
+    if (
+        not isinstance(first_token_ms, int)
+        or isinstance(first_token_ms, bool)
+        or first_token_ms < 0
+    ):
+        return None
+    terminal_ms = (
+        first_visible_text_ms
+        if isinstance(first_visible_text_ms, int)
+        and not isinstance(first_visible_text_ms, bool)
+        and first_visible_text_ms >= 0
+        else terminal_elapsed_ms
+    )
+    if not isinstance(terminal_ms, int) or isinstance(terminal_ms, bool) or terminal_ms < 0:
+        return None
+    return max(0, terminal_ms - first_token_ms)
+
+
 def _model_failure_payload(
     *,
     action_id: str,
@@ -2363,6 +2801,12 @@ def _model_failure_payload(
         "text_delta_count": exc.text_delta_count,
         "max_inter_delta_ms": exc.max_inter_delta_ms,
         "last_progress_ms": exc.last_progress_ms,
+        "finish_reason": exc.finish_reason,
+        "provider_usage": exc.provider_usage,
+        "usage_update_count": exc.usage_update_count,
+        "usage_conflict_observed": exc.usage_conflict_observed,
+        "usage_consistency": exc.usage_consistency,
+        "reasoning_only_elapsed_ms": exc.reasoning_only_elapsed_ms,
     }
     if isinstance(exc, V2QualityError):
         payload["application_validation_result"] = "rejected"
@@ -2385,7 +2829,23 @@ def _required_retry_window_seconds(
     disposition: V2FailureDisposition,
     exc: V2ModelError,
     policy: V2ModelRetryPolicy,
+    cycle_output_budget_failure_count: int = 0,
 ) -> float:
+    if disposition.category == "output_budget":
+        if (
+            cycle_output_budget_failure_count == 2
+            and _is_blocking_required_target(spec)
+            and policy.max_attempts >= 3
+        ):
+            elapsed_ms = exc.elapsed_ms
+            if (
+                isinstance(elapsed_ms, (int, float))
+                and not isinstance(elapsed_ms, bool)
+                and elapsed_ms > 0
+            ):
+                return min(policy.attempt_total_seconds, elapsed_ms / 1000)
+            return policy.attempt_total_seconds
+        return 0.0
     if disposition.category != "timeout":
         return 0.0
     if (
@@ -2429,6 +2889,44 @@ def _enrich_model_error_from_progress(
         exc.provider_concurrency_limit = progress.provider_concurrency_limit
     if progress_capable and exc.failure_stage is None:
         exc.failure_stage = progress.failure_stage()
+
+
+def _enrich_model_error_from_decision(
+    exc: V2ModelError,
+    decision: V2ModelDecision,
+) -> None:
+    """Preserve terminal stream diagnostics when application validation rejects."""
+
+    if exc.provider_request_id is None:
+        exc.provider_request_id = decision.provider_request_id
+    if exc.first_token_ms is None:
+        exc.first_token_ms = decision.first_token_ms
+    exc.first_token_seen = True
+    if exc.first_visible_text_ms is None:
+        exc.first_visible_text_ms = decision.first_visible_text_ms
+    if exc.elapsed_ms is None:
+        exc.elapsed_ms = decision.completed_ms
+    if exc.queue_wait_ms is None:
+        exc.queue_wait_ms = decision.queue_wait_ms
+    if exc.provider_in_flight is None:
+        exc.provider_in_flight = decision.provider_in_flight
+    if exc.provider_concurrency_limit is None:
+        exc.provider_concurrency_limit = decision.provider_concurrency_limit
+    exc.reasoning_delta_count = decision.reasoning_delta_count
+    exc.text_delta_count = decision.text_delta_count
+    if exc.max_inter_delta_ms is None:
+        exc.max_inter_delta_ms = decision.max_inter_delta_ms
+    if exc.last_progress_ms is None:
+        exc.last_progress_ms = decision.last_progress_ms
+    if exc.finish_reason is None:
+        exc.finish_reason = decision.finish_reason
+    if exc.provider_usage is None and decision.provider_usage is not None:
+        exc.provider_usage = dict(decision.provider_usage)
+    exc.usage_update_count = decision.usage_update_count
+    exc.usage_conflict_observed = decision.usage_conflict_observed
+    exc.usage_consistency = decision.usage_consistency
+    if exc.reasoning_only_elapsed_ms is None:
+        exc.reasoning_only_elapsed_ms = decision.reasoning_only_elapsed_ms
 
 
 def _model_retry_delay_seconds(

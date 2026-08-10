@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import TypedDict
 
 
 V2LiveState = Literal[
@@ -578,6 +579,20 @@ class AdminV2OutputEnforcementResponse(BaseModel):
     schema_version: int | None
 
 
+class AdminV2ProviderUsageResponse(TypedDict, total=False):
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    cached_input_tokens: int
+
+
+class AdminV2FailureEpisodeEventRefResponse(BaseModel):
+    event_type: str
+    event_id: int | str | None
+    record_seq: int
+
+
 class AdminV2ModelRequestSummaryResponse(BaseModel):
     attempt_id: str
     decision_family_id: str | None
@@ -591,6 +606,10 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     vote_batch_stage: str | None
     automatic_machine_format_attempt_count: int | None
     automatic_machine_format_budget: int | None
+    prior_output_budget_failures: int | None
+    output_budget_failure_count: int | None
+    automatic_output_budget_attempt_count: int | None
+    automatic_output_budget_budget: int | None
     attempt_no: int
     cycle_attempt_no: int
     retry_cycle: int
@@ -630,8 +649,65 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     passive_observation_count: int
     output_source: Literal["persisted", "legacy_inferred", "unavailable"]
     provider_request_id: str | None
+    model_generation_policy_contract_status: Literal["supported", "legacy_disabled"] | None
+    model_generation_policy_schema_version: int | None
+    model_generation_policy_classification_version: int | None
+    model_generation_policy_enforcement: Literal["observe_only", "disabled"] | None
+    model_generation_policy_reasoning_parameter_mode: (
+        Literal["inherit_frozen_model_configuration"] | None
+    )
+    model_generation_policy_profile: (
+        Literal[
+            "strategic_full",
+            "recoverable_public_speech",
+            "isolated_auxiliary",
+        ]
+        | None
+    )
+    model_generation_policy_profile_source: (
+        Literal[
+            "explicit_action_profile",
+            "default_profile",
+            "legacy_missing_contract",
+        ]
+        | None
+    )
+    reasoning_only_timeout_ms: int | None
+    timeout_max_attempts: int | None
+    shadow_would_timeout: bool | None
+    finish_reason: (
+        Literal[
+            "completed",
+            "stop",
+            "length",
+            "max_output_tokens",
+            "content_filter",
+            "tool_calls",
+            "unknown",
+        ]
+        | None
+    )
+    provider_usage: AdminV2ProviderUsageResponse | None
+    usage_update_count: int | None
+    usage_conflict_observed: bool | None
+    usage_consistency: (
+        Literal[
+            "exact",
+            "provider_total_mismatch",
+            "unavailable",
+        ]
+        | None
+    )
+    queue_wait_ms: int | None
+    provider_in_flight: int | None
+    provider_concurrency_limit: int | None
     first_token_ms: int | None
+    reasoning_only_elapsed_ms: int | None
     completed_ms: int | None
+    reasoning_delta_count: int | None
+    text_delta_count: int | None
+    max_inter_delta_ms: int | None
+    last_progress_ms: int | None
     failure_kind: str | None
     failure_code: str | None
     failure_category: str | None
@@ -654,6 +730,46 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     action_budget_ms: int | None
     action_elapsed_ms: int | None
     action_remaining_ms: int | None
+    effective_attempt_limit: int | None
+    retry_delay_ms: int | None
+    required_retry_window_ms: int | None
+    automatic_retry_scheduled: bool | None
+    automatic_retry_stop_reason: (
+        Literal[
+            "not_retryable",
+            "decision_family_budget_exhausted",
+            "attempt_limit_reached",
+            "insufficient_action_budget",
+        ]
+        | None
+    )
+    failure_episode_id: str | None
+    failure_resolution: (
+        Literal[
+            "automatic_retry_success",
+            "technical_skip",
+            "technical_false_fallback",
+            "operator_pause",
+            "isolated_action_failure",
+            "run_failure",
+            "run_canceled",
+            "unresolved",
+            "invariant_conflict",
+            "legacy_unavailable",
+        ]
+        | None
+    )
+    failure_episode_source_attempt_ids: list[str] | None
+    failure_episode_source_event_refs: list[AdminV2FailureEpisodeEventRefResponse] | None
+    failure_episode_terminal_event_refs: list[AdminV2FailureEpisodeEventRefResponse] | None
+    resolution_event_type: str | None
+    resolution_event_id: int | None
+    resolution_event_record_seq: int | None
+    supporting_event_type: str | None
+    supporting_event_id: int | None
+    supporting_event_record_seq: int | None
+    resolution_updated_at_record_seq: int | None
+    failure_episode_invariant_errors: list[str] | None
     model_binding_failure_streak: int | None
     model_binding_health_status: Literal["healthy", "impaired", "degraded"] | None
     model_binding_recovered_after_failures: int | None
@@ -663,6 +779,13 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
 
 class AdminV2ModelRequestResponse(AdminV2ModelRequestSummaryResponse):
     request_payload: dict[str, Any] | None
+    expanded_known_events: dict[str, Any] | None
+    known_events_expansion_status: Literal[
+        "verified",
+        "not_applicable",
+        "unavailable",
+        "invalid",
+    ]
     raw_response: str | None
     parsed_output: dict[str, Any] | None
     passive_observations: list[dict[str, Any]]

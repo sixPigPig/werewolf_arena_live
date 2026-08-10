@@ -1,0 +1,2961 @@
+{
+  "expected": {
+    "actor_private_event_count": 35,
+    "annotation_count": 5,
+    "canonical_serialized_char_count": 59872,
+    "canonical_sha256": "5aa6f7584d8654eb8d94b1035d4213cc4b767d5da2e6b83763b2a67c2b38419a",
+    "compact_serialized_char_count": 46161,
+    "event_count": 131,
+    "kind_counts": {
+      "day_vote": 33,
+      "hunter_response": 1,
+      "living_werewolf_teammates": 1,
+      "night_result": 5,
+      "player_eliminated": 5,
+      "player_statement": 44,
+      "private_ability_action_committed": 12,
+      "private_action_decision": 14,
+      "private_round_memory": 3,
+      "sheriff_badge_transferred": 2,
+      "sheriff_elected": 1,
+      "speech_turn_skipped_technical": 1,
+      "vote_result": 4,
+      "werewolf_attack_resolved": 5
+    },
+    "maximum_compaction_ratio": 0.8,
+    "public_event_count": 96,
+    "question_count": 1,
+    "relation_count": 0,
+    "speech_char_count": 10015,
+    "speech_char_lengths": [
+      128,
+      191,
+      203,
+      293,
+      270,
+      181,
+      226,
+      269,
+      285,
+      226,
+      218,
+      205,
+      237,
+      264,
+      261,
+      126,
+      265,
+      221,
+      250,
+      188,
+      223,
+      243,
+      204,
+      229,
+      322,
+      272,
+      126,
+      206,
+      241,
+      319,
+      289,
+      219,
+      272,
+      237,
+      186,
+      142,
+      276,
+      216,
+      287,
+      198,
+      247,
+      82,
+      248,
+      224
+    ],
+    "speech_count": 44,
+    "string_length_histogram": {
+      "10": 130,
+      "11": 5,
+      "12": 8,
+      "126": 2,
+      "128": 1,
+      "13": 36,
+      "14": 1,
+      "142": 1,
+      "15": 20,
+      "16": 57,
+      "17": 51,
+      "175": 1,
+      "18": 6,
+      "181": 1,
+      "186": 1,
+      "188": 1,
+      "189": 1,
+      "191": 1,
+      "198": 1,
+      "20": 3,
+      "203": 1,
+      "204": 1,
+      "205": 1,
+      "206": 1,
+      "21": 26,
+      "216": 1,
+      "218": 1,
+      "219": 1,
+      "22": 13,
+      "221": 1,
+      "223": 1,
+      "224": 1,
+      "226": 2,
+      "229": 1,
+      "23": 88,
+      "237": 2,
+      "24": 41,
+      "241": 1,
+      "243": 1,
+      "247": 1,
+      "248": 1,
+      "25": 4,
+      "250": 1,
+      "26": 3,
+      "261": 1,
+      "264": 1,
+      "265": 1,
+      "269": 1,
+      "270": 1,
+      "272": 2,
+      "276": 1,
+      "281": 1,
+      "285": 1,
+      "287": 1,
+      "289": 1,
+      "29": 4,
+      "293": 1,
+      "3": 143,
+      "30": 17,
+      "319": 1,
+      "32": 12,
+      "322": 1,
+      "33": 1,
+      "35": 1,
+      "36": 1,
+      "38": 1,
+      "39": 8,
+      "4": 84,
+      "40": 5,
+      "43": 1,
+      "45": 1,
+      "46": 1,
+      "47": 1,
+      "48": 1,
+      "49": 5,
+      "5": 27,
+      "50": 2,
+      "51": 2,
+      "52": 5,
+      "53": 4,
+      "54": 1,
+      "55": 1,
+      "6": 300,
+      "64": 1,
+      "7": 102,
+      "8": 43,
+      "82": 1,
+      "9": 13
+    }
+  },
+  "fixture_version": 1,
+  "known_events": {
+    "events": [
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "player_id": "seat_00",
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "night_no": 1,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": false,
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "status": "xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeee1",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 92,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 92,
+        "source_activation_id": "x0.xxxxxxxxxx.xx00x00x0x000xx0",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx.xxxx",
+            "target_player_id": "seat_0"
+          },
+          "night_no": 1,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": true,
+            "decision_stage": "xxxxxxxxxx.xxxxx.xxxx",
+            "final_target_player_id": "seat_0",
+            "resolution_reason": "xxxxxxxxx",
+            "tiebreaker_player_id": null
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeee2",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 160,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 160,
+        "source_activation_id": "x0.xxxxxxxxxx.000x0x0000000x00",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxx.xxxxxxxxxx",
+            "final_target_player_id": "seat_0"
+          },
+          "night_no": 1,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "resolution_reason": "xxxxxxxxx",
+            "resolution_stage": "xxxxxxxxxx.xxxxx.xxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeee3",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 163,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 163,
+        "source_activation_id": "x0.xxxxxxxxxx.000xx000x0xx0x00",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "final_target_player_id": "seat_0",
+          "night_no": 1,
+          "resolution_reason": "xxxxxxxxx",
+          "resolution_stage": "xxxxxxxxxx.xxxxx.xxxx",
+          "tiebreaker_player_id": null
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeee4",
+        "kind": "werewolf_attack_resolved",
+        "known_at_seq": 163,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 163,
+        "source_activation_id": "x0.xxxxxxxxxx.000xx000x0xx0x00",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxx.xxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxx.xxx.000.xxxxxxx",
+            "public_cutoff_record_seq": 253
+          },
+          "decision": {
+            "run_for_sheriff": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 1,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeee5",
+        "kind": "private_action_decision",
+        "known_at_seq": 386,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 386,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "396",
+        "kind": "player_statement",
+        "known_at_seq": 396,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 396,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0.0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文",
+        "stage": "xxxxxxx.xxxxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "411",
+        "kind": "player_statement",
+        "known_at_seq": 411,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 411,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0.0文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文",
+        "stage": "xxxxxxx.xxxxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "426",
+        "kind": "player_statement",
+        "known_at_seq": 426,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 426,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0.0文文文文文文文文文文文文0文文",
+        "stage": "xxxxxxx.xxxxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "466",
+        "kind": "sheriff_elected",
+        "known_at_seq": 466,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "payload": {
+          "audience": "xxx",
+          "audience_contract_version": 1,
+          "from_player_id": null,
+          "player_id": "seat_0",
+          "reason": "xxxx.xxxxxxxxx.xxxxxxxxx"
+        },
+        "record_seq": 466,
+        "visibility": "public"
+      },
+      {
+        "announced_in": {
+          "period": "dawn",
+          "round_no": 1
+        },
+        "authority": "judge_fact",
+        "eliminated_player_refs": [],
+        "event_ref": "476",
+        "identity_reveal": "xxxx",
+        "kind": "night_result",
+        "known_at_seq": 476,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 1
+        },
+        "outcome": "xxxxxxxx",
+        "record_seq": 476,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxxxxx.xxxxx.0.000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 505,
+            "selected_for_resolution": false,
+            "stage": "xxxxxxxxxx.xxxxx.0"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 1,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeeeb",
+        "kind": "private_action_decision",
+        "known_at_seq": 550,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 550,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "560",
+        "kind": "player_statement",
+        "known_at_seq": 560,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 560,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文0文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "575",
+        "kind": "player_statement",
+        "known_at_seq": 575,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 575,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "590",
+        "kind": "player_statement",
+        "known_at_seq": 590,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 590,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "605",
+        "kind": "player_statement",
+        "known_at_seq": 605,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 605,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文文文文0文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "620",
+        "kind": "player_statement",
+        "known_at_seq": 620,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 620,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "636",
+        "kind": "player_statement",
+        "known_at_seq": 636,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 636,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文0文文文文文文文\n\n文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文\"文文文文文文文文\"文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文0文文0文文文文文文文文0文文文文文文文文文文文文文文文文文\"文文文\"文文文文文文\n\n文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "651",
+        "kind": "player_statement",
+        "known_at_seq": 651,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 651,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n文文文文文文文0文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n文文文文文文文文文文文文文0文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "666",
+        "kind": "player_statement",
+        "known_at_seq": 666,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 666,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文0文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "681",
+        "kind": "player_statement",
+        "known_at_seq": 681,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 681,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文.文文文.文文文文文文文文文0文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "696",
+        "kind": "player_statement",
+        "known_at_seq": 696,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 696,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文00文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "711",
+        "kind": "player_statement",
+        "known_at_seq": 711,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 711,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "726",
+        "kind": "player_statement",
+        "known_at_seq": 726,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 726,
+        "speaker_ref": "seat_0",
+        "speech": "文文0文文文文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文0文文文文文文文0文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxx.xxxxx.xxxx.000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 731,
+            "selected_for_resolution": false,
+            "stage": "xxxxxx.xxxxx.xxxx"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 1,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeeeo",
+        "kind": "private_action_decision",
+        "known_at_seq": 776,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 776,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "885",
+        "kind": "day_vote",
+        "known_at_seq": 885,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 885,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "887",
+        "kind": "day_vote",
+        "known_at_seq": 887,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 887,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "889",
+        "kind": "day_vote",
+        "known_at_seq": 889,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 889,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "891",
+        "kind": "day_vote",
+        "known_at_seq": 891,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 891,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "893",
+        "kind": "day_vote",
+        "known_at_seq": 893,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 893,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "895",
+        "kind": "day_vote",
+        "known_at_seq": 895,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 895,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "897",
+        "kind": "day_vote",
+        "known_at_seq": 897,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 897,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "899",
+        "kind": "day_vote",
+        "known_at_seq": 899,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 899,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "901",
+        "kind": "day_vote",
+        "known_at_seq": 901,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 901,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.5
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "903",
+        "kind": "day_vote",
+        "known_at_seq": 903,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 903,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "905",
+        "kind": "day_vote",
+        "known_at_seq": 905,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 905,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "907",
+        "kind": "day_vote",
+        "known_at_seq": 907,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 907,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxx.xxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxx.xxxx.000.xxxx",
+            "public_cutoff_record_seq": 776,
+            "vote_round": 1
+          },
+          "decision": {
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文0文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 1,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee11",
+        "kind": "private_action_decision",
+        "known_at_seq": 908,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 908,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "candidate_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "eligible_voter_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "event_ref": "909",
+        "identity_reveal": "xxxx",
+        "ineligible_voter_refs": [],
+        "kind": "vote_result",
+        "known_at_seq": 909,
+        "leader_refs": [
+          "seat_0"
+        ],
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 909,
+        "sheriff_ref": "seat_0",
+        "sheriff_vote_weight": 1.5,
+        "totals": {
+          "seat_5": 1.0,
+          "seat_8": 11.5
+        },
+        "visibility": "public",
+        "voter_weights": {
+          "seat_1": 1.0,
+          "seat_10": 1.0,
+          "seat_11": 1.0,
+          "seat_12": 1.0,
+          "seat_2": 1.0,
+          "seat_3": 1.0,
+          "seat_4": 1.0,
+          "seat_5": 1.0,
+          "seat_6": 1.0,
+          "seat_7": 1.0,
+          "seat_8": 1.0,
+          "seat_9": 1.5
+        },
+        "weighted": true
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "910",
+        "identity_reveal": "xxxx",
+        "kind": "player_eliminated",
+        "known_at_seq": 910,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "player_ref": "seat_0",
+        "public_reason": "xxxxx",
+        "record_seq": 910,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "annotations": [
+          {
+            "authority": "player_claim_unverified",
+            "claim_id": "xxxxx.000.0.xxxx.xxxxx",
+            "claim_type": "xxxx.xxxxx",
+            "claimed_role": "xxxxxxxx",
+            "derivation": {
+              "kind": "deterministic_heuristic",
+              "validation_status": "xxxxxxxx",
+              "validator_version": 1
+            },
+            "sentence_index": 2
+          }
+        ],
+        "authority": "player_claim_unverified",
+        "event_ref": "928",
+        "kind": "player_statement",
+        "known_at_seq": 928,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "record_seq": 928,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文00文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxxxx.xxxx.xxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "actor_memory",
+        "data": {
+          "batch_id": "x0.xxxx.x00x00x0x00000x0.xxxxx.0.xxxxxxx.xxxxxxxx",
+          "epistemic_status": "actor_subjective_memory",
+          "memory": "文文00文文文文文文文0文文0文文0文文文文文文文文文文文文文 xxxxxxxxxxx 文文0文文文文文文文文文文文文文文文文文文0文文文文文文文0文文文文文文文0文文文文文文文文0文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文",
+          "round_no": 1,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee15",
+        "kind": "private_round_memory",
+        "known_at_seq": 1071,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 1
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1071,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "player_id": "seat_00",
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "night_no": 2,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": true,
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "status": "xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee16",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 1150,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1150,
+        "source_activation_id": "x0.xxxxxxxxxx.x00xx000000x0xxx",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxx.xxxxxxxxxx",
+            "final_target_player_id": "seat_0"
+          },
+          "night_no": 2,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+            "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee17",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 1154,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1154,
+        "source_activation_id": "x0.xxxxxxxxxx.0x00x0xxx0x000xx",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "final_target_player_id": "seat_0",
+          "night_no": 2,
+          "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+          "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx",
+          "tiebreaker_player_id": null
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee18",
+        "kind": "werewolf_attack_resolved",
+        "known_at_seq": 1154,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1154,
+        "source_activation_id": "x0.xxxxxxxxxx.0x00x0xxx0x000xx",
+        "visibility": "actor_private"
+      },
+      {
+        "announced_in": {
+          "period": "dawn",
+          "round_no": 2
+        },
+        "authority": "judge_fact",
+        "eliminated_player_refs": [
+          "seat_0"
+        ],
+        "event_ref": "1234",
+        "identity_reveal": "xxxx",
+        "kind": "night_result",
+        "known_at_seq": 1234,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 2
+        },
+        "outcome": "xxxxxx",
+        "record_seq": 1234,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxxxxx.xxxxx.0.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 1263,
+            "selected_for_resolution": false,
+            "stage": "xxxxxxxxxx.xxxxx.0"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文0文文文文文文文文文文文文文文xxx0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 2,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee1a",
+        "kind": "private_action_decision",
+        "known_at_seq": 1308,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1308,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1318",
+        "kind": "player_statement",
+        "known_at_seq": 1318,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1318,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文0文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文0文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1333",
+        "kind": "player_statement",
+        "known_at_seq": 1333,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1333,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文0文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文00.0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "annotations": [
+          {
+            "authority": "player_claim_unverified",
+            "claim_id": "xxxxx.0000.00.xxxx.xxxxx",
+            "claim_type": "xxxx.xxxxx",
+            "claimed_team": "xxxxxxxxx",
+            "derivation": {
+              "kind": "deterministic_heuristic",
+              "validation_status": "xxxxxxxx",
+              "validator_version": 1
+            },
+            "sentence_index": 10
+          }
+        ],
+        "authority": "player_claim_unverified",
+        "event_ref": "1348",
+        "kind": "player_statement",
+        "known_at_seq": 1348,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1348,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1363",
+        "kind": "player_statement",
+        "known_at_seq": 1363,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1363,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文0文文文文0文文文文文文0文文0文文文文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文0文文0文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1378",
+        "kind": "player_statement",
+        "known_at_seq": 1378,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1378,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n\n0文0文文文文文文0文文文文文文文文文文文0文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n\n0文文文文文文文文文文文文文文文文文文文文文文文文文文文文\n\n文文文文文0文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1393",
+        "kind": "player_statement",
+        "known_at_seq": 1393,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1393,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文\n\n文文0文0文文文文0文文文文文文文文文0文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文\n\n0文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文00.0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文0文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1408",
+        "kind": "player_statement",
+        "known_at_seq": 1408,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1408,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文0文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1423",
+        "kind": "player_statement",
+        "known_at_seq": 1423,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1423,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文00文文0文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1438",
+        "kind": "player_statement",
+        "known_at_seq": 1438,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1438,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文0文文0文文00文文00文文文文文0文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文00.0文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文0文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1453",
+        "kind": "player_statement",
+        "known_at_seq": 1453,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1453,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文00.0文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0.0文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxx.xxxxx.xxxx.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 1458,
+            "selected_for_resolution": false,
+            "stage": "xxxxxx.xxxxx.xxxx"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 2,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee1l",
+        "kind": "private_action_decision",
+        "known_at_seq": 1503,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1503,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1594",
+        "kind": "day_vote",
+        "known_at_seq": 1594,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1594,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1596",
+        "kind": "day_vote",
+        "known_at_seq": 1596,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1596,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1598",
+        "kind": "day_vote",
+        "known_at_seq": 1598,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1598,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1600",
+        "kind": "day_vote",
+        "known_at_seq": 1600,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1600,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1602",
+        "kind": "day_vote",
+        "known_at_seq": 1602,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1602,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1604",
+        "kind": "day_vote",
+        "known_at_seq": 1604,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1604,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1606",
+        "kind": "day_vote",
+        "known_at_seq": 1606,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1606,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.5
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1608",
+        "kind": "day_vote",
+        "known_at_seq": 1608,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1608,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1610",
+        "kind": "day_vote",
+        "known_at_seq": 1610,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1610,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "1612",
+        "kind": "day_vote",
+        "known_at_seq": 1612,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1612,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxx.xxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxx.xxxx.0000.xxxx",
+            "public_cutoff_record_seq": 1503,
+            "vote_round": 1
+          },
+          "decision": {
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文0文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 2,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee1w",
+        "kind": "private_action_decision",
+        "known_at_seq": 1613,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1613,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "candidate_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "eligible_voter_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "event_ref": "1614",
+        "identity_reveal": "xxxx",
+        "ineligible_voter_refs": [],
+        "kind": "vote_result",
+        "known_at_seq": 1614,
+        "leader_refs": [
+          "seat_0"
+        ],
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1614,
+        "sheriff_ref": "seat_0",
+        "sheriff_vote_weight": 1.5,
+        "totals": {
+          "seat_5": 9.5,
+          "seat_6": 1.0
+        },
+        "visibility": "public",
+        "voter_weights": {
+          "seat_1": 1.0,
+          "seat_10": 1.0,
+          "seat_11": 1.0,
+          "seat_12": 1.0,
+          "seat_2": 1.0,
+          "seat_4": 1.0,
+          "seat_5": 1.0,
+          "seat_6": 1.0,
+          "seat_7": 1.0,
+          "seat_9": 1.5
+        },
+        "weighted": true
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "1615",
+        "identity_reveal": "xxxx",
+        "kind": "player_eliminated",
+        "known_at_seq": 1615,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "player_ref": "seat_0",
+        "public_reason": "xxxxx",
+        "record_seq": 1615,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "annotations": [
+          {
+            "authority": "player_claim_unverified",
+            "claim_id": "xxxxx.0000.0.xxxx.xxxxx",
+            "claim_type": "xxxx.xxxxx",
+            "claimed_role": "xxxxx",
+            "derivation": {
+              "kind": "deterministic_heuristic",
+              "validation_status": "xxxxxxxx",
+              "validator_version": 1
+            },
+            "sentence_index": 1
+          }
+        ],
+        "authority": "player_claim_unverified",
+        "event_ref": "1633",
+        "kind": "player_statement",
+        "known_at_seq": 1633,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "record_seq": 1633,
+        "speaker_ref": "seat_0",
+        "speech": "文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文0文文文文文文文文0文文文0.0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文0文文文文文文文文文",
+        "stage": "xxxxx.xxxx.xxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "actor_memory",
+        "data": {
+          "batch_id": "x0.xxxx.x00x00x0x00000x0.xxxxx.0.xxxxxxx.xxxxxxxx",
+          "epistemic_status": "actor_subjective_memory",
+          "memory": "文文00文文文文文文0文0文0文文文文文文文文文文文文文文文文0文文 xxxxxxxxx 文文0文文文文文文文文文文文文文文0文文文文xxx0文文0文0文文文0文文文文文文文文文文文文文0文文0.0文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0.文文0文文文文文文文文文文文文文文文文文文文文文文文",
+          "round_no": 2,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee20",
+        "kind": "private_round_memory",
+        "known_at_seq": 1739,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 2
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1739,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "player_id": "seat_00",
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文0文文文文文0.0文文文0文文文文文0文0文文文文0文文文文xxx0文文文文文文文文文文文文文文文"
+          },
+          "night_no": 3,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": true,
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "status": "xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee21",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 1806,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1806,
+        "source_activation_id": "x0.xxxxxxxxxx.0xx00000000000x0",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "final_target_player_id": "seat_0",
+          "night_no": 3,
+          "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+          "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx",
+          "tiebreaker_player_id": null
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee22",
+        "kind": "werewolf_attack_resolved",
+        "known_at_seq": 1811,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1811,
+        "source_activation_id": "x0.xxxxxxxxxx.000x0000x0000000",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxx.xxxxxxxxxx",
+            "final_target_player_id": "seat_0"
+          },
+          "night_no": 3,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+            "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee23",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 1811,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1811,
+        "source_activation_id": "x0.xxxxxxxxxx.000x0000x0000000",
+        "visibility": "actor_private"
+      },
+      {
+        "announced_in": {
+          "period": "dawn",
+          "round_no": 3
+        },
+        "authority": "judge_fact",
+        "eliminated_player_refs": [
+          "seat_0"
+        ],
+        "event_ref": "1831",
+        "identity_reveal": "xxxx",
+        "kind": "night_result",
+        "known_at_seq": 1831,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 3
+        },
+        "outcome": "xxxxxx",
+        "record_seq": 1831,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "1850",
+        "kind": "sheriff_badge_transferred",
+        "known_at_seq": 1850,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "payload": {
+          "audience": "xxx",
+          "audience_contract_version": 1,
+          "from_player_id": "seat_0",
+          "player_id": "seat_0",
+          "reason": "xxxx.xxxxxxx.xxxxx.xxxxxxxxxx"
+        },
+        "record_seq": 1850,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxxxxx.xxxxx.0.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 1878,
+            "selected_for_resolution": false,
+            "stage": "xxxxxxxxxx.xxxxx.0"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 3,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee26",
+        "kind": "private_action_decision",
+        "known_at_seq": 1931,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 1931,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1941",
+        "kind": "player_statement",
+        "known_at_seq": 1941,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 1941,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文0文文文文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0.0文文文文0文00文00文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1956",
+        "kind": "player_statement",
+        "known_at_seq": 1956,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 1956,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文0文文文文文文文0文文文文文文0文文00文文文文文文文文文文文文文文文文文文文文文0文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1971",
+        "kind": "player_statement",
+        "known_at_seq": 1971,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 1971,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文文\n文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文0文文文文文文0文0文0文0文文文文文文文文文文文文文0文文文文文文文文文文0文文文文0文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文\n文文0文文文文文文文文文文文文文文0文文文文文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文0文文\n文文文0文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "1986",
+        "kind": "player_statement",
+        "known_at_seq": 1986,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 1986,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文文文文文文文0文0文0文文文0文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文0文文00文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文文文文0文文0文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文0文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文0文0文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2001",
+        "kind": "player_statement",
+        "known_at_seq": 2001,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2001,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文文文文文文文文文文文00文文00文文文文文文文文文文文文0文文文文文00文文文0文文.文文文.文文文文文文文文文00文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文0文0文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2016",
+        "kind": "player_statement",
+        "known_at_seq": 2016,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2016,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文00文文文文文文文文文文文文文文文文文文文文文0文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文\n\n文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文00文文0文文文文文文文文文文文文文文文文文文文文\n\n0文文文文文文文文文文文文文文文文文文文00文文00文文文文文文0文文文文文文00文文文文文文文文文文文0文0文文文文文文文0文文文文文文0文文文文文文文文文文0文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2032",
+        "kind": "player_statement",
+        "known_at_seq": 2032,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2032,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文00文文0文文文文文文文文文0文文文文文文文0文文0文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文00文文00文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文0文文文文文文文文文文文0文文文文0文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文00文文00文文文文文文文文文0文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2047",
+        "kind": "player_statement",
+        "known_at_seq": 2047,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2047,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文0文文文文文文文文0文文文文文文文文文00文文00文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文00文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文0.0文文0文文0文文00文文00文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxx.xxxxx.xxxx.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 2052,
+            "selected_for_resolution": false,
+            "stage": "xxxxxx.xxxxx.xxxx"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文0文0文0文文文文文文文0文文文文文文文文文文文"
+          },
+          "round_no": 3,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2f",
+        "kind": "private_action_decision",
+        "known_at_seq": 2114,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2114,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2224",
+        "kind": "day_vote",
+        "known_at_seq": 2224,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2224,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2226",
+        "kind": "day_vote",
+        "known_at_seq": 2226,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2226,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2228",
+        "kind": "day_vote",
+        "known_at_seq": 2228,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2228,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.5
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2230",
+        "kind": "day_vote",
+        "known_at_seq": 2230,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2230,
+        "target_ref": "seat_00",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2232",
+        "kind": "day_vote",
+        "known_at_seq": 2232,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2232,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_0",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2234",
+        "kind": "day_vote",
+        "known_at_seq": 2234,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2234,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2236",
+        "kind": "day_vote",
+        "known_at_seq": 2236,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2236,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2238",
+        "kind": "day_vote",
+        "known_at_seq": 2238,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2238,
+        "target_ref": "seat_0",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxx.xxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxx.xxxx.0000.xxxx",
+            "public_cutoff_record_seq": 2114,
+            "vote_round": 1
+          },
+          "decision": {
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文0.0文文0文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 3,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2o",
+        "kind": "private_action_decision",
+        "known_at_seq": 2239,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2239,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "candidate_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "eligible_voter_refs": [
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_0",
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "event_ref": "2240",
+        "identity_reveal": "xxxx",
+        "ineligible_voter_refs": [],
+        "kind": "vote_result",
+        "known_at_seq": 2240,
+        "leader_refs": [
+          "seat_0"
+        ],
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2240,
+        "sheriff_ref": "seat_0",
+        "sheriff_vote_weight": 1.5,
+        "totals": {
+          "seat_1": 2.0,
+          "seat_10": 1.0,
+          "seat_6": 5.5
+        },
+        "visibility": "public",
+        "voter_weights": {
+          "seat_1": 1.0,
+          "seat_10": 1.0,
+          "seat_11": 1.0,
+          "seat_12": 1.0,
+          "seat_2": 1.0,
+          "seat_4": 1.5,
+          "seat_6": 1.0,
+          "seat_7": 1.0
+        },
+        "weighted": true
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "2241",
+        "identity_reveal": "xxxx",
+        "kind": "player_eliminated",
+        "known_at_seq": 2241,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "player_ref": "seat_0",
+        "public_reason": "xxxxx",
+        "record_seq": 2241,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "annotations": [
+          {
+            "authority": "player_claim_unverified",
+            "claim_id": "xxxxx.0000.0.xxxx.xxxxx",
+            "claim_type": "xxxx.xxxxx",
+            "claimed_team": "xxxxxxxxx",
+            "derivation": {
+              "kind": "deterministic_heuristic",
+              "validation_status": "xxxxxxxx",
+              "validator_version": 1
+            },
+            "sentence_index": 2
+          }
+        ],
+        "authority": "player_claim_unverified",
+        "event_ref": "2259",
+        "kind": "player_statement",
+        "known_at_seq": 2259,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "record_seq": 2259,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文文文文文文文文文文文0文文文文文文00文00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+        "stage": "xxxxx.xxxx.xxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "actor_memory",
+        "data": {
+          "batch_id": "x0.xxxx.x00x00x0x00000x0.xxxxx.0.xxxxxxx.xxxxxxxx",
+          "epistemic_status": "actor_subjective_memory",
+          "memory": "文文00文文文文文文0文文0文文文文0文文文文文文文文文文文文0文文文文文文文文文文文0文文 xxxxxxxxxxx 文文0文文文文文文文文文0文文0文文文文文文文0文文0文文文文文文文文文文文文文文文0文文文0.0文文0文文0文文0.0文文文文文文文文文文文文文文文0文文0文文文文0文0文文0文文文0文0文00文00文文文文文文文文文0文文文文文文0文文文文文文文文文0文0文00文00文文0文文0文文文文文文文0文文文文文0文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "round_no": 3,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2s",
+        "kind": "private_round_memory",
+        "known_at_seq": 2343,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 3
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2343,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "player_id": "seat_00",
+            "target_player_id": "seat_0"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文0文文文文文0.0文文文文文文文文文文文0文文0文文文xxx0文文文文文文文文文文文文文文文文文"
+          },
+          "night_no": 4,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": true,
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "status": "xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2t",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 2398,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 4
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2398,
+        "source_activation_id": "x0.xxxxxxxxxx.xxx00000xxx000x0",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "final_target_player_id": "seat_0",
+          "night_no": 4,
+          "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+          "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx",
+          "tiebreaker_player_id": null
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2u",
+        "kind": "werewolf_attack_resolved",
+        "known_at_seq": 2403,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 4
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2403,
+        "source_activation_id": "x0.xxxxxxxxxx.x000xx0000x00000",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxx.xxxxxxxxxx",
+            "final_target_player_id": "seat_0"
+          },
+          "night_no": 4,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "resolution_reason": "xxxxx.xxxxxx.xxxxxxxxx",
+            "resolution_stage": "xxxxx.xxxxxx.xxxxxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2v",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 2403,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 4
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2403,
+        "source_activation_id": "x0.xxxxxxxxxx.x000xx0000x00000",
+        "visibility": "actor_private"
+      },
+      {
+        "announced_in": {
+          "period": "dawn",
+          "round_no": 4
+        },
+        "authority": "judge_fact",
+        "eliminated_player_refs": [
+          "seat_0"
+        ],
+        "event_ref": "2423",
+        "identity_reveal": "xxxx",
+        "kind": "night_result",
+        "known_at_seq": 2423,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 4
+        },
+        "outcome": "xxxxxx",
+        "record_seq": 2423,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "2442",
+        "kind": "sheriff_badge_transferred",
+        "known_at_seq": 2442,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "payload": {
+          "audience": "xxx",
+          "audience_contract_version": 1,
+          "from_player_id": "seat_0",
+          "player_id": "seat_00",
+          "reason": "xxxx.xxxxxxx.xxxxx.xxxxxxxxxx"
+        },
+        "record_seq": 2442,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxxxxx.xxxxx.0.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 2470,
+            "selected_for_resolution": false,
+            "stage": "xxxxxxxxxx.xxxxx.0"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "0文文0文文文文文文文文文文文文文文文文0文0文文文文xxx0文文文文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 4,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee2y",
+        "kind": "private_action_decision",
+        "known_at_seq": 2512,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2512,
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2522",
+        "kind": "player_statement",
+        "known_at_seq": 2522,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2522,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文文文文0文文文文文文文文文文文文文0文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文00文文文文00文文文文文文0文文文文文文文文文文文文文0文文文文文0文文00文文文文文00文00文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2538",
+        "kind": "player_statement",
+        "known_at_seq": 2538,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2538,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文0文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文0文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文00文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文文文文文文文文0文文00文文00文文文文文文文文文文0文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2553",
+        "kind": "player_statement",
+        "known_at_seq": 2553,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2553,
+        "speaker_ref": "seat_0",
+        "speech": "0文文文文0文文文文文文文0文文文文文文文文文文文文文文文文文文文文0文文文文文文文0文文文文文文文文文文文文文文文文0文文文文文文文文文文文文0文文文文文0文文文文文文文文文文文文文0文文文文文文文文文文文文00文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文0文00文00文文文文文文文文文文文文文文文文0文文文文文文文文文文文文00文文00文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2568",
+        "kind": "player_statement",
+        "known_at_seq": 2568,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2568,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文0文文文文文文文文文文文文文文.文文文文.文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文0文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文.文文.文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文00文文文文文文文文文文文文文文文00文文文文文文文文0文文文文文文文文文文文文文文文文文0文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2583",
+        "kind": "player_statement",
+        "known_at_seq": 2583,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2583,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文文文文0文0文文文文文00文文0文文文0文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文0文0文文文文0文文文文文文文文文文文文文文文文文文文文文文0文文文文文文0文0文文文文文文文文文文文文文文文文文文文文文文文文文文0文文文文00文文文文文文文文文文文文文文0文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2608",
+        "kind": "player_statement",
+        "known_at_seq": 2608,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "record_seq": 2608,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文文文文文0文文文文文文0文0文0文0文文文0文文文文文文文文文文文文文文文文文文文文文文文文文0",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "2655",
+        "identity_reveal": "xxxxxxxx.xxxxxxxxx",
+        "kind": "player_eliminated",
+        "known_at_seq": 2655,
+        "known_role": "xxxxxxxx",
+        "occurred_in": {
+          "period": "day",
+          "round_no": 4
+        },
+        "player_ref": "seat_0",
+        "public_reason": "xxxx.xxxxxxxxx",
+        "record_seq": 2655,
+        "role_revealed": true,
+        "stage": "xxxxxx.xxxxx.xxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "player_id": "seat_00",
+            "target_player_id": null
+          },
+          "night_no": 5,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": false,
+            "decision_stage": "xxxxxxxxxx.xxxxx",
+            "status": "xxxxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee36",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 2716,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2716,
+        "source_activation_id": "x0.xxxxxxxxxx.xxxx0x0000x00xx0",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxxxxxxxx.xxxxx.xxxx",
+            "target_player_id": "seat_0"
+          },
+          "night_no": 5,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "adopted": true,
+            "decision_stage": "xxxxxxxxxx.xxxxx.xxxx",
+            "final_target_player_id": "seat_0",
+            "resolution_reason": "xxxxxxxxx",
+            "tiebreaker_player_id": null
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee37",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 2773,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2773,
+        "source_activation_id": "x0.xxxxxxxxxx.x0xxx00x00000000",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "ability_id": "xxxxxxxx.xxxxxx",
+          "decision": {
+            "decision_stage": "xxxx.xxxxxxxxxx",
+            "final_target_player_id": "seat_0"
+          },
+          "night_no": 5,
+          "resolution_scope": "文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文",
+          "result": {
+            "resolution_reason": "xxxxxxxxx",
+            "resolution_stage": "xxxxxxxxxx.xxxxx.xxxx"
+          }
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee38",
+        "kind": "private_ability_action_committed",
+        "known_at_seq": 2776,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2776,
+        "source_activation_id": "x0.xxxxxxxxxx.x0000x0xx00000x0",
+        "visibility": "actor_private"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "final_target_player_id": "seat_0",
+          "night_no": 5,
+          "resolution_reason": "xxxxxxxxx",
+          "resolution_stage": "xxxxxxxxxx.xxxxx.xxxx",
+          "tiebreaker_player_id": null
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee39",
+        "kind": "werewolf_attack_resolved",
+        "known_at_seq": 2776,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2776,
+        "source_activation_id": "x0.xxxxxxxxxx.x0000x0xx00000x0",
+        "visibility": "actor_private"
+      },
+      {
+        "announced_in": {
+          "period": "dawn",
+          "round_no": 5
+        },
+        "authority": "judge_fact",
+        "eliminated_player_refs": [
+          "seat_0"
+        ],
+        "event_ref": "2796",
+        "identity_reveal": "xxxx",
+        "kind": "night_result",
+        "known_at_seq": 2796,
+        "occurred_in": {
+          "period": "night",
+          "round_no": 5
+        },
+        "outcome": "xxxxxx",
+        "record_seq": 2796,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "2829",
+        "hunter_ref": "seat_0",
+        "hunter_role_revealed": true,
+        "kind": "hunter_response",
+        "known_at_seq": 2829,
+        "occurred_in": {
+          "period": "dawn",
+          "round_no": 5
+        },
+        "record_seq": 2829,
+        "target_ref": "seat_0",
+        "target_role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxxxxxx.xxxxx.0.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 2868,
+            "selected_for_resolution": false,
+            "stage": "xxxxxxxxxx.xxxxx.0"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文文文文文文文文文文文文文00文00文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 5,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee3c",
+        "kind": "private_action_decision",
+        "known_at_seq": 2880,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2880,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxx.xxxxxx.xxxxxx",
+        "authority": "judge_fact",
+        "event_ref": "2897",
+        "kind": "speech_turn_skipped_technical",
+        "known_at_seq": 2897,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "reason": "xxxxxxxxx.xxxxxxx",
+        "record_seq": 2897,
+        "speaker_ref": "seat_00",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "annotations": [
+          {
+            "authority": "player_claim_unverified",
+            "claim_id": "xxxxx.0000.0.xxxx.xxxxx",
+            "claim_type": "xxxx.xxxxx",
+            "claimed_team": "xxxxxxxxx",
+            "derivation": {
+              "kind": "deterministic_heuristic",
+              "validation_status": "xxxxxxxx",
+              "validator_version": 1
+            },
+            "sentence_index": 7
+          }
+        ],
+        "authority": "player_claim_unverified",
+        "event_ref": "2917",
+        "kind": "player_statement",
+        "known_at_seq": 2917,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2917,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文文文文文文文文文文文文文文文文文0文文文文文文0文文文文文文文文0文文文文0文文文文0文文文文文文文文文文文0文文文文文文文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文0文文0文文文文文文文文文文00文文文文文文文文0文文文文文0文0文0文0文0文文文文文0文文文文文文文文文文文文文0文文0文文文0文文文文文文文文文文文文文文文文文文文文文文文文文00文文文00文文文文文文文文文文文文00文0文文文0文文文文文文文文00文文00文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "player_claim_unverified",
+        "event_ref": "2932",
+        "kind": "player_statement",
+        "known_at_seq": 2932,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2932,
+        "speaker_ref": "seat_00",
+        "speech": "00文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文0文文文文文0文文0文文文文文文0文文文文文文文文文0文文文00文文文文文文文文0文文文文文文文文文文0文文文文文文文文文文文文文文0文文文文文文文文文文文文文文文0文文文文文文文文0文00文00文文文文文文文文文文文文文文文文文文0文文文文文0文0文0文0文文文0文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文文00文文文文文文文文文文文文文文文文文",
+        "stage": "xxx.xxxxxx.xxxxxx",
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxxxxx.xxxx.xxxxxxxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxxx.xxxxx.xxxx.0000.xxxxxxxx.xxxx.xxxxxxxxx",
+            "public_cutoff_record_seq": 2937,
+            "selected_for_resolution": false,
+            "stage": "xxxxxx.xxxxx.xxxx"
+          },
+          "decision": {
+            "explode": false
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文文文文文文文文文文文文文文00文00文文文文文文文文文文文文文文文文文文文文文"
+          },
+          "round_no": 5,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee3g",
+        "kind": "private_action_decision",
+        "known_at_seq": 2950,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2950,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2987",
+        "kind": "day_vote",
+        "known_at_seq": 2987,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2987,
+        "target_ref": "seat_00",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.5
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2989",
+        "kind": "day_vote",
+        "known_at_seq": 2989,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2989,
+        "target_ref": "seat_00",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "event_ref": "2991",
+        "kind": "day_vote",
+        "known_at_seq": 2991,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2991,
+        "target_ref": "seat_00",
+        "visibility": "public",
+        "voter_ref": "seat_00",
+        "weight": 1.0
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "action_type": "xxxxx.xxxx",
+          "context": {
+            "batch_id": "xxx.0.xxxxx.xxxx.0000.xxxx",
+            "public_cutoff_record_seq": 2950,
+            "vote_round": 1
+          },
+          "decision": {
+            "target_player_id": "seat_00"
+          },
+          "declared_reason": {
+            "epistemic_status": "actor_declared_reason",
+            "text": "文文文文文文文文00文00文文文文文文文文文文文文文文00文文文文文文文00文文文文文文文文文文文"
+          },
+          "round_no": 5,
+          "schema_version": 1
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeee3k",
+        "kind": "private_action_decision",
+        "known_at_seq": 2992,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "record_seq": 2992,
+        "visibility": "actor_private"
+      },
+      {
+        "action_type": "xxxxx.xxxx",
+        "authority": "judge_fact",
+        "candidate_refs": [
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "eligible_voter_refs": [
+          "seat_00",
+          "seat_00",
+          "seat_00"
+        ],
+        "event_ref": "2993",
+        "identity_reveal": "xxxx",
+        "ineligible_voter_refs": [],
+        "kind": "vote_result",
+        "known_at_seq": 2993,
+        "leader_refs": [
+          "seat_00"
+        ],
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "record_seq": 2993,
+        "sheriff_ref": "seat_00",
+        "sheriff_vote_weight": 1.5,
+        "totals": {
+          "seat_10": 1.0,
+          "seat_12": 2.5
+        },
+        "visibility": "public",
+        "voter_weights": {
+          "seat_10": 1.5,
+          "seat_11": 1.0,
+          "seat_12": 1.0
+        },
+        "weighted": true
+      },
+      {
+        "authority": "judge_fact",
+        "event_ref": "2994",
+        "identity_reveal": "xxxx",
+        "kind": "player_eliminated",
+        "known_at_seq": 2994,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "player_ref": "seat_00",
+        "public_reason": "xxxxx",
+        "record_seq": 2994,
+        "role_revealed": false,
+        "visibility": "public"
+      },
+      {
+        "authority": "judge_fact",
+        "data": {
+          "teammate_refs": []
+        },
+        "event_ref": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee3n",
+        "kind": "living_werewolf_teammates",
+        "known_at_seq": 3003,
+        "occurred_in": {
+          "period": "day",
+          "round_no": 5
+        },
+        "owner_ref": "seat_00",
+        "owner_scope": "player",
+        "visibility": "actor_private"
+      }
+    ],
+    "questions": [
+      {
+        "address_resolution": "xxxxxxxx",
+        "addressed_to": "seat_0",
+        "asked_at_seq": 2917,
+        "asked_by": "seat_00",
+        "derivation": {
+          "kind": "deterministic_heuristic",
+          "validation_status": "xxxxxxxx",
+          "validator_version": 1
+        },
+        "question_id": "qqqqqqqqqqqqqq1",
+        "response_status": "xxxx.xxxxxxxx",
+        "source_authority": "xxxxxx.xxxxx.xxxxxxxxxx",
+        "source_event_ref": "2917",
+        "topic": "xxxxxxx"
+      }
+    ],
+    "relations": [],
+    "schema_version": 5
+  },
+  "provenance": {
+    "contains_original_speech_or_private_ids": false,
+    "sanitization_contract": "same_json_shape_and_per_value_string_length_v1",
+    "source_game_ref": "v2_game_f29_sanitized",
+    "source_known_events_schema_version": 5,
+    "source_model_context_schema_version": 11,
+    "source_model_request_started_record_seq": 3004
+  }
+}

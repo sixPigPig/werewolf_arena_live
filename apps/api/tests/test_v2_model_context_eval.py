@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.v2.model_client import build_model_request_payload
+from app.v2.model_context_compaction import expand_known_events_v6
 from app.v2.model_context import (
     V2ModelPlayerReference,
     project_model_action_context_with_metadata,
@@ -66,7 +67,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
         action_record_seq=case["action_record_seq"],
     )
     context = projection.context
-    events = context["known_events"]["events"]
+    events = expand_known_events_v6(context["known_events"])["events"]
 
     assert [event["event_ref"] for event in events] == case["expect"]["event_refs"]
     assert [event["known_at_seq"] for event in events] == case["expect"]["event_sequences"]
@@ -94,7 +95,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
         max_output_tokens=16_384,
     )
     system_text = request["input"][0]["content"][0]["text"]
-    assert len(system_text) < 1_200
+    assert len(system_text) < 1_700
     assert "public_timeline" not in system_text
     assert "history" not in system_text
 
@@ -149,13 +150,17 @@ def test_t02_history_is_lossless_without_a_retention_budget() -> None:
     assert metadata["future_filtered_event_count"] == 0
     assert metadata["budget_dropped_event_count"] == 0
     assert "selection_budget_chars" not in metadata
-    assert "retained_event_refs" not in metadata
-    assert "dropped_event_refs" not in metadata
+    assert metadata["retained_event_refs"] == [
+        str(index) for index in range(1, case["history_count"] + 1)
+    ]
+    assert metadata["dropped_event_refs"] == []
+    assert metadata["round_trip_verified"] is True
     assert "retention_reasons" not in metadata
-    assert [event["event_ref"] for event in projection.context["known_events"]["events"]] == [
+    canonical_events = expand_known_events_v6(projection.context["known_events"])["events"]
+    assert [event["event_ref"] for event in canonical_events] == [
         str(index) for index in range(1, case["history_count"] + 1)
     ]
     assert all(
         "source_event_id" not in event and "timeline_index" not in event
-        for event in projection.context["known_events"]["events"]
+        for event in canonical_events
     )

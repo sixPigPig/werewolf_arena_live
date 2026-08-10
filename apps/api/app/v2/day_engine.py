@@ -65,6 +65,7 @@ _SUPPORTED_DAY_ACTIONS = {
 _SHERIFF_PK_SPEECH_OBJECTIVE = "发表警长竞选平票 PK 发言。"
 _EXILE_PK_SPEECH_OBJECTIVE = "发表放逐平票 PK 发言。"
 _VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET = 2
+_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET = 3
 _PUBLIC_SPEECH_MAX_CHARS = {
     "first_night_last_words": 200,
     "sheriff_campaign_speech": 300,
@@ -1059,7 +1060,15 @@ class V2DayEngine:
             for voter, eligible in prepared
         ]
         machine_format_failure_counts = [0 for _item in prepared]
-        latest_failure_results: list[V2ActionResult | None] = [None for _item in prepared]
+        output_budget_failure_counts = [0 for _item in prepared]
+        latest_machine_format_failure_results: list[V2ActionResult | None] = [
+            None for _item in prepared
+        ]
+        latest_output_budget_failure_results: list[V2ActionResult | None] = [
+            None for _item in prepared
+        ]
+        machine_format_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
+        output_budget_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
 
         async def request_vote(
             index: int,
@@ -1105,6 +1114,8 @@ class V2DayEngine:
                 decision_family_id=decision_family_ids[index],
                 prior_machine_format_failures=machine_format_failure_counts[index],
                 automatic_machine_format_budget=(_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET),
+                prior_output_budget_failures=output_budget_failure_counts[index],
+                automatic_output_budget_budget=(_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET),
                 preflight_pause_failure=preflight_pause_failure,
                 return_result=True,
             )
@@ -1116,8 +1127,28 @@ class V2DayEngine:
             failure = result.failure
             if failure is None:
                 return
-            machine_format_failure_counts[index] += failure.machine_format_failure_count
-            latest_failure_results[index] = result
+            if failure.machine_format_failure_count:
+                machine_format_failure_counts[index] += failure.machine_format_failure_count
+                latest_machine_format_failure_results[index] = result
+                if (
+                    failure.failure_episode_id is not None
+                    and failure.failure_episode_id
+                    not in machine_format_failure_episode_ids_by_voter[index]
+                ):
+                    machine_format_failure_episode_ids_by_voter[index].append(
+                        failure.failure_episode_id
+                    )
+            if failure.output_budget_failure_count:
+                output_budget_failure_counts[index] += failure.output_budget_failure_count
+                latest_output_budget_failure_results[index] = result
+                if (
+                    failure.failure_episode_id is not None
+                    and failure.failure_episode_id
+                    not in output_budget_failure_episode_ids_by_voter[index]
+                ):
+                    output_budget_failure_episode_ids_by_voter[index].append(
+                        failure.failure_episode_id
+                    )
 
         # All non-blocking attempts use the same frozen public cutoff. Initial
         # failures receive one more isolated concurrent attempt; only voters
@@ -1155,6 +1186,7 @@ class V2DayEngine:
                 index
                 for index in failed_indexes
                 if machine_format_failure_counts[index] < _VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET
+                and output_budget_failure_counts[index] < _VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET
             ]
             concurrent_recovery_index_set = set(concurrent_recovery_indexes)
             concurrent_recovery_results = list(
@@ -1207,17 +1239,18 @@ class V2DayEngine:
                 self._actions.check_cancellation(game_id)
                 voter, eligible = prepared[index]
                 preflight_pause_failure = None
-                latest_failure_result = latest_failure_results[index]
-                latest_failure = (
-                    latest_failure_result.failure if latest_failure_result is not None else None
-                )
                 if machine_format_failure_counts[index] >= (_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET):
+                    latest_failure_result = latest_machine_format_failure_results[index]
+                    latest_failure = (
+                        latest_failure_result.failure if latest_failure_result is not None else None
+                    )
                     if (
                         latest_failure_result is None
                         or latest_failure is None
                         or latest_failure_result.action_id is None
                         or latest_failure.last_machine_format_attempt_id is None
                         or latest_failure.last_machine_format_failure_code is None
+                        or not machine_format_failure_episode_ids_by_voter[index]
                     ):
                         raise V2DayRuntimeError("decision_family_retry_lineage_missing")
                     preflight_pause_failure = V2PreflightPauseFailure(
@@ -1227,6 +1260,37 @@ class V2DayEngine:
                         source_attempt_id=(latest_failure.last_machine_format_attempt_id),
                         automatic_machine_format_attempt_count=(
                             machine_format_failure_counts[index]
+                        ),
+                        automatic_output_budget_attempt_count=(output_budget_failure_counts[index]),
+                        source_failure_episode_ids=tuple(
+                            machine_format_failure_episode_ids_by_voter[index]
+                        ),
+                    )
+                elif output_budget_failure_counts[index] >= (_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET):
+                    latest_failure_result = latest_output_budget_failure_results[index]
+                    latest_failure = (
+                        latest_failure_result.failure if latest_failure_result is not None else None
+                    )
+                    if (
+                        latest_failure_result is None
+                        or latest_failure is None
+                        or latest_failure_result.action_id is None
+                        or latest_failure.last_output_budget_attempt_id is None
+                        or latest_failure.last_output_budget_failure_code is None
+                        or not output_budget_failure_episode_ids_by_voter[index]
+                    ):
+                        raise V2DayRuntimeError("decision_family_retry_lineage_missing")
+                    preflight_pause_failure = V2PreflightPauseFailure(
+                        failure_code=(latest_failure.last_output_budget_failure_code),
+                        failure_category="output_budget",
+                        source_action_id=latest_failure_result.action_id,
+                        source_attempt_id=(latest_failure.last_output_budget_attempt_id),
+                        automatic_machine_format_attempt_count=(
+                            machine_format_failure_counts[index]
+                        ),
+                        automatic_output_budget_attempt_count=(output_budget_failure_counts[index]),
+                        source_failure_episode_ids=tuple(
+                            output_budget_failure_episode_ids_by_voter[index]
                         ),
                     )
                 result = await request_vote(
@@ -1888,6 +1952,8 @@ class V2DayEngine:
         decision_family_id: str | None = None,
         prior_machine_format_failures: int = 0,
         automatic_machine_format_budget: int | None = None,
+        prior_output_budget_failures: int = 0,
+        automatic_output_budget_budget: int | None = None,
         preflight_pause_failure: V2PreflightPauseFailure | None = None,
         return_result: bool = False,
     ) -> V2ModelDecision | V2ActionResult | None:
@@ -2011,6 +2077,8 @@ class V2DayEngine:
             decision_family_id=decision_family_id,
             prior_machine_format_failures=prior_machine_format_failures,
             automatic_machine_format_budget=automatic_machine_format_budget,
+            prior_output_budget_failures=prior_output_budget_failures,
+            automatic_output_budget_budget=automatic_output_budget_budget,
             preflight_pause_failure=preflight_pause_failure,
         )
         if return_result and callable(getattr(self._actions, "run_player_decision_result", None)):

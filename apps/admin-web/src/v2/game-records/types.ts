@@ -172,6 +172,16 @@ export type V2PromptProjection = Record<string, unknown> & {
   derivation_rejections?: V2DerivationRejection[];
   known_event_record_seq_min?: number | null;
   known_event_record_seq_max?: number | null;
+  canonical_serialized_char_count?: number;
+  compact_serialized_char_count?: number;
+  compaction_saved_chars?: number;
+  compaction_ratio?: number;
+  verbatim_speech_count?: number;
+  verbatim_speech_chars?: number;
+  retained_event_refs?: string[];
+  dropped_event_refs?: string[];
+  canonical_sha256?: string;
+  round_trip_verified?: boolean;
 };
 
 export type V2OutputEnforcementAudit = {
@@ -179,6 +189,41 @@ export type V2OutputEnforcementAudit = {
   actual: string | null;
   schema_name: string | null;
   schema_version: number | null;
+};
+
+export type V2ProviderUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  cached_input_tokens?: number;
+};
+
+export type V2ModelFinishReason =
+  | "completed"
+  | "stop"
+  | "length"
+  | "max_output_tokens"
+  | "content_filter"
+  | "tool_calls"
+  | "unknown";
+
+export type V2ModelFailureResolution =
+  | "automatic_retry_success"
+  | "technical_skip"
+  | "technical_false_fallback"
+  | "operator_pause"
+  | "isolated_action_failure"
+  | "run_failure"
+  | "run_canceled"
+  | "unresolved"
+  | "invariant_conflict"
+  | "legacy_unavailable";
+
+export type V2FailureEpisodeEventRef = {
+  event_type: string;
+  event_id: number | string | null;
+  record_seq: number;
 };
 
 export type V2ModelRequestAudienceSource =
@@ -201,6 +246,10 @@ export type V2ModelRequestSummary = {
   vote_batch_stage: string | null;
   automatic_machine_format_attempt_count: number | null;
   automatic_machine_format_budget: number | null;
+  prior_output_budget_failures: number | null;
+  output_budget_failure_count: number | null;
+  automatic_output_budget_attempt_count: number | null;
+  automatic_output_budget_budget: number | null;
   attempt_no: number;
   cycle_attempt_no: number;
   retry_cycle: number;
@@ -232,8 +281,48 @@ export type V2ModelRequestSummary = {
   passive_observation_count: number;
   output_source: "persisted" | "legacy_inferred" | "unavailable";
   provider_request_id: string | null;
+  model_generation_policy_contract_status:
+    | "supported"
+    | "legacy_disabled"
+    | null;
+  model_generation_policy_schema_version: number | null;
+  model_generation_policy_classification_version: number | null;
+  model_generation_policy_enforcement: "observe_only" | "disabled" | null;
+  model_generation_policy_reasoning_parameter_mode:
+    | "inherit_frozen_model_configuration"
+    | null;
+  model_generation_policy_profile:
+    | "strategic_full"
+    | "recoverable_public_speech"
+    | "isolated_auxiliary"
+    | null;
+  model_generation_policy_profile_source:
+    | "explicit_action_profile"
+    | "default_profile"
+    | "legacy_missing_contract"
+    | null;
+  reasoning_only_timeout_ms: number | null;
+  timeout_max_attempts: number | null;
+  shadow_would_timeout: boolean | null;
+  finish_reason: V2ModelFinishReason | null;
+  provider_usage: V2ProviderUsage | null;
+  usage_update_count: number | null;
+  usage_conflict_observed: boolean | null;
+  usage_consistency:
+    | "exact"
+    | "provider_total_mismatch"
+    | "unavailable"
+    | null;
+  queue_wait_ms: number | null;
+  provider_in_flight: number | null;
+  provider_concurrency_limit: number | null;
   first_token_ms: number | null;
+  reasoning_only_elapsed_ms: number | null;
   completed_ms: number | null;
+  reasoning_delta_count: number | null;
+  text_delta_count: number | null;
+  max_inter_delta_ms: number | null;
+  last_progress_ms: number | null;
   failure_kind: string | null;
   failure_code: string | null;
   failure_category?: string | null;
@@ -257,6 +346,29 @@ export type V2ModelRequestSummary = {
   action_budget_ms: number | null;
   action_elapsed_ms: number | null;
   action_remaining_ms: number | null;
+  effective_attempt_limit: number | null;
+  retry_delay_ms: number | null;
+  required_retry_window_ms: number | null;
+  automatic_retry_scheduled: boolean | null;
+  automatic_retry_stop_reason:
+    | "not_retryable"
+    | "decision_family_budget_exhausted"
+    | "attempt_limit_reached"
+    | "insufficient_action_budget"
+    | null;
+  failure_episode_id: string | null;
+  failure_resolution: V2ModelFailureResolution | null;
+  failure_episode_source_attempt_ids: string[] | null;
+  failure_episode_source_event_refs: V2FailureEpisodeEventRef[] | null;
+  failure_episode_terminal_event_refs: V2FailureEpisodeEventRef[] | null;
+  resolution_event_type: string | null;
+  resolution_event_id: number | null;
+  resolution_event_record_seq: number | null;
+  supporting_event_type: string | null;
+  supporting_event_id: number | null;
+  supporting_event_record_seq: number | null;
+  resolution_updated_at_record_seq: number | null;
+  failure_episode_invariant_errors: string[] | null;
   model_binding_failure_streak: number | null;
   model_binding_health_status: "healthy" | "impaired" | "degraded" | null;
   model_binding_recovered_after_failures: number | null;
@@ -266,6 +378,12 @@ export type V2ModelRequestSummary = {
 
 export type V2ModelRequest = V2ModelRequestSummary & {
   request_payload: Record<string, unknown> | null;
+  expanded_known_events: Record<string, unknown> | null;
+  known_events_expansion_status:
+    | "verified"
+    | "not_applicable"
+    | "unavailable"
+    | "invalid";
   raw_response: string | null;
   parsed_output: Record<string, unknown> | null;
   passive_observations: Array<Record<string, unknown>>;

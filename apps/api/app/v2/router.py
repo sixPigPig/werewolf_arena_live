@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 from datetime import datetime
@@ -88,7 +89,21 @@ from app.v2.event_contract import (
     V2_EVENT_AUDIENCES,
     model_event_audience,
 )
-from app.v2.model_client import build_model_request_payload
+from app.v2.model_client import V2ModelError, build_model_request_payload
+from app.v2.model_context_compaction import (
+    V2ModelContextCompactionError,
+    expand_known_events_v6,
+)
+from app.v2.model_context_contract import (
+    CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
+    DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+    HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION,
+    KNOWN_EVENTS_SCHEMA_VERSION,
+    MODEL_CONTEXT_SCHEMA_VERSION,
+    MODEL_VIEW_SELECTOR_VERSION,
+    PROMPT_TEMPLATE_VERSION,
+)
+from app.v2.model_failure_episode import FailureEpisode, derive_failure_episodes
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
 from app.v2.models import V2GameRun
@@ -971,7 +986,11 @@ def read_admin_v2_model_request(
     result = next(
         (
             item
-            for item in _admin_model_requests(events, presentations)
+            for item in _admin_model_requests(
+                events,
+                presentations,
+                expanded_known_events_attempt_id=attempt_id,
+            )
             if item.attempt_id == attempt_id
         ),
         None,
@@ -1337,6 +1356,8 @@ def _admin_model_request_summary(
         item.model_dump(
             exclude={
                 "request_payload",
+                "expanded_known_events",
+                "known_events_expansion_status",
                 "raw_response",
                 "parsed_output",
                 "passive_observations",
@@ -1345,64 +1366,174 @@ def _admin_model_request_summary(
     )
 
 
+def _admin_request_model_context(
+    request_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(request_payload, dict):
+        return None
+    candidate_texts: list[str] = []
+    for container_key in ("input", "messages"):
+        items = request_payload.get(container_key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                candidate_texts.append(content)
+            elif isinstance(content, list):
+                candidate_texts.extend(
+                    part["text"]
+                    for part in content
+                    if isinstance(part, dict) and isinstance(part.get("text"), str)
+                )
+    for text in reversed(candidate_texts):
+        json_start = text.find("{")
+        if json_start < 0:
+            continue
+        try:
+            value = json.loads(text[json_start:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _admin_expanded_known_events(
+    request_payload: dict[str, Any] | None,
+    *,
+    model_context_schema_version: int | None,
+    prompt_template_version: int | None,
+    prompt_projection: dict[str, Any] | None,
+) -> tuple[
+    dict[str, Any] | None,
+    Literal["verified", "not_applicable", "unavailable", "invalid"],
+]:
+    if model_context_schema_version == HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION:
+        return None, "not_applicable"
+    if model_context_schema_version is None:
+        return None, "unavailable"
+    if model_context_schema_version != MODEL_CONTEXT_SCHEMA_VERSION:
+        return None, "invalid"
+    if prompt_template_version != PROMPT_TEMPLATE_VERSION:
+        return None, "invalid"
+    expected_projection_contract = {
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
+        "ledger_schema_version": CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
+        "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
+        "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
+    }
+    if not isinstance(prompt_projection, dict) or any(
+        prompt_projection.get(key) != expected
+        for key, expected in expected_projection_contract.items()
+    ):
+        return None, "invalid"
+    model_context = _admin_request_model_context(request_payload)
+    if model_context is None:
+        return None, "unavailable"
+    if (
+        model_context.get("model_context_schema_version") != MODEL_CONTEXT_SCHEMA_VERSION
+        or model_context.get("prompt_template_version") != PROMPT_TEMPLATE_VERSION
+    ):
+        return None, "invalid"
+    known_events = model_context.get("known_events")
+    if not isinstance(known_events, dict):
+        return None, "invalid"
+    try:
+        return expand_known_events_v6(known_events), "verified"
+    except V2ModelContextCompactionError:
+        return None, "invalid"
+
+
 def _admin_model_requests(
     events: list[object],
     presentations: list[object],
+    *,
+    expanded_known_events_attempt_id: str | None = None,
 ) -> list[AdminV2ModelRequestResponse]:
-    action_contexts: dict[str, dict[str, Any]] = {}
+    events_by_run: dict[str | None, list[object]] = {}
+    for event in events:
+        events_by_run.setdefault(getattr(event, "run_id", None), []).append(event)
+    failure_episodes_by_attempt: dict[tuple[str | None, str], FailureEpisode] = {}
+    for run_events in events_by_run.values():
+        for episode in derive_failure_episodes(run_events):
+            for source_attempt_id in episode.source_attempt_ids:
+                failure_episodes_by_attempt.setdefault((episode.run_id, source_attempt_id), episode)
+
+    action_contexts: dict[tuple[str | None, str], dict[str, Any]] = {}
     presentations_by_action = {
-        item.action_id: item
+        (getattr(item, "run_id", None), item.action_id): item
         for item in presentations
         if isinstance(item.action_id, str) and item.action_id
     }
-    responses: dict[str, object] = {}
-    response_headers: dict[str, object] = {}
-    first_tokens: dict[str, object] = {}
-    first_texts: dict[str, object] = {}
-    failures: dict[str, object] = {}
-    action_failures: dict[str, object] = {}
-    action_successes: dict[str, object] = {}
-    tts_starts: dict[str, object] = {}
+    responses: dict[tuple[str | None, str], object] = {}
+    response_headers: dict[tuple[str | None, str], object] = {}
+    first_tokens: dict[tuple[str | None, str], object] = {}
+    first_texts: dict[tuple[str | None, str], object] = {}
+    failures: dict[tuple[str | None, str], object] = {}
+    retry_schedules: dict[tuple[str | None, str], object] = {}
+    action_failures: dict[tuple[str | None, str], object] = {}
+    action_successes: dict[tuple[str | None, str], object] = {}
+    tts_starts: dict[tuple[str | None, str], object] = {}
     starts: list[object] = []
-    last_record_seq_by_attempt: dict[str, int] = {}
-    last_record_seq_by_action: dict[str, int] = {}
+    last_record_seq_by_attempt: dict[tuple[str | None, str], int] = {}
+    last_record_seq_by_action: dict[tuple[str | None, str], int] = {}
 
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
+        event_run_id = getattr(event, "run_id", None)
         action_id = payload.get("action_id")
         attempt_id = payload.get("attempt_id")
         if isinstance(attempt_id, str):
-            last_record_seq_by_attempt[attempt_id] = max(
-                last_record_seq_by_attempt.get(attempt_id, 0),
+            attempt_key = (event_run_id, attempt_id)
+            last_record_seq_by_attempt[attempt_key] = max(
+                last_record_seq_by_attempt.get(attempt_key, 0),
                 event.record_seq,
             )
         if isinstance(action_id, str):
-            last_record_seq_by_action[action_id] = max(
-                last_record_seq_by_action.get(action_id, 0),
+            action_key = (event_run_id, action_id)
+            last_record_seq_by_action[action_key] = max(
+                last_record_seq_by_action.get(action_key, 0),
                 event.record_seq,
             )
         if event.event_type == "action_opened" and isinstance(action_id, str):
             context = payload.get("context")
             if isinstance(context, dict):
-                action_contexts[action_id] = context
+                action_contexts[(event_run_id, action_id)] = context
         elif event.event_type == "model_request_started":
             starts.append(event)
         elif event.event_type == "model_response_headers_received" and isinstance(attempt_id, str):
-            response_headers[attempt_id] = event
+            response_headers[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_first_token_received" and isinstance(attempt_id, str):
-            first_tokens[attempt_id] = event
+            first_tokens[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_first_text_delta_received" and isinstance(attempt_id, str):
-            first_texts[attempt_id] = event
+            first_texts[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_response_received" and isinstance(attempt_id, str):
-            responses[attempt_id] = event
+            responses[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_request_failed" and isinstance(attempt_id, str):
-            failures[attempt_id] = event
+            failures[(event_run_id, attempt_id)] = event
+        elif event.event_type == "model_retry_scheduled" and isinstance(attempt_id, str):
+            retry_schedules[(event_run_id, attempt_id)] = event
         elif event.event_type == "action_failed" and isinstance(action_id, str):
-            action_failures[action_id] = event
+            action_failures[(event_run_id, action_id)] = event
         elif event.event_type == "action_succeeded" and isinstance(action_id, str):
-            action_successes[action_id] = event
+            action_successes[(event_run_id, action_id)] = event
         elif event.event_type == "tts_stream_started" and isinstance(action_id, str):
-            tts_starts[action_id] = event
+            tts_starts[(event_run_id, action_id)] = event
+
+    started_attempt_keys = {
+        (getattr(event, "run_id", None), event.payload.get("attempt_id"))
+        for event in starts
+        if isinstance(event.payload, dict) and isinstance(event.payload.get("attempt_id"), str)
+    }
+    starts.extend(
+        event for attempt_key, event in failures.items() if attempt_key not in started_attempt_keys
+    )
+    starts.sort(key=lambda event: event.record_seq)
 
     result: list[AdminV2ModelRequestResponse] = []
     for start in starts:
@@ -1411,34 +1542,45 @@ def _admin_model_requests(
         action_id = payload.get("action_id")
         if not isinstance(attempt_id, str) or not isinstance(action_id, str):
             continue
-        context = action_contexts.get(action_id, {})
+        run_id = getattr(start, "run_id", None)
+        attempt_key = (run_id, attempt_id)
+        action_key = (run_id, action_id)
+        context = action_contexts.get(action_key, {})
         actor = context.get("actor") if isinstance(context.get("actor"), dict) else {}
-        presentation = presentations_by_action.get(action_id)
-        response = responses.get(attempt_id)
+        presentation = presentations_by_action.get(action_key) or presentations_by_action.get(
+            (None, action_id)
+        )
+        response = responses.get(attempt_key)
         response_payload = (
             response.payload if response is not None and isinstance(response.payload, dict) else {}
         )
-        first_token = first_tokens.get(attempt_id)
+        first_token = first_tokens.get(attempt_key)
         first_payload = (
             first_token.payload
             if first_token is not None and isinstance(first_token.payload, dict)
             else {}
         )
-        headers_event = response_headers.get(attempt_id)
+        headers_event = response_headers.get(attempt_key)
         headers_payload = (
             headers_event.payload
             if headers_event is not None and isinstance(headers_event.payload, dict)
             else {}
         )
-        first_text = first_texts.get(attempt_id)
+        first_text = first_texts.get(attempt_key)
         first_text_payload = (
             first_text.payload
             if first_text is not None and isinstance(first_text.payload, dict)
             else {}
         )
-        failure = failures.get(attempt_id) or action_failures.get(action_id)
+        failure = failures.get(attempt_key) or action_failures.get(action_key)
         failure_payload = (
             failure.payload if failure is not None and isinstance(failure.payload, dict) else {}
+        )
+        retry_schedule = retry_schedules.get(attempt_key)
+        retry_payload = (
+            retry_schedule.payload
+            if retry_schedule is not None and isinstance(retry_schedule.payload, dict)
+            else {}
         )
         model_id = payload.get("model_id")
         model_id = model_id if isinstance(model_id, str) and model_id else None
@@ -1447,21 +1589,58 @@ def _admin_model_requests(
         request_kind = payload.get("request_kind")
         if request_kind not in {"speech", "decision"}:
             request_kind = "decision" if actor_kind == "player" else "speech"
+        model_context_schema_version = (
+            payload.get("model_context_schema_version")
+            if isinstance(payload.get("model_context_schema_version"), int)
+            and not isinstance(payload.get("model_context_schema_version"), bool)
+            else None
+        )
+        prompt_template_version = (
+            payload.get("prompt_template_version")
+            if isinstance(payload.get("prompt_template_version"), int)
+            and not isinstance(payload.get("prompt_template_version"), bool)
+            else None
+        )
+        prompt_projection = (
+            payload.get("prompt_projection")
+            if isinstance(payload.get("prompt_projection"), dict)
+            else None
+        )
         request_payload = payload.get("request_payload")
         input_source: Literal["persisted", "reconstructed", "unavailable"]
         if isinstance(request_payload, dict):
             input_source = "persisted"
-        elif context:
-            request_payload = build_model_request_payload(
-                context,
-                decision=request_kind == "decision",
-                model_id=model_id or "",
-                max_output_tokens=16_384,
-            )
-            input_source = "reconstructed"
+        elif (
+            model_context_schema_version == MODEL_CONTEXT_SCHEMA_VERSION
+            and prompt_template_version == PROMPT_TEMPLATE_VERSION
+            and context.get("model_context_schema_version") == MODEL_CONTEXT_SCHEMA_VERSION
+            and context.get("prompt_template_version") == PROMPT_TEMPLATE_VERSION
+        ):
+            try:
+                request_payload = build_model_request_payload(
+                    context,
+                    decision=request_kind == "decision",
+                    model_id=model_id or "",
+                    max_output_tokens=16_384,
+                )
+            except (V2ModelError, KeyError, TypeError, ValueError):
+                request_payload = None
+                input_source = "unavailable"
+            else:
+                input_source = "reconstructed"
         else:
             request_payload = None
             input_source = "unavailable"
+        expanded_known_events, known_events_expansion_status = (
+            _admin_expanded_known_events(
+                request_payload,
+                model_context_schema_version=model_context_schema_version,
+                prompt_template_version=prompt_template_version,
+                prompt_projection=prompt_projection,
+            )
+            if attempt_id == expanded_known_events_attempt_id
+            else (None, "unavailable")
+        )
 
         parsed_output = response_payload.get("parsed_output")
         raw_response = response_payload.get("raw_response")
@@ -1486,18 +1665,18 @@ def _admin_model_requests(
         elif failure is not None:
             status = "failed"
             completed_at = failure.created_at
-        elif action_id in action_successes or presentation is not None:
+        elif action_key in action_successes or presentation is not None:
             status = "succeeded"
             completed_at = (
-                action_successes[action_id].created_at
-                if action_id in action_successes
+                action_successes[action_key].created_at
+                if action_key in action_successes
                 else presentation.created_at
             )
         else:
             status = "running"
             completed_at = None
 
-        tts_start = tts_starts.get(action_id)
+        tts_start = tts_starts.get(action_key)
         tts_payload = (
             tts_start.payload
             if tts_start is not None and isinstance(tts_start.payload, dict)
@@ -1570,6 +1749,135 @@ def _admin_model_requests(
         started_automatic_count = _first_int(payload.get("automatic_machine_format_attempt_count"))
         failed_automatic_budget = _first_int(failure_payload.get("automatic_machine_format_budget"))
         started_automatic_budget = _first_int(payload.get("automatic_machine_format_budget"))
+        prior_output_budget_failures = _first_int(
+            failure_payload.get("prior_output_budget_failures"),
+            retry_payload.get("prior_output_budget_failures"),
+            payload.get("prior_output_budget_failures"),
+        )
+        output_budget_failure_count = _first_int(
+            failure_payload.get("output_budget_failure_count"),
+            retry_payload.get("output_budget_failure_count"),
+            payload.get("output_budget_failure_count"),
+        )
+        automatic_output_budget_attempt_count = _first_int(
+            failure_payload.get("automatic_output_budget_attempt_count"),
+            retry_payload.get("automatic_output_budget_attempt_count"),
+            payload.get("automatic_output_budget_attempt_count"),
+        )
+        automatic_output_budget_budget = _first_int(
+            failure_payload.get("automatic_output_budget_budget"),
+            retry_payload.get("automatic_output_budget_budget"),
+            payload.get("automatic_output_budget_budget"),
+        )
+        diagnostic_payload = response_payload if response is not None else failure_payload
+        raw_generation_policy_contract_status = _first_str(
+            diagnostic_payload.get("model_generation_policy_contract_status"),
+            payload.get("model_generation_policy_contract_status"),
+        )
+        generation_policy_contract_status = (
+            raw_generation_policy_contract_status
+            if raw_generation_policy_contract_status in {"supported", "legacy_disabled"}
+            else None
+        )
+        raw_generation_policy_enforcement = _first_str(
+            diagnostic_payload.get("model_generation_policy_enforcement"),
+            payload.get("model_generation_policy_enforcement"),
+        )
+        generation_policy_enforcement = (
+            raw_generation_policy_enforcement
+            if raw_generation_policy_enforcement in {"observe_only", "disabled"}
+            else None
+        )
+        raw_generation_policy_reasoning_parameter_mode = _first_str(
+            diagnostic_payload.get("model_generation_policy_reasoning_parameter_mode"),
+            payload.get("model_generation_policy_reasoning_parameter_mode"),
+        )
+        generation_policy_reasoning_parameter_mode = (
+            raw_generation_policy_reasoning_parameter_mode
+            if raw_generation_policy_reasoning_parameter_mode
+            == "inherit_frozen_model_configuration"
+            else None
+        )
+        raw_generation_policy_profile = _first_str(
+            diagnostic_payload.get("model_generation_policy_profile"),
+            payload.get("model_generation_policy_profile"),
+        )
+        generation_policy_profile = (
+            raw_generation_policy_profile
+            if raw_generation_policy_profile
+            in {
+                "strategic_full",
+                "recoverable_public_speech",
+                "isolated_auxiliary",
+            }
+            else None
+        )
+        raw_generation_policy_profile_source = _first_str(
+            diagnostic_payload.get("model_generation_policy_profile_source"),
+            payload.get("model_generation_policy_profile_source"),
+        )
+        generation_policy_profile_source = (
+            raw_generation_policy_profile_source
+            if raw_generation_policy_profile_source
+            in {
+                "explicit_action_profile",
+                "default_profile",
+                "legacy_missing_contract",
+            }
+            else None
+        )
+        shadow_would_timeout = diagnostic_payload.get("shadow_would_timeout")
+        if not isinstance(shadow_would_timeout, bool):
+            shadow_would_timeout = payload.get("shadow_would_timeout")
+        if not isinstance(shadow_would_timeout, bool):
+            shadow_would_timeout = None
+        raw_finish_reason = diagnostic_payload.get("finish_reason")
+        finish_reason = (
+            raw_finish_reason
+            if raw_finish_reason
+            in {
+                "completed",
+                "stop",
+                "length",
+                "max_output_tokens",
+                "content_filter",
+                "tool_calls",
+                "unknown",
+            }
+            else None
+        )
+        raw_usage_consistency = diagnostic_payload.get("usage_consistency")
+        usage_consistency = (
+            raw_usage_consistency
+            if raw_usage_consistency in {"exact", "provider_total_mismatch", "unavailable"}
+            else None
+        )
+        raw_automatic_retry_stop_reason = failure_payload.get("automatic_retry_stop_reason")
+        automatic_retry_stop_reason = (
+            raw_automatic_retry_stop_reason
+            if raw_automatic_retry_stop_reason
+            in {
+                "not_retryable",
+                "decision_family_budget_exhausted",
+                "attempt_limit_reached",
+                "insufficient_action_budget",
+            }
+            else None
+        )
+        failure_episode = failure_episodes_by_attempt.get(attempt_key)
+        has_model_failure = attempt_key in failures
+        failure_resolution = (
+            failure_episode.resolution
+            if failure_episode is not None
+            else "legacy_unavailable"
+            if has_model_failure
+            else None
+        )
+        resolution_updated_at_record_seq = (
+            failure_episode.resolution_updated_at_record_seq
+            if failure_episode is not None
+            else None
+        )
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
@@ -1594,6 +1902,10 @@ def _admin_model_requests(
                     if failed_automatic_budget is not None
                     else started_automatic_budget
                 ),
+                prior_output_budget_failures=prior_output_budget_failures,
+                output_budget_failure_count=output_budget_failure_count,
+                automatic_output_budget_attempt_count=(automatic_output_budget_attempt_count),
+                automatic_output_budget_budget=automatic_output_budget_budget,
                 attempt_no=_first_int(payload.get("attempt_no")) or 1,
                 cycle_attempt_no=cycle_attempt_no,
                 retry_cycle=retry_cycle,
@@ -1606,8 +1918,9 @@ def _admin_model_requests(
                 record_seq=start.record_seq,
                 last_record_seq=max(
                     start.record_seq,
-                    last_record_seq_by_attempt.get(attempt_id, 0),
-                    last_record_seq_by_action.get(action_id, 0),
+                    last_record_seq_by_attempt.get(attempt_key, 0),
+                    last_record_seq_by_action.get(action_key, 0),
+                    resolution_updated_at_record_seq or 0,
                 ),
                 action_id=action_id,
                 run_id=start.run_id,
@@ -1636,26 +1949,14 @@ def _admin_model_requests(
                     if isinstance(payload.get("prompt_schema_version"), int)
                     else None
                 ),
-                model_context_schema_version=(
-                    payload.get("model_context_schema_version")
-                    if isinstance(payload.get("model_context_schema_version"), int)
-                    else None
-                ),
-                prompt_template_version=(
-                    payload.get("prompt_template_version")
-                    if isinstance(payload.get("prompt_template_version"), int)
-                    else None
-                ),
+                model_context_schema_version=model_context_schema_version,
+                prompt_template_version=prompt_template_version,
                 model_view_selector_version=(
                     payload.get("model_view_selector_version")
                     if isinstance(payload.get("model_view_selector_version"), int)
                     else None
                 ),
-                prompt_projection=(
-                    payload.get("prompt_projection")
-                    if isinstance(payload.get("prompt_projection"), dict)
-                    else None
-                ),
+                prompt_projection=prompt_projection,
                 output_enforcement=(
                     payload.get("output_enforcement")
                     if isinstance(payload.get("output_enforcement"), dict)
@@ -1663,6 +1964,8 @@ def _admin_model_requests(
                 ),
                 status=status,
                 request_payload=request_payload,
+                expanded_known_events=expanded_known_events,
+                known_events_expansion_status=known_events_expansion_status,
                 input_source=input_source,
                 raw_response=raw_response,
                 parsed_output=parsed_output,
@@ -1672,13 +1975,71 @@ def _admin_model_requests(
                 provider_request_id=(
                     provider_request_id if isinstance(provider_request_id, str) else None
                 ),
+                model_generation_policy_contract_status=(generation_policy_contract_status),
+                model_generation_policy_schema_version=_first_int(
+                    diagnostic_payload.get("model_generation_policy_schema_version"),
+                    payload.get("model_generation_policy_schema_version"),
+                ),
+                model_generation_policy_classification_version=_first_int(
+                    diagnostic_payload.get("model_generation_policy_classification_version"),
+                    payload.get("model_generation_policy_classification_version"),
+                ),
+                model_generation_policy_enforcement=(generation_policy_enforcement),
+                model_generation_policy_reasoning_parameter_mode=(
+                    generation_policy_reasoning_parameter_mode
+                ),
+                model_generation_policy_profile=generation_policy_profile,
+                model_generation_policy_profile_source=(generation_policy_profile_source),
+                reasoning_only_timeout_ms=_first_int(
+                    diagnostic_payload.get("reasoning_only_timeout_ms"),
+                    payload.get("reasoning_only_timeout_ms"),
+                ),
+                timeout_max_attempts=_first_int(
+                    diagnostic_payload.get("timeout_max_attempts"),
+                    payload.get("timeout_max_attempts"),
+                ),
+                shadow_would_timeout=shadow_would_timeout,
+                finish_reason=finish_reason,
+                provider_usage=_admin_provider_usage(diagnostic_payload.get("provider_usage")),
+                usage_update_count=_first_int(diagnostic_payload.get("usage_update_count")),
+                usage_conflict_observed=(
+                    diagnostic_payload.get("usage_conflict_observed")
+                    if isinstance(diagnostic_payload.get("usage_conflict_observed"), bool)
+                    else None
+                ),
+                usage_consistency=usage_consistency,
+                queue_wait_ms=_first_int(
+                    diagnostic_payload.get("queue_wait_ms"),
+                ),
+                provider_in_flight=_first_int(
+                    diagnostic_payload.get("provider_in_flight"),
+                ),
+                provider_concurrency_limit=_first_int(
+                    diagnostic_payload.get("provider_concurrency_limit"),
+                ),
                 first_token_ms=_first_int(
                     response_payload.get("first_token_ms"),
                     first_payload.get("first_token_ms"),
+                    failure_payload.get("first_token_ms"),
+                ),
+                reasoning_only_elapsed_ms=_first_int(
+                    diagnostic_payload.get("reasoning_only_elapsed_ms"),
                 ),
                 completed_ms=_first_int(
                     response_payload.get("completed_ms"),
                     tts_payload.get("sentence_ms"),
+                ),
+                reasoning_delta_count=_first_int(
+                    diagnostic_payload.get("reasoning_delta_count"),
+                ),
+                text_delta_count=_first_int(
+                    diagnostic_payload.get("text_delta_count"),
+                ),
+                max_inter_delta_ms=_first_int(
+                    diagnostic_payload.get("max_inter_delta_ms"),
+                ),
+                last_progress_ms=_first_int(
+                    diagnostic_payload.get("last_progress_ms"),
                 ),
                 failure_kind=(
                     failure_payload.get("failure_kind")
@@ -1787,6 +2148,84 @@ def _admin_model_requests(
                     failure_payload.get("action_remaining_ms"),
                     payload.get("action_remaining_ms"),
                 ),
+                effective_attempt_limit=_first_int(
+                    failure_payload.get("effective_attempt_limit"),
+                ),
+                retry_delay_ms=_first_int(
+                    failure_payload.get("retry_delay_ms"),
+                ),
+                required_retry_window_ms=_first_int(
+                    failure_payload.get("required_retry_window_ms"),
+                ),
+                automatic_retry_scheduled=(
+                    failure_payload.get("automatic_retry_scheduled")
+                    if isinstance(failure_payload.get("automatic_retry_scheduled"), bool)
+                    else None
+                ),
+                automatic_retry_stop_reason=automatic_retry_stop_reason,
+                failure_episode_id=(
+                    failure_episode.failure_episode_id if failure_episode is not None else None
+                ),
+                failure_resolution=failure_resolution,
+                failure_episode_source_attempt_ids=(
+                    list(failure_episode.source_attempt_ids)
+                    if failure_episode is not None
+                    else None
+                ),
+                failure_episode_source_event_refs=(
+                    [
+                        {
+                            "event_type": ref.event_type,
+                            "event_id": ref.event_id,
+                            "record_seq": ref.record_seq,
+                        }
+                        for ref in failure_episode.source_event_refs
+                    ]
+                    if failure_episode is not None
+                    else None
+                ),
+                failure_episode_terminal_event_refs=(
+                    [
+                        {
+                            "event_type": ref.event_type,
+                            "event_id": ref.event_id,
+                            "record_seq": ref.record_seq,
+                        }
+                        for ref in failure_episode.terminal_event_refs
+                    ]
+                    if failure_episode is not None
+                    else None
+                ),
+                resolution_event_type=(
+                    failure_episode.resolution_event_type if failure_episode is not None else None
+                ),
+                resolution_event_id=(
+                    _first_int(failure_episode.resolution_event_id)
+                    if failure_episode is not None
+                    else None
+                ),
+                resolution_event_record_seq=(
+                    failure_episode.resolution_event_record_seq
+                    if failure_episode is not None
+                    else None
+                ),
+                supporting_event_type=(
+                    failure_episode.supporting_event_type if failure_episode is not None else None
+                ),
+                supporting_event_id=(
+                    _first_int(failure_episode.supporting_event_id)
+                    if failure_episode is not None
+                    else None
+                ),
+                supporting_event_record_seq=(
+                    failure_episode.supporting_event_record_seq
+                    if failure_episode is not None
+                    else None
+                ),
+                resolution_updated_at_record_seq=resolution_updated_at_record_seq,
+                failure_episode_invariant_errors=(
+                    list(failure_episode.invariant_errors) if failure_episode is not None else None
+                ),
                 model_binding_failure_streak=binding_failure_streak,
                 model_binding_health_status=binding_health_status,
                 model_binding_recovered_after_failures=(binding_recovered_after_failures),
@@ -1849,6 +2288,28 @@ def _first_int(*values: object) -> int | None:
         (value for value in values if isinstance(value, int) and not isinstance(value, bool)),
         None,
     )
+
+
+def _first_str(*values: object) -> str | None:
+    return next((value for value in values if isinstance(value, str)), None)
+
+
+def _admin_provider_usage(value: object) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    normalized = {
+        key: item
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+        )
+        for item in (value.get(key),)
+        if isinstance(item, int) and not isinstance(item, bool) and item >= 0
+    }
+    return normalized or None
 
 
 def _record_fields(value: object, *names: str) -> dict[str, object]:

@@ -37,6 +37,7 @@ from app.v2.repository import (
     V2GameCanceled,
     V2PhaseTransition,
     V2RepositoryError,
+    _open_failure_episode_ids_for_locked_run,
 )
 from app.v2.win_conditions import (
     all_hunter_settlement_branches_terminal,
@@ -1486,12 +1487,20 @@ class V2NightRepository:
             game.phase_state = "failed"
             run.status = "failed"
             run.completed_at = _now()
+            failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                db,
+                game=game,
+            )
             _append_event(
                 db,
                 game=game,
                 event_type="ability_runtime_failed",
                 audience="god_view",
-                payload={"failure_code": failure_code},
+                payload={
+                    "failure_code": failure_code,
+                    "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                    "failure_episode_disposition": "run_failure",
+                },
             )
             return run.run_id
 

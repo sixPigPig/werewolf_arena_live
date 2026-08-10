@@ -11,6 +11,7 @@ import type {
   V2ModelRequest,
   V2ModelActionRetryResult,
   V2ModelRequestAudienceSource,
+  V2ModelFailureResolution,
   V2ModelRequestPage,
   V2ModelRequestSummary,
   V2OutputEnforcementAudit,
@@ -249,6 +250,14 @@ export function parseV2ModelRequestSummary(
     record.model_context_schema_version === undefined
       ? null
       : nullableInteger(record.model_context_schema_version, 0);
+  const promptTemplateVersion =
+    record.prompt_template_version === undefined
+      ? null
+      : nullableInteger(record.prompt_template_version, 0);
+  const modelViewSelectorVersion =
+    record.model_view_selector_version === undefined
+      ? null
+      : nullableInteger(record.model_view_selector_version, 0);
   const audienceSource: V2ModelRequestAudienceSource =
     record.audience_source === undefined
       ? "legacy_unknown"
@@ -263,6 +272,25 @@ export function parseV2ModelRequestSummary(
             "legacy_unknown",
           ] as const,
         );
+  const failureResolution: V2ModelFailureResolution | null =
+    record.failure_resolution === undefined
+      ? record.failure_code === null || record.failure_code === undefined
+        ? null
+        : "legacy_unavailable"
+      : record.failure_resolution === null
+        ? null
+        : oneOf(record.failure_resolution, [
+            "automatic_retry_success",
+            "technical_skip",
+            "technical_false_fallback",
+            "operator_pause",
+            "isolated_action_failure",
+            "run_failure",
+            "run_canceled",
+            "unresolved",
+            "invariant_conflict",
+            "legacy_unavailable",
+          ] as const);
   return {
     attempt_id: text(record.attempt_id),
     decision_family_id:
@@ -291,6 +319,22 @@ export function parseV2ModelRequestSummary(
       record.automatic_machine_format_budget === undefined
         ? null
         : nullableInteger(record.automatic_machine_format_budget, 0),
+    prior_output_budget_failures:
+      record.prior_output_budget_failures === undefined
+        ? null
+        : nullableInteger(record.prior_output_budget_failures, 0),
+    output_budget_failure_count:
+      record.output_budget_failure_count === undefined
+        ? null
+        : nullableInteger(record.output_budget_failure_count, 0),
+    automatic_output_budget_attempt_count:
+      record.automatic_output_budget_attempt_count === undefined
+        ? null
+        : nullableInteger(record.automatic_output_budget_attempt_count, 0),
+    automatic_output_budget_budget:
+      record.automatic_output_budget_budget === undefined
+        ? null
+        : nullableInteger(record.automatic_output_budget_budget, 0),
     attempt_no:
       record.attempt_no === undefined ? 1 : integer(record.attempt_no, 1),
     cycle_attempt_no:
@@ -335,21 +379,19 @@ export function parseV2ModelRequestSummary(
         ? null
         : nullableInteger(record.prompt_schema_version, 0),
     model_context_schema_version: modelContextSchemaVersion,
-    prompt_template_version:
-      record.prompt_template_version === undefined
-        ? null
-        : nullableInteger(record.prompt_template_version, 0),
-    model_view_selector_version:
-      record.model_view_selector_version === undefined
-        ? null
-        : nullableInteger(record.model_view_selector_version, 0),
+    prompt_template_version: promptTemplateVersion,
+    model_view_selector_version: modelViewSelectorVersion,
     prompt_projection:
       record.prompt_projection === undefined ||
       record.prompt_projection === null
         ? null
         : parsePromptProjection(
             record.prompt_projection,
-            modelContextSchemaVersion,
+            {
+              modelContextSchemaVersion,
+              modelViewSelectorVersion,
+              promptTemplateVersion,
+            },
           ),
     status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
     input_source: oneOf(
@@ -367,8 +409,137 @@ export function parseV2ModelRequestSummary(
       ["persisted", "legacy_inferred", "unavailable"] as const,
     ),
     provider_request_id: nullableText(record.provider_request_id),
+    model_generation_policy_contract_status:
+      record.model_generation_policy_contract_status === undefined ||
+      record.model_generation_policy_contract_status === null
+        ? null
+        : oneOf(record.model_generation_policy_contract_status, [
+            "supported",
+            "legacy_disabled",
+          ] as const),
+    model_generation_policy_schema_version:
+      record.model_generation_policy_schema_version === undefined
+        ? null
+        : nullableInteger(record.model_generation_policy_schema_version, 1),
+    model_generation_policy_classification_version:
+      record.model_generation_policy_classification_version === undefined
+        ? null
+        : nullableInteger(
+            record.model_generation_policy_classification_version,
+            1,
+          ),
+    model_generation_policy_enforcement:
+      record.model_generation_policy_enforcement === undefined ||
+      record.model_generation_policy_enforcement === null
+        ? null
+        : oneOf(record.model_generation_policy_enforcement, [
+            "observe_only",
+            "disabled",
+          ] as const),
+    model_generation_policy_reasoning_parameter_mode:
+      record.model_generation_policy_reasoning_parameter_mode === undefined ||
+      record.model_generation_policy_reasoning_parameter_mode === null
+        ? null
+        : oneOf(record.model_generation_policy_reasoning_parameter_mode, [
+            "inherit_frozen_model_configuration",
+          ] as const),
+    model_generation_policy_profile:
+      record.model_generation_policy_profile === undefined ||
+      record.model_generation_policy_profile === null
+        ? null
+        : oneOf(record.model_generation_policy_profile, [
+            "strategic_full",
+            "recoverable_public_speech",
+            "isolated_auxiliary",
+          ] as const),
+    model_generation_policy_profile_source:
+      record.model_generation_policy_profile_source === undefined ||
+      record.model_generation_policy_profile_source === null
+        ? null
+        : oneOf(record.model_generation_policy_profile_source, [
+            "explicit_action_profile",
+            "default_profile",
+            "legacy_missing_contract",
+          ] as const),
+    reasoning_only_timeout_ms:
+      record.reasoning_only_timeout_ms === undefined
+        ? null
+        : nullableInteger(record.reasoning_only_timeout_ms, 1),
+    timeout_max_attempts:
+      record.timeout_max_attempts === undefined
+        ? null
+        : nullableInteger(record.timeout_max_attempts, 1),
+    shadow_would_timeout:
+      record.shadow_would_timeout === undefined
+        ? null
+        : nullableBoolean(record.shadow_would_timeout),
+    finish_reason:
+      record.finish_reason === undefined || record.finish_reason === null
+        ? null
+        : oneOf(record.finish_reason, [
+            "completed",
+            "stop",
+            "length",
+            "max_output_tokens",
+            "content_filter",
+            "tool_calls",
+            "unknown",
+          ] as const),
+    provider_usage:
+      record.provider_usage === undefined || record.provider_usage === null
+        ? null
+        : parseProviderUsage(record.provider_usage),
+    usage_update_count:
+      record.usage_update_count === undefined
+        ? null
+        : nullableInteger(record.usage_update_count, 0),
+    usage_conflict_observed:
+      record.usage_conflict_observed === undefined
+        ? null
+        : nullableBoolean(record.usage_conflict_observed),
+    usage_consistency:
+      record.usage_consistency === undefined ||
+      record.usage_consistency === null
+        ? null
+        : oneOf(record.usage_consistency, [
+            "exact",
+            "provider_total_mismatch",
+            "unavailable",
+          ] as const),
+    queue_wait_ms:
+      record.queue_wait_ms === undefined
+        ? null
+        : nullableInteger(record.queue_wait_ms, 0),
+    provider_in_flight:
+      record.provider_in_flight === undefined
+        ? null
+        : nullableInteger(record.provider_in_flight, 0),
+    provider_concurrency_limit:
+      record.provider_concurrency_limit === undefined
+        ? null
+        : nullableInteger(record.provider_concurrency_limit, 1),
     first_token_ms: nullableInteger(record.first_token_ms, 0),
+    reasoning_only_elapsed_ms:
+      record.reasoning_only_elapsed_ms === undefined
+        ? null
+        : nullableInteger(record.reasoning_only_elapsed_ms, 0),
     completed_ms: nullableInteger(record.completed_ms, 0),
+    reasoning_delta_count:
+      record.reasoning_delta_count === undefined
+        ? null
+        : nullableInteger(record.reasoning_delta_count, 0),
+    text_delta_count:
+      record.text_delta_count === undefined
+        ? null
+        : nullableInteger(record.text_delta_count, 0),
+    max_inter_delta_ms:
+      record.max_inter_delta_ms === undefined
+        ? null
+        : nullableInteger(record.max_inter_delta_ms, 0),
+    last_progress_ms:
+      record.last_progress_ms === undefined
+        ? null
+        : nullableInteger(record.last_progress_ms, 0),
     failure_kind: nullableText(record.failure_kind),
     failure_code: nullableText(record.failure_code),
     ...(record.failure_category === undefined
@@ -458,6 +629,89 @@ export function parseV2ModelRequestSummary(
       record.action_remaining_ms === undefined
         ? null
         : nullableInteger(record.action_remaining_ms, 0),
+    effective_attempt_limit:
+      record.effective_attempt_limit === undefined
+        ? null
+        : nullableInteger(record.effective_attempt_limit, 1),
+    retry_delay_ms:
+      record.retry_delay_ms === undefined
+        ? null
+        : nullableInteger(record.retry_delay_ms, 0),
+    required_retry_window_ms:
+      record.required_retry_window_ms === undefined
+        ? null
+        : nullableInteger(record.required_retry_window_ms, 0),
+    automatic_retry_scheduled:
+      record.automatic_retry_scheduled === undefined
+        ? null
+        : nullableBoolean(record.automatic_retry_scheduled),
+    automatic_retry_stop_reason:
+      record.automatic_retry_stop_reason === undefined ||
+      record.automatic_retry_stop_reason === null
+        ? null
+        : oneOf(record.automatic_retry_stop_reason, [
+            "not_retryable",
+            "decision_family_budget_exhausted",
+            "attempt_limit_reached",
+            "insufficient_action_budget",
+          ] as const),
+    failure_episode_id:
+      record.failure_episode_id === undefined
+        ? null
+        : nullableText(record.failure_episode_id),
+    failure_resolution: failureResolution,
+    failure_episode_source_attempt_ids:
+      record.failure_episode_source_attempt_ids === undefined ||
+      record.failure_episode_source_attempt_ids === null
+        ? null
+        : array(record.failure_episode_source_attempt_ids).map(text),
+    failure_episode_source_event_refs:
+      record.failure_episode_source_event_refs === undefined ||
+      record.failure_episode_source_event_refs === null
+        ? null
+        : array(record.failure_episode_source_event_refs).map(
+            parseFailureEpisodeEventRef,
+          ),
+    failure_episode_terminal_event_refs:
+      record.failure_episode_terminal_event_refs === undefined ||
+      record.failure_episode_terminal_event_refs === null
+        ? null
+        : array(record.failure_episode_terminal_event_refs).map(
+            parseFailureEpisodeEventRef,
+          ),
+    resolution_event_type:
+      record.resolution_event_type === undefined
+        ? null
+        : nullableText(record.resolution_event_type),
+    resolution_event_id:
+      record.resolution_event_id === undefined
+        ? null
+        : nullableInteger(record.resolution_event_id, 1),
+    resolution_event_record_seq:
+      record.resolution_event_record_seq === undefined
+        ? null
+        : nullableInteger(record.resolution_event_record_seq, 1),
+    supporting_event_type:
+      record.supporting_event_type === undefined
+        ? null
+        : nullableText(record.supporting_event_type),
+    supporting_event_id:
+      record.supporting_event_id === undefined
+        ? null
+        : nullableInteger(record.supporting_event_id, 1),
+    supporting_event_record_seq:
+      record.supporting_event_record_seq === undefined
+        ? null
+        : nullableInteger(record.supporting_event_record_seq, 1),
+    resolution_updated_at_record_seq:
+      record.resolution_updated_at_record_seq === undefined
+        ? null
+        : nullableInteger(record.resolution_updated_at_record_seq, 1),
+    failure_episode_invariant_errors:
+      record.failure_episode_invariant_errors === undefined ||
+      record.failure_episode_invariant_errors === null
+        ? null
+        : array(record.failure_episode_invariant_errors).map(text),
     model_binding_failure_streak:
       record.model_binding_failure_streak === undefined
         ? null
@@ -482,10 +736,38 @@ export function parseV2ModelRequestSummary(
 
 function parsePromptProjection(
   value: unknown,
-  modelContextSchemaVersion: number | null,
+  contract: {
+    modelContextSchemaVersion: number | null;
+    modelViewSelectorVersion: number | null;
+    promptTemplateVersion: number | null;
+  },
 ): V2PromptProjection {
   const projection = object(value);
-  if (modelContextSchemaVersion !== 11) return projection;
+  const modelContextSchemaVersion = contract.modelContextSchemaVersion;
+  const v11Contract =
+    modelContextSchemaVersion === 11 &&
+    (contract.promptTemplateVersion === 3 ||
+      contract.promptTemplateVersion === 4) &&
+    contract.modelViewSelectorVersion === 2 &&
+    projection.model_context_schema_version === 11 &&
+    projection.prompt_template_version === contract.promptTemplateVersion &&
+    projection.known_events_schema_version === 5 &&
+    projection.ledger_schema_version === 5 &&
+    projection.model_view_schema_version === 5 &&
+    projection.model_view_selector_version === 2;
+  const v12Contract =
+    modelContextSchemaVersion === 12 &&
+    contract.promptTemplateVersion === 5 &&
+    contract.modelViewSelectorVersion === 2 &&
+    projection.model_context_schema_version === 12 &&
+    projection.prompt_template_version === 5 &&
+    projection.known_events_schema_version === 6 &&
+    projection.ledger_schema_version === 5 &&
+    projection.model_view_schema_version === 5 &&
+    projection.model_view_selector_version === 2;
+  if (!v11Contract && !v12Contract) {
+    return projection;
+  }
   for (const key of [
     "model_context_schema_version",
     "prompt_template_version",
@@ -549,6 +831,36 @@ function parsePromptProjection(
       }
     }
   }
+  if (modelContextSchemaVersion === 12) {
+    for (const key of [
+      "canonical_serialized_char_count",
+      "compact_serialized_char_count",
+      "verbatim_speech_count",
+      "verbatim_speech_chars",
+    ]) {
+      validateOptionalInteger(projection, key, 0);
+    }
+    validateOptionalInteger(
+      projection,
+      "compaction_saved_chars",
+      Number.MIN_SAFE_INTEGER,
+    );
+    if (projection.compaction_ratio !== undefined) {
+      finiteNumber(projection.compaction_ratio, 0);
+    }
+    for (const key of ["retained_event_refs", "dropped_event_refs"]) {
+      if (projection[key] !== undefined) {
+        array(projection[key]).forEach(text);
+      }
+    }
+    if (projection.canonical_sha256 !== undefined) {
+      const hash = text(projection.canonical_sha256);
+      if (!/^[0-9a-f]{64}$/u.test(hash)) throw invalid();
+    }
+    if (projection.round_trip_verified !== undefined) {
+      boolean(projection.round_trip_verified);
+    }
+  }
   return projection;
 }
 
@@ -572,6 +884,43 @@ function parseOutputEnforcement(value: unknown): V2OutputEnforcementAudit {
   };
 }
 
+function parseProviderUsage(value: unknown) {
+  const usage = object(value);
+  const normalized: {
+    input_tokens?: number;
+    output_tokens?: number;
+    reasoning_tokens?: number;
+    total_tokens?: number;
+    cached_input_tokens?: number;
+  } = {};
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+    "cached_input_tokens",
+  ] as const) {
+    if (usage[key] !== undefined) normalized[key] = integer(usage[key], 0);
+  }
+  return normalized;
+}
+
+function parseFailureEpisodeEventRef(value: unknown) {
+  const ref = object(value);
+  const rawEventId = ref.event_id;
+  const eventId =
+    rawEventId === null
+      ? null
+      : typeof rawEventId === "string"
+        ? text(rawEventId)
+        : integer(rawEventId, 1);
+  return {
+    event_type: text(ref.event_type),
+    event_id: eventId,
+    record_seq: integer(ref.record_seq, 1),
+  };
+}
+
 function validateOptionalInteger(
   record: Record<string, unknown>,
   key: string,
@@ -589,6 +938,20 @@ export function parseV2ModelRequest(value: unknown): V2ModelRequest {
     ...parseV2ModelRequestSummary(record),
     request_payload:
       record.request_payload === null ? null : object(record.request_payload),
+    expanded_known_events:
+      record.expanded_known_events === undefined ||
+      record.expanded_known_events === null
+        ? null
+        : object(record.expanded_known_events),
+    known_events_expansion_status:
+      record.known_events_expansion_status === undefined
+        ? "unavailable"
+        : oneOf(record.known_events_expansion_status, [
+            "verified",
+            "not_applicable",
+            "unavailable",
+            "invalid",
+          ] as const),
     raw_response: nullableText(record.raw_response),
     parsed_output:
       record.parsed_output === null ? null : object(record.parsed_output),
@@ -617,6 +980,13 @@ function text(value: unknown): string {
 function integer(value: unknown, minimum: number): number {
   if (!Number.isInteger(value) || Number(value) < minimum) throw invalid();
   return Number(value);
+}
+
+function finiteNumber(value: unknown, minimum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
+    throw invalid();
+  }
+  return value;
 }
 
 function nullableInteger(value: unknown, minimum: number): number | null {

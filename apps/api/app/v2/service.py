@@ -33,6 +33,9 @@ from app.v2.god_view_access import (
     verify_god_view_access_token,
 )
 from app.v2.model_context_contract import freeze_model_context_contract
+from app.v2.model_generation_policy_contract import (
+    freeze_model_generation_policy_contract,
+)
 from app.v2.role_assignment import assign_private_roles
 
 
@@ -76,7 +79,9 @@ def create_waiting_game(
     if rule_snapshot is not None or players_snapshot is not None:
         if rule_snapshot is None or players_snapshot is None:
             raise ValueError("rule and player snapshots must be provided together")
-    frozen_rule_snapshot = freeze_model_context_contract(rule_snapshot)
+    frozen_rule_snapshot = freeze_model_generation_policy_contract(
+        freeze_model_context_contract(rule_snapshot)
+    )
     if created_from_lobby:
         assert players_snapshot is not None
         assignment_id = f"v2_roles_{uuid4().hex[:16]}"
@@ -124,16 +129,27 @@ def create_waiting_game(
         run_id=run_id,
         event_type="game_created",
         payload_schema_version=1,
-        payload=canonical_event_payload({
-            "title": game.title,
-            "start_mode": "first_ready_viewer",
-            "creation_source": ("existing_mobile_lobby" if created_from_lobby else "direct_v2"),
-            "rule_set_id": frozen_rule_snapshot.get("rule_set", {}).get("id"),
-            "player_count": len(players_snapshot or []),
-            "judge_voice": judge_voice_snapshot or {},
-            "delivery_snapshot": delivery_snapshot,
-            "model_context_contract": frozen_rule_snapshot["model_context_contract"],
-        }, audience="all"),
+        payload=canonical_event_payload(
+            {
+                "title": game.title,
+                "start_mode": "first_ready_viewer",
+                "creation_source": ("existing_mobile_lobby" if created_from_lobby else "direct_v2"),
+                "rule_set_id": frozen_rule_snapshot.get("rule_set", {}).get("id"),
+                "player_count": len(players_snapshot or []),
+                "judge_voice": judge_voice_snapshot or {},
+                "delivery_snapshot": delivery_snapshot,
+                "model_context_contract": frozen_rule_snapshot["model_context_contract"],
+                "model_generation_policy_contract": {
+                    key: frozen_rule_snapshot["model_generation_policy_contract"][key]
+                    for key in (
+                        "schema_version",
+                        "classification_version",
+                        "enforcement",
+                    )
+                },
+            },
+            audience="all",
+        ),
     )
     db.add(game)
     db.flush()
@@ -189,11 +205,14 @@ def create_waiting_game(
                 run_id=run_id,
                 event_type="roles_assigned",
                 payload_schema_version=1,
-                payload=canonical_event_payload({
-                    "assignment_id": assignment_id,
-                    "assigned_count": len(assignment_result.assignments),
-                    "visibility": "private_sealed",
-                }, audience="god_view"),
+                payload=canonical_event_payload(
+                    {
+                        "assignment_id": assignment_id,
+                        "assigned_count": len(assignment_result.assignments),
+                        "visibility": "private_sealed",
+                    },
+                    audience="god_view",
+                ),
             )
         )
         db.add_all(
@@ -231,12 +250,15 @@ def create_waiting_game(
                 run_id=run_id,
                 event_type="ability_runtime_compiled",
                 payload_schema_version=1,
-                payload=canonical_event_payload({
-                    "ability_snapshot_hash": ability_snapshot["snapshot_hash"],
-                    "registry_version": ability_snapshot["registry_version"],
-                    "instance_count": len(ability_snapshot["instances"]),
-                    "execution_enabled": ability_snapshot["execution_enabled"],
-                }, audience="god_view"),
+                payload=canonical_event_payload(
+                    {
+                        "ability_snapshot_hash": ability_snapshot["snapshot_hash"],
+                        "registry_version": ability_snapshot["registry_version"],
+                        "instance_count": len(ability_snapshot["instances"]),
+                        "execution_enabled": ability_snapshot["execution_enabled"],
+                    },
+                    audience="god_view",
+                ),
             )
         )
     db.commit()

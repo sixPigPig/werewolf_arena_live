@@ -8,11 +8,20 @@ from typing import Any
 from app.v2.ability_runtime import normalize_role_key, normalize_team_key
 from app.v2.discourse_ledger import build_public_discourse_ledger
 from app.v2.discourse_model_view import build_discourse_model_view
+from app.v2.model_context_compaction import (
+    KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
+    V2ModelContextCompactionError,
+    build_known_events_v6_compaction_metadata,
+    encode_known_events_v6,
+    expand_known_events_v6,
+)
 from app.v2.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
+    KNOWN_EVENTS_SCHEMA_VERSION,
+    MODEL_CONTEXT_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
+    PROMPT_TEMPLATE_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
-    SUPPORTED_PROMPT_TEMPLATE_VERSIONS,
     is_supported_model_context_contract,
 )
 from app.v2.win_conditions import (
@@ -91,7 +100,7 @@ def project_model_action_context_with_metadata(
     contract = model_context_contract
     if not is_supported_model_context_contract(contract):
         raise ValueError("unsupported_model_context_contract")
-    return _project_v11_model_action_context_with_metadata(
+    return _project_v12_model_action_context_with_metadata(
         context,
         players=players,
         projection_at_seq=resolved_projection_at_seq,
@@ -102,7 +111,7 @@ def project_model_action_context_with_metadata(
     )
 
 
-def _project_v11_model_action_context_with_metadata(
+def _project_v12_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
@@ -201,7 +210,7 @@ def _project_v11_model_action_context_with_metadata(
         private_facts=teammate_facts_removed,
         task_at_seq=task_at_seq,
         current_round_no=current_round_no,
-        schema_version=known_events_schema_version,
+        schema_version=KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
     )
     is_werewolf = identity.get("role_key") == "werewolf"
     configured_werewolf_count = hard_rules.get("werewolf_count")
@@ -228,6 +237,12 @@ def _project_v11_model_action_context_with_metadata(
         current_round_no=current_round_no,
         include_reply_opportunity=_is_scheduled_speech_action(task),
     )
+    canonical_known_events = {
+        "schema_version": KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
+        "events": selected_events,
+        "questions": questions,
+        "relations": relations,
+    }
     state = _model_public_state(source)
     state.update(
         _v11_temporal_state(
@@ -244,7 +259,7 @@ def _project_v11_model_action_context_with_metadata(
         else None
     )
     projected_context = {
-        "model_context_schema_version": 11,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": prompt_template_version,
         "task": task,
         "self": _model_self_v11(source, hard_rules=hard_rules),
@@ -254,12 +269,7 @@ def _project_v11_model_action_context_with_metadata(
             living_werewolf_count=living_werewolf_count,
         ),
         "state": state,
-        "known_events": {
-            "schema_version": known_events_schema_version,
-            "events": selected_events,
-            "questions": questions,
-            "relations": relations,
-        },
+        "known_events": canonical_known_events,
         "persona": _compact_persona(
             source.get("actor_profile"),
             include_delivery=_response_allows_speech(source.get("output_contract")),
@@ -273,8 +283,22 @@ def _project_v11_model_action_context_with_metadata(
         internal_contract=(
             source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
         ),
+        _canonical_known_events=canonical_known_events,
     )
-    projection_metadata = _v11_projection_metadata(
+    try:
+        compact_known_events = encode_known_events_v6(canonical_known_events)
+    except V2ModelContextCompactionError as exc:
+        raise V2ModelContextProjectionInvariantError(exc.code) from exc
+    if compact_known_events.get("schema_version") != known_events_schema_version:
+        raise V2ModelContextProjectionInvariantError("known_events_schema_version")
+    projected_context["known_events"] = compact_known_events
+    validate_projected_model_context(
+        projected_context,
+        internal_contract=(
+            source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
+        ),
+    )
+    projection_metadata = _v12_projection_metadata(
         ledger=ledger,
         model_view_metadata=model_view_metadata,
         projected_context=projected_context,
@@ -285,6 +309,8 @@ def _project_v11_model_action_context_with_metadata(
         relations=relations,
         current_round_no=current_round_no,
         model_view_schema_version=model_view_schema_version,
+        canonical_known_events=canonical_known_events,
+        compact_known_events=compact_known_events,
     )
 
     observation_task = _model_task(source)
@@ -310,7 +336,7 @@ def _project_v11_model_action_context_with_metadata(
             "hard_rules": hard_rules,
             "public_timeline": _model_public_timeline(public_events),
             "history": observation_history,
-            "known_events": projected_context["known_events"],
+            "known_events": canonical_known_events,
         },
     )
 
@@ -318,17 +344,31 @@ def _project_v11_model_action_context_with_metadata(
 def validate_projected_model_context(
     context: dict[str, Any],
     internal_contract: dict[str, Any],
+    *,
+    _canonical_known_events: dict[str, Any] | None = None,
 ) -> None:
     def fail(code: str) -> None:
         raise V2ModelContextProjectionInvariantError(code)
 
-    if context.get("model_context_schema_version") != 11:
+    if context.get("model_context_schema_version") != MODEL_CONTEXT_SCHEMA_VERSION:
         fail("model_context_schema_version")
-    if context.get("prompt_template_version") not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS:
+    if context.get("prompt_template_version") != PROMPT_TEMPLATE_VERSION:
         fail("prompt_template_version")
-    known_events = context.get("known_events")
-    if not isinstance(known_events, dict) or known_events.get("schema_version") != 5:
-        fail("known_events_schema_version")
+    if _canonical_known_events is not None:
+        known_events = _canonical_known_events
+        if known_events.get("schema_version") != KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION:
+            fail("known_events_schema_version")
+    else:
+        compact_known_events = context.get("known_events")
+        if (
+            not isinstance(compact_known_events, dict)
+            or compact_known_events.get("schema_version") != KNOWN_EVENTS_SCHEMA_VERSION
+        ):
+            fail("known_events_schema_version")
+        try:
+            known_events = expand_known_events_v6(compact_known_events)
+        except V2ModelContextCompactionError as exc:
+            fail(exc.code)
 
     task = context.get("task")
     state = context.get("state")
@@ -836,11 +876,10 @@ def _known_events(
             continue
         fact_id = fact.get("knowledge_fact_id")
         known_at_seq = _positive_int(fact.get("known_at_seq"))
-        record_seq = _positive_int(fact.get("record_seq")) or known_at_seq
+        record_seq = _positive_int(fact.get("record_seq"))
         historical = isinstance(fact_id, str) or isinstance(fact.get("source_activation_id"), str)
         if known_at_seq is None and not historical:
             known_at_seq = task_at_seq
-            record_seq = task_at_seq
         if task_at_seq is not None and known_at_seq is not None and known_at_seq > task_at_seq:
             continue
         payload = fact.get("payload")
@@ -1222,7 +1261,7 @@ def _private_fact_occurrence(payload: Any, *, current_round_no: int) -> dict[str
     return {"period": "current_action", "round_no": current_round_no}
 
 
-def _v11_projection_metadata(
+def _v12_projection_metadata(
     *,
     ledger: dict[str, Any],
     model_view_metadata: dict[str, Any],
@@ -1234,6 +1273,8 @@ def _v11_projection_metadata(
     relations: list[dict[str, Any]],
     current_round_no: int,
     model_view_schema_version: int,
+    canonical_known_events: dict[str, Any],
+    compact_known_events: dict[str, Any],
 ) -> dict[str, Any]:
     statements = ledger.get("statements")
     statements = statements if isinstance(statements, list) else []
@@ -1290,9 +1331,9 @@ def _v11_projection_metadata(
         if isinstance(derivation_rejections, list)
         else []
     )
-    return {
-        "prompt_schema_version": 11,
-        "model_context_schema_version": 11,
+    metadata = {
+        "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": projected_context["prompt_template_version"],
         "known_events_schema_version": projected_context["known_events"]["schema_version"],
         "ledger_schema_version": (
@@ -1357,6 +1398,13 @@ def _v11_projection_metadata(
         ),
         "derivation_rejections": derivation_rejections,
     }
+    metadata.update(
+        build_known_events_v6_compaction_metadata(
+            canonical_known_events,
+            compact_known_events,
+        )
+    )
+    return metadata
 
 
 def _known_event_sort_key(event: dict[str, Any]) -> tuple[int, int, int, str]:
@@ -1402,14 +1450,20 @@ def model_prompt_metadata(
     projection_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if (
-        context.get("model_context_schema_version") != 11
-        or context.get("prompt_template_version") not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS
+        context.get("model_context_schema_version") != MODEL_CONTEXT_SCHEMA_VERSION
+        or context.get("prompt_template_version") != PROMPT_TEMPLATE_VERSION
     ):
         raise ValueError("unsupported_model_prompt_contract")
-    known_events = context.get("known_events")
-    known_events = known_events if isinstance(known_events, dict) else {}
-    if known_events.get("schema_version") != 5:
+    compact_known_events = context.get("known_events")
+    compact_known_events = (
+        compact_known_events if isinstance(compact_known_events, dict) else {}
+    )
+    if compact_known_events.get("schema_version") != KNOWN_EVENTS_SCHEMA_VERSION:
         raise ValueError("unsupported_known_events_schema_version")
+    try:
+        known_events = expand_known_events_v6(compact_known_events)
+    except V2ModelContextCompactionError as exc:
+        raise ValueError("unsupported_known_events_schema_version") from exc
     events = known_events.get("events")
     questions = known_events.get("questions")
     relations = known_events.get("relations")
@@ -1431,10 +1485,10 @@ def model_prompt_metadata(
         if sequence is not None
     ]
     metadata: dict[str, Any] = {
-        "prompt_schema_version": 11,
-        "model_context_schema_version": 11,
+        "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+        "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": context["prompt_template_version"],
-        "known_events_schema_version": 5,
+        "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
         "serialized_char_count": _serialized_chars(context),
         "known_event_count": len(events),
         "known_event_record_seq_min": min(record_seqs, default=None),
@@ -2416,6 +2470,43 @@ def private_authoritative_facts(
     return facts
 
 
+_INTERNAL_MODEL_FAILURE_AUDIT_KEYS = frozenset(
+    {
+        "failure_episode_id",
+        "source_failure_episode_ids",
+        "failed_failure_episode_ids",
+        "canceled_failure_episode_ids",
+        "technical_outcome_record_seq",
+        "failure_episode_disposition",
+        "model_generation_policy_contract_status",
+        "model_generation_policy_schema_version",
+        "model_generation_policy_classification_version",
+        "model_generation_policy_enforcement",
+        "model_generation_policy_profile",
+        "model_generation_policy_profile_source",
+        "model_generation_policy_reasoning_parameter_mode",
+        "reasoning_only_timeout_ms",
+        "timeout_max_attempts",
+        "reasoning_only_elapsed_ms",
+        "shadow_would_timeout",
+    }
+)
+
+
+def _without_internal_model_failure_audit(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_internal_model_failure_audit(item)
+            for key, item in value.items()
+            if key not in _INTERNAL_MODEL_FAILURE_AUDIT_KEYS
+        }
+    if isinstance(value, list):
+        return [_without_internal_model_failure_audit(item) for item in value]
+    if isinstance(value, tuple):
+        return [_without_internal_model_failure_audit(item) for item in value]
+    return value
+
+
 def _project_public_history(
     history: Iterable[Any],
     *,
@@ -2438,7 +2529,7 @@ def _project_public_history(
         if not isinstance(raw_item, dict):
             continue
         event_type = raw_item.get("event_type")
-        payload = raw_item.get("payload")
+        payload = _without_internal_model_failure_audit(raw_item.get("payload"))
         if not isinstance(event_type, str) or not isinstance(payload, dict):
             continue
         source_event_id = _source_id(raw_item.get("source_event_id"))

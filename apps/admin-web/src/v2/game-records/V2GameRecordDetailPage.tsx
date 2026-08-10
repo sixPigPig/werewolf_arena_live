@@ -1239,6 +1239,10 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
     item.modelRequests,
     request?.decision_family_id ?? null,
   );
+  const outputBudgetProgress = automaticOutputBudgetProgressLabel(
+    item.modelRequests,
+    request?.decision_family_id ?? null,
+  );
   return (
     <div className="v2-inspector-panel">
       <Descriptions
@@ -1319,6 +1323,92 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             children: machineFormatProgress ?? "—",
           },
           {
+            key: "output-budget-progress",
+            label: "输出预算尝试 / 自动预算",
+            children: outputBudgetProgress ?? "—",
+          },
+          {
+            key: "output-budget-lineage",
+            label: "输出预算既有 / 当前动作失败",
+            children:
+              request?.prior_output_budget_failures !== null &&
+              request?.prior_output_budget_failures !== undefined
+                ? `${request.prior_output_budget_failures} / ${
+                    request.output_budget_failure_count ?? "—"
+                  }`
+                : request?.output_budget_failure_count !== null &&
+                    request?.output_budget_failure_count !== undefined
+                  ? `— / ${request.output_budget_failure_count}`
+                  : "—",
+          },
+          {
+            key: "generation-policy-contract",
+            label: "生成策略合同",
+            children: generationPolicyContractStatusLabel(
+              request?.model_generation_policy_contract_status ?? null,
+            ),
+          },
+          {
+            key: "generation-policy-versions",
+            label: "生成策略版本",
+            children:
+              request?.model_generation_policy_schema_version !== null &&
+              request?.model_generation_policy_schema_version !== undefined
+                ? `schema v${request.model_generation_policy_schema_version} / classification v${
+                    request.model_generation_policy_classification_version ?? "—"
+                  }`
+                : "—",
+          },
+          {
+            key: "generation-policy-profile",
+            label: "生成策略 Profile",
+            children:
+              request?.model_generation_policy_profile !== null &&
+              request?.model_generation_policy_profile !== undefined
+                ? `${request.model_generation_policy_profile} · ${generationPolicyProfileSourceLabel(
+                    request.model_generation_policy_profile_source,
+                  )}`
+                : request?.model_generation_policy_profile_source
+                  ? `— · ${generationPolicyProfileSourceLabel(
+                      request.model_generation_policy_profile_source,
+                    )}`
+                  : "—",
+          },
+          {
+            key: "generation-policy-enforcement",
+            label: "Shadow 执行模式",
+            children:
+              request?.model_generation_policy_enforcement ||
+              request?.model_generation_policy_reasoning_parameter_mode
+                ? `${generationPolicyEnforcementLabel(
+                    request.model_generation_policy_enforcement,
+                  )} · ${generationPolicyReasoningModeLabel(
+                    request.model_generation_policy_reasoning_parameter_mode,
+                  )}`
+                : "—",
+          },
+          {
+            key: "generation-policy-threshold",
+            label: "Shadow 推理阈值 / 尝试上限",
+            children:
+              request?.reasoning_only_timeout_ms !== null &&
+              request?.reasoning_only_timeout_ms !== undefined
+                ? `${formatDuration(request.reasoning_only_timeout_ms)} / ${
+                    request.timeout_max_attempts ?? "—"
+                  }`
+                : request?.timeout_max_attempts !== null &&
+                    request?.timeout_max_attempts !== undefined
+                  ? `— / ${request.timeout_max_attempts}`
+                  : "—",
+          },
+          {
+            key: "generation-policy-shadow-result",
+            label: "Shadow 候选超时结果",
+            children: shadowWouldTimeoutLabel(
+              request?.shadow_would_timeout ?? null,
+            ),
+          },
+          {
             key: "stored-audience",
             label: "存储受众",
             children: request
@@ -1342,38 +1432,20 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
               : "—",
           },
           {
-            key: "first-token",
-            label: "首 Token",
-            children: formatDuration(request?.first_token_ms ?? null),
+            key: "queue-wait",
+            label: "排队等待",
+            children: formatDuration(request?.queue_wait_ms ?? null),
           },
           {
-            key: "first-token-kind",
-            label: "首 Token 类型",
-            children: firstTokenKindLabel(request?.first_token_kind ?? null),
-          },
-          {
-            key: "first-visible-text",
-            label: "首可见文本",
-            children: formatDuration(request?.first_visible_text_ms ?? null),
-          },
-          {
-            key: "total",
-            label: "模型总耗时",
-            children: formatDuration(request?.completed_ms ?? null),
-          },
-          {
-            key: "budget",
-            label: "请求 / 动作预算",
-            children: request
-              ? `${formatDuration(request.attempt_budget_ms)} / ${formatDuration(
-                  request.action_budget_ms,
-                )}`
-              : "—",
-          },
-          {
-            key: "failure-stage",
-            label: "失败阶段",
-            children: request?.failure_stage ?? "—",
+            key: "provider-capacity",
+            label: "Provider 并发",
+            children:
+              request?.provider_in_flight === null ||
+              request?.provider_in_flight === undefined
+                ? "—"
+                : `${request.provider_in_flight} / ${
+                    request.provider_concurrency_limit ?? "?"
+                  }`,
           },
           {
             key: "response-headers",
@@ -1385,6 +1457,89 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                 : request.response_headers_seen
                   ? "是"
                   : "否",
+          },
+          {
+            key: "first-token",
+            label: "首 Token",
+            children: formatDuration(request?.first_token_ms ?? null),
+          },
+          {
+            key: "first-token-kind",
+            label: "首 Token 类型",
+            children: firstTokenKindLabel(request?.first_token_kind ?? null),
+          },
+          {
+            key: "reasoning-only",
+            label: "纯推理阶段",
+            children: formatDuration(
+              request?.reasoning_only_elapsed_ms ?? null,
+            ),
+          },
+          {
+            key: "first-visible-text",
+            label: "首可见文本",
+            children: formatDuration(request?.first_visible_text_ms ?? null),
+          },
+          {
+            key: "total",
+            label: "完成 / 失败耗时",
+            children: formatDuration(
+              request?.completed_ms ?? request?.failure_elapsed_ms ?? null,
+            ),
+          },
+          {
+            key: "finish-reason",
+            label: "结束原因",
+            children: finishReasonLabel(request?.finish_reason ?? null),
+          },
+          {
+            key: "stream-deltas",
+            label: "推理 / 文本增量",
+            children: streamDeltaLabel(request ?? null),
+          },
+          {
+            key: "stream-progress",
+            label: "最大间隔 / 最后进度",
+            children: request
+              ? `${formatDuration(request.max_inter_delta_ms)} / ${formatDuration(
+                  request.last_progress_ms,
+                )}`
+              : "—",
+          },
+          {
+            key: "budget",
+            label: "请求 / 动作预算",
+            children: request
+              ? `${formatDuration(request.attempt_budget_ms)} / ${formatDuration(
+                  request.action_budget_ms,
+                )}`
+              : "—",
+          },
+          {
+            key: "effective-attempt-limit",
+            label: "生效 / 策略尝试上限",
+            children: request
+              ? `${request.effective_attempt_limit ?? "—"} / ${request.max_attempts}`
+              : "—",
+          },
+          {
+            key: "automatic-retry",
+            label: "自动重试决定",
+            children: automaticRetryDecisionLabel(request ?? null),
+          },
+          {
+            key: "retry-window",
+            label: "重试延迟 / 所需窗口",
+            children: request
+              ? `${formatDuration(request.retry_delay_ms)} / ${formatDuration(
+                  request.required_retry_window_ms,
+                )}`
+              : "—",
+          },
+          {
+            key: "failure-stage",
+            label: "失败阶段",
+            children: request?.failure_stage ?? "—",
           },
           {
             key: "timeout-scope",
@@ -1420,6 +1575,86 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
               request?.model_binding_recovered_after_failures === undefined
                 ? "—"
                 : String(request.model_binding_recovered_after_failures),
+          },
+          {
+            key: "failure-resolution",
+            label: "失败 Episode 结果",
+            children: failureResolutionLabel(
+              request?.failure_resolution ?? null,
+            ),
+          },
+          {
+            key: "resolution-update-seq",
+            label: "结果更新记录序号",
+            children:
+              request?.resolution_updated_at_record_seq === null ||
+              request?.resolution_updated_at_record_seq === undefined
+                ? "—"
+                : String(request.resolution_updated_at_record_seq),
+          },
+          {
+            key: "failure-episode",
+            label: "失败 Episode ID",
+            span: 2,
+            children: request?.failure_episode_id ? (
+              <Typography.Text copyable>
+                {request.failure_episode_id}
+              </Typography.Text>
+            ) : (
+              "—"
+            ),
+          },
+          {
+            key: "failure-source-attempts",
+            label: "Episode 源尝试",
+            span: 2,
+            children: request?.failure_episode_source_attempt_ids?.length
+              ? request.failure_episode_source_attempt_ids.join("、")
+              : "—",
+          },
+          {
+            key: "resolution-event",
+            label: "结果事件",
+            children: failureEpisodeEventRefLabel(
+              request?.resolution_event_type ?? null,
+              request?.resolution_event_id ?? null,
+              request?.resolution_event_record_seq ?? null,
+            ),
+          },
+          {
+            key: "supporting-event",
+            label: "技术支撑事件",
+            children: failureEpisodeEventRefLabel(
+              request?.supporting_event_type ?? null,
+              request?.supporting_event_id ?? null,
+              request?.supporting_event_record_seq ?? null,
+            ),
+          },
+          {
+            key: "terminal-event-refs",
+            label: "全部终结证据",
+            span: 2,
+            children: request?.failure_episode_terminal_event_refs?.length
+              ? request.failure_episode_terminal_event_refs
+                  .map((ref) =>
+                    failureEpisodeEventRefLabel(
+                      ref.event_type,
+                      ref.event_id,
+                      ref.record_seq,
+                    ),
+                  )
+                  .join("、")
+              : "—",
+          },
+          {
+            key: "episode-invariants",
+            label: "Episode 不变量",
+            span: 2,
+            children: request?.failure_episode_invariant_errors?.length
+              ? request.failure_episode_invariant_errors.join("、")
+              : request?.failure_episode_id
+                ? "通过"
+                : "—",
           },
           {
             key: "provider-request",
@@ -1486,6 +1721,11 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                   item.modelRequests.slice(0, index + 1),
                   attempt.decision_family_id,
                 );
+              const attemptOutputBudgetProgress =
+                automaticOutputBudgetProgressLabel(
+                  item.modelRequests.slice(0, index + 1),
+                  attempt.decision_family_id,
+                );
               return (
                 <li key={attempt.attempt_id}>
                   <Space size={8} wrap>
@@ -1503,6 +1743,65 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                           attempt.provider_request_id ??
                           formatDuration(attempt.completed_ms)}
                     </Typography.Text>
+                    {attempt.failure_resolution ? (
+                      <Tag
+                        color={
+                          attempt.failure_resolution === "invariant_conflict"
+                            ? "error"
+                            : attempt.failure_resolution === "unresolved"
+                              ? "warning"
+                              : "default"
+                        }
+                      >
+                        {failureResolutionLabel(attempt.failure_resolution)}
+                      </Tag>
+                    ) : null}
+                    {attempt.failure_episode_id ? (
+                      <Typography.Text copyable type="secondary">
+                        {attempt.failure_episode_id}
+                      </Typography.Text>
+                    ) : null}
+                    {attempt.resolution_event_type ? (
+                      <Typography.Text type="secondary">
+                        {failureEpisodeEventRefLabel(
+                          attempt.resolution_event_type,
+                          attempt.resolution_event_id,
+                          attempt.resolution_event_record_seq,
+                        )}
+                      </Typography.Text>
+                    ) : null}
+                    {attempt.failure_episode_terminal_event_refs &&
+                    attempt.failure_episode_terminal_event_refs.length > 1 ? (
+                      <Typography.Text type="danger">
+                        终结证据{" "}
+                        {attempt.failure_episode_terminal_event_refs
+                          .map((ref) =>
+                            failureEpisodeEventRefLabel(
+                              ref.event_type,
+                              ref.event_id,
+                              ref.record_seq,
+                            ),
+                          )
+                          .join("、")}
+                      </Typography.Text>
+                    ) : null}
+                    {attempt.finish_reason || attempt.provider_usage ? (
+                      <Typography.Text type="secondary">
+                        结束 {finishReasonLabel(attempt.finish_reason)} · 输出 Token{" "}
+                        {attempt.provider_usage?.output_tokens ?? "unavailable"}
+                      </Typography.Text>
+                    ) : null}
+                    {attempt.effective_attempt_limit !== null ||
+                    attempt.automatic_retry_scheduled !== null ||
+                    attempt.automatic_retry_stop_reason !== null ? (
+                      <Typography.Text type="secondary">
+                        生效上限 {attempt.effective_attempt_limit ?? "—"} / 策略{" "}
+                        {attempt.max_attempts} ·{" "}
+                        {automaticRetryDecisionLabel(attempt)} · 延迟/窗口{" "}
+                        {formatDuration(attempt.retry_delay_ms)} /{" "}
+                        {formatDuration(attempt.required_retry_window_ms)}
+                      </Typography.Text>
+                    ) : null}
                     {attempt.decision_family_id ? (
                       <Typography.Text copyable type="secondary">
                         决策族 {attempt.decision_family_id}
@@ -1517,6 +1816,11 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                     {attemptMachineFormatProgress ? (
                       <Typography.Text type="secondary">
                         格式 {attemptMachineFormatProgress}
+                      </Typography.Text>
+                    ) : null}
+                    {attemptOutputBudgetProgress ? (
+                      <Typography.Text type="secondary">
+                        输出预算 {attemptOutputBudgetProgress}
                       </Typography.Text>
                     ) : null}
                   </Space>
@@ -1555,6 +1859,17 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             当前浏览器不支持播放 V2 保存语音。
           </audio>
         </section>
+      ) : null}
+      {request?.failure_resolution === "invariant_conflict" ? (
+        <Alert
+          description={
+            request.failure_episode_invariant_errors?.join("、") ??
+            "同一失败 Episode 出现互斥或无效的持久化证据。"
+          }
+          showIcon
+          title="失败 Episode 不变量冲突"
+          type="error"
+        />
       ) : null}
       {request?.failure_code ? (
         <Alert
@@ -1800,6 +2115,89 @@ function firstTokenKindLabel(kind: string | null) {
   return kind;
 }
 
+function finishReasonLabel(reason: V2ModelRequestSummary["finish_reason"]) {
+  if (reason === null) return "—";
+  const labels: Record<
+    NonNullable<V2ModelRequestSummary["finish_reason"]>,
+    string
+  > = {
+    completed: "Provider 完成（completed）",
+    stop: "正常停止（stop）",
+    length: "长度上限（length）",
+    max_output_tokens: "输出 Token 上限（max_output_tokens）",
+    content_filter: "内容过滤（content_filter）",
+    tool_calls: "工具调用（tool_calls）",
+    unknown: "未知（unknown）",
+  };
+  return labels[reason];
+}
+
+function streamDeltaLabel(request: V2ModelRequestSummary | null) {
+  if (
+    request === null ||
+    (request.reasoning_delta_count === null &&
+      request.text_delta_count === null)
+  ) {
+    return "—";
+  }
+  return `${request.reasoning_delta_count ?? "—"} / ${
+    request.text_delta_count ?? "—"
+  }`;
+}
+
+function automaticRetryDecisionLabel(request: V2ModelRequestSummary | null) {
+  if (request === null) return "—";
+  if (request.automatic_retry_scheduled === true) return "已安排";
+  const reason = request.automatic_retry_stop_reason;
+  if (reason === null) {
+    return request.automatic_retry_scheduled === false ? "未安排" : "—";
+  }
+  const labels: Record<NonNullable<typeof reason>, string> = {
+    not_retryable: "不可重试（not_retryable）",
+    decision_family_budget_exhausted:
+      "决策族预算耗尽（decision_family_budget_exhausted）",
+    attempt_limit_reached: "达到尝试上限（attempt_limit_reached）",
+    insufficient_action_budget:
+      "动作预算不足（insufficient_action_budget）",
+  };
+  return `未安排 · ${labels[reason]}`;
+}
+
+function failureResolutionLabel(
+  resolution: V2ModelRequestSummary["failure_resolution"],
+) {
+  if (resolution === null) return "—";
+  const labels: Record<
+    NonNullable<V2ModelRequestSummary["failure_resolution"]>,
+    string
+  > = {
+    automatic_retry_success: "自动重试成功",
+    technical_skip: "技术跳过",
+    technical_false_fallback: "技术性 false 兜底",
+    operator_pause: "等待操作员处理",
+    isolated_action_failure: "隔离动作失败",
+    run_failure: "运行失败",
+    run_canceled: "对局已取消",
+    unresolved: "尚未解决",
+    invariant_conflict: "不变量冲突",
+    legacy_unavailable: "旧记录无法派生",
+  };
+  return `${labels[resolution]}（${resolution}）`;
+}
+
+function failureEpisodeEventRefLabel(
+  eventType: string | null,
+  eventId: number | string | null,
+  recordSeq: number | null,
+) {
+  if (eventType === null) return "—";
+  const details = [
+    eventId === null ? null : `event ${eventId}`,
+    recordSeq === null ? null : `record ${recordSeq}`,
+  ].filter((value): value is string => value !== null);
+  return details.length ? `${eventType} · ${details.join(" · ")}` : eventType;
+}
+
 function timeoutScopeLabel(scope: string | null) {
   if (scope === null) return "—";
   if (scope === "attempt_budget") return "请求尝试预算（attempt_budget）";
@@ -1856,6 +2254,76 @@ function automaticMachineFormatProgressLabel(
   const attemptCount = Math.max(0, ...attemptCounts);
   const budget = budgets.length === 0 ? "—" : Math.max(...budgets);
   return `${attemptCount} / ${budget}`;
+}
+
+function automaticOutputBudgetProgressLabel(
+  requests: V2ModelRequestSummary[],
+  decisionFamilyId: string | null,
+) {
+  const scopedRequests =
+    decisionFamilyId === null
+      ? requests
+      : requests.filter(
+          (request) => request.decision_family_id === decisionFamilyId,
+        );
+  const attemptCounts = scopedRequests.flatMap((request) =>
+    request.automatic_output_budget_attempt_count === null
+      ? []
+      : [request.automatic_output_budget_attempt_count],
+  );
+  const budgets = scopedRequests.flatMap((request) =>
+    request.automatic_output_budget_budget === null
+      ? []
+      : [request.automatic_output_budget_budget],
+  );
+  if (attemptCounts.length === 0 && budgets.length === 0) return null;
+  const attemptCount = Math.max(0, ...attemptCounts);
+  const budget = budgets.length === 0 ? "—" : Math.max(...budgets);
+  return `${attemptCount} / ${budget}`;
+}
+
+function generationPolicyContractStatusLabel(
+  status: V2ModelRequestSummary["model_generation_policy_contract_status"],
+) {
+  if (status === "supported") return "支持（supported）";
+  if (status === "legacy_disabled") return "旧局禁用（legacy_disabled）";
+  return "—";
+}
+
+function generationPolicyProfileSourceLabel(
+  source: V2ModelRequestSummary["model_generation_policy_profile_source"],
+) {
+  if (source === "explicit_action_profile") return "显式动作分类";
+  if (source === "default_profile") return "默认 Profile";
+  if (source === "legacy_missing_contract") return "旧局缺少合同";
+  return "—";
+}
+
+function generationPolicyEnforcementLabel(
+  enforcement: V2ModelRequestSummary["model_generation_policy_enforcement"],
+) {
+  if (enforcement === "observe_only") return "仅观测（observe_only）";
+  if (enforcement === "disabled") return "禁用（disabled）";
+  return "—";
+}
+
+function generationPolicyReasoningModeLabel(
+  mode: V2ModelRequestSummary["model_generation_policy_reasoning_parameter_mode"],
+) {
+  if (mode === "inherit_frozen_model_configuration") {
+    return "继承冻结模型配置";
+  }
+  return "—";
+}
+
+function shadowWouldTimeoutLabel(value: boolean | null) {
+  if (value === true) {
+    return "会命中候选阈值（Shadow 仅观测，未中断模型）";
+  }
+  if (value === false) {
+    return "未命中候选阈值（Shadow 仅观测，不是实际超时）";
+  }
+  return "未计算（Shadow，不是实际超时）";
 }
 
 function modelBindingHealthLabel(status: string | null) {

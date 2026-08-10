@@ -23,7 +23,7 @@ import Typography from "antd/es/typography";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 
 import { readV2ModelRequest } from "@/v2/game-records/api";
-import { extractV2ModelInputFacts } from "@/v2/game-records/model-input-facts";
+import { extractV2ModelInputFactResult } from "@/v2/game-records/model-input-facts";
 import {
   abilityLabel,
   buildV2HistoricalIdentities,
@@ -168,13 +168,12 @@ export function V2OmniscientSituationPanel({
     ),
     staleTime: Number.POSITIVE_INFINITY,
   });
-  const modelInputFacts = useMemo(
+  const modelInputFactResult = useMemo(
     () =>
-      extractV2ModelInputFacts(
-        modelRequestQuery.data?.request_payload ?? null,
-      ),
-    [modelRequestQuery.data?.request_payload],
+      extractV2ModelInputFactResult(modelRequestQuery.data ?? null),
+    [modelRequestQuery.data],
   );
+  const modelInputFacts = modelInputFactResult.facts;
   const publicSpeeches = recentPublicSpeeches(
     game.events,
     selectedRecordSeq,
@@ -484,6 +483,14 @@ export function V2OmniscientSituationPanel({
                   ) : modelRequestQuery.isError && selectedAttemptId ? (
                     <Typography.Text type="danger">
                       模型输入读取失败，无法确认传输事实
+                    </Typography.Text>
+                  ) : modelInputFactResult.status ===
+                    "unsupported_model_context_contract" ? (
+                    <Typography.Text type="secondary">
+                      {modelInputFactResult.modelContextSchemaVersion === null
+                        ? "未知模型上下文合同不支持事实展开"
+                        : `V${modelInputFactResult.modelContextSchemaVersion} 模型上下文合同不支持事实展开`}
+                      ；Admin 不猜测压缩默认规则或旧版字段语义
                     </Typography.Text>
                   ) : modelInputFacts.length ? (
                     modelInputFacts.map((fact, index) => (

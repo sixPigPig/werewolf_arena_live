@@ -1137,7 +1137,9 @@ def _first_party_investigation_claims(
             _structured_first_party_investigation_claims(
                 annotations,
                 statement=statement,
-                ledger_schema_version=(4 if known_schema_version == 4 else 3),
+                ledger_schema_version=(
+                    known_schema_version if known_schema_version in {3, 4, 5} else 3
+                ),
             )
         )
 
@@ -1167,7 +1169,7 @@ def _first_party_investigation_claims(
                     statement=statement,
                     ledger_schema_version=(
                         history_ledger_schema_version
-                        if history_ledger_schema_version in {3, 4}
+                        if history_ledger_schema_version in {3, 4, 5}
                         else 3
                     ),
                 )
@@ -1997,7 +1999,7 @@ def _observe_response_opportunity(
             )
         prior_ref_field = (
             "prior_relevant_event_refs"
-            if _uses_projected_v9_discourse(model_context)
+            if _uses_projected_discourse(model_context)
             else "prior_relevant_statement_refs"
         )
         prior_refs = list(
@@ -2092,7 +2094,7 @@ def _silence_accusations(speech: str) -> list[dict[str, str]]:
 def _open_question_contexts(
     model_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if _uses_projected_v9_discourse(model_context):
+    if _uses_projected_discourse(model_context):
         known_events = model_context["known_events"]
         events = known_events.get("events")
         questions = known_events.get("questions")
@@ -2153,9 +2155,9 @@ def _open_question_contexts(
     ]
 
 
-def _uses_projected_v9_discourse(model_context: dict[str, Any]) -> bool:
+def _uses_projected_discourse(model_context: dict[str, Any]) -> bool:
     known_events = model_context.get("known_events")
-    return isinstance(known_events, dict) and known_events.get("schema_version") in {3, 4}
+    return isinstance(known_events, dict) and known_events.get("schema_version") in {3, 4, 5}
 
 
 def _deduplicate_signals(

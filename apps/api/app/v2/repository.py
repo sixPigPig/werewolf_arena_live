@@ -24,10 +24,15 @@ from app.v2.model_context_contract import (
     frozen_model_context_contract,
     supports_model_context_contract,
 )
+from app.v2.model_generation_policy_contract import (
+    V2ModelGenerationPolicyContractError,
+    resolve_model_generation_policy_contract,
+)
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     validate_players_snapshot_model_configurations,
 )
+from app.v2.model_failure_episode import FailureEpisode, derive_failure_episodes
 from app.v2.execution import (
     V2RunFence,
     V2RunFenceRejected,
@@ -63,6 +68,7 @@ class V2ActionClaim:
     non_blocking: bool = False
     action_record_seq: int | None = None
     model_context_contract: dict[str, int] | None = None
+    model_generation_policy_contract: dict[str, Any] | None = None
     audio_mode: V2AudioMode = "legacy_unknown"
     run_fence: V2RunFence | None = None
 
@@ -141,6 +147,7 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             if not supports_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
+            _resolved_model_generation_policy_contract(game.rule_snapshot)
             try:
                 validate_players_snapshot_model_configurations(game.players_snapshot)
             except V2FrozenModelParametersError as exc:
@@ -407,6 +414,9 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             if not supports_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
+            model_generation_policy_contract = _resolved_model_generation_policy_contract(
+                game.rule_snapshot
+            )
             expected_live_state = "awaiting_observation" if best_effort else "ready"
             if (
                 game.status != expected_live_state
@@ -469,6 +479,7 @@ class V2ActionRepository:
                 non_blocking=non_blocking,
                 action_record_seq=action_record_seq,
                 model_context_contract=frozen_model_context_contract(game.rule_snapshot),
+                model_generation_policy_contract=(model_generation_policy_contract),
                 audio_mode=delivery_audio_mode(game.delivery_snapshot),
                 run_fence=current_v2_run_fence(),
             )
@@ -869,6 +880,8 @@ class V2ActionRepository:
         next_live_state: str,
         next_phase_state: str,
         best_effort: bool = False,
+        failure_episode_id: str | None = None,
+        technical_outcome_record_seq: int | None = None,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -904,6 +917,14 @@ class V2ActionRepository:
                     "activation_id": claim.activation_id,
                     "result": "decision_recorded_without_presentation",
                     "phase_id": claim.phase_id,
+                    **(
+                        {
+                            "failure_episode_id": failure_episode_id,
+                            "technical_outcome_record_seq": technical_outcome_record_seq,
+                        }
+                        if failure_episode_id is not None
+                        else {}
+                    ),
                 },
             )
 
@@ -999,6 +1020,10 @@ class V2ActionRepository:
             game.phase_state = "failed"
             run.status = "failed"
             run.completed_at = _now()
+            failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                db,
+                game=game,
+            )
             _append_event(
                 db,
                 game=game,
@@ -1008,6 +1033,8 @@ class V2ActionRepository:
                 payload={
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
+                    "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                    "failure_episode_disposition": "run_failure",
                 },
             )
             return run.run_id
@@ -1021,6 +1048,9 @@ class V2ActionRepository:
         identity: V2PresentationIdentity | None,
         tts_attempt_id: str | None = None,
         best_effort: bool = False,
+        failure_episode_id: str | None = None,
+        failure_episode_disposition: Literal["isolated_action_failure", "run_failure"]
+        | None = None,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -1031,11 +1061,32 @@ class V2ActionRepository:
             )
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
-            if not best_effort and not claim.non_blocking:
+            run_failure = not best_effort and not claim.non_blocking
+            if run_failure:
                 game.status = "failed"
                 game.phase_state = "failed"
                 run.status = "failed"
                 run.completed_at = _now()
+            open_episodes = {
+                episode.failure_episode_id: episode
+                for episode in _failure_episodes_for_locked_run(db, game=game)
+                if episode.is_open
+            }
+            active_episode = open_episodes.get(failure_episode_id or "")
+            expected_episode_disposition = (
+                "run_failure" if run_failure else "isolated_action_failure"
+            )
+            attach_active_episode = (
+                active_episode is not None
+                and active_episode.action_id == claim.action_id
+                and failure_episode_disposition == expected_episode_disposition
+            )
+            event_episode_disposition = (
+                "run_failure"
+                if run_failure
+                else ("isolated_action_failure" if attach_active_episode else None)
+            )
+            failed_failure_episode_ids = tuple(sorted(open_episodes)) if run_failure else ()
             if identity is not None:
                 presentation = db.get(
                     V2LivePresentation,
@@ -1075,6 +1126,23 @@ class V2ActionRepository:
                     "tts_attempt_id": tts_attempt_id,
                     "failure_kind": failure_kind,
                     "failure_code": failure_code,
+                    **(
+                        {
+                            "failure_episode_id": failure_episode_id,
+                        }
+                        if attach_active_episode
+                        else {}
+                    ),
+                    **(
+                        {"failure_episode_disposition": (event_episode_disposition)}
+                        if event_episode_disposition is not None
+                        else {}
+                    ),
+                    **(
+                        {"failed_failure_episode_ids": list(failed_failure_episode_ids)}
+                        if run_failure
+                        else {}
+                    ),
                 },
             )
             if claim.non_blocking and claim.activation_id is not None:
@@ -1106,6 +1174,8 @@ class V2ActionRepository:
         attempt_id: str | None,
         failure_code: str,
         recovery: dict[str, Any],
+        failure_episode_id: str | None = None,
+        source_failure_episode_ids: tuple[str, ...] = (),
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -1160,6 +1230,11 @@ class V2ActionRepository:
             automatic_machine_format_attempt_count = recovery.get(
                 "automatic_machine_format_attempt_count"
             )
+            automatic_output_budget_attempt_count = recovery.get(
+                "automatic_output_budget_attempt_count"
+            )
+            prior_output_budget_failures = recovery.get("prior_output_budget_failures")
+            automatic_output_budget_budget = recovery.get("automatic_output_budget_budget")
             exhaustion_scope = recovery.get("exhaustion_scope")
             exhaustion_scope = (
                 exhaustion_scope if exhaustion_scope in {"action", "decision_family"} else "action"
@@ -1188,9 +1263,24 @@ class V2ActionRepository:
                     "automatic_machine_format_attempt_count": (
                         automatic_machine_format_attempt_count
                     ),
+                    "automatic_output_budget_attempt_count": (
+                        automatic_output_budget_attempt_count
+                    ),
+                    "prior_output_budget_failures": prior_output_budget_failures,
+                    "automatic_output_budget_budget": automatic_output_budget_budget,
                     "exhaustion_scope": exhaustion_scope,
                     "source_action_id": source_action_id,
                     "source_attempt_id": source_attempt_id,
+                    **(
+                        {"failure_episode_id": failure_episode_id}
+                        if failure_episode_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_failure_episode_ids": list(source_failure_episode_ids)}
+                        if source_failure_episode_ids
+                        else {}
+                    ),
                 },
             )
             _append_event(
@@ -1205,9 +1295,27 @@ class V2ActionRepository:
                     "request_hash": existing.request_hash,
                     "state": existing.state,
                     "decision_family_id": decision_family_id,
+                    "automatic_machine_format_attempt_count": (
+                        automatic_machine_format_attempt_count
+                    ),
+                    "automatic_output_budget_attempt_count": (
+                        automatic_output_budget_attempt_count
+                    ),
+                    "prior_output_budget_failures": prior_output_budget_failures,
+                    "automatic_output_budget_budget": automatic_output_budget_budget,
                     "exhaustion_scope": exhaustion_scope,
                     "source_action_id": source_action_id,
                     "source_attempt_id": source_attempt_id,
+                    **(
+                        {"failure_episode_id": failure_episode_id}
+                        if failure_episode_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_failure_episode_ids": list(source_failure_episode_ids)}
+                        if source_failure_episode_ids
+                        else {}
+                    ),
                 },
             )
             _append_event(
@@ -1228,9 +1336,24 @@ class V2ActionRepository:
                     "automatic_machine_format_attempt_count": (
                         automatic_machine_format_attempt_count
                     ),
+                    "automatic_output_budget_attempt_count": (
+                        automatic_output_budget_attempt_count
+                    ),
+                    "prior_output_budget_failures": prior_output_budget_failures,
+                    "automatic_output_budget_budget": automatic_output_budget_budget,
                     "exhaustion_scope": exhaustion_scope,
                     "source_action_id": source_action_id,
                     "source_attempt_id": source_attempt_id,
+                    **(
+                        {"failure_episode_id": failure_episode_id}
+                        if failure_episode_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_failure_episode_ids": list(source_failure_episode_ids)}
+                        if source_failure_episode_ids
+                        else {}
+                    ),
                 },
             )
 
@@ -1521,6 +1644,10 @@ class V2ActionRepository:
             run.worker_heartbeat_at = None
             run.lease_expires_at = None
             run.fence_token += 1
+            canceled_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                db,
+                game=game,
+            )
             _append_event(
                 db,
                 game=game,
@@ -1537,6 +1664,7 @@ class V2ActionRepository:
                     "canceled_model_recovery_count": len(active_recoveries),
                     "invalidated_worker_id": invalidated_worker_id,
                     "invalidated_fence_token": invalidated_fence_token,
+                    "canceled_failure_episode_ids": list(canceled_failure_episode_ids),
                 },
             )
             return V2CancellationResult(
@@ -1605,6 +1733,47 @@ def _append_event(
     db.add(event)
     game.last_record_seq = next_seq
     return event
+
+
+def _failure_episodes_for_locked_run(
+    db: Session,
+    *,
+    game: V2GameRecord,
+) -> tuple[FailureEpisode, ...]:
+    events = tuple(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == game.current_run_id,
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+    )
+    return derive_failure_episodes(events)
+
+
+def _open_failure_episode_ids_for_locked_run(
+    db: Session,
+    *,
+    game: V2GameRecord,
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            episode.failure_episode_id
+            for episode in _failure_episodes_for_locked_run(db, game=game)
+            if episode.is_open
+        )
+    )
+
+
+def _resolved_model_generation_policy_contract(
+    rule_snapshot: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    try:
+        return resolve_model_generation_policy_contract(rule_snapshot)
+    except V2ModelGenerationPolicyContractError as exc:
+        raise V2RepositoryError("unsupported_model_generation_policy_contract") from exc
 
 
 def _action_snapshot_audience(snapshot: dict[str, Any]) -> str:

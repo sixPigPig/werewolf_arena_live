@@ -286,7 +286,33 @@ const detail = {
       ],
       output_source: "persisted",
       provider_request_id: "provider-request-1",
+      model_generation_policy_contract_status: "supported",
+      model_generation_policy_schema_version: 1,
+      model_generation_policy_classification_version: 1,
+      model_generation_policy_enforcement: "observe_only",
+      model_generation_policy_reasoning_parameter_mode:
+        "inherit_frozen_model_configuration",
+      model_generation_policy_profile: "recoverable_public_speech",
+      model_generation_policy_profile_source: "explicit_action_profile",
+      reasoning_only_timeout_ms: 180_000,
+      timeout_max_attempts: 1,
+      shadow_would_timeout: false,
+      finish_reason: "completed",
+      provider_usage: {
+        input_tokens: 120,
+        output_tokens: 64,
+        reasoning_tokens: 48,
+        total_tokens: 184,
+        cached_input_tokens: 20,
+      },
+      usage_update_count: 2,
+      usage_conflict_observed: false,
+      usage_consistency: "exact",
+      queue_wait_ms: 11,
+      provider_in_flight: 2,
+      provider_concurrency_limit: 4,
       first_token_ms: 18,
+      reasoning_only_elapsed_ms: 9,
       first_token_seen: true,
       response_headers_seen: true,
       response_headers: {
@@ -297,6 +323,10 @@ const detail = {
       first_visible_text_ms: 27,
       timeout_scope: "attempt_budget",
       completed_ms: 311,
+      reasoning_delta_count: 7,
+      text_delta_count: 2,
+      max_inter_delta_ms: 17,
+      last_progress_ms: 290,
       failure_kind: null,
       failure_code: null,
       model_binding_failure_streak: 0,
@@ -431,6 +461,8 @@ const v11Detail = {
       },
       application_validation_result: "accepted",
       repair_kind: null,
+      expanded_known_events: null,
+      known_events_expansion_status: "not_applicable",
       request_payload: {
         model: "glm-5-2-260617",
         stream: true,
@@ -557,6 +589,172 @@ const v11Detail = {
         decision_note: "复盘不足。",
       },
       passive_observations: [],
+    },
+  ],
+};
+
+const v12KnownEvents = {
+  schema_version: 6,
+  encoding: "lossless_refs_v1",
+  defaults: {
+    record_seq: "known_at_seq",
+    event_ref: "record_seq_string_when_equal",
+    scope_ref_by_kind: {
+      player_statement: "public_player_claim_unverified",
+    },
+    occurred_in_ref_by_kind: {},
+  },
+  scope_catalog: {
+    public_player_claim_unverified: {
+      authority: "player_claim_unverified",
+      visibility: "public",
+    },
+  },
+  occurrence_catalog: {},
+  events: [
+    {
+      known_at_seq: 1403,
+      kind: "player_statement",
+      speaker_ref: "seat_12",
+      speech: "12号原始发言：7号你解释一下昨天为什么投5号。",
+      annotation_count: 1,
+    },
+    {
+      known_at_seq: 1442,
+      kind: "player_statement",
+      speaker_ref: "seat_7",
+      speech: "7号回应：我昨天认为5号的复盘更差。",
+    },
+  ],
+  annotations: [
+    {
+      source_event_ref: "1403",
+      source_annotation_index: 0,
+      claim_id: "claim_1403_1_team_claim",
+      claim_type: "team_claim",
+      authority: "player_claim_unverified",
+      sentence_index: 1,
+      claimed_team: "villagers",
+    },
+  ],
+  questions: [
+    {
+      question_id: "question_1403_7",
+      source_event_ref: "1403",
+      asked_by: "seat_12",
+      addressed_to: "seat_7",
+      response_status: "response_detected",
+    },
+  ],
+  relations: [
+    {
+      relation_id: "relation_1442_question_1403_7",
+      type: "response_to_question",
+      from_event_ref: "1442",
+      to_question_id: "question_1403_7",
+    },
+  ],
+};
+
+const v12Detail = {
+  ...v11Detail,
+  title: "V12 无损压缩审计验收",
+  model_requests: [
+    {
+      ...v11Detail.model_requests[0],
+      prompt_schema_version: 12,
+      model_context_schema_version: 12,
+      prompt_template_version: 5,
+      prompt_projection: {
+        ...v11Detail.model_requests[0].prompt_projection,
+        model_context_schema_version: 12,
+        prompt_template_version: 5,
+        known_events_schema_version: 6,
+        serialized_char_count: 2_900,
+        canonical_serialized_char_count: 2_000,
+        compact_serialized_char_count: 1_200,
+        compaction_saved_chars: 800,
+        compaction_ratio: 0.6,
+        verbatim_speech_count: 2,
+        verbatim_speech_chars: 43,
+        retained_event_refs: ["1403", "1442"],
+        dropped_event_refs: [],
+        canonical_sha256: "b".repeat(64),
+        round_trip_verified: true,
+      },
+      expanded_known_events: {
+        schema_version: 5,
+        events: [
+          {
+            event_ref: "1403",
+            record_seq: 1403,
+            known_at_seq: 1403,
+            kind: "player_statement",
+            authority: "player_claim_unverified",
+            visibility: "public",
+            speaker_ref: "seat_12",
+            speech: "12号原始发言：7号你解释一下昨天为什么投5号。",
+            annotations: [
+              {
+                claim_id: "claim_1403_1_team_claim",
+                claim_type: "team_claim",
+                authority: "player_claim_unverified",
+                sentence_index: 1,
+                claimed_team: "villagers",
+              },
+            ],
+          },
+          {
+            event_ref: "1442",
+            record_seq: 1442,
+            known_at_seq: 1442,
+            kind: "player_statement",
+            authority: "player_claim_unverified",
+            visibility: "public",
+            speaker_ref: "seat_7",
+            speech: "7号回应：我昨天认为5号的复盘更差。",
+          },
+        ],
+        questions: v12KnownEvents.questions,
+        relations: v12KnownEvents.relations,
+      },
+      known_events_expansion_status: "verified",
+      request_payload: {
+        ...v11Detail.model_requests[0].request_payload,
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "Known Events V6 使用可读目录与确定性默认规则表达 V5 的完整语义。",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `请执行这个实时动作：${JSON.stringify({
+                  model_context_schema_version: 12,
+                  prompt_template_version: 5,
+                  task: {
+                    type: "exile_vote",
+                    goal: "选择一名合法候选人。",
+                    at_seq: 1467,
+                    phase_id: "day_3",
+                  },
+                  known_events: v12KnownEvents,
+                  candidates: [
+                    { player_id: "seat_5", seat: 5, display_name: "5号" },
+                  ],
+                })}`,
+              },
+            ],
+          },
+        ],
+      },
     },
   ],
 };
@@ -743,8 +941,21 @@ const retryDetail = {
       parsed_output: null,
       output_source: "unavailable",
       provider_request_id: null,
+      finish_reason: null,
+      provider_usage: null,
+      usage_update_count: null,
+      usage_conflict_observed: null,
+      usage_consistency: null,
+      queue_wait_ms: null,
+      provider_in_flight: null,
+      provider_concurrency_limit: null,
       first_token_ms: null,
+      reasoning_only_elapsed_ms: null,
       completed_ms: null,
+      reasoning_delta_count: 0,
+      text_delta_count: 0,
+      max_inter_delta_ms: null,
+      last_progress_ms: null,
       failure_kind: "model",
       failure_code: "model_transport_failed",
       retryable: true,
@@ -755,6 +966,19 @@ const retryDetail = {
       http_status: null,
       first_token_seen: false,
       failure_elapsed_ms: 5038,
+      effective_attempt_limit: 2,
+      retry_delay_ms: 300,
+      required_retry_window_ms: 1_000,
+      automatic_retry_scheduled: true,
+      automatic_retry_stop_reason: null,
+      failure_episode_id: "v2_mfep_0123456789abcdef01234567",
+      failure_resolution: "automatic_retry_success",
+      failure_episode_source_attempt_ids: ["v2_model_attempt_1"],
+      resolution_event_type: "model_response_received",
+      resolution_event_id: 8,
+      resolution_event_record_seq: 8,
+      resolution_updated_at_record_seq: 8,
+      failure_episode_invariant_errors: [],
       completed_at: "2026-07-23T08:00:04Z",
     },
     {
@@ -1218,13 +1442,23 @@ describe("V2 game record detail workspace", () => {
       within(livePanel).getAllByText("夜幕将至，九位玩家请准备。"),
     ).not.toHaveLength(0);
     const causalFacts = within(livePanel).getByLabelText("传给模型的全部事实");
-    expect(await within(causalFacts).findByText("#448")).toBeVisible();
+    expect(
+      await within(causalFacts).findByText(
+        /未知模型上下文合同不支持事实展开/,
+      ),
+    ).toBeVisible();
+    expect(
+      within(causalFacts).getByText(
+        /Admin 不猜测压缩默认规则或旧版字段语义/,
+      ),
+    ).toBeVisible();
     expect(
       within(causalFacts).queryByText(/警徽流：今晚验2号/),
     ).not.toBeInTheDocument();
-    expect(within(livePanel).getByText("3 条")).toBeVisible();
-    expect(within(livePanel).getByText("#562")).toBeVisible();
-    expect(within(livePanel).getByText("#564")).toBeVisible();
+    expect(within(livePanel).queryByText("3 条")).not.toBeInTheDocument();
+    expect(within(livePanel).queryByText("#448")).not.toBeInTheDocument();
+    expect(within(livePanel).queryByText("#562")).not.toBeInTheDocument();
+    expect(within(livePanel).queryByText("#564")).not.toBeInTheDocument();
     expect(within(livePanel).queryByText(/target_player_id/)).not.toBeInTheDocument();
     expect(within(livePanel).queryByText("权威事实")).not.toBeInTheDocument();
 
@@ -1243,8 +1477,56 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
     expect(within(requestDialog).getByText("首 Token 类型")).toBeVisible();
     expect(within(requestDialog).getByText("推理（reasoning）")).toBeVisible();
+    expect(within(requestDialog).getByText("排队等待")).toBeVisible();
+    expect(within(requestDialog).getByText("11 ms")).toBeVisible();
+    expect(within(requestDialog).getByText("Provider 并发")).toBeVisible();
+    expect(within(requestDialog).getByText("2 / 4")).toBeVisible();
+    expect(within(requestDialog).getByText("纯推理阶段")).toBeVisible();
+    expect(within(requestDialog).getByText("9 ms")).toBeVisible();
     expect(within(requestDialog).getByText("首可见文本")).toBeVisible();
     expect(within(requestDialog).getByText("27 ms")).toBeVisible();
+    expect(within(requestDialog).getByText("结束原因")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("Provider 完成（completed）"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("推理 / 文本增量")).toBeVisible();
+    expect(within(requestDialog).getByText("7 / 2")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("最大间隔 / 最后进度"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("17 ms / 290 ms")).toBeVisible();
+    expect(within(requestDialog).getByText("生成策略合同")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("支持（supported）"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("生成策略版本")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("schema v1 / classification v1"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("生成策略 Profile")).toBeVisible();
+    expect(
+      within(requestDialog).getByText(
+        "recoverable_public_speech · 显式动作分类",
+      ),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("Shadow 执行模式")).toBeVisible();
+    expect(
+      within(requestDialog).getByText(
+        "仅观测（observe_only） · 继承冻结模型配置",
+      ),
+    ).toBeVisible();
+    expect(
+      within(requestDialog).getByText("Shadow 推理阈值 / 尝试上限"),
+    ).toBeVisible();
+    expect(within(requestDialog).getByText("180.0 s / 1")).toBeVisible();
+    expect(
+      within(requestDialog).getByText("Shadow 候选超时结果"),
+    ).toBeVisible();
+    expect(
+      within(requestDialog).getByText(
+        "未命中候选阈值（Shadow 仅观测，不是实际超时）",
+      ),
+    ).toBeVisible();
     expect(within(requestDialog).getByText("超时预算范围")).toBeVisible();
     expect(
       within(requestDialog).getByText("请求尝试预算（attempt_budget）"),
@@ -1300,13 +1582,18 @@ describe("V2 game record detail workspace", () => {
       JSON.stringify(
         {
           application_validation_result: null,
+          finish_reason: "completed",
           output_enforcement: null,
           output_source: "persisted",
           parsed_output: detail.model_requests[0].parsed_output,
           passive_observations:
             detail.model_requests[0].passive_observations,
+          provider_usage: detail.model_requests[0].provider_usage,
           raw_response: detail.model_requests[0].raw_response,
           repair_kind: null,
+          usage_conflict_observed: false,
+          usage_consistency: "exact",
+          usage_update_count: 2,
         },
         null,
         2,
@@ -1315,6 +1602,18 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(outputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
+    const usageDiagnostics = within(outputPanel).getByRole("region", {
+      name: "模型输出与用量诊断",
+    });
+    expect(within(usageDiagnostics).getByText("原始输出字符数")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("输入 Token")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("120")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("输出 Token")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("64")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("推理 Token（输出子集）")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("48")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("Provider 总 Token")).toBeVisible();
+    expect(within(usageDiagnostics).getByText("184")).toBeVisible();
     const historicalOutput = within(outputPanel).getByLabelText(
       "历史模型输出原始 JSON",
     );
@@ -1499,6 +1798,7 @@ describe("V2 game record detail workspace", () => {
     );
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    expect(within(inputPanel).getByText("V11 历史合同（只读）")).toBeVisible();
     const audit = within(inputPanel).getByRole("region", {
       name: "V11 上下文投影审计",
     });
@@ -1559,6 +1859,134 @@ describe("V2 game record detail workspace", () => {
     expect(within(enforcement).getByText("已接受")).toBeVisible();
     expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
     expect(within(outputPanel).getByText("seat_5")).toBeVisible();
+  },
+    45_000,
+  );
+
+  it("renders V12 lossless compaction separately from V11 and unknown contracts", async () => {
+    stubRecordFetch(v12Detail);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "V12 无损压缩审计验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    const audit = within(inputPanel).getByRole("region", {
+      name: "V12 无损压缩审计",
+    });
+
+    expect(within(audit).getByText("审计字段完整")).toBeVisible();
+    expect(within(audit).getByText("V6")).toBeVisible();
+    expect(within(audit).getByText("lossless_refs_v1")).toBeVisible();
+    expect(within(audit).getByText(/已验证 V5 · 2 个事件/)).toBeVisible();
+    expect(within(audit).getByText("2,000 → 1,200")).toBeVisible();
+    expect(within(audit).getByText("800")).toBeVisible();
+    expect(within(audit).getByText("0.6000（60.00%）")).toBeVisible();
+    expect(within(audit).getByText("2 条 / 43 字符")).toBeVisible();
+    expect(within(audit).getByText("通过")).toBeVisible();
+    expect(within(audit).getByText("2 / 0")).toBeVisible();
+    expect(within(audit).getByText("b".repeat(64))).toBeVisible();
+    expect(
+      within(inputPanel).queryByRole("region", {
+        name: "V11 上下文投影审计",
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(audit).getByRole("button", {
+        name: /查看 V6 默认规则与可读目录/,
+      }),
+    );
+    await waitFor(() =>
+      expect(within(audit).getByText("V6 默认还原规则")).toBeVisible(),
+    );
+    expect(within(audit).getByText("作用域目录（scope_catalog）")).toBeVisible();
+    expect(
+      within(audit).getByText("发生阶段目录（occurrence_catalog）"),
+    ).toBeVisible();
+
+    expect(
+      within(inputPanel).getByText("动作发生前已知事件（V12 无损压缩载荷）"),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getAllByText("scope 1 / occurrence 0"),
+    ).toHaveLength(2);
+    expect(
+      within(inputPanel).getByText("事件 2 / 注解 1 / 提问 1 / 关系 1"),
+    ).toBeVisible();
+    await user.click(
+      within(inputPanel).getByRole("button", {
+        name: /查看全局顺序的 Compact 事件（2 个）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(inputPanel).getByText(
+          "12号原始发言：7号你解释一下昨天为什么投5号。",
+        ),
+      ).toBeVisible(),
+    );
+    await user.click(
+      within(inputPanel).getByRole("button", {
+        name: /查看顶层注解及来源索引（1 项）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(within(inputPanel).getByText("claim_1403_1_team_claim")).toBeVisible(),
+    );
+
+    await user.click(screen.getByRole("tab", { name: "模型输出" }));
+    const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    expect(
+      within(outputPanel).getByRole("region", {
+        name: "Provider 输出约束审计",
+      }),
+    ).toBeVisible();
+    expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
+  });
+
+  it("falls back to unsupported raw JSON for a backend-rejected V12 hybrid", async () => {
+    stubRecordFetch({
+      ...v12Detail,
+      title: "V12 混合合同验收",
+      model_requests: [
+        {
+          ...v12Detail.model_requests[0],
+          expanded_known_events: null,
+          known_events_expansion_status: "invalid",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "V12 混合合同验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    expect(
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getByText(/V12 模型上下文合同不受支持/),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getByLabelText("历史模型输入原始 JSON"),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).queryByRole("region", {
+        name: "V12 无损压缩审计",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows missing V11 audit fields as unknown instead of guessing", async () => {
@@ -1784,6 +2212,9 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
+    expect(
+      within(inputPanel).getByText(/V8 模型上下文合同不受支持/),
+    ).toBeVisible();
     const rawInput = within(inputPanel).getByLabelText("历史模型输入原始 JSON");
     expect(rawInput).toHaveTextContent("model_context_schema_version");
     expect(rawInput).toHaveTextContent("knowledge-seer-night-1");
@@ -1868,9 +2299,21 @@ describe("V2 game record detail workspace", () => {
     expect(
       within(dialog).getByText("model_transport_failed"),
     ).toBeVisible();
+    expect(within(dialog).getAllByText(/自动重试成功/)).not.toHaveLength(0);
+    expect(
+      within(dialog).getByText("v2_mfep_0123456789abcdef01234567"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText("model_response_received · event 8 · record 8"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText(
+        "生效上限 2 / 策略 2 · 已安排 · 延迟/窗口 300 ms / 1.00 s",
+      ),
+    ).toBeVisible();
   });
 
-  it("shows decision-family and automatic format retry telemetry", async () => {
+  it("shows independent format and output-budget family retry telemetry", async () => {
     const decisionFamilyId = "v2_decision_family_vote_1";
     stubRecordFetch({
       ...retryDetail,
@@ -1883,8 +2326,12 @@ describe("V2 game record detail workspace", () => {
           vote_batch_stage: "concurrent_initial",
           automatic_machine_format_attempt_count: 1,
           automatic_machine_format_budget: 2,
-          failure_category: "machine_format",
-          failure_code: "model_decision_structured_speech_leak",
+          prior_output_budget_failures: 1,
+          output_budget_failure_count: 1,
+          automatic_output_budget_attempt_count: 2,
+          automatic_output_budget_budget: 3,
+          failure_category: "output_budget",
+          failure_code: "model_output_budget_exhausted",
         },
         {
           ...retryDetail.model_requests[1],
@@ -1893,6 +2340,10 @@ describe("V2 game record detail workspace", () => {
           vote_batch_stage: "concurrent_initial",
           automatic_machine_format_attempt_count: null,
           automatic_machine_format_budget: 2,
+          prior_output_budget_failures: 1,
+          output_budget_failure_count: null,
+          automatic_output_budget_attempt_count: 2,
+          automatic_output_budget_budget: 3,
         },
       ],
     });
@@ -1920,6 +2371,17 @@ describe("V2 game record detail workspace", () => {
     expect(within(dialog).getByText("格式尝试 / 自动预算")).toBeVisible();
     expect(within(dialog).getByText("1 / 2")).toBeVisible();
     expect(within(dialog).getAllByText("格式 1 / 2")).toHaveLength(2);
+    expect(
+      within(dialog).getByText("输出预算尝试 / 自动预算"),
+    ).toBeVisible();
+    expect(within(dialog).getByText("输出预算既有 / 当前动作失败")).toBeVisible();
+    expect(within(dialog).getByText("2 / 3")).toBeVisible();
+    expect(within(dialog).getAllByText("输出预算 2 / 3")).toHaveLength(2);
+    expect(
+      within(dialog).getByText(
+        /output_budget · model_output_budget_exhausted/,
+      ),
+    ).toBeVisible();
   });
 
   it("shows deterministic template variables, final text and frozen speaker", async () => {

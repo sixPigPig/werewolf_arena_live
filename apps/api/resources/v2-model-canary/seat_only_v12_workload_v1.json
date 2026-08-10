@@ -1,0 +1,466 @@
+{
+  "schema_version": 1,
+  "corpus_id": "e1_agent_plan_seat_only_v12_v1",
+  "seed": 20260810,
+  "wave_size": 12,
+  "expected_attempt_count": 120,
+  "models": [
+    {
+      "provider": "agent_plan",
+      "model_id": "doubao-seed-evolving",
+      "supports_thinking": true,
+      "parameters": {
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "max_tokens_mode": "auto",
+        "max_tokens": 4096
+      },
+      "quota_by_response_kind": {
+        "boolean": 12,
+        "speech": 20,
+        "target": 18
+      }
+    },
+    {
+      "provider": "agent_plan",
+      "model_id": "glm-5-2-260617",
+      "supports_thinking": true,
+      "parameters": {
+        "thinking": "enabled",
+        "reasoning_effort": "high",
+        "max_tokens_mode": "auto",
+        "max_tokens": 8192
+      },
+      "quota_by_response_kind": {
+        "boolean": 18,
+        "speech": 16,
+        "target": 21
+      }
+    },
+    {
+      "provider": "agent_plan",
+      "model_id": "minimax-m3",
+      "supports_thinking": true,
+      "parameters": {
+        "thinking": "enabled",
+        "reasoning_effort": null,
+        "max_tokens_mode": "auto",
+        "max_tokens": 8192
+      },
+      "quota_by_response_kind": {
+        "boolean": 3,
+        "speech": 5,
+        "target": 7
+      }
+    }
+  ],
+  "known_event_corpora": {
+    "synthetic_two_day_public_history": {
+      "schema_version": 5,
+      "events": [
+        {
+          "event_ref": "1",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 1,
+          "known_at_seq": 1,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_1",
+          "speech": "1号表示自己暂时没有确定身份结论，会重点比较前后发言是否一致，并提醒所有人不要把语气强弱直接当作阵营证据。"
+        },
+        {
+          "event_ref": "2",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 2,
+          "known_at_seq": 2,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_2",
+          "speech": "2号认为当前信息量不足，建议记录每个人给出的怀疑对象和理由，等投票结果公布后再检查是否存在明显矛盾。"
+        },
+        {
+          "event_ref": "3",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 3,
+          "known_at_seq": 3,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_3",
+          "speech": "3号质疑2号的发言过于保守，但也承认自己没有法官事实支持，只把这点作为后续观察方向而不是定论。"
+        },
+        {
+          "event_ref": "4",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 4,
+          "known_at_seq": 4,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_4",
+          "speech": "4号要求3号说明怀疑标准，并表示如果标准只针对一人而不适用于其他人，自己会降低对该判断的信任。"
+        },
+        {
+          "event_ref": "5",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 5,
+          "known_at_seq": 5,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_5",
+          "speech": "5号表示先听完整轮发言，当前只记录1号和4号都强调一致性检查，暂时不把相似观点解释成同阵营关系。"
+        },
+        {
+          "event_ref": "6",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 6,
+          "known_at_seq": 6,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_6",
+          "speech": "6号提出把候选范围暂时放在2号、3号和8号之间，理由分别是回避、施压过早以及尚未给出可复核观点。"
+        },
+        {
+          "event_ref": "7",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 7,
+          "known_at_seq": 7,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_7",
+          "speech": "7号回应自己会在后置位给出排序，目前认为6号至少提供了可检查的三项理由，但这些仍然只是玩家主张。"
+        },
+        {
+          "event_ref": "8",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 8,
+          "known_at_seq": 8,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_8",
+          "speech": "8号解释此前没有发言机会，不能把尚未表达观点当作沉默策略，并把当前关注点放在3号对2号的单点施压。"
+        },
+        {
+          "event_ref": "9",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 9,
+          "known_at_seq": 9,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_9",
+          "speech": "9号认为8号关于发言顺序的解释合理，同时要求8号补充独立判断，避免只对已有争议进行被动回应。"
+        },
+        {
+          "event_ref": "10",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 10,
+          "known_at_seq": 10,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_10",
+          "speech": "10号暂时把3号列为第一关注，把2号列为第二关注，并说明排序依据是施压是否有一致标准而不是音量或语速。"
+        },
+        {
+          "event_ref": "11",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 11,
+          "known_at_seq": 11,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_11",
+          "speech": "11号不同意过早收窄范围，建议保留6号，因为6号同时列出三人却没有说明三项理由之间的优先级。"
+        },
+        {
+          "event_ref": "12",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 12,
+          "known_at_seq": 12,
+          "occurred_in": {"period": "day", "round_no": 1},
+          "actor_ref": "seat_12",
+          "speech": "12号总结当前争议主要围绕2号是否回避、3号施压是否双标、6号排序是否充分，自己暂时更想听三人的补充。"
+        },
+        {
+          "event_ref": "13",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 13,
+          "known_at_seq": 13,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_1",
+          "speech": "第二天1号回顾昨日记录，指出3号后来补充了统一标准，因此把3号从第一关注降为观察位，但仍需核对其投票。"
+        },
+        {
+          "event_ref": "14",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 14,
+          "known_at_seq": 14,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_2",
+          "speech": "第二天2号表示昨日投票前已给出选择理由，并要求区分发言节奏慢与故意回避，不接受只凭最初印象延续怀疑。"
+        },
+        {
+          "event_ref": "15",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 15,
+          "known_at_seq": 15,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_3",
+          "speech": "第二天3号承认首日施压表达得过强，当前优先比较6号和11号，因为两人对候选范围的扩张方向完全相反。"
+        },
+        {
+          "event_ref": "16",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 16,
+          "known_at_seq": 16,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_4",
+          "speech": "第二天4号认为3号愿意修正并不自动证明可信，但修正内容至少可以复核，接下来重点查看其投票是否跟随新排序。"
+        },
+        {
+          "event_ref": "17",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 17,
+          "known_at_seq": 17,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_5",
+          "speech": "第二天5号把昨日发言和投票分开整理，认为2号的票型与口头排序一致，而6号的最终选择与最早给出的优先级不清。"
+        },
+        {
+          "event_ref": "18",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 18,
+          "known_at_seq": 18,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_6",
+          "speech": "第二天6号回应自己首日没有固定优先级，投票前根据后续发言调整选择，并承认当时应该明确说明调整过程。"
+        },
+        {
+          "event_ref": "19",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 19,
+          "known_at_seq": 19,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_7",
+          "speech": "第二天7号认为6号的解释补上了时间线，但仍要检查该调整是否在投票前公开，不能用事后理由替代当时信息。"
+        },
+        {
+          "event_ref": "20",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 20,
+          "known_at_seq": 20,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_8",
+          "speech": "第二天8号独立给出6号、11号、3号的关注顺序，理由依次是票型解释、范围扩张和首日施压标准。"
+        },
+        {
+          "event_ref": "21",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 21,
+          "known_at_seq": 21,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_9",
+          "speech": "第二天9号认可8号补充了独立判断，但认为把三个争议点简单串联仍不足以证明共同阵营，需要分别评价。"
+        },
+        {
+          "event_ref": "22",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 22,
+          "known_at_seq": 22,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_10",
+          "speech": "第二天10号将第一关注改为6号，第二关注保留3号，并明确这次变化来自票型与解释时点而非跟随多数。"
+        },
+        {
+          "event_ref": "23",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 23,
+          "known_at_seq": 23,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_11",
+          "speech": "第二天11号表示首日扩大范围是为了防止过早形成共识，当前愿意收窄到6号和3号，并要求两人回答具体时点。"
+        },
+        {
+          "event_ref": "24",
+          "kind": "player_statement",
+          "authority": "player_claim_unverified",
+          "epistemic_status": "reported",
+          "visibility": "public",
+          "record_seq": 24,
+          "known_at_seq": 24,
+          "occurred_in": {"period": "day", "round_no": 2},
+          "actor_ref": "seat_12",
+          "speech": "第二天12号总结目前可复核的问题是6号何时改变选择、3号标准是否一致、11号为何此时收窄范围，建议围绕这些问题投票。"
+        }
+      ],
+      "questions": [],
+      "relations": []
+    }
+  },
+  "contexts": [
+    {
+      "context_id": "synthetic_boolean_self_explosion",
+      "response_kind": "boolean",
+      "known_events_ref": "synthetic_two_day_public_history",
+      "action_context": {
+        "model_context_schema_version": 12,
+        "prompt_template_version": 5,
+        "task": {
+          "type": "werewolf_self_explosion",
+          "at_seq": 25,
+          "actor_id": "seat_7"
+        },
+        "self": {
+          "player_id": "seat_7",
+          "seat": 7,
+          "role": "werewolf"
+        },
+        "state": {
+          "period": "day",
+          "round_no": 2,
+          "alive_player_ids": [
+            "seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6",
+            "seat_7", "seat_8", "seat_9", "seat_10", "seat_11", "seat_12"
+          ]
+        },
+        "candidates": [],
+        "response": {
+          "kind": "boolean",
+          "field": "self_explode",
+          "boolean": {
+            "true_means": "立即自爆",
+            "false_means": "继续参与白天讨论"
+          },
+          "speech": {"mode": "forbidden"},
+          "decision_note": {"mode": "optional", "max_chars": 80}
+        }
+      }
+    },
+    {
+      "context_id": "synthetic_day_debate_speech",
+      "response_kind": "speech",
+      "known_events_ref": "synthetic_two_day_public_history",
+      "action_context": {
+        "model_context_schema_version": 12,
+        "prompt_template_version": 5,
+        "task": {
+          "type": "day_debate_speech",
+          "at_seq": 25,
+          "actor_id": "seat_7"
+        },
+        "self": {
+          "player_id": "seat_7",
+          "seat": 7,
+          "role": "villager"
+        },
+        "state": {
+          "period": "day",
+          "round_no": 2,
+          "speech_order": [
+            "seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6",
+            "seat_7", "seat_8", "seat_9", "seat_10", "seat_11", "seat_12"
+          ]
+        },
+        "candidates": [],
+        "response": {
+          "kind": "speech",
+          "speech": {"mode": "required", "max_chars": 160}
+        }
+      }
+    },
+    {
+      "context_id": "synthetic_exile_vote_target",
+      "response_kind": "target",
+      "known_events_ref": "synthetic_two_day_public_history",
+      "action_context": {
+        "model_context_schema_version": 12,
+        "prompt_template_version": 5,
+        "task": {
+          "type": "exile_vote",
+          "at_seq": 25,
+          "actor_id": "seat_7"
+        },
+        "self": {
+          "player_id": "seat_7",
+          "seat": 7,
+          "role": "villager"
+        },
+        "state": {
+          "period": "day",
+          "round_no": 2
+        },
+        "candidates": [
+          {"player_id": "seat_2", "seat": 2},
+          {"player_id": "seat_3", "seat": 3},
+          {"player_id": "seat_6", "seat": 6},
+          {"player_id": "seat_8", "seat": 8},
+          {"player_id": "seat_10", "seat": 10},
+          {"player_id": "seat_11", "seat": 11}
+        ],
+        "response": {
+          "kind": "target",
+          "target_policy": {
+            "mode": "required",
+            "candidate_source": "candidates"
+          },
+          "speech": {"mode": "forbidden"},
+          "decision_note": {"mode": "optional", "max_chars": 80}
+        }
+      }
+    }
+  ]
+}

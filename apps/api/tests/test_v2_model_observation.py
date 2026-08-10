@@ -1242,8 +1242,12 @@ def test_cannot_say_report_denial_is_not_treated_as_an_assertion() -> None:
     )
 
 
-def test_v10_structured_first_party_investigation_drives_report_observation() -> None:
+@pytest.mark.parametrize("known_events_schema_version", [3, 5])
+def test_structured_first_party_investigation_drives_report_observation(
+    known_events_schema_version: int,
+) -> None:
     context = _first_day_check_context()
+    context["known_events"]["schema_version"] = known_events_schema_version
     events = context["known_events"]["events"]
     report = events[1]
     report["speech"] = "5号首夜验1号查杀。"

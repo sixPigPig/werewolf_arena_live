@@ -1,3 +1,9 @@
+import {
+  classifyV2ModelContextContract,
+  structuredModelContextFromRequestPayload,
+  type V2ModelContextContractEnvelope,
+} from "@/v2/game-records/model-context-contract";
+
 export type V2ModelInputFact = {
   authority: string | null;
   context: string | null;
@@ -8,73 +14,75 @@ export type V2ModelInputFact = {
   title: string;
 };
 
+export type V2ModelInputFactExtraction = {
+  facts: V2ModelInputFact[];
+  modelContextSchemaVersion: number | null;
+  status:
+    | "supported"
+    | "unsupported_model_context_contract"
+    | "unavailable";
+};
+
 export function extractV2ModelInputFacts(
-  requestPayload: Record<string, unknown> | null,
+  request: V2ModelContextContractEnvelope | null,
 ): V2ModelInputFact[] {
-  if (!requestPayload) return [];
-  const prompt = structuredPromptFromPayload(requestPayload);
-  if (!prompt) return [];
+  return extractV2ModelInputFactResult(request).facts;
+}
 
+export function extractV2ModelInputFactResult(
+  request: V2ModelContextContractEnvelope | null,
+): V2ModelInputFactExtraction {
+  if (!request?.request_payload) {
+    return {
+      facts: [],
+      modelContextSchemaVersion: request?.model_context_schema_version ?? null,
+      status: "unavailable",
+    };
+  }
+  const prompt = structuredModelContextFromRequestPayload(
+    request.request_payload,
+  );
+  if (!prompt) {
+    return {
+      facts: [],
+      modelContextSchemaVersion: request.model_context_schema_version,
+      status: "unavailable",
+    };
+  }
+
+  const modelContextSchemaVersion = request.model_context_schema_version;
+  const presentationKind = classifyV2ModelContextContract(
+    request,
+    prompt,
+  );
   const knownEvents = objectValue(prompt.known_events);
-  const publicTimeline = objectValue(prompt.public_timeline);
-  const history = objectValue(prompt.history);
-  const historyTimeline = arrayValue(history?.timeline).filter(isRecord);
-  const publicEvents = arrayValue(
-    knownEvents?.events ?? publicTimeline?.events,
-  ).filter(isRecord);
-
-  if (publicEvents.length) {
-    return publicEvents.map((event, index) =>
-      publicEventFact(event, index),
-    );
+  if (presentationKind === "v11_canonical" && knownEvents !== null) {
+    const canonicalEvents = arrayValue(knownEvents.events).filter(isRecord);
+    return {
+      facts: canonicalEvents.map((event, index) =>
+        publicEventFact(event, index),
+      ),
+      modelContextSchemaVersion,
+      status: "supported",
+    };
   }
-
-  return historyTimeline.map((item, index) => historyFact(item, index));
-}
-
-function structuredPromptFromPayload(
-  requestPayload: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const input = Array.isArray(requestPayload.input)
-    ? requestPayload.input
-    : [];
-  const messages = Array.isArray(requestPayload.messages)
-    ? requestPayload.messages
-    : [];
-  const items = input.length ? input : messages;
-
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!isRecord(item)) continue;
-    const text = messageText(item.content);
-    const parsed = parseStructuredPrompt(text);
-    if (parsed) return parsed;
+  if (presentationKind === "v12_compact") {
+    const canonicalEvents = arrayValue(
+      request.expanded_known_events?.events,
+    ).filter(isRecord);
+    return {
+      facts: canonicalEvents.map((event, index) =>
+        publicEventFact(event, index),
+      ),
+      modelContextSchemaVersion,
+      status: "supported",
+    };
   }
-  return null;
-}
-
-function messageText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return "";
-  return value
-    .map((part) => {
-      if (typeof part === "string") return part;
-      return isRecord(part) && typeof part.text === "string" ? part.text : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function parseStructuredPrompt(text: string): Record<string, unknown> | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    const value: unknown = JSON.parse(text.slice(start, end + 1));
-    return isRecord(value) ? value : null;
-  } catch {
-    return null;
-  }
+  return {
+    facts: [],
+    modelContextSchemaVersion,
+    status: "unsupported_model_context_contract",
+  };
 }
 
 function publicEventFact(
@@ -96,25 +104,6 @@ function publicEventFact(
     recordSeq,
     summary: eventSummary(event),
     title: eventTitle(kind),
-  };
-}
-
-function historyFact(
-  item: Record<string, unknown>,
-  index: number,
-): V2ModelInputFact {
-  const recordSeq = numberValue(item.record_seq);
-  return {
-    authority: "player_claim_unverified",
-    context: eventContext(item),
-    id:
-      textValue(item.source_event_id) ??
-      textValue(item.statement_id) ??
-      `history-${index}`,
-    kind: "player_statement",
-    recordSeq,
-    summary: null,
-    title: eventTitle("player_statement"),
   };
 }
 

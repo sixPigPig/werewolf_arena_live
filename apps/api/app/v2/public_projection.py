@@ -36,7 +36,10 @@ def project_public_rule_snapshot(
         return None
     rule_set = rule_snapshot.get("rule_set")
     if not isinstance(rule_set, dict):
-        if set(rule_snapshot) == {"model_context_contract"}:
+        if set(rule_snapshot) <= {
+            "model_context_contract",
+            "model_generation_policy_contract",
+        }:
             return None
         raise V2PublicProjectionError("rule snapshot must contain a rule set")
 

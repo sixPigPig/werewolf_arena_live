@@ -32,6 +32,7 @@ from app.v2.repository import (
     V2GameCanceled,
     V2PhaseTransition,
     V2RepositoryError,
+    _open_failure_episode_ids_for_locked_run,
 )
 from app.v2.win_conditions import (
     hunter_settlement_can_change_winner,
@@ -679,12 +680,21 @@ class V2MatchRepository:
                 run = _run(db, game.current_run_id)
                 run.status = "failed"
                 run.completed_at = _now()
+                failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                    db,
+                    game=game,
+                )
                 _append_event(
                     db,
                     game=game,
                     event_type="match_runtime_failed",
                     audience="god_view",
-                    payload={"reason": "max_rounds_exceeded", "round_no": match.round_no},
+                    payload={
+                        "reason": "max_rounds_exceeded",
+                        "round_no": match.round_no,
+                        "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                        "failure_episode_disposition": "run_failure",
+                    },
                 )
             else:
                 match.round_no += 1
@@ -734,12 +744,20 @@ class V2MatchRepository:
             match = db.get(V2MatchState, game_id)
             if match is not None:
                 match.completion_reason = failure_code
+            failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                db,
+                game=game,
+            )
             _append_event(
                 db,
                 game=game,
                 event_type="day_runtime_failed",
                 audience="god_view",
-                payload={"failure_code": failure_code},
+                payload={
+                    "failure_code": failure_code,
+                    "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                    "failure_episode_disposition": "run_failure",
+                },
             )
             return run.run_id
 
