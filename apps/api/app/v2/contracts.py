@@ -580,6 +580,17 @@ class AdminV2OutputEnforcementResponse(BaseModel):
 
 class AdminV2ModelRequestSummaryResponse(BaseModel):
     attempt_id: str
+    decision_family_id: str | None
+    retry_scope: Literal[
+        "action",
+        "same_action",
+        "batch_initial",
+        "batch_recovery",
+        "operator_retry",
+    ]
+    vote_batch_stage: str | None
+    automatic_machine_format_attempt_count: int | None
+    automatic_machine_format_budget: int | None
     attempt_no: int
     cycle_attempt_no: int
     retry_cycle: int

@@ -12,7 +12,8 @@ from app.v2.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
     PUBLIC_TIMELINE_SCHEMA_VERSION,
-    is_current_model_context_contract,
+    SUPPORTED_PROMPT_TEMPLATE_VERSIONS,
+    is_supported_model_context_contract,
 )
 from app.v2.win_conditions import (
     build_public_win_condition_contract,
@@ -88,7 +89,7 @@ def project_model_action_context_with_metadata(
         projection_at_seq=projection_at_seq,
     )
     contract = model_context_contract
-    if not is_current_model_context_contract(contract):
+    if not is_supported_model_context_contract(contract):
         raise ValueError("unsupported_model_context_contract")
     return _project_v11_model_action_context_with_metadata(
         context,
@@ -323,7 +324,7 @@ def validate_projected_model_context(
 
     if context.get("model_context_schema_version") != 11:
         fail("model_context_schema_version")
-    if context.get("prompt_template_version") != 3:
+    if context.get("prompt_template_version") not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS:
         fail("prompt_template_version")
     known_events = context.get("known_events")
     if not isinstance(known_events, dict) or known_events.get("schema_version") != 5:
@@ -1402,7 +1403,7 @@ def model_prompt_metadata(
 ) -> dict[str, Any]:
     if (
         context.get("model_context_schema_version") != 11
-        or context.get("prompt_template_version") != 3
+        or context.get("prompt_template_version") not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS
     ):
         raise ValueError("unsupported_model_prompt_contract")
     known_events = context.get("known_events")
@@ -1432,7 +1433,7 @@ def model_prompt_metadata(
     metadata: dict[str, Any] = {
         "prompt_schema_version": 11,
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": context["prompt_template_version"],
         "known_events_schema_version": 5,
         "serialized_char_count": _serialized_chars(context),
         "known_event_count": len(events),

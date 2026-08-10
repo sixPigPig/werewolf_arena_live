@@ -66,7 +66,10 @@ from app.v2.model_context import (
     V2ProjectedModelContext,
     project_model_action_context,
 )
-from app.v2.model_context_contract import current_model_context_contract
+from app.v2.model_context_contract import (
+    PROMPT_TEMPLATE_VERSION,
+    current_model_context_contract,
+)
 from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
@@ -352,6 +355,8 @@ class FakeV2ModelClient:
         self.decision_contexts: list[dict[str, Any]] = []
         self.decline_action_types: set[str] = set()
         self.quality_failure_action_types: set[str] = set()
+        self.quality_failure_first_actor_action_types: set[str] = set()
+        self._quality_failure_actor_by_action: dict[str, str] = {}
         self.quality_failures_remaining_by_action: dict[str, int] = {}
         self.unexpected_speech_target: str | None = None
         self.force_speech_action_types: set[str] = set()
@@ -511,13 +516,25 @@ class FakeV2ModelClient:
             await asyncio.wait_for(self.concurrent_barrier_all_started.wait(), timeout=5)
             self.concurrent_barrier_in_flight -= 1
         output_contract = action_context["response"]
+        actor_id = str(action_context["self"]["identity"]["player_id"])
+        latched_quality_failure_actor = None
+        if action_type in self.quality_failure_first_actor_action_types:
+            latched_quality_failure_actor = self._quality_failure_actor_by_action.setdefault(
+                action_type,
+                actor_id,
+            )
+        actor_quality_failure = latched_quality_failure_actor == actor_id
         quality_failures_remaining = self.quality_failures_remaining_by_action.get(
             action_type,
             0,
         )
         if quality_failures_remaining > 0:
             self.quality_failures_remaining_by_action[action_type] = quality_failures_remaining - 1
-        if action_type in self.quality_failure_action_types or quality_failures_remaining > 0:
+        if (
+            action_type in self.quality_failure_action_types
+            or quality_failures_remaining > 0
+            or actor_quality_failure
+        ):
             boolean_field = output_contract.get("field")
             raise V2QualityError(
                 "model_decision_invalid_speech",
@@ -535,7 +552,6 @@ class FakeV2ModelClient:
                 f"我是{action_context['self']['identity']['player_id']}，"
                 "这一轮的判断只作为我下一轮继续验证的主观记忆。"
             )
-        actor_id = str(action_context["self"]["identity"]["player_id"])
         speech: str | None = self.speech_by_actor_and_action_type.get(
             (actor_id, action_type),
             self.speech_by_action_type.get(action_type, default_speech),
@@ -1407,7 +1423,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "delivery_snapshot": game.delivery_snapshot,
             "model_context_contract": {
                 "model_context_schema_version": 11,
-                "prompt_template_version": 3,
+                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
                 "known_events_schema_version": 5,
                 "ledger_schema_version": 5,
                 "model_view_schema_version": 5,
@@ -2136,7 +2152,7 @@ def test_profile_library_mode_requires_inner_rule_revision(v2_context) -> None:
     assert response.status_code == 422
 
 
-def test_new_game_freezes_v11_prompt_v3_model_context_contract(v2_context) -> None:
+def test_new_game_freezes_v11_current_prompt_model_context_contract(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     request = _lobby_create_request()
     request["title"] = "V11 契约冻结"
@@ -2145,7 +2161,7 @@ def test_new_game_freezes_v11_prompt_v3_model_context_contract(v2_context) -> No
 
     expected = {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "known_events_schema_version": 5,
         "ledger_schema_version": 5,
         "model_view_schema_version": 5,
@@ -3916,7 +3932,7 @@ def test_executable_rule_runs_dynamic_first_night_without_leaking_private_action
     )
     assert all(
         context["model_context_schema_version"] == 11
-        and context["prompt_template_version"] == 3
+        and context["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
         and "private_judge_facts" not in context["self"]
         and "mechanical_effect" in context["task"]
         and "state" in context
@@ -4764,6 +4780,8 @@ def test_rotating_werewolf_tiebreaker_changes_on_second_night_with_real_reposito
             game.phase_state = "nightfall_announced"
             run.status = "ready"
             match.round_no = 2
+            match.sheriff_player_id = wolf_players[1][0]
+            match.sheriff_badge_state = "held"
         second_state = night_repository.start_night(
             identifiers["game_id"],
             audience="god_view",
@@ -4779,6 +4797,8 @@ def test_rotating_werewolf_tiebreaker_changes_on_second_night_with_real_reposito
     first_state, second_state, first_working, second_working = asyncio.run(scenario())
 
     assert (first_state.round_no, second_state.round_no) == (1, 2)
+    assert second_state.sheriff_player_id == wolf_players[1][0]
+    assert second_state.sheriff_badge_state == "held"
     assert first_working.attack_target is not None
     assert second_working.attack_target is not None
     assert external_tts.call_count == 0
@@ -4792,6 +4812,9 @@ def test_rotating_werewolf_tiebreaker_changes_on_second_night_with_real_reposito
     assert [context["self"]["identity"]["player_id"] for context in tiebreak_contexts] == wolf_refs[
         :2
     ]
+    assert tiebreak_contexts[1]["state"]["sheriff_player_id"] == wolf_refs[1]
+    assert tiebreak_contexts[1]["state"]["sheriff_badge_state"] == "held"
+    assert tiebreak_contexts[1]["self"]["public_office_capabilities"]["is_current_sheriff"] is True
 
     with session_factory() as db:
         for state, expected_actor_id, working in (
@@ -5295,7 +5318,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
         assert all(
             event.payload["prompt_schema_version"] == 11
             and event.payload["model_context_schema_version"] == 11
-            and event.payload["prompt_template_version"] == 3
+            and event.payload["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
             and event.payload["model_view_selector_version"] == 2
             and event.payload["prompt_projection"]["known_events_schema_version"] == 5
             and "known_event_count" in event.payload["prompt_projection"]
@@ -5453,7 +5476,7 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
     speech_contexts = campaign_contexts + debate_contexts
     assert all(
         context["model_context_schema_version"] == 11
-        and context["prompt_template_version"] == 3
+        and context["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
         and context["known_events"]["schema_version"] == 5
         and "questions" in context["known_events"]
         and "relations" in context["known_events"]
@@ -6354,7 +6377,7 @@ def test_model_output_enforcement_and_application_validation_are_audited(
     )
     projected_context = {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "task": {"type": "exile_vote", "at_seq": 42, "round_no": 1},
         "self": {
             "identity": {
@@ -6856,7 +6879,7 @@ def test_optional_boolean_format_exhaustion_uses_false_fallback(v2_context) -> N
 def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
-    model_client.decline_action_types.add("exile_vote")
+    model_client.quality_failure_first_actor_action_types.add("exile_vote")
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -6884,8 +6907,10 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
             )
             assert recovery is not None
             assert recovery.action_type == "exile_vote"
-            assert recovery.failure_code == "model_decision_required_target_missing"
+            assert recovery.failure_code == "model_decision_invalid_speech"
             assert recovery.action_snapshot["context"]["vote_batch_stage"] == "sequential_recovery"
+            decision_family_id = recovery.action_snapshot["decision_family_id"]
+            assert decision_family_id
             recovery_action_id = recovery.action_id
             batch_recovery_started = db.scalar(
                 select(V2GameRecordEvent)
@@ -6924,7 +6949,52 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
                 )
             )
 
-        model_client.decline_action_types.discard("exile_vote")
+            family_requests = [
+                event
+                for event in db.scalars(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == identifiers["game_id"],
+                        V2GameRecordEvent.event_type == "model_request_started",
+                    )
+                )
+                if event.payload.get("decision_family_id") == decision_family_id
+            ]
+            assert len(family_requests) == 2
+            suppressed = db.scalar(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_automatic_retry_suppressed",
+                    V2GameRecordEvent.payload["decision_family_id"].as_string()
+                    == decision_family_id,
+                )
+            )
+            assert suppressed is not None
+            assert suppressed.payload["automatic_machine_format_attempt_count"] == 2
+            assert suppressed.payload["suppression_reason"] == ("decision_family_budget_exhausted")
+            paused_event = db.scalar(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_action_paused",
+                    V2GameRecordEvent.payload["action_id"].as_string() == recovery_action_id,
+                )
+            )
+            assert paused_event is not None
+            assert paused_event.payload["attempt_id"] is None
+            assert paused_event.payload["reason_code"] == ("decision_family_budget_exhausted")
+            assert paused_event.payload["exhaustion_scope"] == "decision_family"
+            assert (
+                paused_event.payload["source_action_id"] == (suppressed.payload["source_action_id"])
+            )
+            assert (
+                paused_event.payload["source_attempt_id"]
+                == (suppressed.payload["source_attempt_id"])
+            )
+
+        model_client.quality_failure_first_actor_action_types.discard("exile_vote")
+        # Operator authorization opens a normal retry cycle: its first request
+        # may still fail format validation and receive the existing in-cycle
+        # retry without being counted as another pre-operator automatic try.
+        model_client.quality_failures_remaining_by_action["exile_vote"] = 1
         retried = client.post(
             f"/api/v1/admin/v2/games/{identifiers['game_id']}/retry-model-action",
             json={"reason": "恢复同一冻结投票批次"},
@@ -6942,9 +7012,38 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
                 break
         assert terminal_live_state == "awaiting_observation"
 
+    request_page = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests"
+        "?after_record_seq=0&page_size=500"
+    )
+    assert request_page.status_code == 200, request_page.text
+    family_request_summaries = [
+        item
+        for item in request_page.json()["items"]
+        if item["decision_family_id"] == decision_family_id
+    ]
+    assert len(family_request_summaries) == 4
+    assert [item["retry_scope"] for item in family_request_summaries] == [
+        "batch_initial",
+        "same_action",
+        "operator_retry",
+        "operator_retry",
+    ]
+    assert [
+        item["automatic_machine_format_attempt_count"] for item in family_request_summaries
+    ] == [1, 2, 2, 2]
+    assert {item["automatic_machine_format_budget"] for item in family_request_summaries} == {2}
+    assert family_request_summaries[-1]["vote_batch_stage"] == "sequential_recovery"
+    assert (
+        family_request_summaries[2]["retry_of_attempt_id"]
+        == (suppressed.payload["source_attempt_id"])
+    )
+
     with session_factory() as db:
         recovery = db.get(V2ModelActionRecovery, recovery_action_id)
         assert recovery is not None and recovery.state == "resolved"
+        frozen_recovery_request = recovery.request_payload
+        frozen_recovery_request_hash = recovery.request_hash
         events = list(
             db.scalars(
                 select(V2GameRecordEvent)
@@ -6952,6 +7051,25 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
+    operator_starts = [
+        event
+        for event in events
+        if event.event_type == "model_request_started"
+        and event.payload.get("action_id") == recovery_action_id
+    ]
+    assert len(operator_starts) == 2
+    assert all(
+        event.payload["request_payload"] == frozen_recovery_request for event in operator_starts
+    )
+    canonical_frozen_request = json.dumps(
+        frozen_recovery_request,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert hashlib.sha256(canonical_frozen_request.encode()).hexdigest() == (
+        frozen_recovery_request_hash
+    )
     batch_recovery_completed = next(
         event
         for event in events
@@ -6969,7 +7087,9 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
         for event in events
         if event.event_type == "day_vote_committed" and event.payload.get("batch_id") == batch_id
     ]
-    assert {event.payload["voter_player_id"] for event in committed} == set(failed_voter_ids)
+    committed_voter_ids = {event.payload["voter_player_id"] for event in committed}
+    assert set(failed_voter_ids).issubset(committed_voter_ids)
+    assert len(committed) == len(committed_voter_ids)
     assert concurrent_recovery_completed.record_seq < batch_recovery_completed.record_seq
     assert batch_recovery_completed.record_seq < min(event.record_seq for event in committed)
 

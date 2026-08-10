@@ -12,6 +12,8 @@ import wave
 import pytest
 
 from app.v2.action_engine import (
+    V2ActionFailure,
+    V2ActionResult,
     V2DecisionContract,
     V2ModelRetryPolicy,
     V2SpeechSpec,
@@ -30,6 +32,7 @@ from app.v2.god_view_projection import (
 from app.v2.model_client import (
     V2ModelError,
     V2QualityError,
+    _decision_model_input,
     _decision_object,
     _decision_repair_kind,
     _decision_fields,
@@ -508,6 +511,303 @@ def test_decision_fields_extracts_target_from_safe_nested_decision_wrapper() -> 
         None,
         None,
     )
+
+
+def test_decision_fields_extracts_target_from_exact_response_wrapper() -> None:
+    raw = json.dumps(
+        {
+            "response": {
+                "target_player_id": "seat_1",
+                "decision_note": "警徽票给1号。",
+            }
+        },
+        ensure_ascii=False,
+    )
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+        "decision_note": {"mode": "optional", "max_chars": 80},
+    }
+
+    assert _decision_fields(raw, contract) == ("seat_1", None, None, None)
+    assert _decision_repair_kind(raw, contract) == "response_wrapper_recovered"
+
+
+@pytest.mark.parametrize(
+    ("raw", "contract", "expected"),
+    [
+        (
+            '{"response":{"speech":"我会继续听取后续发言。"}}',
+            {"kind": "speech", "speech": {"mode": "required"}},
+            (None, "我会继续听取后续发言。", None, None),
+        ),
+        (
+            '{"response":{"withdraw":false,"speech":"我继续参选。"}}',
+            {
+                "kind": "boolean",
+                "field": "withdraw",
+                "speech": {"mode": "required"},
+            },
+            (None, "我继续参选。", "withdraw", False),
+        ),
+    ],
+)
+def test_decision_fields_recovers_exact_response_wrapper_for_all_contract_kinds(
+    raw: str,
+    contract: dict[str, Any],
+    expected: tuple[str | None, str | None, str | None, bool | None],
+) -> None:
+    assert _decision_fields(raw, contract) == expected
+    assert _decision_repair_kind(raw, contract) == "response_wrapper_recovered"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {
+            "kind": "target",
+            "target_player_id": "seat_1",
+            "speech": {"mode": "forbidden"},
+        },
+        {
+            "target_player_id": "seat_1",
+            "target_policy": {"mode": "required"},
+        },
+        {"target_player_id": "seat_1", "speech": "不应进入私密投票"},
+        {"target_player_id": "seat_1", "speech": None},
+    ],
+)
+def test_decision_fields_rejects_response_wrapper_contract_echo(
+    response: dict[str, Any],
+) -> None:
+    raw = json.dumps({"response": response}, ensure_ascii=False)
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+        "decision_note": {"mode": "optional", "max_chars": 80},
+    }
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, contract)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"response":null}',
+        '{"response":{}}',
+        '{"response":{"target_player_id":"seat_1"},"target_player_id":"seat_1"}',
+        '{"response":{"target_player_id":"seat_1"},"output":{"target_player_id":"seat_1"}}',
+        '{"response":{"response":{"target_player_id":"seat_1"}}}',
+    ],
+)
+def test_decision_fields_rejects_unsafe_response_wrapper_shapes(raw: str) -> None:
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+    }
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, contract)
+
+
+def test_decision_fields_rejects_long_truncated_response_wrapper_without_fragment_recovery() -> (
+    None
+):
+    raw = "x" * 1_601 + '{"response":{"target_player_id":"seat_1"'
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+    }
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, contract)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '｛＂response＂：｛"target_player_id":"seat_1"',
+        "x" * 1_601 + '{“response”:{"target_player_id":"seat_1"',
+        '{"Response":{"target_player_id":"seat_1"',
+        '{"\\u0072esponse":{"target_player_id":"seat_1"',
+    ],
+)
+def test_decision_fields_rejects_compatibility_response_wrapper_without_fragment_recovery(
+    raw: str,
+) -> None:
+    contract = {
+        "kind": "target",
+        "target_policy": {"mode": "required"},
+        "speech": {"mode": "forbidden"},
+    }
+
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, contract)
+
+
+@pytest.mark.parametrize(
+    ("raw", "contract"),
+    [
+        (
+            '{"wrapper":{"speech":"嵌套发言"',
+            {"kind": "speech", "speech": {"mode": "required"}},
+        ),
+        (
+            '{"wrapper":{"withdraw":true,"speech":"嵌套退水"',
+            {
+                "kind": "boolean",
+                "field": "withdraw",
+                "speech": {"mode": "required_if_true"},
+            },
+        ),
+    ],
+)
+def test_decision_fields_rejects_nested_truncated_fragments_for_all_contract_kinds(
+    raw: str,
+    contract: dict[str, Any],
+) -> None:
+    with pytest.raises(
+        V2QualityError,
+        match="model_decision_structured_speech_leak",
+    ):
+        _decision_fields(raw, contract)
+
+
+def test_machine_format_failure_result_requires_complete_lineage() -> None:
+    with pytest.raises(ValueError, match="machine-format failure lineage is required"):
+        V2ActionFailure(
+            code="model_decision_invalid_json",
+            category="machine_format",
+            terminal_attempt_id="v2_model_terminal",
+            machine_format_failure_count=2,
+        )
+
+    failure = V2ActionFailure(
+        code="model_decision_invalid_json",
+        category="machine_format",
+        terminal_attempt_id="v2_model_terminal",
+        machine_format_failure_count=2,
+        last_machine_format_attempt_id="v2_model_terminal",
+        last_machine_format_failure_code="model_decision_invalid_json",
+    )
+    with pytest.raises(ValueError, match="failed action result requires an action_id"):
+        V2ActionResult(failure=failure)
+
+
+def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_example() -> None:
+    context = {
+        "model_context_schema_version": 11,
+        "prompt_template_version": 4,
+        "task": {"type": "sheriff_vote", "at_seq": 42, "round_no": 1},
+        "self": {},
+        "rules": {},
+        "state": {"as_of_seq": 42, "current_round_no": 1},
+        "known_events": {
+            "schema_version": 5,
+            "events": [],
+            "questions": [],
+            "relations": [],
+        },
+        "persona": {},
+        "candidates": [{"player_id": "seat_1", "seat": 1, "display_name": "1号"}],
+        "response": {
+            "kind": "target",
+            "presentation_kind": "private_vote",
+            "speech": {"mode": "forbidden"},
+            "decision_note": {"mode": "optional", "max_chars": 80},
+            "target_policy": {"mode": "required", "candidate_source": "candidates"},
+        },
+        "player_reference_format": "seat_N",
+    }
+
+    prompt = _decision_model_input(context)[0]["content"][0]["text"]
+
+    assert "response 仅用于描述本次输出合同，不是输出包装字段" in prompt
+    assert "不得使用 response、output 或 decision 包装层" in prompt
+    assert (
+        '本动作合格输出示例：{"target_player_id":"<candidate_player_id>","decision_note"' in prompt
+    )
+    example = prompt.split("本动作合格输出示例：", 1)[1].split("。只输出", 1)[0]
+    assert '"speech"' not in example
+
+
+def test_legacy_v3_decision_prompt_does_not_silently_use_v4_template() -> None:
+    context = {
+        "model_context_schema_version": 11,
+        "prompt_template_version": 3,
+        "task": {"type": "sheriff_vote", "at_seq": 42, "round_no": 1},
+        "self": {},
+        "rules": {},
+        "state": {"as_of_seq": 42, "current_round_no": 1},
+        "known_events": {
+            "schema_version": 5,
+            "events": [],
+            "questions": [],
+            "relations": [],
+        },
+        "persona": {},
+        "candidates": [{"player_id": "seat_1", "seat": 1, "display_name": "1号"}],
+        "response": {
+            "kind": "target",
+            "presentation_kind": "private_vote",
+            "speech": {"mode": "forbidden"},
+            "target_policy": {"mode": "required", "candidate_source": "candidates"},
+        },
+        "player_reference_format": "seat_N",
+    }
+
+    prompt = _decision_model_input(context)[0]["content"][0]["text"]
+
+    assert "本次输出仍须遵守 response 合同" in prompt
+    assert "response 仅用于描述本次输出合同" not in prompt
+
+
+def test_v4_boolean_prompt_shows_both_values_without_strategy_anchor() -> None:
+    context = {
+        "model_context_schema_version": 11,
+        "prompt_template_version": 4,
+        "task": {"type": "sheriff_withdraw", "at_seq": 42, "round_no": 1},
+        "self": {},
+        "rules": {},
+        "state": {"as_of_seq": 42, "current_round_no": 1},
+        "known_events": {
+            "schema_version": 5,
+            "events": [],
+            "questions": [],
+            "relations": [],
+        },
+        "persona": {},
+        "candidates": [],
+        "response": {
+            "kind": "boolean",
+            "field": "withdraw",
+            "speech": {"mode": "required_if_true"},
+        },
+        "player_reference_format": "seat_N",
+    }
+
+    prompt = _decision_model_input(context)[0]["content"][0]["text"]
+
+    assert "以下示例仅示范格式，不代表任何策略选择" in prompt
+    assert '{"withdraw":true,"speech":"本次动作要求的自然中文"}' in prompt
+    assert '{"withdraw":false}' in prompt
 
 
 def test_decision_fields_extracts_speech_from_safe_metadata_wrapper() -> None:

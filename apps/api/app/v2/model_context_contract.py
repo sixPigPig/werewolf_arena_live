@@ -4,7 +4,11 @@ from typing import Any
 
 
 MODEL_CONTEXT_SCHEMA_VERSION = 11
-PROMPT_TEMPLATE_VERSION = 3
+PROMPT_TEMPLATE_VERSION = 4
+# Before bumping the current template, explicitly add the outgoing version to
+# this legacy set so frozen games remain resumable across deployments.
+LEGACY_PROMPT_TEMPLATE_VERSIONS = frozenset({3})
+SUPPORTED_PROMPT_TEMPLATE_VERSIONS = LEGACY_PROMPT_TEMPLATE_VERSIONS | {PROMPT_TEMPLATE_VERSION}
 MODEL_PROMPT_SCHEMA_VERSION = MODEL_CONTEXT_SCHEMA_VERSION
 KNOWN_EVENTS_SCHEMA_VERSION = 5
 PUBLIC_TIMELINE_SCHEMA_VERSION = 1
@@ -47,7 +51,7 @@ def frozen_model_context_contract(
 def supports_model_context_contract(
     rule_snapshot: dict[str, Any] | None,
 ) -> bool:
-    return is_current_model_context_contract(frozen_model_context_contract(rule_snapshot))
+    return is_supported_model_context_contract(frozen_model_context_contract(rule_snapshot))
 
 
 def is_current_model_context_contract(contract: dict[str, Any] | None) -> bool:
@@ -64,7 +68,23 @@ def is_current_model_context_contract(contract: dict[str, Any] | None) -> bool:
     )
 
 
+def is_supported_model_context_contract(contract: dict[str, Any] | None) -> bool:
+    expected = current_model_context_contract()
+    if not isinstance(contract, dict) or set(contract) != set(expected):
+        return False
+    for key, value in expected.items():
+        actual = contract.get(key)
+        if not isinstance(actual, int) or isinstance(actual, bool):
+            return False
+        if key == "prompt_template_version":
+            if actual not in SUPPORTED_PROMPT_TEMPLATE_VERSIONS:
+                return False
+        elif actual != value:
+            return False
+    return True
+
+
 def supports_current_model_context_contract(
     rule_snapshot: dict[str, Any] | None,
 ) -> bool:
-    return supports_model_context_contract(rule_snapshot)
+    return is_current_model_context_contract(frozen_model_context_contract(rule_snapshot))

@@ -23,6 +23,7 @@ from app.v2.model_context import (
 )
 from app.v2.model_client import build_model_request_payload
 from app.v2.model_context_contract import (
+    PROMPT_TEMPLATE_VERSION,
     current_model_context_contract,
     supports_model_context_contract,
 )
@@ -253,7 +254,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     assert "唐梨" not in serialized
     assert "system-player-" not in serialized
     assert projected["model_context_schema_version"] == 11
-    assert projected["prompt_template_version"] == 3
+    assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected["task"]["goal"] == "2号需要判断4号是否可信"
     assert projected["self"]["identity"] == {
         "player_id": "seat_2",
@@ -330,7 +331,7 @@ def test_model_context_uses_only_seat_references_and_unifies_public_events() -> 
     metadata = model_prompt_metadata(projected)
     assert metadata["prompt_schema_version"] == 11
     assert metadata["model_context_schema_version"] == 11
-    assert metadata["prompt_template_version"] == 3
+    assert metadata["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert metadata["serialized_char_count"] == len(
         json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
     )
@@ -986,7 +987,7 @@ def test_v11_prompt_separates_event_occurrence_from_delayed_announcement() -> No
         max_output_tokens=16_384,
     )
     system_text = request["input"][0]["content"][0]["text"]
-    assert projected["prompt_template_version"] == 3
+    assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert "known_at_seq/record_seq 表示获知和记录顺序" in system_text
     assert "occurred_in 表示事件实际发生阶段" in system_text
     assert "announced_in 只表示公布阶段，公布更晚不代表发生更晚" in system_text
@@ -1016,7 +1017,7 @@ def test_current_contract_projects_v11_only_shape() -> None:
     )
 
     assert projected["model_context_schema_version"] == 11
-    assert projected["prompt_template_version"] == 3
+    assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected["task"]["type"] == "day_debate_speech"
     assert projected["response"] == {"kind": "speech", "speech": {"mode": "required"}}
     assert projected["known_events"] == {
@@ -1062,7 +1063,7 @@ def test_v11_keeps_player_statement_unverified_authority() -> None:
         action_record_seq=21,
     )
 
-    assert projected["prompt_template_version"] == 3
+    assert projected["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected["known_events"]["schema_version"] == 5
     statement = projected["known_events"]["events"][0]
     assert statement["authority"] == "player_claim_unverified"
@@ -1071,17 +1072,58 @@ def test_v11_keeps_player_statement_unverified_authority() -> None:
     assert "timeline_index" not in statement
 
 
-def test_only_current_model_context_contract_is_supported() -> None:
+def test_current_and_explicit_legacy_v3_model_context_contracts_are_supported() -> None:
     assert supports_model_context_contract(
         {"model_context_contract": current_model_context_contract()}
     )
 
+
+def test_legacy_v3_contract_preserves_projection_metadata_and_prompt_template() -> None:
+    legacy = current_model_context_contract()
+    legacy["prompt_template_version"] = 3
+    projected = project_model_action_context(
+        {
+            "action_type": "day_debate_speech",
+            "objective": "发表白天发言。",
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "public_history": [],
+            "output_contract": {
+                "kind": "speech",
+                "speech": {"mode": "required"},
+            },
+        },
+        players=PLAYERS,
+        model_context_contract=legacy,
+    )
+
+    metadata = model_prompt_metadata(projected)
+    request = build_model_request_payload(
+        projected,
+        decision=True,
+        model_id="test-model",
+        max_output_tokens=16_384,
+    )
+    system_text = request["input"][0]["content"][0]["text"]
+
+    assert projected["prompt_template_version"] == 3
+    assert metadata["prompt_template_version"] == 3
+    assert "本次输出仍须遵守 response 合同" in system_text
+    assert "response 仅用于描述本次输出合同" not in system_text
+    legacy = current_model_context_contract()
+    legacy["prompt_template_version"] = 3
+    assert supports_model_context_contract({"model_context_contract": legacy})
+
     assert not supports_model_context_contract(
         {
             "model_context_contract": {
-                "model_context_schema_version": 9,
+                **legacy,
                 "prompt_template_version": 2,
-            }
+            },
         }
     )
 
@@ -2216,7 +2258,7 @@ def test_v11_dead_hunter_sees_public_slaughter_boundaries() -> None:
     contract = projected.context["rules"]["win_condition_contract"]
 
     assert "win_condition_contract" not in action_context["public_rule_contract"]
-    assert projected.context["prompt_template_version"] == 3
+    assert projected.context["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
     assert projected.projection_metadata["ledger_schema_version"] == 5
     assert contract["mode"] == "slaughter_side"
     assert contract["evaluation_order"] == ["villagers", "werewolves"]
@@ -2293,7 +2335,7 @@ def test_v11_player_prompt_explains_information_authority_and_time() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 11,
-            "prompt_template_version": 3,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
@@ -2341,7 +2383,7 @@ def test_v11_prompt_explains_compact_question_response_semantics() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 11,
-            "prompt_template_version": 3,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "day_debate_speech", "goal": "发表本轮白天讨论发言。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "seer"}},
             "rules": {"reveal_policy": "hidden"},
@@ -2413,7 +2455,7 @@ def test_v11_prompt_identifies_the_public_win_condition_contract() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 11,
-            "prompt_template_version": 3,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {"type": "hunter_death_shot", "goal": "决定是否发动猎人技能。"},
             "self": {"identity": {"player_id": "seat_2", "role_key": "hunter"}},
             "rules": {"win_condition_contract": {"mode": "slaughter_side"}},
@@ -2424,6 +2466,7 @@ def test_v11_prompt_identifies_the_public_win_condition_contract() -> None:
                 "questions": [],
                 "relations": [],
             },
+            "candidates": [],
             "response": {
                 "kind": "target",
                 "target_policy": {"mode": "optional"},
@@ -2444,7 +2487,7 @@ def test_private_round_memory_prompt_is_explicitly_non_public() -> None:
     payload = build_model_request_payload(
         {
             "model_context_schema_version": 11,
-            "prompt_template_version": 3,
+            "prompt_template_version": PROMPT_TEMPLATE_VERSION,
             "task": {
                 "type": "private_round_memory",
                 "goal": "生成仅供本人后续决策使用的轮次记忆。",

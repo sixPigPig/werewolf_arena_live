@@ -191,6 +191,16 @@ export type V2ModelRequestAudienceSource =
 
 export type V2ModelRequestSummary = {
   attempt_id: string;
+  decision_family_id: string | null;
+  retry_scope:
+    | "action"
+    | "same_action"
+    | "batch_initial"
+    | "batch_recovery"
+    | "operator_retry";
+  vote_batch_stage: string | null;
+  automatic_machine_format_attempt_count: number | null;
+  automatic_machine_format_budget: number | null;
   attempt_no: number;
   cycle_attempt_no: number;
   retry_cycle: number;

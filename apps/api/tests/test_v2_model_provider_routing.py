@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app.v2.model_context_contract import PROMPT_TEMPLATE_VERSION
 from app.v2.model_client import (
     V2ModelClient,
     V2ModelDecision,
@@ -53,7 +54,7 @@ def _client(
 def _action_context() -> dict[str, Any]:
     return {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "action_type": "day_speech",
         "candidates": [],
         "response": {
@@ -66,7 +67,7 @@ def _action_context() -> dict[str, Any]:
 def _target_action_context() -> dict[str, Any]:
     return {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "task": {"type": "exile_vote", "at_seq": 42},
         "known_events": {"schema_version": 5, "events": [], "questions": [], "relations": []},
         "candidates": [
@@ -576,7 +577,8 @@ def test_model_client_preserves_forbidden_speech_for_action_normalization() -> N
     )
     context = {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
             "target_policy": {"mode": "required"},
@@ -623,7 +625,8 @@ def test_model_client_parses_optional_private_decision_note() -> None:
     )
     context = {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
             "target_policy": {"mode": "required"},
@@ -642,6 +645,54 @@ def test_model_client_parses_optional_private_decision_note() -> None:
 
     assert decision.target_player_id == "seat_6"
     assert decision.decision_note == "首夜随机覆盖中置位"
+
+
+def test_model_client_recovers_exact_response_wrapper_and_preserves_raw() -> None:
+    raw_response = json.dumps(
+        {
+            "response": {
+                "target_player_id": "seat_1",
+                "decision_note": "选择候选人。",
+            }
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        event = json.dumps(
+            {"type": "response.output_text.delta", "delta": raw_response},
+            ensure_ascii=False,
+        )
+        return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="agent_plan",
+        model_id="minimax-m3",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": None,
+            "max_tokens_mode": "manual",
+            "max_tokens": 512,
+        },
+    )
+    context = _target_action_context()
+    context["prompt_template_version"] = 4
+
+    decision = asyncio.run(
+        client.generate_action_decision(
+            action_context=context,
+            attempt_id="v2_model_response_wrapper",
+            target=target,
+        )
+    )
+
+    assert decision.target_player_id == "seat_1"
+    assert decision.decision_note == "选择候选人。"
+    assert decision.raw_response == raw_response
+    assert decision.repair_kind == "response_wrapper_recovered"
 
 
 def test_model_client_repairs_identical_duplicate_json_once_and_preserves_raw() -> None:
@@ -680,7 +731,8 @@ def test_model_client_repairs_identical_duplicate_json_once_and_preserves_raw() 
     )
     context = {
         "model_context_schema_version": 11,
-        "prompt_template_version": 3,
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "candidates": [{"player_id": "seat_6"}],
         "response": {
             "kind": "target",
             "target_policy": {
@@ -741,7 +793,11 @@ def test_model_client_ambiguous_duplicate_json_keeps_exact_raw_response() -> Non
             client.generate_action_decision(
                 action_context={
                     "model_context_schema_version": 11,
-                    "prompt_template_version": 3,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "candidates": [
+                        {"player_id": "seat_5"},
+                        {"player_id": "seat_6"},
+                    ],
                     "response": {
                         "kind": "target",
                         "target_policy": {
@@ -789,7 +845,8 @@ def test_model_client_rejects_non_string_target_in_duplicate_json() -> None:
             client.generate_action_decision(
                 action_context={
                     "model_context_schema_version": 11,
-                    "prompt_template_version": 3,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "candidates": [{"player_id": "seat_1"}],
                     "response": {
                         "kind": "target",
                         "target_policy": {"mode": "required"},
@@ -840,7 +897,8 @@ def test_model_client_treats_different_extra_payload_fields_as_ambiguous() -> No
             client.generate_action_decision(
                 action_context={
                     "model_context_schema_version": 11,
-                    "prompt_template_version": 3,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "candidates": [{"player_id": "seat_6"}],
                     "response": {
                         "kind": "target",
                         "target_policy": {"mode": "required"},
@@ -889,7 +947,7 @@ def test_model_client_rejects_truncated_second_speech_object_without_fragment_fa
             client.generate_action_decision(
                 action_context={
                     "model_context_schema_version": 11,
-                    "prompt_template_version": 3,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
                     "response": {
                         "kind": "speech",
                         "speech": {"mode": "required"},
@@ -1567,7 +1625,7 @@ def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> No
         client.generate_action_decision(
             action_context={
                 "model_context_schema_version": 11,
-                "prompt_template_version": 3,
+                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
                 "action_type": "sheriff_withdraw",
                 "candidates": [],
                 "response": {
@@ -1631,7 +1689,7 @@ def test_sheriff_withdraw_quality_error_keeps_exact_raw_response() -> None:
             client.generate_action_decision(
                 action_context={
                     "model_context_schema_version": 11,
-                    "prompt_template_version": 3,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
                     "action_type": "sheriff_withdraw",
                     "candidates": [],
                     "response": {

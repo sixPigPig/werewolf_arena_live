@@ -1795,6 +1795,7 @@ class V2NightEngine:
                         round_no=state.round_no,
                         players=state.players,
                     ),
+                    "sheriff_player_id": state.sheriff_player_id,
                     "knowledge_fact_ids": list(knowledge_fact_ids),
                     "knowledge_projection_hash": knowledge_hash,
                     "candidates": [

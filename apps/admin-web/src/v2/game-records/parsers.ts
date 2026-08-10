@@ -265,6 +265,32 @@ export function parseV2ModelRequestSummary(
         );
   return {
     attempt_id: text(record.attempt_id),
+    decision_family_id:
+      record.decision_family_id === undefined
+        ? null
+        : nullableText(record.decision_family_id),
+    retry_scope:
+      record.retry_scope === undefined
+        ? "action"
+        : oneOf(record.retry_scope, [
+            "action",
+            "same_action",
+            "batch_initial",
+            "batch_recovery",
+            "operator_retry",
+          ] as const),
+    vote_batch_stage:
+      record.vote_batch_stage === undefined
+        ? null
+        : nullableText(record.vote_batch_stage),
+    automatic_machine_format_attempt_count:
+      record.automatic_machine_format_attempt_count === undefined
+        ? null
+        : nullableInteger(record.automatic_machine_format_attempt_count, 0),
+    automatic_machine_format_budget:
+      record.automatic_machine_format_budget === undefined
+        ? null
+        : nullableInteger(record.automatic_machine_format_budget, 0),
     attempt_no:
       record.attempt_no === undefined ? 1 : integer(record.attempt_no, 1),
     cycle_attempt_no:

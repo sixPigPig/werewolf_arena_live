@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Iterable
+import hashlib
+import json
 import logging
 from typing import Any, Literal
 
 from app.v2.action_engine import (
     V2ActionEngine,
+    V2ActionResult,
     V2BroadcastPort,
     V2DecisionContract,
+    V2PreflightPauseFailure,
     V2SpeechSpec,
 )
 from app.v2.match_repository import (
@@ -26,7 +30,7 @@ from app.v2.model_context import (
     build_public_rule_contract,
     private_authoritative_facts,
 )
-from app.v2.model_context_contract import is_current_model_context_contract
+from app.v2.model_context_contract import is_supported_model_context_contract
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -60,6 +64,7 @@ _SUPPORTED_DAY_ACTIONS = {
 }
 _SHERIFF_PK_SPEECH_OBJECTIVE = "发表警长竞选平票 PK 发言。"
 _EXILE_PK_SPEECH_OBJECTIVE = "发表放逐平票 PK 发言。"
+_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET = 2
 _PUBLIC_SPEECH_MAX_CHARS = {
     "first_night_last_words": 200,
     "sheriff_campaign_speech": 300,
@@ -68,6 +73,35 @@ _PUBLIC_SPEECH_MAX_CHARS = {
     "exile_pk_speech": 300,
     "exile_last_words": 200,
 }
+
+
+def _vote_decision_family_id(
+    *,
+    batch_id: str,
+    action_type: str,
+    voter: V2MatchPlayer,
+    candidates: list[V2MatchPlayer],
+    projection_at_seq: int,
+    model_context_contract: dict[str, Any] | None,
+) -> str:
+    canonical = json.dumps(
+        {
+            "batch_id": batch_id,
+            "action_type": action_type,
+            "actor_id": voter.player_id,
+            "candidate_ids": [candidate.player_id for candidate in candidates],
+            "projection_at_seq": projection_at_seq,
+            "model_provider": voter.model_provider,
+            "model_id": voter.model_id,
+            "model_context_contract": model_context_contract,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"v2_decision_{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
 _PRIVATE_ROUND_MEMORY_MAX_CHARS = 400
 _DECISION_NOTE_MAX_CHARS = 80
 
@@ -683,7 +717,7 @@ class V2DayEngine:
             for candidate in candidates
         ]
         option_by_start = {str(option["target_player_id"]): option for option in options}
-        if not is_current_model_context_contract(state.model_context_contract):
+        if not is_supported_model_context_contract(state.model_context_contract):
             raise V2DayRuntimeError("unsupported_model_context_contract")
         decision = await self._player_action(
             game_id=state.game_id,
@@ -1013,8 +1047,22 @@ class V2DayEngine:
             eligible = [item for item in candidates if item.player_id != voter.player_id]
             if eligible:
                 prepared.append((voter, eligible))
+        decision_family_ids = [
+            _vote_decision_family_id(
+                batch_id=batch_id,
+                action_type=action_type,
+                voter=voter,
+                candidates=eligible,
+                projection_at_seq=public_cutoff_record_seq,
+                model_context_contract=state.model_context_contract,
+            )
+            for voter, eligible in prepared
+        ]
+        machine_format_failure_counts = [0 for _item in prepared]
+        latest_failure_results: list[V2ActionResult | None] = [None for _item in prepared]
 
         async def request_vote(
+            index: int,
             voter: V2MatchPlayer,
             eligible: list[V2MatchPlayer],
             *,
@@ -1023,9 +1071,10 @@ class V2DayEngine:
                 "concurrent_recovery",
                 "sequential_recovery",
             ],
-        ) -> V2ModelDecision | None:
+            preflight_pause_failure: V2PreflightPauseFailure | None = None,
+        ) -> V2ActionResult:
             isolated = stage != "sequential_recovery"
-            return await self._player_action(
+            result = await self._player_action(
                 game_id=game_id,
                 player=voter,
                 broadcaster=broadcaster,
@@ -1053,21 +1102,39 @@ class V2DayEngine:
                 isolated_failure=isolated,
                 allow_failure=isolated,
                 batch_id=batch_id,
+                decision_family_id=decision_family_ids[index],
+                prior_machine_format_failures=machine_format_failure_counts[index],
+                automatic_machine_format_budget=(_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET),
+                preflight_pause_failure=preflight_pause_failure,
+                return_result=True,
             )
+            if not isinstance(result, V2ActionResult):
+                return V2ActionResult(decision=result)
+            return result
+
+        def observe_failure(index: int, result: V2ActionResult) -> None:
+            failure = result.failure
+            if failure is None:
+                return
+            machine_format_failure_counts[index] += failure.machine_format_failure_count
+            latest_failure_results[index] = result
 
         # All non-blocking attempts use the same frozen public cutoff. Initial
         # failures receive one more isolated concurrent attempt; only voters
         # still missing after that enter the blocking path one at a time. This
         # preserves durable pause/operator-retry semantics without publishing
         # a partial tally.
-        decisions = list(
+        initial_results = list(
             await asyncio.gather(
                 *(
-                    request_vote(voter, eligible, stage="concurrent_initial")
-                    for voter, eligible in prepared
+                    request_vote(index, voter, eligible, stage="concurrent_initial")
+                    for index, (voter, eligible) in enumerate(prepared)
                 )
             )
         )
+        for index, result in enumerate(initial_results):
+            observe_failure(index, result)
+        decisions = [result.decision for result in initial_results]
         failed_indexes = [index for index, decision in enumerate(decisions) if decision is None]
         initial_failed_voter_ids = [prepared[index][0].player_id for index in failed_indexes]
         if failed_indexes:
@@ -1084,30 +1151,41 @@ class V2DayEngine:
                 },
             )
 
-            concurrent_recovery_decisions = list(
+            concurrent_recovery_indexes = [
+                index
+                for index in failed_indexes
+                if machine_format_failure_counts[index] < _VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET
+            ]
+            concurrent_recovery_index_set = set(concurrent_recovery_indexes)
+            concurrent_recovery_results = list(
                 await asyncio.gather(
                     *(
                         request_vote(
+                            index,
                             prepared[index][0],
                             prepared[index][1],
                             stage="concurrent_recovery",
                         )
-                        for index in failed_indexes
+                        for index in concurrent_recovery_indexes
                     )
                 )
             )
-            still_failed_indexes: list[int] = []
+            still_failed_indexes: list[int] = [
+                index for index in failed_indexes if index not in concurrent_recovery_index_set
+            ]
             concurrent_recovered_voter_ids: list[str] = []
-            for index, decision in zip(
-                failed_indexes,
-                concurrent_recovery_decisions,
+            for index, result in zip(
+                concurrent_recovery_indexes,
+                concurrent_recovery_results,
                 strict=True,
             ):
-                decisions[index] = decision
-                if decision is None:
+                observe_failure(index, result)
+                decisions[index] = result.decision
+                if result.decision is None:
                     still_failed_indexes.append(index)
                 else:
                     concurrent_recovered_voter_ids.append(prepared[index][0].player_id)
+            still_failed_indexes.sort()
             still_failed_voter_ids = [
                 prepared[index][0].player_id for index in still_failed_indexes
             ]
@@ -1128,11 +1206,37 @@ class V2DayEngine:
             for index in still_failed_indexes:
                 self._actions.check_cancellation(game_id)
                 voter, eligible = prepared[index]
-                decisions[index] = await request_vote(
+                preflight_pause_failure = None
+                latest_failure_result = latest_failure_results[index]
+                latest_failure = (
+                    latest_failure_result.failure if latest_failure_result is not None else None
+                )
+                if machine_format_failure_counts[index] >= (_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET):
+                    if (
+                        latest_failure_result is None
+                        or latest_failure is None
+                        or latest_failure_result.action_id is None
+                        or latest_failure.last_machine_format_attempt_id is None
+                        or latest_failure.last_machine_format_failure_code is None
+                    ):
+                        raise V2DayRuntimeError("decision_family_retry_lineage_missing")
+                    preflight_pause_failure = V2PreflightPauseFailure(
+                        failure_code=(latest_failure.last_machine_format_failure_code),
+                        failure_category="machine_format",
+                        source_action_id=latest_failure_result.action_id,
+                        source_attempt_id=(latest_failure.last_machine_format_attempt_id),
+                        automatic_machine_format_attempt_count=(
+                            machine_format_failure_counts[index]
+                        ),
+                    )
+                result = await request_vote(
+                    index,
                     voter,
                     eligible,
                     stage="sequential_recovery",
+                    preflight_pause_failure=preflight_pause_failure,
                 )
+                decisions[index] = result.decision
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_recovery_completed",
@@ -1546,7 +1650,7 @@ class V2DayEngine:
         state: V2MatchSnapshot,
         broadcaster: V2BroadcastPort,
     ) -> bool:
-        if not is_current_model_context_contract(state.model_context_contract):
+        if not is_supported_model_context_contract(state.model_context_contract):
             raise V2DayRuntimeError("unsupported_model_context_contract")
 
         players = tuple(
@@ -1781,7 +1885,12 @@ class V2DayEngine:
         isolated_failure: bool = False,
         allow_failure: bool = False,
         batch_id: str | None = None,
-    ) -> V2ModelDecision | None:
+        decision_family_id: str | None = None,
+        prior_machine_format_failures: int = 0,
+        automatic_machine_format_budget: int | None = None,
+        preflight_pause_failure: V2PreflightPauseFailure | None = None,
+        return_result: bool = False,
+    ) -> V2ModelDecision | V2ActionResult | None:
         self._actions.check_cancellation(game_id)
         state = frozen_state or self._repository.snapshot(game_id)
         if projection_at_seq is not None and (
@@ -1823,89 +1932,105 @@ class V2DayEngine:
             raise V2DayRuntimeError("target action requires target_optional")
         if resolved_contract.kind != "target" and target_optional is not None:
             raise V2DayRuntimeError("non-target action cannot set target_optional")
-        decision = await self._actions.run_player_decision(
-            game_id=game_id,
-            broadcaster=broadcaster,
-            spec=V2SpeechSpec(
-                action_type=action_type,
-                phase_id=state.phase_id,
-                required_phase_state=state.phase_state,
-                objective=objective,
-                success_live_state="ready",
-                success_phase_state=state.phase_state,
-                actor_kind="player",
-                actor_id=player.player_id,
-                audience=audience,
-                speaker=player.tts_speaker,
-                dialect=player.tts_dialect,
-                model_provider=player.model_provider,
-                model_id=player.model_id,
-                model_supports_thinking=player.model_supports_thinking,
-                model_parameters=player.model_parameters,
-                output_kind=output_kind,
-                decision_contract=resolved_contract,
-                allowed_target_ids=(
-                    tuple(item.player_id for item in candidates)
-                    if resolved_contract.kind == "target"
-                    else None
-                ),
-                model_players=tuple(
-                    V2ModelPlayerReference(
-                        player_id=item.player_id,
-                        seat=item.seat,
-                        display_name=item.display_name,
-                    )
-                    for item in state.players
-                ),
-                context={
-                    "round_no": state.round_no,
-                    **build_actor_information(
-                        player_id=player.player_id,
-                        seat=player.seat,
-                        role_key=player.role_key,
-                        team=player.team,
-                        persona=player.persona,
-                        alive=player.alive,
-                        sheriff_player_id=state.sheriff_player_id,
-                        sheriff_badge_state=state.sheriff_badge_state,
-                        rule=state.rule,
-                        player_state=player.state,
-                        private_facts=private_facts,
-                        current_action_type=action_type,
-                    ),
-                    "private_authoritative_facts": private_authoritative_facts(
-                        private_facts,
-                        owner_scope="player",
-                        owner_id=player.player_id,
-                    ),
-                    "public_match_state": build_public_match_state(
-                        round_no=state.round_no,
-                        players=state.players,
-                    ),
-                    "candidates": [
-                        {
-                            "player_id": item.player_id,
-                            "seat": item.seat,
-                            "display_name": item.display_name,
-                        }
-                        for item in candidates
-                    ],
-                    "public_history": list(state.public_history),
-                    "sheriff_player_id": state.sheriff_player_id,
-                    "public_rule_contract": build_public_rule_contract(
-                        rule=state.rule,
-                        max_rounds=state.max_rounds,
-                    ),
-                    **(extra_context or {}),
-                },
-                defer_presentation=defer_presentation,
-                isolated_failure=isolated_failure,
-                batch_id=batch_id,
-                projection_at_seq=projection_at_seq,
+        spec = V2SpeechSpec(
+            action_type=action_type,
+            phase_id=state.phase_id,
+            required_phase_state=state.phase_state,
+            objective=objective,
+            success_live_state="ready",
+            success_phase_state=state.phase_state,
+            actor_kind="player",
+            actor_id=player.player_id,
+            audience=audience,
+            speaker=player.tts_speaker,
+            dialect=player.tts_dialect,
+            model_provider=player.model_provider,
+            model_id=player.model_id,
+            model_supports_thinking=player.model_supports_thinking,
+            model_parameters=player.model_parameters,
+            output_kind=output_kind,
+            decision_contract=resolved_contract,
+            allowed_target_ids=(
+                tuple(item.player_id for item in candidates)
+                if resolved_contract.kind == "target"
+                else None
             ),
+            model_players=tuple(
+                V2ModelPlayerReference(
+                    player_id=item.player_id,
+                    seat=item.seat,
+                    display_name=item.display_name,
+                )
+                for item in state.players
+            ),
+            context={
+                "round_no": state.round_no,
+                **build_actor_information(
+                    player_id=player.player_id,
+                    seat=player.seat,
+                    role_key=player.role_key,
+                    team=player.team,
+                    persona=player.persona,
+                    alive=player.alive,
+                    sheriff_player_id=state.sheriff_player_id,
+                    sheriff_badge_state=state.sheriff_badge_state,
+                    rule=state.rule,
+                    player_state=player.state,
+                    private_facts=private_facts,
+                    current_action_type=action_type,
+                ),
+                "private_authoritative_facts": private_authoritative_facts(
+                    private_facts,
+                    owner_scope="player",
+                    owner_id=player.player_id,
+                ),
+                "public_match_state": build_public_match_state(
+                    round_no=state.round_no,
+                    players=state.players,
+                ),
+                "candidates": [
+                    {
+                        "player_id": item.player_id,
+                        "seat": item.seat,
+                        "display_name": item.display_name,
+                    }
+                    for item in candidates
+                ],
+                "public_history": list(state.public_history),
+                "sheriff_player_id": state.sheriff_player_id,
+                "public_rule_contract": build_public_rule_contract(
+                    rule=state.rule,
+                    max_rounds=state.max_rounds,
+                ),
+                **(extra_context or {}),
+            },
+            defer_presentation=defer_presentation,
+            isolated_failure=isolated_failure,
+            batch_id=batch_id,
+            projection_at_seq=projection_at_seq,
+            decision_family_id=decision_family_id,
+            prior_machine_format_failures=prior_machine_format_failures,
+            automatic_machine_format_budget=automatic_machine_format_budget,
+            preflight_pause_failure=preflight_pause_failure,
         )
+        if return_result and callable(getattr(self._actions, "run_player_decision_result", None)):
+            result = await self._actions.run_player_decision_result(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+            )
+        else:
+            decision = await self._actions.run_player_decision(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+            )
+            result = V2ActionResult(decision=decision)
+        decision = result.decision if result is not None else None
         if decision is None and not allow_failure:
             raise V2DayRuntimeError(f"{action_type}_failed")
+        if return_result:
+            return result
         return decision
 
     def _record_speech(

@@ -1870,6 +1870,58 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
   });
 
+  it("shows decision-family and automatic format retry telemetry", async () => {
+    const decisionFamilyId = "v2_decision_family_vote_1";
+    stubRecordFetch({
+      ...retryDetail,
+      title: "格式重试可观测性验收",
+      model_requests: [
+        {
+          ...retryDetail.model_requests[0],
+          decision_family_id: decisionFamilyId,
+          retry_scope: "batch_initial",
+          vote_batch_stage: "concurrent_initial",
+          automatic_machine_format_attempt_count: 1,
+          automatic_machine_format_budget: 2,
+          failure_category: "machine_format",
+          failure_code: "model_decision_structured_speech_leak",
+        },
+        {
+          ...retryDetail.model_requests[1],
+          decision_family_id: decisionFamilyId,
+          retry_scope: "same_action",
+          vote_batch_stage: "concurrent_initial",
+          automatic_machine_format_attempt_count: null,
+          automatic_machine_format_budget: 2,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "格式重试可观测性验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getAllByText(new RegExp(decisionFamilyId))).not.toHaveLength(0);
+    expect(
+      within(dialog).getAllByText("同动作自动重试（same_action）"),
+    ).not.toHaveLength(0);
+    expect(
+      within(dialog).getByText("批次初始（batch_initial）"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getAllByText("并发初始（concurrent_initial）"),
+    ).not.toHaveLength(0);
+    expect(within(dialog).getByText("格式尝试 / 自动预算")).toBeVisible();
+    expect(within(dialog).getByText("1 / 2")).toBeVisible();
+    expect(within(dialog).getAllByText("格式 1 / 2")).toHaveLength(2);
+  });
+
   it("shows deterministic template variables, final text and frozen speaker", async () => {
     stubRecordFetch(templateDetail);
     const user = userEvent.setup();

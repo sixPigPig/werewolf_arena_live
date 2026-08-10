@@ -1235,6 +1235,10 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
   const responseHeaderCount = responseHeaders
     ? Object.keys(responseHeaders).length
     : 0;
+  const machineFormatProgress = automaticMachineFormatProgressLabel(
+    item.modelRequests,
+    request?.decision_family_id ?? null,
+  );
   return (
     <div className="v2-inspector-panel">
       <Descriptions
@@ -1287,6 +1291,32 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
                 : request
                   ? "1 次"
                   : "—",
+          },
+          {
+            key: "decision-family",
+            label: "决策族",
+            children: request?.decision_family_id ? (
+              <Typography.Text copyable>
+                {request.decision_family_id}
+              </Typography.Text>
+            ) : (
+              "—"
+            ),
+          },
+          {
+            key: "retry-scope",
+            label: "重试范围",
+            children: request ? retryScopeLabel(request.retry_scope) : "—",
+          },
+          {
+            key: "vote-batch-stage",
+            label: "投票批阶段",
+            children: voteBatchStageLabel(request?.vote_batch_stage ?? null),
+          },
+          {
+            key: "machine-format-progress",
+            label: "格式尝试 / 自动预算",
+            children: machineFormatProgress ?? "—",
           },
           {
             key: "stored-audience",
@@ -1450,26 +1480,49 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
         <section aria-label="模型请求尝试">
           <Typography.Text strong>模型请求尝试</Typography.Text>
           <ol>
-            {item.modelRequests.map((attempt) => (
-              <li key={attempt.attempt_id}>
-                <Space size={8} wrap>
-                  <Tag color={statusColor(attempt.status)}>
-                    第 {attempt.attempt_no} 次 · 周期 {attempt.retry_cycle} ·{" "}
-                    {statusLabel(attempt.status)}
-                  </Tag>
-                  <Typography.Text copyable>
-                    {attempt.attempt_id}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    {attempt.failure_category
-                      ? `${attempt.failure_category} · ${attempt.failure_code ?? "失败"}`
-                      : attempt.failure_code ??
-                      attempt.provider_request_id ??
-                      formatDuration(attempt.completed_ms)}
-                  </Typography.Text>
-                </Space>
-              </li>
-            ))}
+            {item.modelRequests.map((attempt, index) => {
+              const attemptMachineFormatProgress =
+                automaticMachineFormatProgressLabel(
+                  item.modelRequests.slice(0, index + 1),
+                  attempt.decision_family_id,
+                );
+              return (
+                <li key={attempt.attempt_id}>
+                  <Space size={8} wrap>
+                    <Tag color={statusColor(attempt.status)}>
+                      第 {attempt.attempt_no} 次 · 周期 {attempt.retry_cycle} ·{" "}
+                      {statusLabel(attempt.status)}
+                    </Tag>
+                    <Typography.Text copyable>
+                      {attempt.attempt_id}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      {attempt.failure_category
+                        ? `${attempt.failure_category} · ${attempt.failure_code ?? "失败"}`
+                        : attempt.failure_code ??
+                          attempt.provider_request_id ??
+                          formatDuration(attempt.completed_ms)}
+                    </Typography.Text>
+                    {attempt.decision_family_id ? (
+                      <Typography.Text copyable type="secondary">
+                        决策族 {attempt.decision_family_id}
+                      </Typography.Text>
+                    ) : null}
+                    {attempt.retry_scope !== "action" ? (
+                      <Tag>{retryScopeLabel(attempt.retry_scope)}</Tag>
+                    ) : null}
+                    {attempt.vote_batch_stage ? (
+                      <Tag>{voteBatchStageLabel(attempt.vote_batch_stage)}</Tag>
+                    ) : null}
+                    {attemptMachineFormatProgress ? (
+                      <Typography.Text type="secondary">
+                        格式 {attemptMachineFormatProgress}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
+                </li>
+              );
+            })}
           </ol>
         </section>
       ) : null}
@@ -1752,6 +1805,57 @@ function timeoutScopeLabel(scope: string | null) {
   if (scope === "attempt_budget") return "请求尝试预算（attempt_budget）";
   if (scope === "action_budget") return "动作总预算（action_budget）";
   return scope;
+}
+
+function retryScopeLabel(scope: V2ModelRequestSummary["retry_scope"]) {
+  const labels: Record<V2ModelRequestSummary["retry_scope"], string> = {
+    action: "普通动作（action）",
+    same_action: "同动作自动重试（same_action）",
+    batch_initial: "批次初始（batch_initial）",
+    batch_recovery: "批次恢复（batch_recovery）",
+    operator_retry: "操作员重试（operator_retry）",
+  };
+  return labels[scope];
+}
+
+function voteBatchStageLabel(stage: string | null) {
+  if (stage === null) return "—";
+  if (stage === "concurrent_initial") {
+    return "并发初始（concurrent_initial）";
+  }
+  if (stage === "concurrent_recovery") {
+    return "并发恢复（concurrent_recovery）";
+  }
+  if (stage === "sequential_recovery") {
+    return "串行恢复（sequential_recovery）";
+  }
+  return stage;
+}
+
+function automaticMachineFormatProgressLabel(
+  requests: V2ModelRequestSummary[],
+  decisionFamilyId: string | null,
+) {
+  const scopedRequests =
+    decisionFamilyId === null
+      ? requests
+      : requests.filter(
+          (request) => request.decision_family_id === decisionFamilyId,
+        );
+  const attemptCounts = scopedRequests.flatMap((request) =>
+    request.automatic_machine_format_attempt_count === null
+      ? []
+      : [request.automatic_machine_format_attempt_count],
+  );
+  const budgets = scopedRequests.flatMap((request) =>
+    request.automatic_machine_format_budget === null
+      ? []
+      : [request.automatic_machine_format_budget],
+  );
+  if (attemptCounts.length === 0 && budgets.length === 0) return null;
+  const attemptCount = Math.max(0, ...attemptCounts);
+  const budget = budgets.length === 0 ? "—" : Math.max(...budgets);
+  return `${attemptCount} / ${budget}`;
 }
 
 function modelBindingHealthLabel(status: string | null) {

@@ -22,7 +22,7 @@ from app.v2.models import (
 )
 from app.v2.model_context_contract import (
     frozen_model_context_contract,
-    supports_current_model_context_contract,
+    supports_model_context_contract,
 )
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
@@ -139,7 +139,7 @@ class V2ActionRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=False)
             _raise_if_stop_requested(db, game)
-            if not supports_current_model_context_contract(game.rule_snapshot):
+            if not supports_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
             try:
                 validate_players_snapshot_model_configurations(game.players_snapshot)
@@ -405,7 +405,7 @@ class V2ActionRepository:
                 require_fence=self._enforce_execution_fence,
             )
             _raise_if_stop_requested(db, game)
-            if not supports_current_model_context_contract(game.rule_snapshot):
+            if not supports_model_context_contract(game.rule_snapshot):
                 raise V2RepositoryError("unsupported_model_context_contract")
             expected_live_state = "awaiting_observation" if best_effort else "ready"
             if (
@@ -1103,7 +1103,7 @@ class V2ActionRepository:
         self,
         *,
         claim: V2ActionClaim,
-        attempt_id: str,
+        attempt_id: str | None,
         failure_code: str,
         recovery: dict[str, Any],
     ) -> None:
@@ -1156,6 +1156,21 @@ class V2ActionRepository:
                 existing.lease_owner = None
                 existing.lease_expires_at = None
             recovery_audience = _model_action_recovery_audience(existing)
+            decision_family_id = recovery.get("decision_family_id")
+            automatic_machine_format_attempt_count = recovery.get(
+                "automatic_machine_format_attempt_count"
+            )
+            exhaustion_scope = recovery.get("exhaustion_scope")
+            exhaustion_scope = (
+                exhaustion_scope if exhaustion_scope in {"action", "decision_family"} else "action"
+            )
+            source_action_id = recovery.get("source_action_id")
+            source_attempt_id = recovery.get("source_attempt_id")
+            reason_code = (
+                "decision_family_budget_exhausted"
+                if exhaustion_scope == "decision_family"
+                else "model_attempts_exhausted"
+            )
             _append_event(
                 db,
                 game=game,
@@ -1169,6 +1184,13 @@ class V2ActionRepository:
                     "failure_category": existing.failure_category,
                     "attempt_no": existing.attempt_no,
                     "retry_cycle": existing.retry_cycle,
+                    "decision_family_id": decision_family_id,
+                    "automatic_machine_format_attempt_count": (
+                        automatic_machine_format_attempt_count
+                    ),
+                    "exhaustion_scope": exhaustion_scope,
+                    "source_action_id": source_action_id,
+                    "source_attempt_id": source_attempt_id,
                 },
             )
             _append_event(
@@ -1182,6 +1204,10 @@ class V2ActionRepository:
                     "recovery_id": existing.recovery_id,
                     "request_hash": existing.request_hash,
                     "state": existing.state,
+                    "decision_family_id": decision_family_id,
+                    "exhaustion_scope": exhaustion_scope,
+                    "source_action_id": source_action_id,
+                    "source_attempt_id": source_attempt_id,
                 },
             )
             _append_event(
@@ -1194,10 +1220,17 @@ class V2ActionRepository:
                     "action_id": claim.action_id,
                     "attempt_id": attempt_id,
                     "failure_code": failure_code,
-                    "reason_code": "model_attempts_exhausted",
+                    "reason_code": reason_code,
                     "recovery_id": existing.recovery_id,
                     "request_hash": existing.request_hash,
                     "failure_category": existing.failure_category,
+                    "decision_family_id": decision_family_id,
+                    "automatic_machine_format_attempt_count": (
+                        automatic_machine_format_attempt_count
+                    ),
+                    "exhaustion_scope": exhaustion_scope,
+                    "source_action_id": source_action_id,
+                    "source_attempt_id": source_attempt_id,
                 },
             )
 

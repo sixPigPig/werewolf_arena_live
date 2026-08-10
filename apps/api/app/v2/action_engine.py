@@ -89,7 +89,7 @@ class V2ModelPort(Protocol):
         self,
         *,
         action_context: dict[str, Any],
-        attempt_id: str,
+        attempt_id: str | None,
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
     ) -> V2ModelDecision: ...
@@ -182,8 +182,21 @@ class V2SpeechSpec:
     isolated_failure: bool = False
     batch_id: str | None = None
     projection_at_seq: int | None = None
+    decision_family_id: str | None = None
+    prior_machine_format_failures: int = 0
+    automatic_machine_format_budget: int | None = None
+    preflight_pause_failure: V2PreflightPauseFailure | None = None
 
     def __post_init__(self) -> None:
+        if self.prior_machine_format_failures < 0:
+            raise ValueError("prior_machine_format_failures must be non-negative")
+        if (
+            self.automatic_machine_format_budget is not None
+            and self.automatic_machine_format_budget < 0
+        ):
+            raise ValueError("automatic_machine_format_budget must be non-negative")
+        if self.preflight_pause_failure is not None and self.isolated_failure:
+            raise ValueError("preflight pause requires a blocking action")
         if isinstance(self.context, dict) and "projection_at_seq" in self.context:
             raise ValueError("projection_at_seq must use the dedicated spec field")
         if self.projection_at_seq is None:
@@ -209,8 +222,41 @@ class V2SpeechSpec:
 
 
 @dataclass(frozen=True)
+class V2PreflightPauseFailure:
+    failure_code: str
+    failure_category: str
+    source_action_id: str
+    source_attempt_id: str
+    automatic_machine_format_attempt_count: int
+
+
+@dataclass(frozen=True)
+class V2ActionFailure:
+    code: str
+    category: str | None
+    terminal_attempt_id: str | None
+    machine_format_failure_count: int = 0
+    last_machine_format_attempt_id: str | None = None
+    last_machine_format_failure_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.machine_format_failure_count < 0:
+            raise ValueError("machine_format_failure_count must be non-negative")
+        if self.machine_format_failure_count > 0 and (
+            not self.last_machine_format_attempt_id or not self.last_machine_format_failure_code
+        ):
+            raise ValueError("machine-format failure lineage is required")
+
+
+@dataclass(frozen=True)
 class V2ActionResult:
+    action_id: str | None = None
     decision: V2ModelDecision | None = None
+    failure: V2ActionFailure | None = None
+
+    def __post_init__(self) -> None:
+        if self.failure is not None and not self.action_id:
+            raise ValueError("failed action result requires an action_id")
 
 
 @dataclass(frozen=True)
@@ -549,13 +595,26 @@ class V2ActionEngine:
         broadcaster: V2BroadcastPort,
         spec: V2SpeechSpec,
     ) -> V2ModelDecision | None:
-        result = await self._run_model_action(
+        result = await self.run_player_decision_result(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=spec,
+        )
+        return result.decision if result is not None else None
+
+    async def run_player_decision_result(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+    ) -> V2ActionResult | None:
+        return await self._run_model_action(
             game_id=game_id,
             broadcaster=broadcaster,
             spec=spec,
             decision=True,
         )
-        return result.decision if result is not None else None
 
     async def present_player_decision(
         self,
@@ -646,6 +705,9 @@ class V2ActionEngine:
         model_attempt_no: int | None = None
         model_request_completed = False
         model_failure_recorded = False
+        machine_format_failure_count = 0
+        last_machine_format_attempt_id: str | None = None
+        last_machine_format_failure_code: str | None = None
         tts_attempt_id: str | None = None
         try:
             check_cancellation()
@@ -753,6 +815,44 @@ class V2ActionEngine:
                 retry_cycle = 1
                 previous_attempt_id: str | None = None
                 model_attempt_no = 0
+                if spec.preflight_pause_failure is not None:
+                    preflight = spec.preflight_pause_failure
+                    self._repository.append_event(
+                        game_id=claim.game_id,
+                        event_type="model_automatic_retry_suppressed",
+                        audience=model_audience,
+                        payload={
+                            "action_id": claim.action_id,
+                            "decision_family_id": spec.decision_family_id,
+                            "source_action_id": preflight.source_action_id,
+                            "source_attempt_id": preflight.source_attempt_id,
+                            "failure_code": preflight.failure_code,
+                            "failure_category": preflight.failure_category,
+                            "automatic_machine_format_attempt_count": (
+                                preflight.automatic_machine_format_attempt_count
+                            ),
+                            "suppression_reason": "decision_family_budget_exhausted",
+                        },
+                    )
+                    await self._pause_for_model_retry(
+                        claim=claim,
+                        attempt_id=None,
+                        failure_code=preflight.failure_code,
+                        recovery=_model_action_recovery_snapshot(
+                            spec=spec,
+                            target=model_target,
+                            request_payload=request_payload,
+                            model_context=model_context,
+                            failure_category=preflight.failure_category,
+                            attempt_no=0,
+                            retry_cycle=retry_cycle,
+                            machine_format_failure_count=0,
+                        ),
+                        broadcaster=broadcaster,
+                        audience=spec.audience,
+                    )
+                    previous_attempt_id = preflight.source_attempt_id
+                    retry_cycle += 1
                 while model_decision is None:
                     model_started_at = time.monotonic()
                     model_deadline = model_started_at + retry_policy.action_total_seconds
@@ -835,6 +935,22 @@ class V2ActionEngine:
                             payload={
                                 "action_id": claim.action_id,
                                 "attempt_id": model_attempt_id,
+                                "decision_family_id": spec.decision_family_id,
+                                "prior_machine_format_failures": (
+                                    spec.prior_machine_format_failures
+                                ),
+                                "automatic_machine_format_budget": (
+                                    spec.automatic_machine_format_budget
+                                ),
+                                "automatic_machine_format_attempt_count": (
+                                    min(
+                                        spec.prior_machine_format_failures
+                                        + machine_format_failure_count,
+                                        spec.automatic_machine_format_budget,
+                                    )
+                                    if spec.automatic_machine_format_budget is not None
+                                    else None
+                                ),
                                 "attempt_no": model_attempt_no,
                                 "cycle_attempt_no": cycle_attempt_no,
                                 "retry_cycle": retry_cycle,
@@ -999,6 +1115,21 @@ class V2ActionEngine:
                             # object across an automatic or operator-triggered retry.
                             model_decision = None
                             disposition = model_failure_disposition(exc)
+                            if disposition.category == "machine_format":
+                                if retry_cycle == 1:
+                                    machine_format_failure_count += 1
+                                last_machine_format_attempt_id = model_attempt_id
+                                last_machine_format_failure_code = exc.code
+                            family_machine_format_attempt_count = (
+                                spec.prior_machine_format_failures + machine_format_failure_count
+                            )
+                            family_retry_available = (
+                                disposition.category != "machine_format"
+                                or retry_cycle > 1
+                                or spec.automatic_machine_format_budget is None
+                                or family_machine_format_attempt_count
+                                < spec.automatic_machine_format_budget
+                            )
                             remaining = model_deadline - time.monotonic()
                             delay_seconds = _model_retry_delay_seconds(
                                 disposition=disposition,
@@ -1014,6 +1145,7 @@ class V2ActionEngine:
                             )
                             retryable = (
                                 disposition.retryable
+                                and family_retry_available
                                 and cycle_attempt_no
                                 < min(retry_policy.max_attempts, disposition.max_attempts)
                                 and remaining > delay_seconds + required_retry_window
@@ -1022,43 +1154,50 @@ class V2ActionEngine:
                             binding_health_status = _model_binding_health_status(
                                 binding_failure_streak
                             )
+                            failure_payload = _model_failure_payload(
+                                action_id=claim.action_id,
+                                attempt_id=model_attempt_id,
+                                attempt_no=model_attempt_no,
+                                max_attempts=retry_policy.max_attempts,
+                                retry_cycle=retry_cycle,
+                                cycle_attempt_no=cycle_attempt_no,
+                                exc=exc,
+                                failure_category=disposition.category,
+                                retryable=disposition.retryable,
+                                action_recoverable=disposition.pausable,
+                                terminal=not retryable,
+                                attempt_budget_ms=round(retry_policy.attempt_total_seconds * 1000),
+                                action_budget_ms=round(retry_policy.action_total_seconds * 1000),
+                                action_elapsed_ms=round(
+                                    (time.monotonic() - model_started_at - model_queue_wait_seconds)
+                                    * 1000
+                                ),
+                                action_remaining_ms=max(
+                                    0,
+                                    round((model_deadline - time.monotonic()) * 1000),
+                                ),
+                                model_binding_failure_streak=(binding_failure_streak),
+                                model_binding_health_status=(binding_health_status),
+                            )
+                            if spec.decision_family_id is not None:
+                                failure_payload["decision_family_id"] = spec.decision_family_id
+                            if disposition.category == "machine_format":
+                                failure_payload["automatic_machine_format_attempt_count"] = (
+                                    min(
+                                        family_machine_format_attempt_count,
+                                        spec.automatic_machine_format_budget,
+                                    )
+                                    if spec.automatic_machine_format_budget is not None
+                                    else family_machine_format_attempt_count
+                                )
+                                failure_payload["automatic_machine_format_budget"] = (
+                                    spec.automatic_machine_format_budget
+                                )
                             self._repository.append_event(
                                 game_id=claim.game_id,
                                 event_type="model_request_failed",
                                 audience=model_audience,
-                                payload=_model_failure_payload(
-                                    action_id=claim.action_id,
-                                    attempt_id=model_attempt_id,
-                                    attempt_no=model_attempt_no,
-                                    max_attempts=retry_policy.max_attempts,
-                                    retry_cycle=retry_cycle,
-                                    cycle_attempt_no=cycle_attempt_no,
-                                    exc=exc,
-                                    failure_category=disposition.category,
-                                    retryable=disposition.retryable,
-                                    action_recoverable=disposition.pausable,
-                                    terminal=not retryable,
-                                    attempt_budget_ms=round(
-                                        retry_policy.attempt_total_seconds * 1000
-                                    ),
-                                    action_budget_ms=round(
-                                        retry_policy.action_total_seconds * 1000
-                                    ),
-                                    action_elapsed_ms=round(
-                                        (
-                                            time.monotonic()
-                                            - model_started_at
-                                            - model_queue_wait_seconds
-                                        )
-                                        * 1000
-                                    ),
-                                    action_remaining_ms=max(
-                                        0,
-                                        round((model_deadline - time.monotonic()) * 1000),
-                                    ),
-                                    model_binding_failure_streak=(binding_failure_streak),
-                                    model_binding_health_status=(binding_health_status),
-                                ),
+                                payload=failure_payload,
                             )
                             self._repository.append_event(
                                 game_id=claim.game_id,
@@ -1091,6 +1230,7 @@ class V2ActionEngine:
                                     payload={
                                         "action_id": claim.action_id,
                                         "attempt_id": model_attempt_id,
+                                        "decision_family_id": spec.decision_family_id,
                                         "next_attempt_id": next_attempt_id,
                                         "attempt_no": model_attempt_no,
                                         "next_attempt_no": model_attempt_no + 1,
@@ -1162,7 +1302,10 @@ class V2ActionEngine:
                                         ),
                                         audience=spec.audience,
                                     )
-                                return V2ActionResult(decision=technical_decision)
+                                return V2ActionResult(
+                                    action_id=claim.action_id,
+                                    decision=technical_decision,
+                                )
                             if (
                                 not spec.best_effort
                                 and not spec.isolated_failure
@@ -1180,6 +1323,7 @@ class V2ActionEngine:
                                         failure_category=disposition.category,
                                         attempt_no=model_attempt_no,
                                         retry_cycle=retry_cycle,
+                                        machine_format_failure_count=(machine_format_failure_count),
                                     ),
                                     broadcaster=broadcaster,
                                     audience=spec.audience,
@@ -1456,7 +1600,10 @@ class V2ActionEngine:
                         ),
                         audience=spec.audience,
                     )
-                return V2ActionResult(decision=model_decision)
+                return V2ActionResult(
+                    action_id=claim.action_id,
+                    decision=model_decision,
+                )
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
             tts_client = self._tts_client_for_claim(claim)
@@ -1520,7 +1667,10 @@ class V2ActionEngine:
                         ),
                         audience=spec.audience,
                     )
-                return V2ActionResult(decision=model_decision)
+                return V2ActionResult(
+                    action_id=claim.action_id,
+                    decision=model_decision,
+                )
             if identity.voice_asset_id is None:
                 raise V2RepositoryError("enabled TTS action has no voice asset")
             tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
@@ -1670,7 +1820,10 @@ class V2ActionEngine:
                     ),
                     audience=spec.audience,
                 )
-            return V2ActionResult(decision=model_decision)
+            return V2ActionResult(
+                action_id=claim.action_id,
+                decision=model_decision,
+            )
         except asyncio.CancelledError:
             if recorder is not None:
                 recorder.discard_finalized()
@@ -1692,6 +1845,7 @@ class V2ActionEngine:
                     failure_payload: dict[str, Any] = {
                         "action_id": claim.action_id,
                         "attempt_id": model_attempt_id,
+                        "decision_family_id": spec.decision_family_id,
                         "attempt_no": model_attempt_no,
                         "max_attempts": self._model_retry_policy.max_attempts,
                         "failure_kind": failure_kind,
@@ -1757,6 +1911,23 @@ class V2ActionEngine:
                     audience=identity.audience,
                 )
                 await broadcaster.set_current(None, 0, audience=identity.audience)
+            if spec.isolated_failure:
+                failure_category = (
+                    model_failure_disposition(exc).category
+                    if isinstance(exc, V2ModelError)
+                    else None
+                )
+                return V2ActionResult(
+                    action_id=claim.action_id,
+                    failure=V2ActionFailure(
+                        code=failure_code,
+                        category=failure_category,
+                        terminal_attempt_id=model_attempt_id,
+                        machine_format_failure_count=machine_format_failure_count,
+                        last_machine_format_attempt_id=(last_machine_format_attempt_id),
+                        last_machine_format_failure_code=(last_machine_format_failure_code),
+                    ),
+                )
             return None
 
 
@@ -1804,6 +1975,11 @@ def _action_context(
         },
         **(spec.context or {}),
         **({"batch_id": spec.batch_id} if spec.batch_id is not None else {}),
+        **(
+            {"decision_family_id": spec.decision_family_id}
+            if spec.decision_family_id is not None
+            else {}
+        ),
         **(
             {"projection_at_seq": spec.projection_at_seq}
             if spec.projection_at_seq is not None
@@ -2014,6 +2190,7 @@ def _model_action_recovery_snapshot(
     failure_category: str,
     attempt_no: int,
     retry_cycle: int,
+    machine_format_failure_count: int,
 ) -> dict[str, Any]:
     canonical_request = json.dumps(
         request_payload,
@@ -2021,9 +2198,37 @@ def _model_action_recovery_snapshot(
         sort_keys=True,
         separators=(",", ":"),
     )
+    family_machine_format_failure_count = (
+        spec.prior_machine_format_failures + machine_format_failure_count
+    )
+    automatic_machine_format_attempt_count = (
+        min(
+            family_machine_format_failure_count,
+            spec.automatic_machine_format_budget,
+        )
+        if spec.automatic_machine_format_budget is not None
+        else None
+    )
     return {
         "action_type": spec.action_type,
         "actor_id": spec.actor_id,
+        "decision_family_id": spec.decision_family_id,
+        "prior_machine_format_failures": family_machine_format_failure_count,
+        "automatic_machine_format_attempt_count": (automatic_machine_format_attempt_count),
+        "automatic_machine_format_budget": spec.automatic_machine_format_budget,
+        "exhaustion_scope": (
+            "decision_family" if spec.preflight_pause_failure is not None else "action"
+        ),
+        "source_action_id": (
+            spec.preflight_pause_failure.source_action_id
+            if spec.preflight_pause_failure is not None
+            else None
+        ),
+        "source_attempt_id": (
+            spec.preflight_pause_failure.source_attempt_id
+            if spec.preflight_pause_failure is not None
+            else None
+        ),
         "model_provider": target.provider,
         "model_id": target.model_id,
         "request_payload": request_payload,

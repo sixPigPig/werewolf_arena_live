@@ -43,7 +43,7 @@ from app.v2.execution import V2RunFence, bind_v2_run_fence, database_utc_now
 from app.v2.flow_engine import V2LiveFlowEngine
 from app.v2.model_client import V2ModelClient
 from app.v2.model_context_contract import (
-    supports_current_model_context_contract,
+    supports_model_context_contract,
 )
 from app.v2.night_repository import V2NightRepository
 from app.v2.match_repository import V2MatchRepository
@@ -679,7 +679,7 @@ class V2LiveRuntime:
                 self.snapshot(game_id=game_id, audience="player_public")
                 with self._session_factory() as db:
                     game = get_game(db, game_id)
-                    if not supports_current_model_context_contract(game.rule_snapshot):
+                    if not supports_model_context_contract(game.rule_snapshot):
                         raise V2ClientProtocolError("unsupported_model_context_contract")
                 channel = _GameChannel(
                     game_id=game_id,

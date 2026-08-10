@@ -473,6 +473,13 @@ describe("V2 game record parsers", () => {
     });
     expect(request.application_validation_result).toBe("accepted");
     expect(request.repair_kind).toBeNull();
+    expect(request).toMatchObject({
+      decision_family_id: null,
+      retry_scope: "action",
+      vote_batch_stage: null,
+      automatic_machine_format_attempt_count: null,
+      automatic_machine_format_budget: null,
+    });
   });
 
   it("parses an idempotent V2 stop result", () => {
@@ -502,6 +509,11 @@ describe("V2 game record parsers", () => {
       items: [
         {
           attempt_id: "v2_model_attempt_3",
+          decision_family_id: "v2_decision_family_vote_1",
+          retry_scope: "operator_retry",
+          vote_batch_stage: "sequential_recovery",
+          automatic_machine_format_attempt_count: 2,
+          automatic_machine_format_budget: 2,
           attempt_no: 3,
           cycle_attempt_no: 1,
           retry_cycle: 2,
@@ -555,6 +567,11 @@ describe("V2 game record parsers", () => {
     }).items[0];
 
     expect(request).toMatchObject({
+      decision_family_id: "v2_decision_family_vote_1",
+      retry_scope: "operator_retry",
+      vote_batch_stage: "sequential_recovery",
+      automatic_machine_format_attempt_count: 2,
+      automatic_machine_format_budget: 2,
       attempt_no: 3,
       cycle_attempt_no: 1,
       retry_cycle: 2,

@@ -1546,16 +1546,57 @@ def _admin_model_requests(
             context=context,
             presentation=presentation,
         )
+        retry_cycle = _first_int(payload.get("retry_cycle")) or 1
+        cycle_attempt_no = (
+            _first_int(payload.get("cycle_attempt_no"))
+            or _first_int(payload.get("attempt_no"))
+            or 1
+        )
+        vote_batch_stage = context.get("vote_batch_stage")
+        vote_batch_stage = vote_batch_stage if isinstance(vote_batch_stage, str) else None
+        if retry_cycle > 1:
+            retry_scope = "operator_retry"
+        elif cycle_attempt_no > 1:
+            retry_scope = "same_action"
+        elif vote_batch_stage == "concurrent_initial":
+            retry_scope = "batch_initial"
+        elif vote_batch_stage in {"concurrent_recovery", "sequential_recovery"}:
+            retry_scope = "batch_recovery"
+        else:
+            retry_scope = "action"
+        failed_automatic_count = _first_int(
+            failure_payload.get("automatic_machine_format_attempt_count")
+        )
+        started_automatic_count = _first_int(payload.get("automatic_machine_format_attempt_count"))
+        failed_automatic_budget = _first_int(failure_payload.get("automatic_machine_format_budget"))
+        started_automatic_budget = _first_int(payload.get("automatic_machine_format_budget"))
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
-                attempt_no=_first_int(payload.get("attempt_no")) or 1,
-                cycle_attempt_no=(
-                    _first_int(payload.get("cycle_attempt_no"))
-                    or _first_int(payload.get("attempt_no"))
-                    or 1
+                decision_family_id=(
+                    payload.get("decision_family_id")
+                    if isinstance(payload.get("decision_family_id"), str)
+                    else (
+                        context.get("decision_family_id")
+                        if isinstance(context.get("decision_family_id"), str)
+                        else None
+                    )
                 ),
-                retry_cycle=_first_int(payload.get("retry_cycle")) or 1,
+                retry_scope=retry_scope,
+                vote_batch_stage=vote_batch_stage,
+                automatic_machine_format_attempt_count=(
+                    failed_automatic_count
+                    if failed_automatic_count is not None
+                    else started_automatic_count
+                ),
+                automatic_machine_format_budget=(
+                    failed_automatic_budget
+                    if failed_automatic_budget is not None
+                    else started_automatic_budget
+                ),
+                attempt_no=_first_int(payload.get("attempt_no")) or 1,
+                cycle_attempt_no=cycle_attempt_no,
+                retry_cycle=retry_cycle,
                 max_attempts=_first_int(payload.get("max_attempts")) or 1,
                 retry_of_attempt_id=(
                     payload.get("retry_of_attempt_id")
