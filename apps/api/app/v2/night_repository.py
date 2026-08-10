@@ -470,6 +470,199 @@ class V2NightRepository:
                 },
             )
 
+    def complete_activation_technical_no_action(
+        self,
+        *,
+        state: V2NightRuntimeState,
+        activation: V2ActivationRef,
+        technical_outcome: dict[str, Any],
+        decision_context: dict[str, Any] | None = None,
+        result_context: dict[str, Any] | None = None,
+        knowledge: tuple[tuple[str, str, dict[str, Any]], ...] = (),
+    ) -> None:
+        if technical_outcome.get("kind") != "technical_no_action":
+            raise V2RepositoryError("invalid technical no-action outcome")
+        if activation.audience != "god_view":
+            raise V2RepositoryError("technical no-action activation must remain god-view only")
+        source_action_id = technical_outcome.get("source_action_id")
+        supporting_event_record_seq = technical_outcome.get("supporting_event_record_seq")
+        failure_episode_id = technical_outcome.get("failure_episode_id")
+        source_failure_code = technical_outcome.get("source_failure_code")
+        source_failure_category = technical_outcome.get("source_failure_category")
+        source_attempt_id = technical_outcome.get("source_attempt_id")
+        failure_mode = technical_outcome.get("failure_mode")
+        if not isinstance(source_action_id, str) or not source_action_id:
+            raise V2RepositoryError("technical no-action source action is missing")
+        if not isinstance(failure_episode_id, str) or not failure_episode_id:
+            raise V2RepositoryError("technical no-action failure episode is missing")
+        if not isinstance(source_failure_code, str) or not source_failure_code:
+            raise V2RepositoryError("technical no-action failure code is missing")
+        if source_failure_category not in {"output_budget", "timeout"}:
+            raise V2RepositoryError("technical no-action failure category is invalid")
+        if not isinstance(source_attempt_id, str) or not source_attempt_id:
+            raise V2RepositoryError("technical no-action source attempt is missing")
+        if failure_mode not in {
+            "output_budget_exhausted",
+            "attempt_hard_timeout",
+            "action_wall_timeout",
+        }:
+            raise V2RepositoryError("technical no-action failure mode is invalid")
+        expected_failure_category = (
+            "output_budget" if failure_mode == "output_budget_exhausted" else "timeout"
+        )
+        if source_failure_category != expected_failure_category:
+            raise V2RepositoryError("technical no-action failure mode does not match")
+        if (
+            not isinstance(supporting_event_record_seq, int)
+            or isinstance(supporting_event_record_seq, bool)
+            or supporting_event_record_seq <= 0
+        ):
+            raise V2RepositoryError("technical no-action supporting event is invalid")
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                state.game_id,
+                require_fence=self._enforce_execution_fence,
+            )
+            row = db.get(V2AbilityActivation, activation.activation_id)
+            if row is None or row.status != "open":
+                raise V2RepositoryError("ability activation is not open")
+            if row.action_id != source_action_id:
+                raise V2RepositoryError("technical no-action source action does not match")
+            supporting_event = db.scalar(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == state.game_id,
+                    V2GameRecordEvent.record_seq == supporting_event_record_seq,
+                )
+            )
+            supporting_payload = supporting_event.payload if supporting_event is not None else {}
+            if (
+                supporting_event is None
+                or supporting_event.run_id != state.run_id
+                or supporting_event.event_type != "technical_target_outcome_applied"
+                or supporting_payload.get("action_id") != source_action_id
+                or supporting_payload.get("activation_id") != activation.activation_id
+                or supporting_payload.get("failure_episode_id") != failure_episode_id
+                or supporting_payload.get("failure_code") != source_failure_code
+                or supporting_payload.get("failure_category") != source_failure_category
+                or supporting_payload.get("attempt_id") != source_attempt_id
+                or supporting_payload.get("actor_id") != activation.actor_player_id
+                or supporting_payload.get("technical_outcome") != "technical_no_action"
+                or supporting_payload.get("audience") != "god_view"
+                or supporting_payload.get("target_player_id") is not None
+                or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
+                or supporting_payload.get("model_generation_policy_schema_version") != 3
+            ):
+                raise V2RepositoryError("technical no-action supporting event does not match")
+            action_succeeded_events = list(
+                db.scalars(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == state.game_id,
+                        V2GameRecordEvent.run_id == state.run_id,
+                        V2GameRecordEvent.event_type == "action_succeeded",
+                    )
+                )
+            )
+            action_succeeded = next(
+                (
+                    event
+                    for event in action_succeeded_events
+                    if (event.payload or {}).get("action_id") == source_action_id
+                ),
+                None,
+            )
+            action_succeeded_payload = (
+                action_succeeded.payload if action_succeeded is not None else {}
+            )
+            if (
+                action_succeeded is None
+                or action_succeeded.record_seq <= supporting_event_record_seq
+                or action_succeeded_payload.get("activation_id") != activation.activation_id
+                or action_succeeded_payload.get("failure_episode_id") != failure_episode_id
+                or action_succeeded_payload.get("technical_outcome_record_seq")
+                != supporting_event_record_seq
+                or action_succeeded_payload.get("result")
+                != "decision_recorded_without_presentation"
+                or action_succeeded_payload.get("audience") != "god_view"
+            ):
+                raise V2RepositoryError("technical no-action action completion does not match")
+
+            decision_payload = {
+                **(decision_context or {}),
+                "decision_status": "technical_no_action",
+            }
+            result_payload = {
+                **(result_context or {}),
+                "decision_status": "technical_no_action",
+                "effect_applied": False,
+                "technical_outcome": dict(technical_outcome),
+                "effect_intent_id": None,
+            }
+            durable_knowledge = list(knowledge)
+            if activation.actor_player_id is not None:
+                durable_knowledge.append(
+                    (
+                        "player",
+                        activation.actor_player_id,
+                        {
+                            "fact_type": "private_ability_action_not_taken",
+                            "payload": {
+                                "ability_id": activation.ability_id,
+                                "night_no": state.round_no,
+                                "decision": dict(decision_payload),
+                                "result": {
+                                    "decision_status": "technical_no_action",
+                                    "effect_applied": False,
+                                    "source_failure_code": technical_outcome.get(
+                                        "source_failure_code"
+                                    ),
+                                },
+                                "resolution_scope": (
+                                    "本次私有动作因技术耗尽未执行；未选择目标、未产生效果，"
+                                    "也不额外公开其他玩家身份。"
+                                ),
+                            },
+                        },
+                    )
+                )
+
+            knowledge_ids: list[str] = []
+            for owner_scope, owner_id, fact in durable_knowledge:
+                fact_id = f"v2_fact_{uuid4().hex[:16]}"
+                knowledge_ids.append(fact_id)
+                db.add(
+                    V2KnowledgeFact(
+                        knowledge_fact_id=fact_id,
+                        game_id=state.game_id,
+                        source_activation_id=activation.activation_id,
+                        owner_scope=owner_scope,
+                        owner_id=owner_id,
+                        fact_type=str(fact["fact_type"]),
+                        payload=dict(fact["payload"]),
+                    )
+                )
+
+            row.status = "completed"
+            row.decision_id = None
+            row.knowledge_fact_ids = [*(row.knowledge_fact_ids or []), *knowledge_ids]
+            row.decision = decision_payload
+            row.result = result_payload
+            row.closed_at = _now()
+            _append_event(
+                db,
+                game=game,
+                event_type="ability_activation_technical_no_action",
+                audience=activation.audience,
+                payload={
+                    "action_id": row.action_id,
+                    "activation_id": activation.activation_id,
+                    "ability_id": activation.ability_id,
+                    "decision": decision_payload,
+                    "result": result_payload,
+                    "knowledge_fact_ids": row.knowledge_fact_ids,
+                },
+            )
+
     def register_activation_knowledge(
         self,
         *,

@@ -1455,9 +1455,7 @@ def model_prompt_metadata(
     ):
         raise ValueError("unsupported_model_prompt_contract")
     compact_known_events = context.get("known_events")
-    compact_known_events = (
-        compact_known_events if isinstance(compact_known_events, dict) else {}
-    )
+    compact_known_events = compact_known_events if isinstance(compact_known_events, dict) else {}
     if compact_known_events.get("schema_version") != KNOWN_EVENTS_SCHEMA_VERSION:
         raise ValueError("unsupported_known_events_schema_version")
     try:
@@ -2630,6 +2628,13 @@ def _project_public_history(
                 "target_ref": projected_payload.get("target_player_id"),
                 "weight": projected_payload.get("weight"),
             }
+            if projected_payload.get("technical_status") is not None:
+                fact.update(
+                    {
+                        "technical_status": projected_payload.get("technical_status"),
+                        "technical_reason": projected_payload.get("technical_reason"),
+                    }
+                )
             public_events.append(dict(fact))
             continue
         if event_type == "day_vote_resolved":
@@ -2650,6 +2655,8 @@ def _project_public_history(
                 "leader_refs": projected_payload.get("leaders", []),
                 "identity_reveal": "none",
             }
+            if "technical_abstentions" in projected_payload:
+                vote_snapshot["technical_abstentions"] = projected_payload["technical_abstentions"]
             vote_snapshots.append(vote_snapshot)
             public_events.append(dict(vote_snapshot))
             continue

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from app.v2.action_engine import (
     V2ActionEngine,
+    V2ActionResult,
     V2BroadcastPort,
     V2DecisionContract,
     V2SpeechSpec,
@@ -92,6 +93,7 @@ class _BufferedRoleDecision:
     prepared: _PreparedRoleDecision
     activation: V2ActivationRef | None
     decision: V2ModelDecision | None
+    action_result: V2ActionResult | None = None
 
 
 GroupHandler = Callable[[V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]]
@@ -437,6 +439,10 @@ class V2NightEngine:
             if group in buffered
             and buffered[group].prepared.skip_reason is None
             and buffered[group].decision is None
+            and (
+                buffered[group].action_result is None
+                or buffered[group].action_result.technical_outcome is None
+            )
         ]
         if failed_groups:
             self._repository.append_event(
@@ -461,7 +467,10 @@ class V2NightEngine:
                     concurrent_initial=False,
                     activation=previous.activation,
                 )
-                if recovered.decision is None:
+                if recovered.decision is None and (
+                    recovered.action_result is None
+                    or recovered.action_result.technical_outcome is None
+                ):
                     raise V2NightError(f"{recovered.prepared.ability_id}_decision_failed")
                 buffered[group] = recovered
             self._repository.append_event(
@@ -512,6 +521,10 @@ class V2NightEngine:
                             "skipped"
                             if group in buffered
                             and buffered[group].prepared.skip_reason is not None
+                            else "technical_no_action"
+                            if group in buffered
+                            and buffered[group].action_result is not None
+                            and buffered[group].action_result.technical_outcome is not None
                             else "completed"
                         ),
                         "activation_id": (
@@ -584,7 +597,7 @@ class V2NightEngine:
         )
         occurrence = 0
         blind_choices: list[dict[str, Any]] = []
-        proposal_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision | None]] = []
+        proposal_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ActionResult]] = []
 
         if len(wolves) > 1:
             proposal_batch_id = f"{state.window_id}:werewolf_attack:preference_probe"
@@ -607,8 +620,8 @@ class V2NightEngine:
             async def request_preference(
                 wolf: V2NightPlayer,
                 activation: V2ActivationRef,
-            ) -> V2ModelDecision | None:
-                return await self._player_decision(
+            ) -> V2ActionResult:
+                result = await self._player_decision(
                     state=state,
                     broadcaster=broadcaster,
                     activation=activation,
@@ -638,40 +651,80 @@ class V2NightEngine:
                     allow_failure=True,
                     batch_id=proposal_batch_id,
                     batch=batch,
+                    target_exhaustion_outcome=(None if allow_no_attack else "technical_no_action"),
+                    return_result=True,
                 )
+                if not isinstance(result, V2ActionResult):
+                    return V2ActionResult(decision=result)
+                return result
 
-            decisions = await asyncio.gather(
+            proposal_results = await asyncio.gather(
                 *(request_preference(wolf, activation) for wolf, activation in prepared)
             )
             proposal_items = [
-                (wolf, activation, decision)
-                for (wolf, activation), decision in zip(prepared, decisions, strict=True)
+                (wolf, activation, result)
+                for (wolf, activation), result in zip(prepared, proposal_results, strict=True)
             ]
-            for wolf, _activation, decision in proposal_items:
+            for wolf, _activation, result in proposal_items:
+                decision = result.decision
                 blind_choices.append(
                     {
                         "player_id": wolf.player_id,
                         "target_player_id": (
                             decision.target_player_id if decision is not None else None
                         ),
-                        "status": "completed" if decision is not None else "failed",
+                        "status": (
+                            "completed"
+                            if decision is not None
+                            else "technical_no_action"
+                            if result.technical_outcome is not None
+                            else "failed"
+                        ),
                     }
                 )
 
         complete_unanimous_proposal = (
             len(wolves) > 1
             and len(proposal_items) == len(wolves)
-            and all(decision is not None for _wolf, _activation, decision in proposal_items)
+            and all(result.decision is not None for _wolf, _activation, result in proposal_items)
             and len(
                 {
-                    decision.target_player_id
-                    for _wolf, _activation, decision in proposal_items
-                    if decision is not None
+                    result.decision.target_player_id
+                    for _wolf, _activation, result in proposal_items
+                    if result.decision is not None
                 }
             )
             == 1
         )
-        for wolf, activation, decision in proposal_items:
+        for wolf, activation, result in proposal_items:
+            decision = result.decision
+            if result.technical_outcome is not None:
+                self._repository.complete_activation_technical_no_action(
+                    state=state,
+                    activation=activation,
+                    technical_outcome=_technical_no_action_payload(result),
+                    decision_context={
+                        "decision_stage": "preference_probe",
+                        "player_id": wolf.player_id,
+                    },
+                    result_context={
+                        "adopted": False,
+                        "decision_stage": "preference_probe",
+                        "status": "technical_no_action",
+                    },
+                )
+                await broadcaster.broadcast_json(
+                    ability_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        ability_id=ability_id,
+                        status="preference_technical_no_action",
+                        actor_player_id=wolf.player_id,
+                        round_no=1,
+                    ),
+                    audience="god_view",
+                )
+                continue
             self._repository.complete_activation(
                 state=state,
                 activation=activation,
@@ -704,8 +757,10 @@ class V2NightEngine:
 
         second_round: list[dict[str, Any]] = []
         final_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision]] = []
+        technical_team_result: V2ActionResult | None = None
+        technical_team_actor_player_id: str | None = None
         if complete_unanimous_proposal:
-            unanimous = proposal_items[0][2]
+            unanimous = proposal_items[0][2].decision
             assert unanimous is not None
             resolution = _WerewolfAttackResolution(
                 target_player_id=unanimous.target_player_id,
@@ -716,9 +771,9 @@ class V2NightEngine:
                 ),
             )
             votes = [
-                (wolf.player_id, decision.target_player_id)
-                for wolf, _activation, decision in proposal_items
-                if decision is not None
+                (wolf.player_id, result.decision.target_player_id)
+                for wolf, _activation, result in proposal_items
+                if result.decision is not None
             ]
             resolution_stage = "blind_choice_consensus"
         else:
@@ -731,7 +786,7 @@ class V2NightEngine:
                     actor_player_id=wolf.player_id,
                     occurrence=occurrence,
                 )
-                decision = await self._player_decision(
+                final_result = await self._player_decision(
                     state=state,
                     broadcaster=broadcaster,
                     activation=activation,
@@ -771,8 +826,45 @@ class V2NightEngine:
                     ),
                     optional=allow_no_attack,
                     batch=batch,
+                    target_exhaustion_outcome=(None if allow_no_attack else "technical_no_action"),
+                    return_result=True,
                 )
-                assert decision is not None
+                if not isinstance(final_result, V2ActionResult):
+                    final_result = V2ActionResult(decision=final_result)
+                if final_result.technical_outcome is not None:
+                    self._repository.complete_activation_technical_no_action(
+                        state=state,
+                        activation=activation,
+                        technical_outcome=_technical_no_action_payload(final_result),
+                        decision_context={
+                            "decision_stage": "sequential_final_vote",
+                            "player_id": wolf.player_id,
+                            "speaking_position": position,
+                        },
+                        result_context={
+                            "adopted": False,
+                            "decision_stage": "sequential_final_vote",
+                            "final_target_player_id": None,
+                            "resolution_reason": "technical_final_vote_no_attack",
+                        },
+                    )
+                    await broadcaster.broadcast_json(
+                        ability_progress(
+                            game_id=state.game_id,
+                            run_id=state.run_id,
+                            ability_id=ability_id,
+                            status="technical_no_action",
+                            actor_player_id=wolf.player_id,
+                            round_no=2 if len(wolves) > 1 else 1,
+                        ),
+                        audience="god_view",
+                    )
+                    technical_team_result = final_result
+                    technical_team_actor_player_id = wolf.player_id
+                    break
+                decision = final_result.decision
+                if decision is None:
+                    raise V2NightError("werewolf.attack_decision_incomplete")
                 final_items.append((wolf, activation, decision))
                 second_round.append(
                     {
@@ -787,15 +879,25 @@ class V2NightEngine:
                 (wolf.player_id, decision.target_player_id)
                 for wolf, _activation, decision in final_items
             ]
-            resolution = _resolve_werewolf_attack(
-                state=state,
-                wolves=wolves,
-                votes=votes,
-                policy=policy,
-            )
-            resolution_stage = "sequential_final_vote"
+            if technical_team_result is not None:
+                resolution = _WerewolfAttackResolution(
+                    target_player_id=None,
+                    reason="technical_final_vote_no_attack",
+                )
+                resolution_stage = "sequential_final_vote_technical_no_action"
+            else:
+                resolution = _resolve_werewolf_attack(
+                    state=state,
+                    wolves=wolves,
+                    votes=votes,
+                    policy=policy,
+                )
+                resolution_stage = "sequential_final_vote"
 
-            if resolution.reason == "explicit_rotating_tiebreak_required":
+            if (
+                technical_team_result is None
+                and resolution.reason == "explicit_rotating_tiebreak_required"
+            ):
                 tiebreaker = _rotating_werewolf_tiebreaker(state, wolves)
                 tied_targets = list(resolution.tied_target_player_ids)
                 occurrence += 1
@@ -806,7 +908,8 @@ class V2NightEngine:
                     actor_player_id=tiebreaker.player_id,
                     occurrence=occurrence,
                 )
-                tiebreak_decision = await self._player_decision(
+                tiebreak_optional = None in tied_targets
+                tiebreak_result = await self._player_decision(
                     state=state,
                     broadcaster=broadcaster,
                     activation=tiebreak_activation,
@@ -835,35 +938,79 @@ class V2NightEngine:
                         "tied_target_player_ids": list(tied_targets),
                         "werewolf_attack_policy": policy,
                     },
-                    optional=None in tied_targets,
+                    optional=tiebreak_optional,
                     batch=batch,
-                )
-                assert tiebreak_decision is not None
-                resolution = _WerewolfAttackResolution(
-                    target_player_id=tiebreak_decision.target_player_id,
-                    reason=(
-                        "explicit_rotating_tiebreak_no_attack"
-                        if tiebreak_decision.target_player_id is None
-                        else "explicit_rotating_tiebreak"
+                    target_exhaustion_outcome=(
+                        None if tiebreak_optional else "technical_no_action"
                     ),
-                    tiebreaker_player_id=tiebreaker.player_id,
+                    return_result=True,
                 )
-                resolution_stage = "tiebreak"
-                self._repository.complete_activation(
-                    state=state,
-                    activation=tiebreak_activation,
-                    decision={
-                        "decision_stage": "tiebreak",
-                        "target_player_id": tiebreak_decision.target_player_id,
-                        "speech": tiebreak_decision.speech,
-                    },
-                    result={
-                        "adopted": True,
-                        "decision_stage": "tiebreak",
-                        "final_target_player_id": resolution.target_player_id,
-                        "resolution_reason": resolution.reason,
-                    },
-                )
+                if not isinstance(tiebreak_result, V2ActionResult):
+                    tiebreak_result = V2ActionResult(decision=tiebreak_result)
+                if tiebreak_result.technical_outcome is not None:
+                    technical_team_result = tiebreak_result
+                    technical_team_actor_player_id = tiebreaker.player_id
+                    resolution = _WerewolfAttackResolution(
+                        target_player_id=None,
+                        reason="technical_tiebreak_no_attack",
+                        tiebreaker_player_id=tiebreaker.player_id,
+                    )
+                    resolution_stage = "tiebreak_technical_no_action"
+                    self._repository.complete_activation_technical_no_action(
+                        state=state,
+                        activation=tiebreak_activation,
+                        technical_outcome=_technical_no_action_payload(tiebreak_result),
+                        decision_context={
+                            "decision_stage": "tiebreak",
+                            "player_id": tiebreaker.player_id,
+                        },
+                        result_context={
+                            "adopted": False,
+                            "decision_stage": "tiebreak",
+                            "final_target_player_id": None,
+                            "resolution_reason": resolution.reason,
+                        },
+                    )
+                    await broadcaster.broadcast_json(
+                        ability_progress(
+                            game_id=state.game_id,
+                            run_id=state.run_id,
+                            ability_id=ability_id,
+                            status="technical_no_action",
+                            actor_player_id=tiebreaker.player_id,
+                            round_no=3,
+                        ),
+                        audience="god_view",
+                    )
+                else:
+                    tiebreak_decision = tiebreak_result.decision
+                    if tiebreak_decision is None:
+                        raise V2NightError("werewolf.attack_tiebreak_decision_incomplete")
+                    resolution = _WerewolfAttackResolution(
+                        target_player_id=tiebreak_decision.target_player_id,
+                        reason=(
+                            "explicit_rotating_tiebreak_no_attack"
+                            if tiebreak_decision.target_player_id is None
+                            else "explicit_rotating_tiebreak"
+                        ),
+                        tiebreaker_player_id=tiebreaker.player_id,
+                    )
+                    resolution_stage = "tiebreak"
+                    self._repository.complete_activation(
+                        state=state,
+                        activation=tiebreak_activation,
+                        decision={
+                            "decision_stage": "tiebreak",
+                            "target_player_id": tiebreak_decision.target_player_id,
+                            "speech": tiebreak_decision.speech,
+                        },
+                        result={
+                            "adopted": True,
+                            "decision_stage": "tiebreak",
+                            "final_target_player_id": resolution.target_player_id,
+                            "resolution_reason": resolution.reason,
+                        },
+                    )
 
         for wolf, activation, decision in final_items:
             self._repository.complete_activation(
@@ -903,6 +1050,48 @@ class V2NightEngine:
             actor_player_id=None,
             occurrence=occurrence,
         )
+        private_team_resolution_fact = (
+            {
+                "fact_type": "private_ability_action_not_taken",
+                "payload": {
+                    "ability_id": ability_id,
+                    "night_no": state.round_no,
+                    "decision": {
+                        "decision_stage": "team_resolution",
+                        "decision_status": "technical_no_action",
+                    },
+                    "result": {
+                        "final_target_player_id": None,
+                        "resolution_reason": resolution.reason,
+                        "resolution_stage": resolution_stage,
+                    },
+                    "resolution_scope": (
+                        "狼队本夜袭击因必选步骤技术耗尽而未执行；未形成刀口、未产生效果，"
+                        "不向普通玩家公开票型。"
+                    ),
+                },
+            }
+            if technical_team_result is not None
+            else {
+                "fact_type": "private_ability_action_committed",
+                "payload": {
+                    "ability_id": ability_id,
+                    "night_no": state.round_no,
+                    "decision": {
+                        "decision_stage": "team_resolution",
+                        "final_target_player_id": resolution.target_player_id,
+                    },
+                    "result": {
+                        "resolution_reason": resolution.reason,
+                        "resolution_stage": resolution_stage,
+                    },
+                    "resolution_scope": (
+                        "法官已接受本次私有动作；这里只记录狼队共同结算结果，"
+                        "不向普通玩家公开刀口或票型。"
+                    ),
+                },
+            }
+        )
         resolution_knowledge = tuple(
             (
                 "player",
@@ -922,49 +1111,57 @@ class V2NightEngine:
                     },
                 },
                 {
-                    "fact_type": "private_ability_action_committed",
-                    "payload": {
-                        "ability_id": ability_id,
-                        "night_no": state.round_no,
-                        "decision": {
-                            "decision_stage": "team_resolution",
-                            "final_target_player_id": resolution.target_player_id,
-                        },
-                        "result": {
-                            "resolution_reason": resolution.reason,
-                            "resolution_stage": resolution_stage,
-                        },
-                        "resolution_scope": (
-                            "法官已接受本次私有动作；这里只记录狼队共同结算结果，"
-                            "不向普通玩家公开刀口或票型。"
-                        ),
-                    },
+                    **private_team_resolution_fact,
                 },
             )
         )
-        self._repository.complete_activation(
-            state=state,
-            activation=resolution_activation,
-            decision={
-                "decision_stage": "team_resolution",
-                "resolution_stage": resolution_stage,
-                "votes": [
-                    {
-                        "player_id": player_id,
-                        "target_player_id": target_player_id,
-                    }
-                    for player_id, target_player_id in votes
-                ],
-            },
-            result={
-                "final_target_player_id": resolution.target_player_id,
-                "resolution_reason": resolution.reason,
-                "tiebreaker_player_id": resolution.tiebreaker_player_id,
-            },
-            effect_type=("attack" if resolution.target_player_id is not None else None),
-            target_player_id=resolution.target_player_id,
-            knowledge=resolution_knowledge,
-        )
+        resolution_decision = {
+            "decision_stage": "team_resolution",
+            "resolution_stage": resolution_stage,
+            "votes": [
+                {
+                    "player_id": player_id,
+                    "target_player_id": target_player_id,
+                }
+                for player_id, target_player_id in votes
+            ],
+            **(
+                {"interrupted_actor_player_id": technical_team_actor_player_id}
+                if technical_team_actor_player_id is not None
+                else {}
+            ),
+        }
+        resolution_result = {
+            "final_target_player_id": resolution.target_player_id,
+            "resolution_reason": resolution.reason,
+            "tiebreaker_player_id": resolution.tiebreaker_player_id,
+        }
+        if technical_team_result is not None:
+            self._repository.complete_activation(
+                state=state,
+                activation=resolution_activation,
+                decision={
+                    **resolution_decision,
+                    "decision_status": "technical_no_action",
+                },
+                result={
+                    **resolution_result,
+                    "decision_status": "technical_no_action",
+                    "effect_applied": False,
+                    "technical_outcome": _technical_no_action_payload(technical_team_result),
+                },
+                knowledge=resolution_knowledge,
+            )
+        else:
+            self._repository.complete_activation(
+                state=state,
+                activation=resolution_activation,
+                decision=resolution_decision,
+                result=resolution_result,
+                effect_type=("attack" if resolution.target_player_id is not None else None),
+                target_player_id=resolution.target_player_id,
+                knowledge=resolution_knowledge,
+            )
 
         working.attack_target = resolution.target_player_id
         await broadcaster.broadcast_json(
@@ -972,9 +1169,17 @@ class V2NightEngine:
                 game_id=state.game_id,
                 run_id=state.run_id,
                 ability_id=ability_id,
-                status=("completed" if resolution.target_player_id is not None else "no_attack"),
+                status=(
+                    "technical_no_action"
+                    if technical_team_result is not None
+                    else "completed"
+                    if resolution.target_player_id is not None
+                    else "no_attack"
+                ),
                 actor_player_id=(
-                    resolution.tiebreaker_player_id or resolution_activation.actor_player_id
+                    technical_team_actor_player_id
+                    or resolution.tiebreaker_player_id
+                    or resolution_activation.actor_player_id
                 ),
                 target_player_id=resolution.target_player_id,
             ),
@@ -1083,7 +1288,7 @@ class V2NightEngine:
             occurrence=1,
         )
         try:
-            decision = await self._player_decision(
+            action_result = await self._player_decision(
                 state=state,
                 broadcaster=broadcaster,
                 activation=current_activation,
@@ -1098,7 +1303,11 @@ class V2NightEngine:
                 batch_id=batch.batch_id if batch is not None else None,
                 batch=batch,
                 batch_stage=("concurrent_initial" if concurrent_initial else "sequential_recovery"),
+                target_exhaustion_outcome="technical_no_action",
+                return_result=True,
             )
+            if not isinstance(action_result, V2ActionResult):
+                action_result = V2ActionResult(decision=action_result)
         except asyncio.CancelledError:
             if concurrent_initial:
                 self._repository.cancel_open_activation(
@@ -1112,7 +1321,8 @@ class V2NightEngine:
         return _BufferedRoleDecision(
             prepared=prepared,
             activation=current_activation,
-            decision=decision,
+            decision=action_result.decision,
+            action_result=action_result,
         )
 
     async def _commit_guard_decision(
@@ -1133,7 +1343,7 @@ class V2NightEngine:
                 reason=prepared.skip_reason,
             )
             return
-        if buffered.activation is None or buffered.decision is None or prepared.player is None:
+        if buffered.activation is None or prepared.player is None:
             raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
         if present_wake:
             await self._private_judge(
@@ -1143,6 +1353,34 @@ class V2NightEngine:
                 objective="唤醒守卫并请其选择今晚守护的存活玩家",
                 context={"ability_id": prepared.ability_id, "night_no": state.round_no},
             )
+        if (
+            buffered.action_result is not None
+            and buffered.action_result.technical_outcome is not None
+        ):
+            self._repository.complete_activation_technical_no_action(
+                state=state,
+                activation=buffered.activation,
+                technical_outcome=_technical_no_action_payload(buffered.action_result),
+                decision_context={"decision_stage": "guard_protect"},
+                result_context={"effect": "protect_not_registered"},
+            )
+            await self._ability_status(
+                state,
+                broadcaster,
+                prepared.ability_id,
+                prepared.player,
+                "technical_no_action",
+            )
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="guard_protect_sleep",
+                objective="宣布守卫行动结束并请守卫闭眼，不公开守护目标",
+                context={"ability_id": prepared.ability_id},
+            )
+            return
+        if buffered.decision is None:
+            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
         decision = buffered.decision
         working.protected_target = decision.target_player_id
         self._repository.complete_activation(
@@ -1250,7 +1488,7 @@ class V2NightEngine:
                 reason=prepared.skip_reason,
             )
             return
-        if buffered.activation is None or buffered.decision is None or prepared.player is None:
+        if buffered.activation is None or prepared.player is None:
             raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
         if present_wake:
             await self._private_judge(
@@ -1260,6 +1498,34 @@ class V2NightEngine:
                 objective="唤醒预言家并请其选择今晚查验的一名其他存活玩家",
                 context={"ability_id": prepared.ability_id},
             )
+        if (
+            buffered.action_result is not None
+            and buffered.action_result.technical_outcome is not None
+        ):
+            self._repository.complete_activation_technical_no_action(
+                state=state,
+                activation=buffered.activation,
+                technical_outcome=_technical_no_action_payload(buffered.action_result),
+                decision_context={"decision_stage": "seer_investigate"},
+                result_context={"effect": "investigation_not_registered"},
+            )
+            await self._ability_status(
+                state,
+                broadcaster,
+                prepared.ability_id,
+                prepared.player,
+                "technical_no_action",
+            )
+            await self._private_judge(
+                state=state,
+                broadcaster=broadcaster,
+                action_type="seer_investigate_sleep",
+                objective="宣布预言家行动结束并请预言家闭眼，不公开查验目标",
+                context={"ability_id": prepared.ability_id},
+            )
+            return
+        if buffered.decision is None:
+            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
         decision = buffered.decision
         target = state.player(_required_target(decision))
         alignment = "werewolves" if target.role_key == "werewolf" else "villagers"
@@ -1694,7 +1960,9 @@ class V2NightEngine:
         batch: _NightParallelBatch | None = None,
         batch_stage: str | None = None,
         decision_contract: V2DecisionContract | None = None,
-    ) -> V2ModelDecision | None:
+        target_exhaustion_outcome: str | None = None,
+        return_result: bool = False,
+    ) -> V2ModelDecision | V2ActionResult | None:
         knowledge_fact_ids, knowledge_hash = self._repository.register_activation_knowledge(
             state=state,
             activation=activation,
@@ -1722,121 +1990,132 @@ class V2NightEngine:
             ),
             decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
         )
-        decision = await self._actions.run_player_decision(
-            game_id=state.game_id,
-            broadcaster=broadcaster,
-            spec=V2SpeechSpec(
-                action_type=action_type,
-                phase_id=(f"day_{state.round_no}" if is_dawn_reaction else state.phase_id),
-                required_phase_state=(
-                    "dawn_reactions_ready" if is_dawn_reaction else "night_running"
-                ),
-                objective=objective,
-                success_live_state="ready",
-                success_phase_state=(
-                    "dawn_reactions_ready" if is_dawn_reaction else "night_running"
-                ),
-                actor_kind="player",
-                actor_id=player.player_id,
-                audience=audience,
-                speaker=player.tts_speaker,
-                dialect=player.tts_dialect,
-                model_provider=player.model_provider,
-                model_id=player.model_id,
-                model_supports_thinking=player.model_supports_thinking,
-                model_parameters=player.model_parameters,
-                activation_id=activation.activation_id,
-                output_kind=(
-                    "decision_and_speech"
-                    if resolved_decision_contract.speech_mode != "forbidden"
-                    else "private_decision"
-                ),
-                decision_contract=resolved_decision_contract,
-                allowed_target_ids=tuple(item.player_id for item in candidates),
-                model_players=tuple(
-                    V2ModelPlayerReference(
-                        player_id=item.player_id,
-                        seat=item.seat,
-                        display_name=item.display_name,
-                    )
-                    for item in state.players
-                ),
-                context={
-                    "ability_id": activation.ability_id,
-                    "ability_instance_id": activation.ability_instance_id,
-                    "activation_id": activation.activation_id,
-                    **build_actor_information(
-                        player_id=player.player_id,
-                        seat=player.seat,
-                        role_key=player.role_key,
-                        team=player.team,
-                        persona=player.persona,
-                        alive=player.alive,
-                        sheriff_player_id=state.sheriff_player_id,
-                        sheriff_badge_state=state.sheriff_badge_state,
-                        rule=state.rule,
-                        private_facts=historical_private_facts,
-                        current_action_type=action_type,
-                        current_action_knowledge=current_action_knowledge,
-                    ),
-                    "private_authoritative_facts": [
-                        *private_authoritative_facts(
-                            historical_private_facts,
-                            owner_scope="player",
-                            owner_id=player.player_id,
-                        ),
-                        *private_authoritative_facts(
-                            current_action_knowledge,
-                            owner_scope="player",
-                            owner_id=player.player_id,
-                        ),
-                    ],
-                    "public_match_state": build_public_match_state(
-                        round_no=state.round_no,
-                        players=state.players,
-                    ),
-                    "sheriff_player_id": state.sheriff_player_id,
-                    "knowledge_fact_ids": list(knowledge_fact_ids),
-                    "knowledge_projection_hash": knowledge_hash,
-                    "candidates": [
-                        {
-                            "player_id": item.player_id,
-                            "seat": item.seat,
-                            "display_name": item.display_name,
-                        }
-                        for item in candidates
-                    ],
-                    "decision_rules": {
-                        "target_optional": optional,
-                        "must_choose_exact_candidate_id": True,
-                    },
-                    "night_no": state.round_no,
-                    "public_rule_contract": build_public_rule_contract(
-                        rule=state.rule,
-                        max_rounds=state.max_rounds,
-                    ),
-                    "public_history": (
-                        list(batch.public_history)
-                        if batch is not None
-                        else self._repository.public_history(state.game_id)
-                    ),
-                    **(
-                        {
-                            "night_parallel_batch_id": batch.batch_id,
-                            "public_cutoff_record_seq": batch.public_cutoff_record_seq,
-                            "night_parallel_batch_stage": batch_stage or "blocking_lane",
-                        }
-                        if batch is not None
-                        else {}
-                    ),
-                },
-                defer_presentation=defer_presentation,
-                isolated_failure=isolated_failure,
-                batch_id=batch_id or (batch.batch_id if batch is not None else None),
+        spec = V2SpeechSpec(
+            action_type=action_type,
+            phase_id=(f"day_{state.round_no}" if is_dawn_reaction else state.phase_id),
+            required_phase_state=("dawn_reactions_ready" if is_dawn_reaction else "night_running"),
+            objective=objective,
+            success_live_state="ready",
+            success_phase_state=("dawn_reactions_ready" if is_dawn_reaction else "night_running"),
+            actor_kind="player",
+            actor_id=player.player_id,
+            audience=audience,
+            speaker=player.tts_speaker,
+            dialect=player.tts_dialect,
+            model_provider=player.model_provider,
+            model_id=player.model_id,
+            model_supports_thinking=player.model_supports_thinking,
+            model_parameters=player.model_parameters,
+            activation_id=activation.activation_id,
+            output_kind=(
+                "decision_and_speech"
+                if resolved_decision_contract.speech_mode != "forbidden"
+                else "private_decision"
             ),
+            decision_contract=resolved_decision_contract,
+            allowed_target_ids=tuple(item.player_id for item in candidates),
+            model_players=tuple(
+                V2ModelPlayerReference(
+                    player_id=item.player_id,
+                    seat=item.seat,
+                    display_name=item.display_name,
+                )
+                for item in state.players
+            ),
+            context={
+                "ability_id": activation.ability_id,
+                "ability_instance_id": activation.ability_instance_id,
+                "activation_id": activation.activation_id,
+                **build_actor_information(
+                    player_id=player.player_id,
+                    seat=player.seat,
+                    role_key=player.role_key,
+                    team=player.team,
+                    persona=player.persona,
+                    alive=player.alive,
+                    sheriff_player_id=state.sheriff_player_id,
+                    sheriff_badge_state=state.sheriff_badge_state,
+                    rule=state.rule,
+                    private_facts=historical_private_facts,
+                    current_action_type=action_type,
+                    current_action_knowledge=current_action_knowledge,
+                ),
+                "private_authoritative_facts": [
+                    *private_authoritative_facts(
+                        historical_private_facts,
+                        owner_scope="player",
+                        owner_id=player.player_id,
+                    ),
+                    *private_authoritative_facts(
+                        current_action_knowledge,
+                        owner_scope="player",
+                        owner_id=player.player_id,
+                    ),
+                ],
+                "public_match_state": build_public_match_state(
+                    round_no=state.round_no,
+                    players=state.players,
+                ),
+                "sheriff_player_id": state.sheriff_player_id,
+                "knowledge_fact_ids": list(knowledge_fact_ids),
+                "knowledge_projection_hash": knowledge_hash,
+                "candidates": [
+                    {
+                        "player_id": item.player_id,
+                        "seat": item.seat,
+                        "display_name": item.display_name,
+                    }
+                    for item in candidates
+                ],
+                "decision_rules": {
+                    "target_optional": optional,
+                    "must_choose_exact_candidate_id": True,
+                },
+                "night_no": state.round_no,
+                "public_rule_contract": build_public_rule_contract(
+                    rule=state.rule,
+                    max_rounds=state.max_rounds,
+                ),
+                "public_history": (
+                    list(batch.public_history)
+                    if batch is not None
+                    else self._repository.public_history(state.game_id)
+                ),
+                **(
+                    {
+                        "night_parallel_batch_id": batch.batch_id,
+                        "public_cutoff_record_seq": batch.public_cutoff_record_seq,
+                        "night_parallel_batch_stage": batch_stage or "blocking_lane",
+                    }
+                    if batch is not None
+                    else {}
+                ),
+            },
+            defer_presentation=defer_presentation,
+            isolated_failure=isolated_failure,
+            batch_id=batch_id or (batch.batch_id if batch is not None else None),
+            target_exhaustion_outcome=target_exhaustion_outcome,
         )
-        if decision is None and not allow_failure:
+        if return_result and callable(getattr(self._actions, "run_player_decision_result", None)):
+            result = await self._actions.run_player_decision_result(
+                game_id=state.game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+            )
+        else:
+            decision = await self._actions.run_player_decision(
+                game_id=state.game_id,
+                broadcaster=broadcaster,
+                spec=spec,
+            )
+            result = V2ActionResult(decision=decision)
+        if result is None:
+            result = V2ActionResult()
+        decision = result.decision
+        if decision is None and not allow_failure and result.technical_outcome is None:
             raise V2NightError(f"{activation.ability_id}_decision_failed")
+        if return_result:
+            return result
         return decision
 
     async def _ability_completed(
@@ -1890,6 +2169,35 @@ def _private_decision_record(
             decision.target_player_id if target_player_id is None else target_player_id
         ),
         **({"decision_note": decision.decision_note} if decision.decision_note is not None else {}),
+    }
+
+
+def _technical_no_action_payload(result: V2ActionResult) -> dict[str, Any]:
+    outcome = result.technical_outcome
+    if (
+        outcome is None
+        or outcome.kind != "technical_no_action"
+        or result.decision is not None
+        or result.failure is not None
+        or not result.action_id
+    ):
+        raise V2NightError("night_required_target_technical_outcome_invalid")
+    failure = outcome.failure
+    return {
+        "kind": outcome.kind,
+        "failure_mode": outcome.failure_mode,
+        "source_action_id": result.action_id,
+        "source_failure_code": failure.code,
+        "source_failure_category": failure.category,
+        "source_attempt_id": failure.terminal_attempt_id,
+        "failure_episode_id": failure.failure_episode_id,
+        "supporting_event_record_seq": outcome.supporting_event_record_seq,
+        "machine_format_failure_count": failure.machine_format_failure_count,
+        "last_machine_format_attempt_id": failure.last_machine_format_attempt_id,
+        "last_machine_format_failure_code": failure.last_machine_format_failure_code,
+        "output_budget_failure_count": failure.output_budget_failure_count,
+        "last_output_budget_attempt_id": failure.last_output_budget_attempt_id,
+        "last_output_budget_failure_code": failure.last_output_budget_failure_code,
     }
 
 

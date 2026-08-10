@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import math
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -13,6 +13,9 @@ from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
 from app.v2.event_contract import canonical_event_payload
 from app.v2.model_context_contract import frozen_model_context_contract
+from app.v2.model_generation_policy_contract import (
+    resolve_model_generation_policy_contract,
+)
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     frozen_player_model_configuration,
@@ -72,6 +75,7 @@ class V2MatchSnapshot:
     rule: dict[str, Any]
     max_rounds: int
     model_context_contract: dict[str, Any]
+    model_generation_policy_contract: dict[str, Any] | None
     players: tuple[V2MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
 
@@ -92,9 +96,22 @@ class V2ExileResult:
 @dataclass(frozen=True)
 class V2DayVoteCommit:
     voter_player_id: str
-    target_player_id: str
+    target_player_id: str | None
     weight: float
     decision_note: str | None
+    technical_status: Literal["technical_abstain"] | None = None
+    technical_reason: str | None = None
+    source_action_id: str | None = None
+    supporting_event_record_seq: int | None = None
+    failure_episode_id: str | None = None
+    failure_mode: (
+        Literal[
+            "output_budget_exhausted",
+            "attempt_hard_timeout",
+            "action_wall_timeout",
+        ]
+        | None
+    ) = None
 
 
 class V2MatchRepository:
@@ -135,6 +152,9 @@ class V2MatchRepository:
                 rule=compiled_rule,
                 max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
                 model_context_contract=(frozen_model_context_contract(game.rule_snapshot) or {}),
+                model_generation_policy_contract=(
+                    resolve_model_generation_policy_contract(game.rule_snapshot)
+                ),
                 players=_players(db, game),
                 public_history=_public_history(db, game_id),
             )
@@ -215,31 +235,54 @@ class V2MatchRepository:
                 resolution_payload=resolution_payload,
             )
             for vote in votes:
+                vote_payload = {
+                    "round_no": round_no,
+                    "action_type": action_type,
+                    "voter_player_id": vote.voter_player_id,
+                    "target_player_id": vote.target_player_id,
+                    "weight": vote.weight,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                }
+                if vote.technical_status is not None:
+                    vote_payload.update(
+                        {
+                            "technical_status": vote.technical_status,
+                            "technical_reason": vote.technical_reason,
+                        }
+                    )
                 _append_event(
                     db,
                     game=game,
                     event_type="day_vote_committed",
                     audience="all",
-                    payload={
-                        "round_no": round_no,
-                        "action_type": action_type,
-                        "voter_player_id": vote.voter_player_id,
-                        "target_player_id": vote.target_player_id,
-                        "weight": vote.weight,
-                        "batch_id": batch_id,
-                        "public_cutoff_record_seq": public_cutoff_record_seq,
-                    },
+                    payload=vote_payload,
                 )
-                _add_private_action_decision(
-                    db,
-                    game=game,
-                    player_id=vote.voter_player_id,
-                    round_no=round_no,
-                    action_type=action_type,
-                    decision={"target_player_id": vote.target_player_id},
-                    decision_note=vote.decision_note,
-                    context=decision_context,
-                )
+                if vote.technical_status == "technical_abstain":
+                    _append_event(
+                        db,
+                        game=game,
+                        event_type="day_vote_technical_abstention_committed",
+                        audience="god_view",
+                        payload={
+                            **vote_payload,
+                            "source_action_id": vote.source_action_id,
+                            "supporting_event_record_seq": (vote.supporting_event_record_seq),
+                            "failure_episode_id": vote.failure_episode_id,
+                            "failure_mode": vote.failure_mode,
+                        },
+                    )
+                else:
+                    _add_private_action_decision(
+                        db,
+                        game=game,
+                        player_id=vote.voter_player_id,
+                        round_no=round_no,
+                        action_type=action_type,
+                        decision={"target_player_id": vote.target_player_id},
+                        decision_note=vote.decision_note,
+                        context=decision_context,
+                    )
             _append_event(
                 db,
                 game=game,
@@ -1115,19 +1158,65 @@ def _validate_day_vote_batch(
     candidate_id_set = set(candidate_ids)
     computed_totals: dict[str, float] = {}
     computed_weights: dict[str, float] = {}
+    computed_technical_abstentions: list[dict[str, str]] = []
     for vote in votes:
-        if vote.target_player_id == vote.voter_player_id or vote.target_player_id not in (
-            candidate_id_set
-        ):
-            raise V2RepositoryError("day vote target is invalid")
         voter = db.get(V2PlayerState, (game.game_id, vote.voter_player_id))
-        target = db.get(V2PlayerState, (game.game_id, vote.target_player_id))
         if voter is None or not voter.alive:
             raise V2RepositoryError("day vote voter must be alive")
+        try:
+            weight = float(vote.weight)
+        except (TypeError, ValueError) as exc:
+            raise V2RepositoryError("day vote weight is invalid") from exc
+        if not math.isfinite(weight):
+            raise V2RepositoryError("day vote weight is invalid")
+
+        if vote.technical_status == "technical_abstain":
+            reason = vote.technical_reason
+            if (
+                vote.target_player_id is not None
+                or weight != 0.0
+                or vote.decision_note is not None
+                or not isinstance(reason, str)
+                or not reason.strip()
+                or len(reason) > 120
+            ):
+                raise V2RepositoryError("day vote technical abstention is invalid")
+            _validate_day_vote_technical_abstention_lineage(
+                db,
+                game=game,
+                vote=vote,
+                action_type=action_type,
+                public_cutoff_record_seq=public_cutoff_record_seq,
+            )
+            computed_weights[vote.voter_player_id] = 0.0
+            computed_technical_abstentions.append(
+                {
+                    "voter_player_id": vote.voter_player_id,
+                    "technical_status": "technical_abstain",
+                    "technical_reason": reason,
+                }
+            )
+            continue
+
+        if (
+            vote.technical_status is not None
+            or vote.technical_reason is not None
+            or vote.source_action_id is not None
+            or vote.supporting_event_record_seq is not None
+            or vote.failure_episode_id is not None
+            or vote.failure_mode is not None
+        ):
+            raise V2RepositoryError("day vote technical status is invalid")
+        if (
+            not isinstance(vote.target_player_id, str)
+            or vote.target_player_id == vote.voter_player_id
+            or vote.target_player_id not in candidate_id_set
+        ):
+            raise V2RepositoryError("day vote target is invalid")
+        target = db.get(V2PlayerState, (game.game_id, vote.target_player_id))
         if target is None or not target.alive:
             raise V2RepositoryError("day vote target must be alive")
-        weight = float(vote.weight)
-        if not math.isfinite(weight) or weight <= 0:
+        if weight <= 0:
             raise V2RepositoryError("day vote weight must be positive")
         computed_weights[vote.voter_player_id] = weight
         computed_totals[vote.target_player_id] = (
@@ -1137,6 +1226,12 @@ def _validate_day_vote_batch(
         raise V2RepositoryError("day vote voter weights are inconsistent")
     if resolution_payload.get("totals") != computed_totals:
         raise V2RepositoryError("day vote totals are inconsistent")
+    technical_abstentions = resolution_payload.get("technical_abstentions")
+    if computed_technical_abstentions:
+        if technical_abstentions != computed_technical_abstentions:
+            raise V2RepositoryError("day vote technical abstentions are inconsistent")
+    elif technical_abstentions not in (None, []):
+        raise V2RepositoryError("day vote technical abstentions are inconsistent")
     leaders = []
     if computed_totals:
         highest = max(computed_totals.values())
@@ -1173,6 +1268,101 @@ def _validate_day_vote_batch(
         for fact in existing_private_decisions
     ):
         raise V2RepositoryError("day vote batch already has durable private decisions")
+
+
+def _validate_day_vote_technical_abstention_lineage(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    vote: V2DayVoteCommit,
+    action_type: str,
+    public_cutoff_record_seq: int,
+) -> None:
+    source_action_id = vote.source_action_id
+    supporting_record_seq = vote.supporting_event_record_seq
+    failure_episode_id = vote.failure_episode_id
+    failure_mode = vote.failure_mode
+    if (
+        not isinstance(source_action_id, str)
+        or not source_action_id
+        or not isinstance(supporting_record_seq, int)
+        or isinstance(supporting_record_seq, bool)
+        or supporting_record_seq <= public_cutoff_record_seq
+        or not isinstance(failure_episode_id, str)
+        or not failure_episode_id
+        or failure_mode
+        not in {
+            "output_budget_exhausted",
+            "attempt_hard_timeout",
+            "action_wall_timeout",
+        }
+    ):
+        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+
+    supporting = db.scalar(
+        select(V2GameRecordEvent).where(
+            V2GameRecordEvent.game_id == game.game_id,
+            V2GameRecordEvent.record_seq == supporting_record_seq,
+        )
+    )
+    supporting_payload = supporting.payload if supporting is not None else None
+    if (
+        supporting is None
+        or supporting.run_id != game.current_run_id
+        or supporting.event_type != "technical_target_outcome_applied"
+        or not isinstance(supporting_payload, dict)
+        or supporting_payload.get("audience") != "god_view"
+        or supporting_payload.get("action_id") != source_action_id
+        or supporting_payload.get("failure_episode_id") != failure_episode_id
+        or supporting_payload.get("actor_id") != vote.voter_player_id
+        or supporting_payload.get("action_type") != action_type
+        or supporting_payload.get("technical_outcome") != "technical_abstain"
+        or supporting_payload.get("failure_code") != vote.technical_reason
+        or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
+        or supporting_payload.get("target_player_id") is not None
+        or supporting_payload.get("model_generation_policy_schema_version") != 3
+    ):
+        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+
+    succeeded_events = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == game.current_run_id,
+                V2GameRecordEvent.event_type == "action_succeeded",
+            )
+        )
+    )
+    matching_succeeded = [
+        event
+        for event in succeeded_events
+        if event.record_seq > supporting_record_seq
+        and isinstance(event.payload, dict)
+        and event.payload.get("action_id") == source_action_id
+        and event.payload.get("failure_episode_id") == failure_episode_id
+        and event.payload.get("technical_outcome_record_seq") == supporting_record_seq
+    ]
+    if len(matching_succeeded) != 1:
+        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+
+    existing_lineage_events = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == game.current_run_id,
+                V2GameRecordEvent.event_type == "day_vote_technical_abstention_committed",
+            )
+        )
+    )
+    if any(
+        isinstance(event.payload, dict)
+        and (
+            event.payload.get("source_action_id") == source_action_id
+            or event.payload.get("supporting_event_record_seq") == supporting_record_seq
+        )
+        for event in existing_lineage_events
+    ):
+        raise V2RepositoryError("day vote technical abstention lineage was already committed")
 
 
 def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:

@@ -31,6 +31,9 @@ from app.v2.model_context import (
     private_authoritative_facts,
 )
 from app.v2.model_context_contract import is_supported_model_context_contract
+from app.v2.model_generation_policy_contract import (
+    resolve_model_generation_action_policy,
+)
 from app.v2.model_client import V2ModelDecision
 from app.v2.protocol import (
     day_progress,
@@ -480,6 +483,13 @@ class V2DayEngine:
             },
         )
         leaders = _leaders(votes)
+        if not leaders:
+            await self._destroy_badge(
+                game_id=game_id,
+                broadcaster=broadcaster,
+                reason="no_valid_sheriff_votes",
+            )
+            return
         if len(leaders) == 1:
             winner = next(item for item in remaining if item.player_id == leaders[0])
             await self._elect_sheriff(
@@ -1069,6 +1079,8 @@ class V2DayEngine:
         ]
         machine_format_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
         output_budget_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
+        technical_abstain_reasons: list[str | None] = [None for _item in prepared]
+        technical_abstain_results: list[V2ActionResult | None] = [None for _item in prepared]
 
         async def request_vote(
             index: int,
@@ -1117,6 +1129,7 @@ class V2DayEngine:
                 prior_output_budget_failures=output_budget_failure_counts[index],
                 automatic_output_budget_budget=(_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET),
                 preflight_pause_failure=preflight_pause_failure,
+                target_exhaustion_outcome="technical_abstain",
                 return_result=True,
             )
             if not isinstance(result, V2ActionResult):
@@ -1150,6 +1163,22 @@ class V2DayEngine:
                         failure.failure_episode_id
                     )
 
+        def observe_technical_outcome(index: int, result: V2ActionResult) -> bool:
+            outcome = result.technical_outcome
+            if outcome is None:
+                return False
+            if (
+                outcome.kind != "technical_abstain"
+                or result.decision is not None
+                or result.action_id is None
+                or not outcome.failure.code
+                or not outcome.failure.failure_episode_id
+            ):
+                raise V2DayRuntimeError("day_vote_technical_outcome_invalid")
+            technical_abstain_reasons[index] = outcome.failure.code
+            technical_abstain_results[index] = result
+            return True
+
         # All non-blocking attempts use the same frozen public cutoff. Initial
         # failures receive one more isolated concurrent attempt; only voters
         # still missing after that enter the blocking path one at a time. This
@@ -1165,8 +1194,13 @@ class V2DayEngine:
         )
         for index, result in enumerate(initial_results):
             observe_failure(index, result)
+            observe_technical_outcome(index, result)
         decisions = [result.decision for result in initial_results]
-        failed_indexes = [index for index, decision in enumerate(decisions) if decision is None]
+        failed_indexes = [
+            index
+            for index, decision in enumerate(decisions)
+            if decision is None and technical_abstain_reasons[index] is None
+        ]
         initial_failed_voter_ids = [prepared[index][0].player_id for index in failed_indexes]
         if failed_indexes:
             self._repository.append_event(
@@ -1206,6 +1240,7 @@ class V2DayEngine:
                 index for index in failed_indexes if index not in concurrent_recovery_index_set
             ]
             concurrent_recovered_voter_ids: list[str] = []
+            concurrent_technical_abstained_voter_ids: list[str] = []
             for index, result in zip(
                 concurrent_recovery_indexes,
                 concurrent_recovery_results,
@@ -1213,7 +1248,9 @@ class V2DayEngine:
             ):
                 observe_failure(index, result)
                 decisions[index] = result.decision
-                if result.decision is None:
+                if observe_technical_outcome(index, result):
+                    concurrent_technical_abstained_voter_ids.append(prepared[index][0].player_id)
+                elif result.decision is None:
                     still_failed_indexes.append(index)
                 else:
                     concurrent_recovered_voter_ids.append(prepared[index][0].player_id)
@@ -1221,18 +1258,23 @@ class V2DayEngine:
             still_failed_voter_ids = [
                 prepared[index][0].player_id for index in still_failed_indexes
             ]
+            concurrent_recovery_payload = {
+                "round_no": state.round_no,
+                "action_type": action_type,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
+                "recovered_voter_ids": concurrent_recovered_voter_ids,
+                "still_failed_voter_ids": still_failed_voter_ids,
+            }
+            if concurrent_technical_abstained_voter_ids:
+                concurrent_recovery_payload["technical_abstained_voter_ids"] = (
+                    concurrent_technical_abstained_voter_ids
+                )
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_concurrent_recovery_completed",
                 audience="god_view",
-                payload={
-                    "round_no": state.round_no,
-                    "action_type": action_type,
-                    "batch_id": batch_id,
-                    "public_cutoff_record_seq": public_cutoff_record_seq,
-                    "recovered_voter_ids": concurrent_recovered_voter_ids,
-                    "still_failed_voter_ids": still_failed_voter_ids,
-                },
+                payload=concurrent_recovery_payload,
             )
 
             for index in still_failed_indexes:
@@ -1301,21 +1343,69 @@ class V2DayEngine:
                     preflight_pause_failure=preflight_pause_failure,
                 )
                 decisions[index] = result.decision
+                observe_failure(index, result)
+                observe_technical_outcome(index, result)
+            recovered_voter_ids = [
+                prepared[index][0].player_id
+                for index in failed_indexes
+                if decisions[index] is not None
+            ]
+            recovery_technical_abstained_voter_ids = [
+                prepared[index][0].player_id
+                for index in failed_indexes
+                if technical_abstain_reasons[index] is not None
+            ]
+            recovery_payload = {
+                "round_no": state.round_no,
+                "action_type": action_type,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
+                "recovered_voter_ids": recovered_voter_ids,
+            }
+            if recovery_technical_abstained_voter_ids:
+                recovery_payload["technical_abstained_voter_ids"] = (
+                    recovery_technical_abstained_voter_ids
+                )
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_recovery_completed",
                 audience="god_view",
-                payload={
-                    "round_no": state.round_no,
-                    "action_type": action_type,
-                    "batch_id": batch_id,
-                    "public_cutoff_record_seq": public_cutoff_record_seq,
-                    "recovered_voter_ids": initial_failed_voter_ids,
-                },
+                payload=recovery_payload,
             )
 
         committed: list[V2DayVoteCommit] = []
-        for (voter, eligible), decision in zip(prepared, decisions, strict=True):
+        for index, ((voter, eligible), decision) in enumerate(
+            zip(prepared, decisions, strict=True)
+        ):
+            technical_reason = technical_abstain_reasons[index]
+            if technical_reason is not None:
+                technical_result = technical_abstain_results[index]
+                technical_outcome = (
+                    technical_result.technical_outcome if technical_result is not None else None
+                )
+                if (
+                    decision is not None
+                    or technical_result is None
+                    or technical_result.action_id is None
+                    or technical_outcome is None
+                    or technical_outcome.failure.failure_episode_id is None
+                ):
+                    raise V2DayRuntimeError("day_vote_technical_outcome_invalid")
+                committed.append(
+                    V2DayVoteCommit(
+                        voter_player_id=voter.player_id,
+                        target_player_id=None,
+                        weight=0.0,
+                        decision_note=None,
+                        technical_status="technical_abstain",
+                        technical_reason=technical_reason,
+                        source_action_id=technical_result.action_id,
+                        supporting_event_record_seq=(technical_outcome.supporting_event_record_seq),
+                        failure_episode_id=(technical_outcome.failure.failure_episode_id),
+                        failure_mode=technical_outcome.failure_mode,
+                    )
+                )
+                continue
             if decision is None:
                 raise V2DayRuntimeError(f"{action_type}_vote_batch_incomplete")
             target_id = _required_target(decision)
@@ -1366,18 +1456,22 @@ class V2DayEngine:
                 if weighted and state.sheriff_player_id is not None
                 else None
             ),
-            "voter_weights": {
-                voter.player_id: (
-                    float(state.rule.get("sheriff_vote_weight") or 1)
-                    if weighted and voter.player_id == state.sheriff_player_id
-                    else 1.0
-                )
-                for voter in voters
-            },
+            "voter_weights": {vote.voter_player_id: vote.weight for vote in committed},
             "totals": dict(totals),
             "leaders": _leaders(dict(totals)),
             "identity_reveal": "none",
         }
+        technical_abstentions = [
+            {
+                "voter_player_id": vote.voter_player_id,
+                "technical_status": vote.technical_status,
+                "technical_reason": vote.technical_reason,
+            }
+            for vote in committed
+            if vote.technical_status is not None
+        ]
+        if technical_abstentions:
+            resolution_payload["technical_abstentions"] = technical_abstentions
         self._repository.finalize_day_vote_batch(
             game_id=game_id,
             phase_id=state.phase_id,
@@ -1723,6 +1817,11 @@ class V2DayEngine:
                 key=lambda player: player.seat,
             )
         )
+        memory_policy = resolve_model_generation_action_policy(
+            state.model_generation_policy_contract,
+            action_type="private_round_memory",
+        )
+        memory_mode = memory_policy.private_round_memory_mode
         batch_id = f"{state.game_id}:round_{state.round_no}:private_memories"
         self._repository.append_event(
             game_id=state.game_id,
@@ -1734,8 +1833,85 @@ class V2DayEngine:
                 "public_cutoff_record_seq": state.last_record_seq,
                 "player_ids": [player.player_id for player in players],
                 "commit_order": [player.player_id for player in players],
+                "private_round_memory_mode": memory_mode,
             },
         )
+
+        if memory_mode == "reuse_previous_non_blocking":
+            try:
+                summary_completed = await self._judge(
+                    state=state,
+                    broadcaster=broadcaster,
+                    action_type="judge_day_summary",
+                    objective=f"播报第{state.round_no}天流程结束并即将入夜",
+                    success_phase_state=state.phase_state,
+                    context={},
+                )
+            except BaseException:
+                try:
+                    self._repository.append_event(
+                        game_id=state.game_id,
+                        event_type="day_private_memory_batch_canceled",
+                        audience="god_view",
+                        payload={
+                            "round_no": state.round_no,
+                            "batch_id": batch_id,
+                            "private_round_memory_mode": memory_mode,
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Live V2 could not persist non-blocking private memory batch cancellation"
+                    )
+                raise
+            if not summary_completed:
+                self._repository.append_event(
+                    game_id=state.game_id,
+                    event_type="day_private_memory_batch_completed",
+                    audience="god_view",
+                    payload={
+                        "round_no": state.round_no,
+                        "batch_id": batch_id,
+                        "public_summary_status": "failed",
+                        "private_round_memory_mode": memory_mode,
+                        "memories": [],
+                        "commit_order": [player.player_id for player in players],
+                    },
+                )
+                return False
+            skipped = [
+                {
+                    "player_id": player.player_id,
+                    "status": "generation_skipped_non_blocking",
+                }
+                for player in players
+            ]
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="private_round_memory_generation_skipped",
+                audience="god_view",
+                payload={
+                    "round_no": state.round_no,
+                    "batch_id": batch_id,
+                    "reason": "non_blocking_latency_policy",
+                    "public_cutoff_record_seq": state.last_record_seq,
+                    "player_ids": [player.player_id for player in players],
+                },
+            )
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="day_private_memory_batch_completed",
+                audience="god_view",
+                payload={
+                    "round_no": state.round_no,
+                    "batch_id": batch_id,
+                    "public_summary_status": "completed",
+                    "private_round_memory_mode": memory_mode,
+                    "memories": skipped,
+                    "commit_order": [player.player_id for player in players],
+                },
+            )
+            return True
 
         request_started = {player.player_id: asyncio.Event() for player in players}
         memory_tasks = {
@@ -1955,6 +2131,7 @@ class V2DayEngine:
         prior_output_budget_failures: int = 0,
         automatic_output_budget_budget: int | None = None,
         preflight_pause_failure: V2PreflightPauseFailure | None = None,
+        target_exhaustion_outcome: Literal["technical_abstain"] | None = None,
         return_result: bool = False,
     ) -> V2ModelDecision | V2ActionResult | None:
         self._actions.check_cancellation(game_id)
@@ -2080,6 +2257,7 @@ class V2DayEngine:
             prior_output_budget_failures=prior_output_budget_failures,
             automatic_output_budget_budget=automatic_output_budget_budget,
             preflight_pause_failure=preflight_pause_failure,
+            target_exhaustion_outcome=target_exhaustion_outcome,
         )
         if return_result and callable(getattr(self._actions, "run_player_decision_result", None)):
             result = await self._actions.run_player_decision_result(
@@ -2095,7 +2273,7 @@ class V2DayEngine:
             )
             result = V2ActionResult(decision=decision)
         decision = result.decision if result is not None else None
-        if decision is None and not allow_failure:
+        if decision is None and not allow_failure and result.technical_outcome is None:
             raise V2DayRuntimeError(f"{action_type}_failed")
         if return_result:
             return result

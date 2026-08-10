@@ -28,7 +28,11 @@ _SOURCE_EVENT_TYPES = frozenset(
     }
 )
 _TECHNICAL_SUPPORT_EVENT_TYPES = frozenset(
-    {"action_skipped_technical", "technical_fallback_applied"}
+    {
+        "action_skipped_technical",
+        "technical_fallback_applied",
+        "technical_target_outcome_applied",
+    }
 )
 _RUN_FAILURE_EVENT_TYPES = frozenset(
     {
@@ -477,7 +481,8 @@ def _collect_terminal_candidates(
                 continue
             resolution: FailureEpisodeResolution = (
                 "technical_skip"
-                if supporting.event_type == "action_skipped_technical"
+                if supporting.event_type
+                in {"action_skipped_technical", "technical_target_outcome_applied"}
                 else "technical_false_fallback"
             )
             builder.terminals.append(_TerminalCandidate(resolution, event, supporting))

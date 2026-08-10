@@ -16,6 +16,7 @@ from app.v2 import tts_client as v2_tts
 from app.v2.action_engine import (
     V2ActionFailure,
     V2ActionResult,
+    V2ActionTechnicalOutcome,
     V2DecisionContract,
     V2ModelRetryPolicy,
     V2SpeechSpec,
@@ -27,6 +28,7 @@ from app.v2.action_engine import (
     _model_generation_policy_audit_payload,
     _required_retry_window_seconds,
     _resolved_reasoning_only_elapsed_ms,
+    _technical_target_exhaustion_outcome,
     _validate_model_target_decision,
 )
 from app.v2.director_projection import project_director_scene
@@ -516,6 +518,146 @@ def test_v2_failure_episode_requires_technical_support_and_action_success_pair()
     assert episode.invariant_errors == ()
 
 
+def test_v2_failure_episode_accepts_target_technical_outcome_as_technical_skip() -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_target",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_target_1",
+    )
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={
+                "action_id": "v2_action_target",
+                "attempt_id": "v2_model_target_1",
+                "retry_cycle": 1,
+                "audience": "player_private",
+            },
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                "action_id": "v2_action_target",
+                "attempt_id": "v2_model_target_1",
+                "retry_cycle": 1,
+                "failure_code": "model_output_budget_exhausted",
+                "failure_episode_id": episode_id,
+                "audience": "player_private",
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "technical_target_outcome_applied",
+            payload={
+                "action_id": "v2_action_target",
+                "failure_episode_id": episode_id,
+                "technical_outcome": "technical_no_action",
+                "audience": "god_view",
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "action_succeeded",
+            payload={
+                "action_id": "v2_action_target",
+                "failure_episode_id": episode_id,
+                "technical_outcome_record_seq": 3,
+                "audience": "god_view",
+            },
+        ),
+    ]
+
+    episode = derive_failure_episodes(events)[0]
+
+    assert episode.resolution == "technical_skip"
+    assert episode.supporting_event_type == "technical_target_outcome_applied"
+    assert episode.supporting_event_record_seq == 3
+    assert episode.resolution_event_record_seq == 4
+    assert episode.invariant_errors == ()
+
+
+@pytest.mark.parametrize(
+    ("support_action_id", "support_episode_id", "support_run_id", "linked_record_seq"),
+    [
+        ("v2_action_other", "same", "v2_run_episode", 3),
+        ("v2_action_target", "other", "v2_run_episode", 3),
+        ("v2_action_target", "same", "v2_run_other", 3),
+        ("v2_action_target", "same", "v2_run_episode", 99),
+    ],
+)
+def test_v2_target_technical_support_must_match_action_episode_run_and_record_seq(
+    support_action_id: str,
+    support_episode_id: str,
+    support_run_id: str,
+    linked_record_seq: int,
+) -> None:
+    episode_id = stable_failure_episode_id(
+        game_id="v2_game_episode",
+        run_id="v2_run_episode",
+        action_id="v2_action_target",
+        retry_cycle=1,
+        first_failed_attempt_id="v2_model_target_1",
+    )
+    events = [
+        _failure_episode_event(
+            1,
+            "model_request_started",
+            payload={
+                "action_id": "v2_action_target",
+                "attempt_id": "v2_model_target_1",
+                "retry_cycle": 1,
+                "audience": "player_private",
+            },
+        ),
+        _failure_episode_event(
+            2,
+            "model_request_failed",
+            payload={
+                "action_id": "v2_action_target",
+                "attempt_id": "v2_model_target_1",
+                "retry_cycle": 1,
+                "failure_code": "model_output_budget_exhausted",
+                "failure_episode_id": episode_id,
+                "audience": "player_private",
+            },
+        ),
+        _failure_episode_event(
+            3,
+            "technical_target_outcome_applied",
+            run_id=support_run_id,
+            payload={
+                "action_id": support_action_id,
+                "failure_episode_id": (
+                    episode_id if support_episode_id == "same" else "v2_failure_other"
+                ),
+                "technical_outcome": "technical_no_action",
+                "audience": "god_view",
+            },
+        ),
+        _failure_episode_event(
+            4,
+            "action_succeeded",
+            payload={
+                "action_id": "v2_action_target",
+                "failure_episode_id": episode_id,
+                "technical_outcome_record_seq": linked_record_seq,
+                "audience": "god_view",
+            },
+        ),
+    ]
+
+    episode = next(
+        item for item in derive_failure_episodes(events) if item.failure_episode_id == episode_id
+    )
+
+    assert episode.resolution == "invariant_conflict"
+    assert "technical_supporting_event_invalid" in episode.invariant_errors
+
+
 def test_v2_failure_episode_reports_terminal_conflict_without_guessing_priority() -> None:
     episode_id = stable_failure_episode_id(
         game_id="v2_game_episode",
@@ -582,9 +724,26 @@ def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
     assert policy.action_total_seconds == 300.0
 
 
-def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is_disabled() -> None:
+def _legacy_model_generation_policy_v1() -> dict[str, Any]:
+    contract = current_model_generation_policy_contract()
+    contract["schema_version"] = 1
+    contract.pop("execution")
+    return contract
+
+
+def _model_generation_policy_v2() -> dict[str, Any]:
+    contract = current_model_generation_policy_contract()
+    contract["schema_version"] = 2
+    execution = contract["execution"]
+    execution["blocking_required_target_output_timeout_mode"] = "legacy_behavior"
+    execution["blocking_required_target_queue_wait_budget_mode"] = "active_only"
+    execution.pop("required_target_exhaustion")
+    return contract
+
+
+def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> None:
     expected = {
-        "schema_version": 1,
+        "schema_version": 3,
         "classification_version": 1,
         "enforcement": "observe_only",
         "reasoning_parameter_mode": "inherit_frozen_model_configuration",
@@ -612,6 +771,29 @@ def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is
             "first_night_last_words": "recoverable_public_speech",
             "private_round_memory": "isolated_auxiliary",
         },
+        "execution": {
+            "automatic_retry_enforcement": "enforce",
+            "output_budget_max_attempts": 1,
+            "attempt_hard_timeout_max_attempts": 1,
+            "transport_max_attempts": 2,
+            "post_token_transport_max_attempts": 1,
+            "queue_wait_budget_mode": "wall_clock",
+            "action_wall_timeout_ms": 300_000,
+            "blocking_required_target_output_timeout_mode": "technical_outcome",
+            "blocking_required_target_queue_wait_budget_mode": "wall_clock",
+            "required_target_exhaustion": {
+                "eligible_failure_modes": [
+                    "output_budget_exhausted",
+                    "attempt_hard_timeout",
+                    "action_wall_timeout",
+                ],
+                "day_vote_outcome": "technical_abstain",
+                "night_required_target_outcome": "technical_no_action",
+                "transport_mode": "retry_then_pause",
+                "machine_format_mode": "retry_then_pause",
+            },
+            "private_round_memory_mode": "reuse_previous_non_blocking",
+        },
     }
 
     assert current_model_generation_policy_contract() == expected
@@ -627,6 +809,26 @@ def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is
     assert resolved == expected
     assert resolved is not frozen["model_generation_policy_contract"]
     assert is_supported_model_generation_policy_contract(resolved) is True
+    v2 = _model_generation_policy_v2()
+    assert is_supported_model_generation_policy_contract(v2) is True
+    v2_resolved = resolve_model_generation_action_policy(
+        v2,
+        action_type="exile_vote",
+    )
+    assert v2_resolved.schema_version == 2
+    assert v2_resolved.blocking_required_target_output_timeout_mode == "legacy_behavior"
+    assert v2_resolved.blocking_required_target_queue_wait_budget_mode == "active_only"
+    assert v2_resolved.required_target_exhaustion is None
+    legacy = _legacy_model_generation_policy_v1()
+    assert is_supported_model_generation_policy_contract(legacy) is True
+    legacy_resolved = resolve_model_generation_action_policy(
+        legacy,
+        action_type="private_round_memory",
+    )
+    assert legacy_resolved.schema_version == 1
+    assert legacy_resolved.automatic_retry_enforcement == "legacy_behavior"
+    assert legacy_resolved.queue_wait_budget_mode == "active_only"
+    assert legacy_resolved.private_round_memory_mode == "blocking_generation"
     assert (
         project_public_rule_snapshot(
             {
@@ -641,7 +843,8 @@ def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value.update(schema_version=2),
+        lambda value: value.update(schema_version=4),
+        lambda value: value.update(schema_version=3.0),
         lambda value: value.update(enforcement="enabled"),
         lambda value: value.update(extra=True),
         lambda value: value["profiles"]["strategic_full"].update(timeout_max_attempts=True),
@@ -651,6 +854,19 @@ def test_model_generation_policy_v1_is_frozen_observe_only_and_legacy_missing_is
         ),
         lambda value: value["profiles"]["isolated_auxiliary"].update(timeout_max_attempts=4),
         lambda value: value["action_profiles"].pop("private_round_memory"),
+        lambda value: value["execution"].update(output_budget_max_attempts=0),
+        lambda value: value["execution"].update(queue_wait_budget_mode="active_only"),
+        lambda value: value["execution"].update(
+            blocking_required_target_output_timeout_mode="enforce"
+        ),
+        lambda value: value["execution"].update(private_round_memory_mode="blocking_generation"),
+        lambda value: value["execution"]["required_target_exhaustion"].update(
+            eligible_failure_modes=["output_budget_exhausted", "transport"]
+        ),
+        lambda value: value["execution"]["required_target_exhaustion"].update(
+            transport_mode="technical_outcome"
+        ),
+        lambda value: value["execution"].update(extra=True),
     ],
 )
 def test_model_generation_policy_present_unknown_or_malformed_fails_closed(
@@ -718,13 +934,35 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     assert resolved.enforcement == "observe_only"
     assert resolved.profile == profile
     assert resolved.source == "explicit_action_profile"
-    assert resolved.schema_version == 1
+    assert resolved.schema_version == 3
     assert resolved.classification_version == 1
     assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
     assert resolved.reasoning_only_timeout_ms == (
         240_000 if profile == "isolated_auxiliary" else 180_000
     )
     assert resolved.timeout_max_attempts == 1
+    assert resolved.automatic_retry_enforcement == "enforce"
+    assert resolved.output_budget_max_attempts == 1
+    assert resolved.attempt_hard_timeout_max_attempts == 1
+    assert resolved.transport_max_attempts == 2
+    assert resolved.post_token_transport_max_attempts == 1
+    assert resolved.queue_wait_budget_mode == "wall_clock"
+    assert resolved.action_wall_timeout_ms == 300_000
+    assert resolved.blocking_required_target_output_timeout_mode == "technical_outcome"
+    assert resolved.blocking_required_target_queue_wait_budget_mode == "wall_clock"
+    assert resolved.required_target_exhaustion is not None
+    assert resolved.required_target_exhaustion.eligible_failure_modes == (
+        "output_budget_exhausted",
+        "attempt_hard_timeout",
+        "action_wall_timeout",
+    )
+    assert resolved.required_target_exhaustion.day_vote_outcome == "technical_abstain"
+    assert (
+        resolved.required_target_exhaustion.night_required_target_outcome == "technical_no_action"
+    )
+    assert resolved.required_target_exhaustion.transport_mode == "retry_then_pause"
+    assert resolved.required_target_exhaustion.machine_format_mode == "retry_then_pause"
+    assert resolved.private_round_memory_mode == "reuse_previous_non_blocking"
 
 
 @pytest.mark.parametrize(
@@ -750,6 +988,7 @@ def test_model_generation_policy_unknown_actions_fall_back_to_strategic_full(
     assert resolved.source == "default_profile"
     assert resolved.reasoning_only_timeout_ms is None
     assert resolved.timeout_max_attempts == 2
+    assert resolved.automatic_retry_enforcement == "enforce"
 
 
 def test_model_generation_policy_legacy_missing_resolves_disabled_metadata() -> None:
@@ -767,6 +1006,12 @@ def test_model_generation_policy_legacy_missing_resolves_disabled_metadata() -> 
     assert resolved.reasoning_parameter_mode is None
     assert resolved.reasoning_only_timeout_ms is None
     assert resolved.timeout_max_attempts is None
+    assert resolved.automatic_retry_enforcement == "legacy_behavior"
+    assert resolved.queue_wait_budget_mode == "active_only"
+    assert resolved.blocking_required_target_output_timeout_mode == "legacy_behavior"
+    assert resolved.blocking_required_target_queue_wait_budget_mode == "active_only"
+    assert resolved.required_target_exhaustion is None
+    assert resolved.private_round_memory_mode == "blocking_generation"
 
 
 def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_threshold() -> None:
@@ -798,7 +1043,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "model_id": "glm-test",
         "action_type": "day_debate_speech",
         "model_generation_policy_contract_status": "supported",
-        "model_generation_policy_schema_version": 1,
+        "model_generation_policy_schema_version": 3,
         "model_generation_policy_classification_version": 1,
         "model_generation_policy_enforcement": "observe_only",
         "model_generation_policy_profile": "recoverable_public_speech",
@@ -806,6 +1051,27 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "model_generation_policy_reasoning_parameter_mode": ("inherit_frozen_model_configuration"),
         "reasoning_only_timeout_ms": 180_000,
         "timeout_max_attempts": 1,
+        "automatic_retry_enforcement": "enforce",
+        "output_budget_max_attempts": 1,
+        "attempt_hard_timeout_max_attempts": 1,
+        "transport_max_attempts": 2,
+        "post_token_transport_max_attempts": 1,
+        "queue_wait_budget_mode": "wall_clock",
+        "action_wall_timeout_ms": 300_000,
+        "blocking_required_target_output_timeout_mode": "technical_outcome",
+        "blocking_required_target_queue_wait_budget_mode": "wall_clock",
+        "required_target_exhaustion": {
+            "eligible_failure_modes": [
+                "output_budget_exhausted",
+                "attempt_hard_timeout",
+                "action_wall_timeout",
+            ],
+            "day_vote_outcome": "technical_abstain",
+            "night_required_target_outcome": "technical_no_action",
+            "transport_mode": "retry_then_pause",
+            "machine_format_mode": "retry_then_pause",
+        },
+        "private_round_memory_mode": "reuse_previous_non_blocking",
         "reasoning_only_elapsed_ms": 180_000,
         "shadow_would_timeout": True,
     }
@@ -978,6 +1244,244 @@ def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> 
         )
         == 3
     )
+
+
+def test_generation_policy_v3_suppresses_repeated_expensive_failures() -> None:
+    required_target_spec = _blocking_required_target_spec()
+    spec = replace(
+        required_target_spec,
+        decision_contract=V2DecisionContract(kind="speech"),
+        allowed_target_ids=None,
+    )
+    policy = V2ModelRetryPolicy(max_attempts=3)
+    generation_policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=spec.action_type,
+    )
+
+    output_budget = V2ModelError("model_output_budget_exhausted", retryable=True)
+    assert (
+        _effective_model_attempt_limit(
+            spec=spec,
+            exc=output_budget,
+            disposition=model_failure_disposition(output_budget),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 1
+    )
+    hard_timeout = V2ModelError(
+        "model_attempt_hard_timeout",
+        retryable=True,
+        timeout_scope="attempt_hard",
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=spec,
+            exc=hard_timeout,
+            disposition=model_failure_disposition(hard_timeout),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 1
+    )
+    pre_token_transport = V2ModelError("model_transport_failed", retryable=True)
+    assert (
+        _effective_model_attempt_limit(
+            spec=spec,
+            exc=pre_token_transport,
+            disposition=model_failure_disposition(pre_token_transport),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 2
+    )
+    post_token_transport = V2ModelError(
+        "model_transport_failed",
+        retryable=True,
+        first_token_seen=True,
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=spec,
+            exc=post_token_transport,
+            disposition=model_failure_disposition(post_token_transport),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 1
+    )
+    non_retryable_transport = V2ModelError("model_transport_failed", retryable=False)
+    assert (
+        _effective_model_attempt_limit(
+            spec=spec,
+            exc=non_retryable_transport,
+            disposition=model_failure_disposition(non_retryable_transport),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 1
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=required_target_spec,
+            exc=output_budget,
+            disposition=model_failure_disposition(output_budget),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 3
+    )
+    technical_target_spec = replace(
+        required_target_spec,
+        target_exhaustion_outcome="technical_no_action",
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=technical_target_spec,
+            exc=output_budget,
+            disposition=model_failure_disposition(output_budget),
+            policy=policy,
+            generation_policy=generation_policy,
+        )
+        == 1
+    )
+    v2_policy = resolve_model_generation_action_policy(
+        _model_generation_policy_v2(),
+        action_type=technical_target_spec.action_type,
+    )
+    assert (
+        _effective_model_attempt_limit(
+            spec=technical_target_spec,
+            exc=output_budget,
+            disposition=model_failure_disposition(output_budget),
+            policy=policy,
+            generation_policy=v2_policy,
+        )
+        == 3
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_failure_mode"),
+    [
+        (V2ModelError("model_output_budget_exhausted"), "output_budget_exhausted"),
+        (
+            V2ModelError(
+                "model_attempt_hard_timeout",
+                timeout_scope="attempt_hard",
+            ),
+            "attempt_hard_timeout",
+        ),
+        (
+            V2ModelError(
+                "model_total_timeout",
+                timeout_scope="action_budget",
+            ),
+            "action_wall_timeout",
+        ),
+        (
+            V2ModelError(
+                "model_total_timeout",
+                failure_stage="action_budget",
+            ),
+            "action_wall_timeout",
+        ),
+    ],
+)
+def test_v3_required_target_expensive_exhaustion_returns_typed_technical_outcome(
+    error: V2ModelError,
+    expected_failure_mode: str,
+) -> None:
+    spec = replace(
+        _blocking_required_target_spec(),
+        isolated_failure=True,
+        target_exhaustion_outcome="technical_no_action",
+    )
+    generation_policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=spec.action_type,
+    )
+
+    assert _technical_target_exhaustion_outcome(
+        spec=spec,
+        exc=error,
+        generation_policy=generation_policy,
+    ) == ("technical_no_action", expected_failure_mode)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        V2ModelError("model_first_token_timeout", timeout_scope="first_token"),
+        V2ModelError("model_stream_idle_timeout", timeout_scope="stream_idle"),
+        V2ModelError("model_total_timeout", timeout_scope="attempt_budget"),
+        V2ModelError("model_transport_failed"),
+        V2QualityError("model_decision_invalid_json", raw_response="not-json"),
+    ],
+)
+def test_v3_required_target_transport_format_and_soft_timeouts_do_not_technical_fallback(
+    error: V2ModelError,
+) -> None:
+    spec = replace(
+        _blocking_required_target_spec(),
+        target_exhaustion_outcome="technical_abstain",
+    )
+    generation_policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=spec.action_type,
+    )
+
+    assert (
+        _technical_target_exhaustion_outcome(
+            spec=spec,
+            exc=error,
+            generation_policy=generation_policy,
+        )
+        is None
+    )
+
+
+def test_required_target_technical_outcome_requires_v3_and_explicit_spec_mode() -> None:
+    spec = _blocking_required_target_spec()
+    error = V2ModelError("model_output_budget_exhausted")
+    v3_policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type=spec.action_type,
+    )
+    v2_policy = resolve_model_generation_action_policy(
+        _model_generation_policy_v2(),
+        action_type=spec.action_type,
+    )
+
+    assert (
+        _technical_target_exhaustion_outcome(
+            spec=spec,
+            exc=error,
+            generation_policy=v3_policy,
+        )
+        is None
+    )
+    assert (
+        _technical_target_exhaustion_outcome(
+            spec=replace(spec, target_exhaustion_outcome="technical_no_action"),
+            exc=error,
+            generation_policy=v2_policy,
+        )
+        is None
+    )
+    with pytest.raises(
+        ValueError,
+        match="target exhaustion outcome requires a required target contract",
+    ):
+        replace(
+            spec,
+            decision_contract=V2DecisionContract(
+                kind="target",
+                target_mode="optional",
+            ),
+            target_exhaustion_outcome="technical_no_action",
+        )
 
 
 @pytest.mark.parametrize("elapsed_ms", [None, 0, -1, True])
@@ -1761,6 +2265,52 @@ def test_output_budget_failure_result_requires_independent_lineage() -> None:
         last_output_budget_failure_code="model_output_budget_exhausted",
     )
     assert failure.machine_format_failure_count == 0
+
+    technical_outcome = V2ActionTechnicalOutcome(
+        kind="technical_abstain",
+        failure_mode="output_budget_exhausted",
+        failure=failure,
+        supporting_event_record_seq=42,
+    )
+    result = V2ActionResult(
+        action_id="v2_action_terminal",
+        technical_outcome=technical_outcome,
+    )
+    assert result.decision is None
+    assert result.failure is None
+    assert result.technical_outcome is not None
+    assert result.technical_outcome.failure.failure_episode_id == failure.failure_episode_id
+
+    with pytest.raises(ValueError, match="technical outcome result requires an action_id"):
+        V2ActionResult(technical_outcome=technical_outcome)
+    with pytest.raises(
+        ValueError,
+        match="technical outcome result cannot carry a decision or failure",
+    ):
+        V2ActionResult(
+            action_id="v2_action_terminal",
+            failure=failure,
+            technical_outcome=technical_outcome,
+        )
+
+
+def test_technical_outcome_failure_mode_requires_matching_failure_category() -> None:
+    failure = V2ActionFailure(
+        code="model_transport_failed",
+        category="transport",
+        terminal_attempt_id="v2_model_terminal",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="technical outcome failure category does not match its mode",
+    ):
+        V2ActionTechnicalOutcome(
+            kind="technical_no_action",
+            failure_mode="attempt_hard_timeout",
+            failure=failure,
+            supporting_event_record_seq=7,
+        )
 
 
 def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_example() -> None:

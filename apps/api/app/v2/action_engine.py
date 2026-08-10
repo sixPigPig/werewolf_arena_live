@@ -35,6 +35,8 @@ from app.v2.model_client import (
 )
 from app.v2.model_failure_episode import stable_failure_episode_id
 from app.v2.model_generation_policy_contract import (
+    V2RequiredTargetExhaustionFailureMode,
+    V2RequiredTargetTechnicalOutcome,
     V2ResolvedModelGenerationPolicy,
     resolve_model_generation_action_policy,
 )
@@ -179,6 +181,7 @@ class V2SpeechSpec:
     activation_id: str | None = None
     output_kind: str = "public_speech"
     decision_contract: V2DecisionContract = V2DecisionContract(kind="speech")
+    target_exhaustion_outcome: V2RequiredTargetTechnicalOutcome | None = None
     context: dict[str, Any] | None = None
     allowed_target_ids: tuple[str, ...] | None = None
     model_players: tuple[V2ModelPlayerReference, ...] = ()
@@ -211,6 +214,11 @@ class V2SpeechSpec:
             raise ValueError("automatic_output_budget_budget must be non-negative")
         if self.preflight_pause_failure is not None and self.isolated_failure:
             raise ValueError("preflight pause requires a blocking action")
+        if self.target_exhaustion_outcome is not None and not (
+            self.decision_contract.kind == "target"
+            and self.decision_contract.target_mode == "required"
+        ):
+            raise ValueError("target exhaustion outcome requires a required target contract")
         if isinstance(self.context, dict) and "projection_at_seq" in self.context:
             raise ValueError("projection_at_seq must use the dedicated spec field")
         if self.projection_at_seq is None:
@@ -275,14 +283,41 @@ class V2ActionFailure:
 
 
 @dataclass(frozen=True)
+class V2ActionTechnicalOutcome:
+    kind: V2RequiredTargetTechnicalOutcome
+    failure_mode: V2RequiredTargetExhaustionFailureMode
+    failure: V2ActionFailure
+    supporting_event_record_seq: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.supporting_event_record_seq, int)
+            or isinstance(self.supporting_event_record_seq, bool)
+            or self.supporting_event_record_seq <= 0
+        ):
+            raise ValueError("technical outcome requires a supporting event record seq")
+        expected_category = (
+            "output_budget" if self.failure_mode == "output_budget_exhausted" else "timeout"
+        )
+        if self.failure.category != expected_category:
+            raise ValueError("technical outcome failure category does not match its mode")
+
+
+@dataclass(frozen=True)
 class V2ActionResult:
     action_id: str | None = None
     decision: V2ModelDecision | None = None
     failure: V2ActionFailure | None = None
+    technical_outcome: V2ActionTechnicalOutcome | None = None
 
     def __post_init__(self) -> None:
         if self.failure is not None and not self.action_id:
             raise ValueError("failed action result requires an action_id")
+        if self.technical_outcome is not None:
+            if not self.action_id:
+                raise ValueError("technical outcome result requires an action_id")
+            if self.decision is not None or self.failure is not None:
+                raise ValueError("technical outcome result cannot carry a decision or failure")
 
 
 @dataclass(frozen=True)
@@ -321,7 +356,46 @@ def _effective_model_attempt_limit(
     exc: V2ModelError,
     disposition: V2FailureDisposition,
     policy: V2ModelRetryPolicy,
+    generation_policy: V2ResolvedModelGenerationPolicy | None = None,
 ) -> int:
+    if generation_policy is not None and generation_policy.automatic_retry_enforcement == "enforce":
+        required_target = _is_blocking_required_target(spec)
+        # Required-target actions still need a frozen abstention/no-op rule at
+        # their batch or ability layer. Preserve their existing recovery path
+        # until that rule is present instead of turning a shorter model wait
+        # into an indefinite operator pause.
+        preserve_required_target_output_timeout = required_target and (
+            generation_policy.blocking_required_target_output_timeout_mode == "legacy_behavior"
+            or spec.target_exhaustion_outcome is None
+        )
+        if disposition.category == "output_budget" and not (
+            preserve_required_target_output_timeout
+        ):
+            return min(
+                policy.max_attempts,
+                generation_policy.output_budget_max_attempts or 1,
+            )
+        if disposition.category == "timeout" and not (preserve_required_target_output_timeout):
+            hard_timeout = exc.code == "model_attempt_hard_timeout" or exc.timeout_scope in {
+                "attempt_hard",
+                "action_budget",
+            }
+            return min(
+                policy.max_attempts,
+                (
+                    generation_policy.attempt_hard_timeout_max_attempts
+                    if hard_timeout
+                    else generation_policy.timeout_max_attempts
+                )
+                or 1,
+            )
+        if disposition.category == "transport":
+            max_attempts = (
+                generation_policy.post_token_transport_max_attempts
+                if exc.first_token_seen or not exc.retryable
+                else generation_policy.transport_max_attempts
+            )
+            return min(policy.max_attempts, max_attempts or 1)
     if exc.code == "model_output_budget_exhausted" and _is_blocking_required_target(spec):
         return min(policy.max_attempts, 3)
     return min(policy.max_attempts, disposition.max_attempts)
@@ -940,7 +1014,28 @@ class V2ActionEngine:
                     retry_cycle += 1
                 while model_decision is None:
                     model_started_at = time.monotonic()
-                    model_deadline = model_started_at + retry_policy.action_total_seconds
+                    blocking_required_target = _is_blocking_required_target(spec)
+                    effective_queue_wait_budget_mode = (
+                        resolved_generation_policy.blocking_required_target_queue_wait_budget_mode
+                        if blocking_required_target
+                        else resolved_generation_policy.queue_wait_budget_mode
+                    )
+                    effective_output_timeout_retry_mode = (
+                        resolved_generation_policy.blocking_required_target_output_timeout_mode
+                        if blocking_required_target
+                        else resolved_generation_policy.automatic_retry_enforcement
+                    )
+                    wall_clock_budget_enforced = (
+                        resolved_generation_policy.action_wall_timeout_ms is not None
+                        and effective_queue_wait_budget_mode == "wall_clock"
+                    )
+                    action_budget_seconds = retry_policy.action_total_seconds
+                    if resolved_generation_policy.action_wall_timeout_ms is not None:
+                        action_budget_seconds = min(
+                            action_budget_seconds,
+                            resolved_generation_policy.action_wall_timeout_ms / 1000,
+                        )
+                    model_deadline = model_started_at + action_budget_seconds
                     model_queue_wait_seconds = 0.0
                     # Operator resume starts a new retry cycle.  The observed
                     # window for a possible third output-budget attempt is
@@ -973,6 +1068,7 @@ class V2ActionEngine:
                             )
                         )
                         attempt_started_at = time.monotonic()
+                        attempt_queued_at: float | None = None
                         attempt_progress = _ModelAttemptProgressTrace()
                         managed_action_timeout: asyncio.Timeout | None = None
                         progress_method = getattr(
@@ -990,10 +1086,14 @@ class V2ActionEngine:
                             nonlocal attempt_started_at
                             nonlocal model_deadline
                             nonlocal model_queue_wait_seconds
+                            nonlocal attempt_queued_at
+                            if progress.stage == "queued" and attempt_queued_at is None:
+                                attempt_queued_at = time.monotonic()
                             if progress.stage == "admitted":
                                 queue_wait_seconds = (progress.queue_wait_ms or 0) / 1000
                                 model_queue_wait_seconds += queue_wait_seconds
-                                model_deadline += queue_wait_seconds
+                                if not wall_clock_budget_enforced:
+                                    model_deadline += queue_wait_seconds
                                 attempt_started_at = time.monotonic()
                                 if managed_action_timeout is not None:
                                     active_action_remaining = max(
@@ -1061,7 +1161,15 @@ class V2ActionEngine:
                                 "attempt_budget_ms": round(
                                     retry_policy.attempt_total_seconds * 1000
                                 ),
-                                "action_budget_ms": round(retry_policy.action_total_seconds * 1000),
+                                "action_budget_ms": round(action_budget_seconds * 1000),
+                                "action_wall_budget_enforced": wall_clock_budget_enforced,
+                                "blocking_required_target": blocking_required_target,
+                                "effective_output_timeout_retry_mode": (
+                                    effective_output_timeout_retry_mode
+                                ),
+                                "effective_queue_wait_budget_mode": (
+                                    effective_queue_wait_budget_mode
+                                ),
                                 "first_token_timeout_ms": round(
                                     getattr(
                                         self._model_client,
@@ -1182,7 +1290,9 @@ class V2ActionEngine:
                                     )
 
                                 if manages_attempt_timeout:
-                                    async with asyncio.timeout(None) as action_timeout:
+                                    async with asyncio.timeout(
+                                        remaining if wall_clock_budget_enforced else None
+                                    ) as action_timeout:
                                         managed_action_timeout = action_timeout
                                         model_decision = await generate_once()
                                 else:
@@ -1287,6 +1397,7 @@ class V2ActionEngine:
                                 exc=exc,
                                 disposition=disposition,
                                 policy=retry_policy,
+                                generation_policy=resolved_generation_policy,
                             )
                             if (
                                 disposition.category == "output_budget"
@@ -1331,6 +1442,19 @@ class V2ActionEngine:
                                     retry_cycle=retry_cycle,
                                     first_failed_attempt_id=model_attempt_id,
                                 )
+                            unadmitted_queue_wait_seconds = (
+                                max(0.0, time.monotonic() - attempt_queued_at)
+                                if attempt_queued_at is not None
+                                and not attempt_progress.admitted_recorded
+                                else 0.0
+                            )
+                            observed_queue_wait_seconds = (
+                                model_queue_wait_seconds + unadmitted_queue_wait_seconds
+                            )
+                            action_active_elapsed_seconds = max(
+                                0.0,
+                                time.monotonic() - model_started_at - observed_queue_wait_seconds,
+                            )
                             failure_payload = _model_failure_payload(
                                 action_id=claim.action_id,
                                 attempt_id=model_attempt_id,
@@ -1344,11 +1468,8 @@ class V2ActionEngine:
                                 action_recoverable=disposition.pausable,
                                 terminal=not retryable,
                                 attempt_budget_ms=round(retry_policy.attempt_total_seconds * 1000),
-                                action_budget_ms=round(retry_policy.action_total_seconds * 1000),
-                                action_elapsed_ms=round(
-                                    (time.monotonic() - model_started_at - model_queue_wait_seconds)
-                                    * 1000
-                                ),
+                                action_budget_ms=round(action_budget_seconds * 1000),
+                                action_elapsed_ms=round(action_active_elapsed_seconds * 1000),
                                 action_remaining_ms=max(
                                     0,
                                     round((model_deadline - time.monotonic()) * 1000),
@@ -1373,6 +1494,20 @@ class V2ActionEngine:
                             failure_payload["failure_episode_id"] = failure_episode_id
                             failure_payload.update(
                                 {
+                                    "action_wall_elapsed_ms": round(
+                                        (time.monotonic() - model_started_at) * 1000
+                                    ),
+                                    "action_wall_budget_enforced": (wall_clock_budget_enforced),
+                                    "observed_queue_wait_elapsed_ms": round(
+                                        observed_queue_wait_seconds * 1000
+                                    ),
+                                    "blocking_required_target": blocking_required_target,
+                                    "effective_output_timeout_retry_mode": (
+                                        effective_output_timeout_retry_mode
+                                    ),
+                                    "effective_queue_wait_budget_mode": (
+                                        effective_queue_wait_budget_mode
+                                    ),
                                     "effective_attempt_limit": effective_attempt_limit,
                                     "retry_delay_ms": round(delay_seconds * 1000),
                                     "required_retry_window_ms": round(required_retry_window * 1000),
@@ -1514,6 +1649,92 @@ class V2ActionEngine:
                                     check_cancellation=check_cancellation,
                                 )
                                 continue
+                            target_technical_outcome = _technical_target_exhaustion_outcome(
+                                spec=spec,
+                                exc=exc,
+                                generation_policy=resolved_generation_policy,
+                            )
+                            if target_technical_outcome is not None:
+                                target_outcome_kind, target_failure_mode = target_technical_outcome
+                                event_type = "technical_target_outcome_applied"
+                                technical_outcome_record_seq = self._repository.append_event(
+                                    game_id=claim.game_id,
+                                    event_type=event_type,
+                                    audience=claim.audience,
+                                    payload={
+                                        "action_id": claim.action_id,
+                                        "activation_id": spec.activation_id,
+                                        "attempt_id": model_attempt_id,
+                                        "failure_episode_id": failure_episode_id,
+                                        "action_type": spec.action_type,
+                                        "actor_id": spec.actor_id,
+                                        "phase_id": spec.phase_id,
+                                        "round_no": (
+                                            spec.context.get("round_no")
+                                            if isinstance(spec.context, dict)
+                                            else None
+                                        ),
+                                        "failure_code": exc.code,
+                                        "failure_category": disposition.category,
+                                        "target_exhaustion_failure_mode": target_failure_mode,
+                                        "technical_outcome": target_outcome_kind,
+                                        "target_player_id": None,
+                                        "model_generation_policy_schema_version": (
+                                            resolved_generation_policy.schema_version
+                                        ),
+                                    },
+                                )
+                                self._repository.complete_silent_action(
+                                    claim=claim,
+                                    next_live_state=spec.success_live_state,
+                                    next_phase_state=spec.success_phase_state,
+                                    best_effort=spec.best_effort,
+                                    failure_episode_id=failure_episode_id,
+                                    technical_outcome_record_seq=(technical_outcome_record_seq),
+                                )
+                                clear_active_failure_episode()
+                                if not spec.best_effort and not spec.defer_presentation:
+                                    await broadcaster.broadcast_json(
+                                        live_state(
+                                            game_id=claim.game_id,
+                                            run_id=claim.run_id,
+                                            state=spec.success_live_state,
+                                            reason=event_type,
+                                        ),
+                                        audience=spec.audience,
+                                    )
+                                return V2ActionResult(
+                                    action_id=claim.action_id,
+                                    technical_outcome=V2ActionTechnicalOutcome(
+                                        kind=target_outcome_kind,
+                                        failure_mode=target_failure_mode,
+                                        failure=V2ActionFailure(
+                                            code=exc.code,
+                                            category=disposition.category,
+                                            terminal_attempt_id=model_attempt_id,
+                                            machine_format_failure_count=(
+                                                machine_format_failure_count
+                                            ),
+                                            last_machine_format_attempt_id=(
+                                                last_machine_format_attempt_id
+                                            ),
+                                            last_machine_format_failure_code=(
+                                                last_machine_format_failure_code
+                                            ),
+                                            output_budget_failure_count=(
+                                                output_budget_failure_count
+                                            ),
+                                            last_output_budget_attempt_id=(
+                                                last_output_budget_attempt_id
+                                            ),
+                                            last_output_budget_failure_code=(
+                                                last_output_budget_failure_code
+                                            ),
+                                            failure_episode_id=failure_episode_id,
+                                        ),
+                                        supporting_event_record_seq=(technical_outcome_record_seq),
+                                    ),
+                                )
                             technical_outcome = _technical_exhaustion_outcome(
                                 spec=spec,
                                 exc=exc,
@@ -1712,6 +1933,28 @@ class V2ActionEngine:
                         "passive_observations": passive_observations,
                         "repair_kind": model_decision.repair_kind,
                         "application_validation_result": "accepted",
+                        "action_budget_ms": round(action_budget_seconds * 1000),
+                        "action_elapsed_ms": round(
+                            max(
+                                0.0,
+                                time.monotonic() - model_started_at - model_queue_wait_seconds,
+                            )
+                            * 1000
+                        ),
+                        "action_wall_elapsed_ms": round(
+                            (time.monotonic() - model_started_at) * 1000
+                        ),
+                        "action_remaining_ms": max(
+                            0,
+                            round((model_deadline - time.monotonic()) * 1000),
+                        ),
+                        "action_wall_budget_enforced": wall_clock_budget_enforced,
+                        "observed_queue_wait_elapsed_ms": round(model_queue_wait_seconds * 1000),
+                        "blocking_required_target": blocking_required_target,
+                        "effective_output_timeout_retry_mode": (
+                            effective_output_timeout_retry_mode
+                        ),
+                        "effective_queue_wait_budget_mode": effective_queue_wait_budget_mode,
                         "first_token_ms": model_decision.first_token_ms,
                         "first_visible_text_ms": model_decision.first_visible_text_ms,
                         "completed_ms": model_decision.completed_ms,
@@ -2628,6 +2871,48 @@ _TECHNICAL_FALSE_FALLBACK_ACTION_TYPES = frozenset(
 )
 
 
+def _technical_target_exhaustion_outcome(
+    *,
+    spec: V2SpeechSpec,
+    exc: V2ModelError,
+    generation_policy: V2ResolvedModelGenerationPolicy,
+) -> tuple[V2RequiredTargetTechnicalOutcome, V2RequiredTargetExhaustionFailureMode] | None:
+    target_policy = generation_policy.required_target_exhaustion
+    if (
+        generation_policy.schema_version != 3
+        or generation_policy.blocking_required_target_output_timeout_mode != "technical_outcome"
+        or target_policy is None
+        or spec.target_exhaustion_outcome is None
+        or spec.decision_contract.kind != "target"
+        or spec.decision_contract.target_mode != "required"
+        or not spec.allowed_target_ids
+    ):
+        return None
+    if spec.target_exhaustion_outcome not in {
+        target_policy.day_vote_outcome,
+        target_policy.night_required_target_outcome,
+    }:
+        return None
+    failure_mode = _required_target_exhaustion_failure_mode(exc)
+    if failure_mode is None or failure_mode not in target_policy.eligible_failure_modes:
+        return None
+    return spec.target_exhaustion_outcome, failure_mode
+
+
+def _required_target_exhaustion_failure_mode(
+    exc: V2ModelError,
+) -> V2RequiredTargetExhaustionFailureMode | None:
+    if exc.code == "model_output_budget_exhausted":
+        return "output_budget_exhausted"
+    if exc.code == "model_attempt_hard_timeout" or exc.timeout_scope == "attempt_hard":
+        return "attempt_hard_timeout"
+    if exc.code == "model_total_timeout" and (
+        exc.timeout_scope == "action_budget" or exc.failure_stage == "action_budget"
+    ):
+        return "action_wall_timeout"
+    return None
+
+
 def _technical_exhaustion_outcome(
     *,
     spec: V2SpeechSpec,
@@ -2705,6 +2990,35 @@ def _model_generation_policy_audit_payload(
         "model_generation_policy_reasoning_parameter_mode": (policy.reasoning_parameter_mode),
         "reasoning_only_timeout_ms": reasoning_only_timeout_ms,
         "timeout_max_attempts": policy.timeout_max_attempts,
+        "automatic_retry_enforcement": policy.automatic_retry_enforcement,
+        "output_budget_max_attempts": policy.output_budget_max_attempts,
+        "attempt_hard_timeout_max_attempts": (policy.attempt_hard_timeout_max_attempts),
+        "transport_max_attempts": policy.transport_max_attempts,
+        "post_token_transport_max_attempts": (policy.post_token_transport_max_attempts),
+        "queue_wait_budget_mode": policy.queue_wait_budget_mode,
+        "action_wall_timeout_ms": policy.action_wall_timeout_ms,
+        "blocking_required_target_output_timeout_mode": (
+            policy.blocking_required_target_output_timeout_mode
+        ),
+        "blocking_required_target_queue_wait_budget_mode": (
+            policy.blocking_required_target_queue_wait_budget_mode
+        ),
+        "required_target_exhaustion": (
+            {
+                "eligible_failure_modes": list(
+                    policy.required_target_exhaustion.eligible_failure_modes
+                ),
+                "day_vote_outcome": policy.required_target_exhaustion.day_vote_outcome,
+                "night_required_target_outcome": (
+                    policy.required_target_exhaustion.night_required_target_outcome
+                ),
+                "transport_mode": policy.required_target_exhaustion.transport_mode,
+                "machine_format_mode": (policy.required_target_exhaustion.machine_format_mode),
+            }
+            if policy.required_target_exhaustion is not None
+            else None
+        ),
+        "private_round_memory_mode": policy.private_round_memory_mode,
         "reasoning_only_elapsed_ms": reasoning_only_elapsed_ms,
         "shadow_would_timeout": shadow_would_timeout,
     }

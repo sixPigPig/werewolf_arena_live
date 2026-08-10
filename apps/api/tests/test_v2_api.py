@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,8 +43,12 @@ from app.v2.live_runtime import (
     _GameChannel,
 )
 from app.v2 import match_repository as match_repository_module
+from app.v2 import model_context as model_context_module
 from app.v2.action_engine import (
+    V2ActionFailure,
     V2ActionEngine,
+    V2ActionResult,
+    V2ActionTechnicalOutcome,
     V2DecisionContract,
     V2ModelRetryPolicy,
     V2SpeechSpec,
@@ -52,6 +56,7 @@ from app.v2.action_engine import (
 )
 from app.v2.day_engine import (
     V2DayEngine,
+    V2DayRuntimeError,
     _EXILE_PK_SPEECH_OBJECTIVE,
     _PUBLIC_SPEECH_MAX_CHARS,
     _SHERIFF_PK_SPEECH_OBJECTIVE,
@@ -172,12 +177,13 @@ def _create_rotating_werewolf_game(
     session_factory: sessionmaker[Session],
     request: dict[str, Any],
     audio_mode: str,
+    allow_no_attack: bool = False,
 ) -> dict[str, str]:
     lobby = request["lobby_snapshot"]
     rule_set = dict(lobby["rule_set"])
     rule_set["werewolf_attack_policy"] = {
         "resolution": "plurality_rotating_tiebreak",
-        "allow_no_attack": False,
+        "allow_no_attack": allow_no_attack,
         "allow_wolf_target": False,
     }
     rule_snapshot = {
@@ -332,6 +338,24 @@ def _unfenced_text_only_night_engine(
         action_engine=action_engine,
         day_engine=runtime._day_engine,
     )
+
+
+def _prepare_direct_first_night(
+    *,
+    session_factory: sessionmaker[Session],
+    game_id: str,
+    run_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        run = db.get(V2GameRun, run_id)
+        match = db.get(V2MatchState, game_id)
+        assert game is not None and run is not None and match is not None
+        game.status = "ready"
+        game.phase_id = "first_night"
+        game.phase_state = "nightfall_announced"
+        run.status = "ready"
+        match.round_no = 1
 
 
 def _unfenced_text_only_day_engine(
@@ -777,9 +801,11 @@ class _QueuedManagedModelClient(FakeV2ModelClient):
     first_token_seconds = 0.12
     stream_idle_seconds = 0.09
 
-    def __init__(self) -> None:
+    def __init__(self, *, queued_action_type: str | None = None) -> None:
         super().__init__()
         self.managed_calls = 0
+        self.queued_action_type = queued_action_type
+        self.queue_injected = False
 
     def provider_concurrency_limit(self, provider: str) -> int:
         assert provider == "agent_plan"
@@ -796,6 +822,7 @@ class _QueuedManagedModelClient(FakeV2ModelClient):
     ) -> V2ModelDecision:
         self.managed_calls += 1
         managed_call_no = self.managed_calls
+        action_type = action_context["task"]["type"]
         assert on_progress is not None
         on_progress(
             V2ModelProgress(
@@ -806,7 +833,13 @@ class _QueuedManagedModelClient(FakeV2ModelClient):
                 provider_concurrency_limit=2,
             )
         )
-        queue_wait_ms = 150 if managed_call_no == 1 else 0
+        should_inject_queue = not self.queue_injected and (
+            (self.queued_action_type is None and managed_call_no == 1)
+            or action_type == self.queued_action_type
+        )
+        if should_inject_queue:
+            self.queue_injected = True
+        queue_wait_ms = 150 if should_inject_queue else 0
         if queue_wait_ms:
             await asyncio.sleep(queue_wait_ms / 1000)
         on_progress(
@@ -820,7 +853,7 @@ class _QueuedManagedModelClient(FakeV2ModelClient):
                 provider_concurrency_limit=2,
             )
         )
-        if managed_call_no == 1:
+        if should_inject_queue:
             raise V2ModelError(
                 "model_transport_failed",
                 retryable=True,
@@ -1134,6 +1167,277 @@ class _ConcurrentVoteActions:
         )
 
 
+class _TechnicalVoteOutcomeActions:
+    def __init__(
+        self,
+        *,
+        repository: V2MatchRepository,
+        actor_id: str,
+        explicit_outcome: bool,
+        failure_code: str = "model_output_budget_exhausted",
+        failure_category: str = "output_budget",
+        failure_mode: Literal[
+            "output_budget_exhausted",
+            "attempt_hard_timeout",
+            "action_wall_timeout",
+        ] = "output_budget_exhausted",
+        lineage_corruption: Literal["fake_seq", "wrong_action"] | None = None,
+    ) -> None:
+        self._repository = repository
+        self._actor_id = actor_id
+        self._explicit_outcome = explicit_outcome
+        self._failure_code = failure_code
+        self._failure_category = failure_category
+        self._failure_mode = failure_mode
+        self._lineage_corruption = lineage_corruption
+        self.specs: list[Any] = []
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
+
+    async def run_player_decision_result(
+        self,
+        *,
+        game_id: str,
+        spec,
+        **_kwargs,
+    ) -> V2ActionResult:
+        self.specs.append(spec)
+        stage = spec.context["vote_batch_stage"]
+        if spec.actor_id == self._actor_id and stage == "concurrent_initial":
+            action_id = f"technical-vote-{spec.actor_id}"
+            attempt_id = f"technical-vote-attempt-{spec.actor_id}"
+            failure = V2ActionFailure(
+                code=self._failure_code,
+                category=self._failure_category,
+                terminal_attempt_id=attempt_id,
+                output_budget_failure_count=(1 if self._failure_category == "output_budget" else 0),
+                last_output_budget_attempt_id=(
+                    attempt_id if self._failure_category == "output_budget" else None
+                ),
+                last_output_budget_failure_code=(
+                    self._failure_code if self._failure_category == "output_budget" else None
+                ),
+                failure_episode_id=f"episode-{spec.actor_id}",
+            )
+            if self._explicit_outcome:
+                self._repository.append_event(
+                    game_id=game_id,
+                    event_type="technical_target_outcome_applied",
+                    audience="god_view",
+                    payload={
+                        "action_id": action_id,
+                        "attempt_id": attempt_id,
+                        "failure_episode_id": failure.failure_episode_id,
+                        "action_type": spec.action_type,
+                        "actor_id": spec.actor_id,
+                        "phase_id": spec.phase_id,
+                        "failure_code": self._failure_code,
+                        "failure_category": self._failure_category,
+                        "target_exhaustion_failure_mode": self._failure_mode,
+                        "technical_outcome": "technical_abstain",
+                        "target_player_id": None,
+                        "model_generation_policy_schema_version": 3,
+                    },
+                )
+                supporting_event_record_seq = self._repository.snapshot(game_id).last_record_seq
+                self._repository.append_event(
+                    game_id=game_id,
+                    event_type="action_succeeded",
+                    audience="god_view",
+                    payload={
+                        "action_id": action_id,
+                        "failure_episode_id": failure.failure_episode_id,
+                        "technical_outcome_record_seq": supporting_event_record_seq,
+                    },
+                )
+                return V2ActionResult(
+                    action_id=(
+                        f"wrong-{action_id}"
+                        if self._lineage_corruption == "wrong_action"
+                        else action_id
+                    ),
+                    technical_outcome=V2ActionTechnicalOutcome(
+                        kind="technical_abstain",
+                        failure_mode=self._failure_mode,
+                        failure=failure,
+                        supporting_event_record_seq=(
+                            supporting_event_record_seq + 10_000
+                            if self._lineage_corruption == "fake_seq"
+                            else supporting_event_record_seq
+                        ),
+                    ),
+                )
+            return V2ActionResult(action_id=action_id, failure=failure)
+        assert spec.allowed_target_ids
+        return V2ActionResult(
+            decision=V2ModelDecision(
+                target_player_id=spec.allowed_target_ids[0],
+                speech=None,
+                provider_request_id=f"provider-{spec.actor_id}",
+                first_token_ms=1,
+                completed_ms=2,
+                decision_note=f"{spec.actor_id}选择首个合法候选。",
+            )
+        )
+
+
+class _TechnicalNightOutcomeActions:
+    def __init__(
+        self,
+        *,
+        session_factory: sessionmaker[Session],
+        repository: V2NightRepository,
+        technical_ability_ids: set[str] | None = None,
+        wolf_technical_stage: Literal["sequential_final_vote", "tiebreak"] | None = None,
+        wolf_technical_actor_rank: int = 1,
+        optional_tiebreak_no_attack: bool = False,
+    ) -> None:
+        self._session_factory = session_factory
+        self._repository = repository
+        self._technical_ability_ids = technical_ability_ids or set()
+        self._wolf_technical_stage = wolf_technical_stage
+        self._wolf_technical_actor_rank = wolf_technical_actor_rank
+        self._optional_tiebreak_no_attack = optional_tiebreak_no_attack
+        self._wolf_calls_by_actor: dict[str, int] = {}
+        self._wolf_actor_order: dict[str, int] = {}
+        self.specs: list[V2SpeechSpec] = []
+        self.wolf_stages: list[tuple[str, str]] = []
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
+
+    async def run_judge_speech(self, **_kwargs) -> bool:
+        return True
+
+    async def run_player_decision_result(
+        self,
+        *,
+        game_id: str,
+        spec: V2SpeechSpec,
+        **_kwargs,
+    ) -> V2ActionResult:
+        self.specs.append(spec)
+        ability_id = str(spec.context["ability_id"])
+        stage = ability_id
+        actor_rank = 0
+        if ability_id == "werewolf.attack":
+            actor_rank = self._wolf_actor_order.setdefault(
+                spec.actor_id,
+                len(self._wolf_actor_order),
+            )
+            actor_call = self._wolf_calls_by_actor.get(spec.actor_id, 0) + 1
+            self._wolf_calls_by_actor[spec.actor_id] = actor_call
+            stage = (
+                "preference_probe"
+                if actor_call == 1
+                else "sequential_final_vote"
+                if actor_call == 2
+                else "tiebreak"
+            )
+            self.wolf_stages.append((spec.actor_id, stage))
+
+        technical = ability_id in self._technical_ability_ids or (
+            ability_id == "werewolf.attack"
+            and stage == self._wolf_technical_stage
+            and (stage == "tiebreak" or actor_rank == self._wolf_technical_actor_rank)
+        )
+        if technical:
+            assert spec.target_exhaustion_outcome == "technical_no_action"
+            action_id = f"technical-night-{len(self.specs)}"
+            attempt_id = f"technical-night-attempt-{len(self.specs)}"
+            with self._session_factory.begin() as db:
+                activation = db.get(V2AbilityActivation, spec.activation_id)
+                assert activation is not None and activation.status == "open"
+                activation.action_id = action_id
+            supporting_event_record_seq = self._repository.append_event(
+                game_id=game_id,
+                event_type="technical_target_outcome_applied",
+                audience="god_view",
+                payload={
+                    "action_id": action_id,
+                    "activation_id": spec.activation_id,
+                    "attempt_id": attempt_id,
+                    "failure_episode_id": f"episode-{action_id}",
+                    "action_type": spec.action_type,
+                    "actor_id": spec.actor_id,
+                    "phase_id": spec.phase_id,
+                    "failure_code": "model_output_budget_exhausted",
+                    "failure_category": "output_budget",
+                    "target_exhaustion_failure_mode": "output_budget_exhausted",
+                    "technical_outcome": "technical_no_action",
+                    "target_player_id": None,
+                    "model_generation_policy_schema_version": 3,
+                },
+            )
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="action_succeeded",
+                audience="god_view",
+                payload={
+                    "action_id": action_id,
+                    "activation_id": spec.activation_id,
+                    "result": "decision_recorded_without_presentation",
+                    "phase_id": spec.phase_id,
+                    "failure_episode_id": f"episode-{action_id}",
+                    "technical_outcome_record_seq": supporting_event_record_seq,
+                },
+            )
+            failure = V2ActionFailure(
+                code="model_output_budget_exhausted",
+                category="output_budget",
+                terminal_attempt_id=attempt_id,
+                output_budget_failure_count=1,
+                last_output_budget_attempt_id=attempt_id,
+                last_output_budget_failure_code="model_output_budget_exhausted",
+                failure_episode_id=f"episode-{action_id}",
+            )
+            return V2ActionResult(
+                action_id=action_id,
+                technical_outcome=V2ActionTechnicalOutcome(
+                    kind="technical_no_action",
+                    failure_mode="output_budget_exhausted",
+                    failure=failure,
+                    supporting_event_record_seq=supporting_event_record_seq,
+                ),
+            )
+
+        assert spec.allowed_target_ids
+        target_player_id: str | None
+        if ability_id == "werewolf.attack" and stage == "preference_probe":
+            target_player_id = spec.allowed_target_ids[actor_rank % 2]
+        elif (
+            ability_id == "werewolf.attack"
+            and stage == "sequential_final_vote"
+            and self._optional_tiebreak_no_attack
+        ):
+            target_player_id = None if actor_rank % 2 else spec.allowed_target_ids[0]
+        elif ability_id == "werewolf.attack" and stage == "sequential_final_vote":
+            target_player_id = spec.allowed_target_ids[actor_rank % 2]
+        elif ability_id == "werewolf.attack" and stage == "tiebreak":
+            target_player_id = (
+                None if self._optional_tiebreak_no_attack else spec.allowed_target_ids[0]
+            )
+        else:
+            target_player_id = spec.allowed_target_ids[0]
+        return V2ActionResult(
+            decision=V2ModelDecision(
+                target_player_id=target_player_id,
+                speech=(
+                    None if spec.decision_contract.speech_mode == "forbidden" else "我提交该刀口。"
+                ),
+                provider_request_id=f"provider-{spec.actor_id}-{stage}",
+                first_token_ms=1,
+                completed_ms=2,
+                decision_note=(
+                    "这是本次夜间选择理由。"
+                    if spec.decision_contract.decision_note_mode == "optional"
+                    else None
+                ),
+            )
+        )
+
+
 class _ConcurrentPrivateMemoryActions:
     def __init__(
         self,
@@ -1190,6 +1494,32 @@ class _ConcurrentPrivateMemoryActions:
         self.judge_overlapped = self._in_flight == self._expected_players
         self._release.set()
         return True
+
+
+class _SummaryOnlyPrivateMemoryActions:
+    def __init__(
+        self,
+        *,
+        judge_result: bool = True,
+        judge_error: BaseException | None = None,
+    ) -> None:
+        self.judge_specs: list[Any] = []
+        self.memory_calls = 0
+        self.judge_result = judge_result
+        self.judge_error = judge_error
+
+    def check_cancellation(self, _game_id: str) -> None:
+        return
+
+    async def run_player_decision(self, **_kwargs) -> V2ModelDecision | None:
+        self.memory_calls += 1
+        raise AssertionError("non-blocking private-memory policy must not start model actions")
+
+    async def run_judge_speech(self, *, spec, **_kwargs) -> bool:
+        self.judge_specs.append(spec)
+        if self.judge_error is not None:
+            raise self.judge_error
+        return self.judge_result
 
 
 class _CollectingBroadcaster:
@@ -1500,7 +1830,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "model_view_selector_version": 2,
             },
             "model_generation_policy_contract": {
-                "schema_version": 1,
+                "schema_version": 3,
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
@@ -1784,6 +2114,119 @@ def test_v2_create_freezes_explicit_werewolf_attack_policy(v2_context) -> None:
         assert game is not None
         assert game.rule_snapshot["rule_set"]["werewolf_attack_policy"] == policy
         assert game.ability_snapshot["policies"]["werewolf_attack"] == policy
+
+
+def test_schema3_vote_output_budget_applies_abstain_and_closes_failure_episode(
+    v2_context,
+) -> None:
+    client, session_factory, voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository, engine = _unfenced_text_only_day_engine(
+        client=client,
+        session_factory=session_factory,
+        voice_root=voice_root,
+    )
+    voters = sorted(repository.snapshot(created["game_id"]).players, key=lambda item: item.seat)
+    model_client = client.app.state.v2_test_model_client
+    model_client.output_budget_failure_first_actor_action_types.add("exile_vote")
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            action_type="exile_vote",
+            voters=voters,
+            candidates=voters,
+            weighted=True,
+            context={"vote_round": 1},
+        )
+    )
+    model_client.output_budget_failure_first_actor_action_types.discard("exile_vote")
+
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == created["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        private_decisions = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_action_decision",
+                )
+            )
+        )
+        recoveries = list(
+            db.scalars(
+                select(V2ModelActionRecovery).where(
+                    V2ModelActionRecovery.game_id == created["game_id"]
+                )
+            )
+        )
+
+    technical = next(
+        event
+        for event in events
+        if event.event_type == "technical_target_outcome_applied"
+        and event.payload.get("action_type") == "exile_vote"
+    )
+    action_id = technical.payload["action_id"]
+    actor_id = technical.payload["actor_id"]
+    action_events = [event for event in events if event.payload.get("action_id") == action_id]
+    failures = [event for event in action_events if event.event_type == "model_request_failed"]
+    succeeded = next(event for event in action_events if event.event_type == "action_succeeded")
+    committed = next(
+        event
+        for event in events
+        if event.event_type == "day_vote_committed"
+        and event.payload.get("voter_player_id") == actor_id
+    )
+    technical_commit = next(
+        event
+        for event in events
+        if event.event_type == "day_vote_technical_abstention_committed"
+        and event.payload.get("voter_player_id") == actor_id
+    )
+    resolved = next(event for event in events if event.event_type == "day_vote_resolved")
+
+    assert sum(totals.values()) == len(voters) - 1
+    assert len(failures) == 1
+    assert failures[0].payload["failure_code"] == "model_output_budget_exhausted"
+    assert failures[0].payload["automatic_retry_scheduled"] is False
+    assert technical.payload["technical_outcome"] == "technical_abstain"
+    assert technical.payload["target_player_id"] is None
+    assert technical.payload["model_generation_policy_schema_version"] == 3
+    assert succeeded.payload["technical_outcome_record_seq"] == technical.record_seq
+    assert technical.record_seq < succeeded.record_seq < committed.record_seq
+    assert committed.payload["target_player_id"] is None
+    assert committed.payload["weight"] == 0.0
+    assert committed.payload["technical_status"] == "technical_abstain"
+    assert committed.payload["technical_reason"] == "model_output_budget_exhausted"
+    assert "source_action_id" not in committed.payload
+    assert "supporting_event_record_seq" not in committed.payload
+    assert "failure_episode_id" not in committed.payload
+    assert "failure_mode" not in committed.payload
+    assert technical_commit.payload["audience"] == "god_view"
+    assert technical_commit.payload["source_action_id"] == action_id
+    assert technical_commit.payload["supporting_event_record_seq"] == technical.record_seq
+    assert technical_commit.payload["failure_episode_id"] == technical.payload["failure_episode_id"]
+    assert technical_commit.payload["failure_mode"] == "output_budget_exhausted"
+    assert resolved.payload["voter_weights"][actor_id] == 0.0
+    assert actor_id not in {fact.owner_id for fact in private_decisions}
+    assert len(private_decisions) == len(voters) - 1
+    assert recoveries == []
+
+    episode_id = technical.payload["failure_episode_id"]
+    episode = next(
+        item for item in derive_failure_episodes(events) if item.failure_episode_id == episode_id
+    )
+    assert episode.resolution == "technical_skip"
+    assert episode.supporting_event_type == "technical_target_outcome_applied"
+    assert episode.invariant_errors == ()
 
 
 @pytest.mark.parametrize(
@@ -2256,7 +2699,7 @@ def test_new_game_freezes_v12_current_prompt_model_context_contract(v2_context) 
     assert created_event.payload["model_context_contract"] == expected
 
 
-def test_new_game_freezes_observe_only_model_generation_policy_and_claim_carries_it(
+def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries_it(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -2281,12 +2724,35 @@ def test_new_game_freezes_observe_only_model_generation_policy_and_claim_carries
         )
         assert created_event is not None
     assert created_event.payload["model_generation_policy_contract"] == {
-        "schema_version": 1,
+        "schema_version": 3,
         "classification_version": 1,
         "enforcement": "observe_only",
     }
     assert "profiles" not in created_event.payload["model_generation_policy_contract"]
     assert expected["enforcement"] == "observe_only"
+    assert expected["execution"] == {
+        "automatic_retry_enforcement": "enforce",
+        "output_budget_max_attempts": 1,
+        "attempt_hard_timeout_max_attempts": 1,
+        "transport_max_attempts": 2,
+        "post_token_transport_max_attempts": 1,
+        "queue_wait_budget_mode": "wall_clock",
+        "action_wall_timeout_ms": 300_000,
+        "blocking_required_target_output_timeout_mode": "technical_outcome",
+        "blocking_required_target_queue_wait_budget_mode": "wall_clock",
+        "required_target_exhaustion": {
+            "eligible_failure_modes": [
+                "output_budget_exhausted",
+                "attempt_hard_timeout",
+                "action_wall_timeout",
+            ],
+            "day_vote_outcome": "technical_abstain",
+            "night_required_target_outcome": "technical_no_action",
+            "transport_mode": "retry_then_pause",
+            "machine_format_mode": "retry_then_pause",
+        },
+        "private_round_memory_mode": "reuse_previous_non_blocking",
+    }
 
     repository = V2ActionRepository(session_factory, enforce_execution_fence=False)
     assert repository.start_game(
@@ -2357,7 +2823,7 @@ def test_present_invalid_model_generation_policy_fails_closed_at_runtime_start_a
         frozen_rule = dict(game.rule_snapshot)
         frozen_rule["model_generation_policy_contract"] = {
             **current_model_generation_policy_contract(),
-            "schema_version": 2,
+            "schema_version": 4,
         }
         game.rule_snapshot = frozen_rule
     assert client.get(runtime_created["snapshot_url"]).status_code == 200
@@ -5394,6 +5860,449 @@ def test_night_parallel_cancellation_closes_all_open_activations(v2_context) -> 
     assert any(event.event_type == "game_canceled" for event in events)
 
 
+def test_werewolf_required_final_vote_technical_no_action_stops_remaining_votes(
+    v2_context,
+) -> None:
+    client, session_factory, voice_root = v2_context
+    request = _advanced_create_request()
+    request["audio_mode"] = "text_only"
+    identifiers = _create_rotating_werewolf_game(
+        session_factory=session_factory,
+        request=request,
+        audio_mode="text_only",
+    )
+    _prepare_direct_first_night(
+        session_factory=session_factory,
+        game_id=identifiers["game_id"],
+        run_id=identifiers["run_id"],
+    )
+    repository = V2NightRepository(session_factory)
+    actions = _TechnicalNightOutcomeActions(
+        session_factory=session_factory,
+        repository=repository,
+        wolf_technical_stage="sequential_final_vote",
+        wolf_technical_actor_rank=1,
+    )
+    engine = V2NightEngine(
+        repository=repository,
+        action_engine=actions,
+        day_engine=client.app.state.v2_live_runtime._day_engine,
+    )
+
+    async def scenario() -> tuple[Any, _WorkingNight]:
+        state = repository.start_night(identifiers["game_id"], audience="god_view")
+        working = _WorkingNight()
+        await engine._run_werewolves(state, _CollectingBroadcaster(), working)
+        return state, working
+
+    state, working = asyncio.run(scenario())
+
+    with session_factory() as db:
+        activations = list(
+            db.scalars(
+                select(V2AbilityActivation).where(
+                    V2AbilityActivation.game_id == identifiers["game_id"],
+                    V2AbilityActivation.window_id == state.window_id,
+                )
+            )
+        )
+        effects = list(
+            db.scalars(
+                select(V2EffectIntent).where(
+                    V2EffectIntent.game_id == identifiers["game_id"],
+                    V2EffectIntent.window_id == state.window_id,
+                )
+            )
+        )
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+
+    final_stage_calls = [item for item in actions.wolf_stages if item[1] == "sequential_final_vote"]
+    assert len(final_stage_calls) == 2
+    assert working.attack_target is None
+    assert activations and not any(item.status == "open" for item in activations)
+    assert effects == []
+    failed_vote = next(
+        item
+        for item in activations
+        if (item.decision or {}).get("decision_stage") == "sequential_final_vote"
+        and (item.decision or {}).get("decision_status") == "technical_no_action"
+    )
+    team_resolution = next(
+        item
+        for item in activations
+        if (item.decision or {}).get("decision_stage") == "team_resolution"
+    )
+    assert failed_vote.result["technical_outcome"]["source_action_id"] == failed_vote.action_id
+    assert team_resolution.action_id is None
+    assert team_resolution.decision["decision_status"] == "technical_no_action"
+    assert team_resolution.result["decision_status"] == "technical_no_action"
+    assert team_resolution.result["effect_applied"] is False
+    assert team_resolution.result["resolution_reason"] == "technical_final_vote_no_attack"
+    assert team_resolution.result["technical_outcome"]["source_action_id"] == failed_vote.action_id
+    assert any(
+        event.event_type == "ability_activation_technical_no_action"
+        and event.payload["activation_id"] == failed_vote.activation_id
+        and event.payload["audience"] == "god_view"
+        for event in events
+    )
+    assert not any(
+        event.event_type == "ability_activation_technical_no_action"
+        and event.payload["activation_id"] == team_resolution.activation_id
+        for event in events
+    )
+
+
+def test_guard_and_seer_technical_no_action_complete_without_effect_or_public_leak(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_direct_first_night(
+        session_factory=session_factory,
+        game_id=identifiers["game_id"],
+        run_id=identifiers["run_id"],
+    )
+    repository = V2NightRepository(session_factory)
+    actions = _TechnicalNightOutcomeActions(
+        session_factory=session_factory,
+        repository=repository,
+        technical_ability_ids={"guard.protect", "seer.investigate"},
+    )
+    engine = V2NightEngine(
+        repository=repository,
+        action_engine=actions,
+        day_engine=client.app.state.v2_live_runtime._day_engine,
+    )
+
+    async def scenario() -> tuple[Any, _WorkingNight, _CollectingBroadcaster]:
+        state = repository.start_night(identifiers["game_id"], audience="god_view")
+        working = _WorkingNight()
+        broadcaster = _CollectingBroadcaster()
+        await engine._run_parallel_independent_groups(
+            state=state,
+            broadcaster=broadcaster,
+            working=working,
+            groups=("guard", "seer"),
+        )
+        return state, working, broadcaster
+
+    state, working, broadcaster = asyncio.run(scenario())
+    public_history = repository.public_history(identifiers["game_id"])
+
+    with session_factory() as db:
+        instances = {
+            item.ability_instance_id: item
+            for item in db.scalars(
+                select(V2AbilityInstance).where(V2AbilityInstance.game_id == identifiers["game_id"])
+            )
+        }
+        activations = list(
+            db.scalars(
+                select(V2AbilityActivation).where(
+                    V2AbilityActivation.game_id == identifiers["game_id"],
+                    V2AbilityActivation.window_id == state.window_id,
+                )
+            )
+        )
+        effects = list(
+            db.scalars(
+                select(V2EffectIntent).where(
+                    V2EffectIntent.game_id == identifiers["game_id"],
+                    V2EffectIntent.window_id == state.window_id,
+                )
+            )
+        )
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == identifiers["game_id"])
+            )
+        )
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+
+    technical_activations = [
+        item
+        for item in activations
+        if instances[item.ability_instance_id].ability_id in {"guard.protect", "seer.investigate"}
+    ]
+    technical_by_ability = {
+        instances[item.ability_instance_id].ability_id: item for item in technical_activations
+    }
+    assert len(technical_activations) == 2
+    assert all(item.status == "completed" for item in technical_activations)
+    assert all(
+        item.decision["decision_status"] == "technical_no_action" for item in technical_activations
+    )
+    assert all(item.result["effect_applied"] is False for item in technical_activations)
+    assert all(item.result["effect_intent_id"] is None for item in technical_activations)
+    assert effects == []
+    assert working.protected_target is None
+    guard_instance = next(item for item in instances.values() if item.ability_id == "guard.protect")
+    assert guard_instance.state.get("previous_target_player_id") is None
+    assert not any(item.fact_type == "investigation_alignment" for item in facts)
+    assert sum(item.fact_type == "private_ability_action_not_taken" for item in facts) == 2
+    assert not any(item.status == "open" for item in activations)
+    assert not any(event.event_type == "night_parallel_batch_recovery_started" for event in events)
+    resolved = next(
+        event for event in events if event.event_type == "night_parallel_batch_resolved"
+    )
+    assert resolved.payload["lanes"] == [
+        {
+            "group": "guard",
+            "status": "technical_no_action",
+            "activation_id": technical_by_ability["guard.protect"].activation_id,
+        },
+        {
+            "group": "seer",
+            "status": "technical_no_action",
+            "activation_id": technical_by_ability["seer.investigate"].activation_id,
+        },
+    ]
+    assert all(
+        event.payload["audience"] == "god_view"
+        for event in events
+        if event.event_type
+        in {"technical_target_outcome_applied", "ability_activation_technical_no_action"}
+    )
+    assert "technical_no_action" not in json.dumps(public_history, ensure_ascii=False)
+    assert all(spec.target_exhaustion_outcome == "technical_no_action" for spec in actions.specs)
+    assert all(
+        "technical_no_action" not in json.dumps(message, ensure_ascii=False)
+        for audience, message in broadcaster.messages
+        if audience == "public"
+    )
+
+
+def test_technical_no_action_activation_rejects_fake_seq_and_wrong_action(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_direct_first_night(
+        session_factory=session_factory,
+        game_id=identifiers["game_id"],
+        run_id=identifiers["run_id"],
+    )
+    repository = V2NightRepository(session_factory)
+    state = repository.start_night(identifiers["game_id"], audience="god_view")
+    guard = next(player for player in state.players if player.role_key == "guard")
+
+    def outcome(*, action_id: str, record_seq: int) -> dict[str, Any]:
+        return {
+            "kind": "technical_no_action",
+            "failure_mode": "output_budget_exhausted",
+            "source_action_id": action_id,
+            "source_failure_code": "model_output_budget_exhausted",
+            "source_failure_category": "output_budget",
+            "source_attempt_id": f"attempt-{action_id}",
+            "failure_episode_id": f"episode-{action_id}",
+            "supporting_event_record_seq": record_seq,
+            "machine_format_failure_count": 0,
+            "last_machine_format_attempt_id": None,
+            "last_machine_format_failure_code": None,
+            "output_budget_failure_count": 1,
+            "last_output_budget_attempt_id": f"attempt-{action_id}",
+            "last_output_budget_failure_code": "model_output_budget_exhausted",
+        }
+
+    fake_seq_activation = repository.open_activation(
+        state=state,
+        ability_id="guard.protect",
+        audience="god_view",
+        actor_player_id=guard.player_id,
+        occurrence=77,
+    )
+    with session_factory.begin() as db:
+        row = db.get(V2AbilityActivation, fake_seq_activation.activation_id)
+        assert row is not None
+        row.action_id = "fake-seq-action"
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None
+        fake_seq = game.last_record_seq + 100
+    with pytest.raises(V2RepositoryError, match="supporting event does not match"):
+        repository.complete_activation_technical_no_action(
+            state=state,
+            activation=fake_seq_activation,
+            technical_outcome=outcome(action_id="fake-seq-action", record_seq=fake_seq),
+        )
+
+    wrong_action_activation = repository.open_activation(
+        state=state,
+        ability_id="guard.protect",
+        audience="god_view",
+        actor_player_id=guard.player_id,
+        occurrence=78,
+    )
+    with session_factory.begin() as db:
+        row = db.get(V2AbilityActivation, wrong_action_activation.activation_id)
+        assert row is not None
+        row.action_id = "linked-action"
+    with pytest.raises(V2RepositoryError, match="source action does not match"):
+        repository.complete_activation_technical_no_action(
+            state=state,
+            activation=wrong_action_activation,
+            technical_outcome=outcome(action_id="different-action", record_seq=1),
+        )
+    assert repository.cancel_open_activation(
+        state=state,
+        activation=fake_seq_activation,
+        reason="test_cleanup",
+    )
+    assert repository.cancel_open_activation(
+        state=state,
+        activation=wrong_action_activation,
+        reason="test_cleanup",
+    )
+
+
+@pytest.mark.parametrize(
+    ("technical_tiebreak", "allow_no_attack", "expected_reason"),
+    [
+        (True, False, "technical_tiebreak_no_attack"),
+        (False, True, "explicit_rotating_tiebreak_no_attack"),
+    ],
+    ids=["required-technical", "optional-voluntary-no-attack"],
+)
+def test_werewolf_tiebreak_technical_and_optional_no_attack_remain_distinct(
+    v2_context,
+    technical_tiebreak: bool,
+    allow_no_attack: bool,
+    expected_reason: str,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    request = _advanced_create_request()
+    request["audio_mode"] = "text_only"
+    identifiers = _create_rotating_werewolf_game(
+        session_factory=session_factory,
+        request=request,
+        audio_mode="text_only",
+        allow_no_attack=allow_no_attack,
+    )
+    _prepare_direct_first_night(
+        session_factory=session_factory,
+        game_id=identifiers["game_id"],
+        run_id=identifiers["run_id"],
+    )
+    repository = V2NightRepository(session_factory)
+    actions = _TechnicalNightOutcomeActions(
+        session_factory=session_factory,
+        repository=repository,
+        wolf_technical_stage="tiebreak" if technical_tiebreak else None,
+        optional_tiebreak_no_attack=allow_no_attack,
+    )
+    engine = V2NightEngine(
+        repository=repository,
+        action_engine=actions,
+        day_engine=client.app.state.v2_live_runtime._day_engine,
+    )
+
+    async def scenario() -> tuple[Any, _WorkingNight]:
+        state = repository.start_night(identifiers["game_id"], audience="god_view")
+        working = _WorkingNight()
+        await engine._run_werewolves(state, _CollectingBroadcaster(), working)
+        return state, working
+
+    state, working = asyncio.run(scenario())
+
+    with session_factory() as db:
+        activations = list(
+            db.scalars(
+                select(V2AbilityActivation).where(
+                    V2AbilityActivation.game_id == identifiers["game_id"],
+                    V2AbilityActivation.window_id == state.window_id,
+                )
+            )
+        )
+        effects = list(
+            db.scalars(
+                select(V2EffectIntent).where(
+                    V2EffectIntent.game_id == identifiers["game_id"],
+                    V2EffectIntent.window_id == state.window_id,
+                )
+            )
+        )
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(V2KnowledgeFact.game_id == identifiers["game_id"])
+            )
+        )
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == identifiers["game_id"])
+            )
+        )
+
+    tiebreak = next(
+        item for item in activations if (item.decision or {}).get("decision_stage") == "tiebreak"
+    )
+    team_resolution = next(
+        item
+        for item in activations
+        if (item.decision or {}).get("decision_stage") == "team_resolution"
+    )
+    tiebreak_spec = next(
+        spec
+        for spec, (_actor_id, stage) in zip(actions.specs, actions.wolf_stages, strict=True)
+        if stage == "tiebreak"
+    )
+    assert (
+        len([stage for _actor_id, stage in actions.wolf_stages if stage == "sequential_final_vote"])
+        == 4
+    )
+    assert len([stage for _actor_id, stage in actions.wolf_stages if stage == "tiebreak"]) == 1
+    assert working.attack_target is None
+    assert effects == []
+    assert activations and not any(item.status == "open" for item in activations)
+    assert team_resolution.action_id is None
+    assert team_resolution.result["resolution_reason"] == expected_reason
+    if technical_tiebreak:
+        assert tiebreak.decision["decision_status"] == "technical_no_action"
+        assert tiebreak.result["effect_applied"] is False
+        assert team_resolution.decision["decision_status"] == "technical_no_action"
+        assert team_resolution.result["decision_status"] == "technical_no_action"
+        assert team_resolution.result["technical_outcome"]["source_action_id"] == tiebreak.action_id
+        assert tiebreak_spec.decision_contract.target_mode == "required"
+        assert tiebreak_spec.target_exhaustion_outcome == "technical_no_action"
+        assert any(
+            event.event_type == "ability_activation_technical_no_action"
+            and event.payload["activation_id"] == tiebreak.activation_id
+            and event.payload["audience"] == "god_view"
+            for event in events
+        )
+        assert any(
+            fact.source_activation_id == team_resolution.activation_id
+            and fact.fact_type == "private_ability_action_not_taken"
+            for fact in facts
+        )
+    else:
+        assert tiebreak.decision["target_player_id"] is None
+        assert tiebreak.result["resolution_reason"] == expected_reason
+        assert "decision_status" not in team_resolution.decision
+        assert "technical_outcome" not in team_resolution.result
+        assert tiebreak_spec.decision_contract.target_mode == "optional"
+        assert tiebreak_spec.target_exhaustion_outcome is None
+        assert all(spec.target_exhaustion_outcome is None for spec in actions.specs)
+        assert not any(
+            event.event_type == "ability_activation_technical_no_action" for event in events
+        )
+        assert any(
+            fact.source_activation_id == team_resolution.activation_id
+            and fact.fact_type == "private_ability_action_committed"
+            for fact in facts
+        )
+
+
 def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
     v2_context,
 ) -> None:
@@ -6452,13 +7361,14 @@ def test_blocking_required_target_output_budget_uses_third_same_request_attempt(
     runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
         max_attempts=3,
         attempt_total_seconds=5,
-        action_total_seconds=5,
+        action_total_seconds=600,
         base_delay_seconds=0,
         jitter_seconds=0,
     )
     model_client.split_werewolf_preferences = True
     model_client.output_budget_failures_remaining_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v2(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -6494,6 +7404,7 @@ def test_blocking_required_target_output_budget_uses_third_same_request_attempt(
     retries = [event for event in action_events if event.event_type == "model_retry_scheduled"]
     responses = [event for event in action_events if event.event_type == "model_response_received"]
     assert len(starts) == 3
+    assert all(event.payload["action_budget_ms"] == 300_000 for event in starts)
     assert len(retries) == 2
     assert len(responses) == 1
     assert [event.payload["cycle_attempt_no"] for event in starts] == [1, 2, 3]
@@ -6527,6 +7438,12 @@ def test_blocking_required_target_output_budget_uses_third_same_request_attempt(
         == 1
     )
     assert [event.payload["effective_attempt_limit"] for event in failures] == [3, 3]
+    assert all(event.payload["blocking_required_target"] is True for event in starts + failures)
+    assert all(
+        event.payload["effective_output_timeout_retry_mode"] == "legacy_behavior"
+        and event.payload["effective_queue_wait_budget_mode"] == "active_only"
+        for event in starts + failures
+    )
     assert [event.payload["required_retry_window_ms"] for event in failures] == [
         0,
         model_client.output_budget_elapsed_ms,
@@ -6594,6 +7511,7 @@ def test_blocking_output_budget_does_not_start_unfunded_or_policy_forbidden_thir
     model_client.output_budget_delay_seconds = output_delay
     model_client.output_budget_elapsed_ms = elapsed_ms
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v2(session_factory, identifiers["game_id"])
     headers = _operator_control_headers(
         client,
         session_factory,
@@ -6674,6 +7592,7 @@ def test_third_output_budget_failure_pauses_and_operator_cycle_uses_new_episode(
     model_client.split_werewolf_preferences = True
     model_client.output_budget_failures_remaining_by_stage["sequential_final_vote"] = 3
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v2(session_factory, identifiers["game_id"])
     headers = _operator_control_headers(
         client,
         session_factory,
@@ -6787,9 +7706,23 @@ def test_third_output_budget_failure_pauses_and_operator_cycle_uses_new_episode(
             event.payload["model_generation_policy_profile_source"],
             event.payload["reasoning_only_timeout_ms"],
             event.payload["timeout_max_attempts"],
+            event.payload["automatic_retry_enforcement"],
+            event.payload["output_budget_max_attempts"],
         )
         for event in generation_audit_events
-    } == {(1, 1, "observe_only", "strategic_full", "default_profile", None, 2)}
+    } == {
+        (
+            2,
+            1,
+            "observe_only",
+            "strategic_full",
+            "default_profile",
+            None,
+            2,
+            "enforce",
+            1,
+        )
+    }
     cycle_two_episode = next(
         episode
         for episode in derive_failure_episodes(events)
@@ -6799,11 +7732,11 @@ def test_third_output_budget_failure_pauses_and_operator_cycle_uses_new_episode(
     assert cycle_two_episode.invariant_errors == ()
 
 
-def test_managed_model_queue_wait_is_observable_and_excluded_from_action_budget(
+def test_managed_model_queue_wait_is_observable_and_consumes_v2_wall_budget(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
-    model_client = _QueuedManagedModelClient()
+    model_client = _QueuedManagedModelClient(queued_action_type="day_debate_speech")
     runtime = client.app.state.v2_live_runtime
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
@@ -6848,6 +7781,10 @@ def test_managed_model_queue_wait_is_observable_and_excluded_from_action_budget(
         assert failure.payload["queue_wait_ms"] == 150
         assert failure.payload["provider_concurrency_limit"] == 2
         assert failure.payload["action_elapsed_ms"] < 100
+        assert failure.payload["action_wall_elapsed_ms"] >= 150
+        assert failure.payload["action_remaining_ms"] < 4_900
+        assert failure.payload["queue_wait_budget_mode"] == "wall_clock"
+        assert failure.payload["action_wall_timeout_ms"] == 300_000
 
         action_id = failure.payload["action_id"]
         response = next(
@@ -6861,6 +7798,83 @@ def test_managed_model_queue_wait_is_observable_and_excluded_from_action_budget(
         assert response.payload["text_delta_count"] == 2
         assert response.payload["max_inter_delta_ms"] == 7
         assert response.payload["last_progress_ms"] == 27
+        assert response.payload["action_wall_elapsed_ms"] >= 150
+        assert response.payload["action_wall_budget_enforced"] is True
+        assert response.payload["effective_queue_wait_budget_mode"] == "wall_clock"
+
+
+def test_managed_queue_wait_can_exhaust_v2_wall_budget_before_retry(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = _QueuedManagedModelClient(queued_action_type="day_debate_speech")
+    runtime = client.app.state.v2_live_runtime
+    runtime._action_engine._model_client = model_client
+    runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
+        max_attempts=2,
+        attempt_total_seconds=0.12,
+        action_total_seconds=0.12,
+        base_delay_seconds=0,
+        jitter_seconds=0,
+    )
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            terminal_state = json.loads(message["text"]).get("live_state")
+            if terminal_state in {"awaiting_observation", "failed"}:
+                break
+    assert terminal_state == "awaiting_observation"
+
+    with session_factory() as db:
+        failures = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.event_type == "model_request_failed",
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        failure = next(
+            event
+            for event in failures
+            if event.payload.get("action_type") == "day_debate_speech"
+            and event.payload.get("failure_code") == "model_total_timeout"
+        )
+        action_events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == identifiers["game_id"],
+                    V2GameRecordEvent.payload["action_id"].as_string()
+                    == failure.payload["action_id"],
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+    assert sum(event.event_type == "model_request_started" for event in action_events) == 1
+    assert any(event.event_type == "model_request_queued" for event in action_events)
+    assert not any(event.event_type == "model_request_admitted" for event in action_events)
+    assert not any(event.event_type == "model_retry_scheduled" for event in action_events)
+    assert "queue_wait_ms" not in failure.payload
+    assert failure.payload["failure_stage"] == "queue"
+    assert failure.payload["timeout_scope"] == "action_budget"
+    assert failure.payload["action_budget_ms"] == 120
+    assert failure.payload["action_wall_elapsed_ms"] >= 120
+    assert failure.payload["action_elapsed_ms"] < 30
+    assert failure.payload["observed_queue_wait_elapsed_ms"] >= (
+        failure.payload["action_wall_elapsed_ms"] - 30
+    )
+    assert failure.payload["action_remaining_ms"] == 0
+    assert failure.payload["action_wall_budget_enforced"] is True
+    assert failure.payload["automatic_retry_scheduled"] is False
+    assert failure.payload["automatic_retry_stop_reason"] == "attempt_limit_reached"
 
 
 def test_model_context_projection_invariant_fails_before_provider_request(
@@ -7589,7 +8603,7 @@ def test_optional_boolean_format_exhaustion_uses_false_fallback(v2_context) -> N
         ),
     ],
 )
-def test_output_budget_speech_and_boolean_keep_two_attempt_technical_outcomes(
+def test_v2_output_budget_speech_and_boolean_use_one_attempt_then_technical_outcome(
     v2_context,
     action_type: str,
     technical_event_type: str,
@@ -7636,10 +8650,14 @@ def test_output_budget_speech_and_boolean_keep_two_attempt_technical_outcomes(
     action_events = [event for event in events if event.payload.get("action_id") == action_id]
     starts = [event for event in action_events if event.event_type == "model_request_started"]
     failures = [event for event in action_events if event.event_type == "model_request_failed"]
-    assert len(starts) == 2
-    assert len(failures) == 2
+    retries = [event for event in action_events if event.event_type == "model_retry_scheduled"]
+    assert len(starts) == 1
+    assert len(failures) == 1
+    assert retries == []
     assert all(event.payload["failure_category"] == "output_budget" for event in failures)
-    assert all(event.payload["effective_attempt_limit"] == 2 for event in failures)
+    assert all(event.payload["effective_attempt_limit"] == 1 for event in failures)
+    assert failures[0].payload["terminal"] is True
+    assert failures[0].payload["automatic_retry_scheduled"] is False
     assert failures[-1].payload["automatic_retry_stop_reason"] == "attempt_limit_reached"
     assert all("automatic_machine_format_attempt_count" not in event.payload for event in failures)
     expected_profile = (
@@ -7647,6 +8665,13 @@ def test_output_budget_speech_and_boolean_keep_two_attempt_technical_outcomes(
     )
     assert all(
         event.payload["model_generation_policy_profile"] == expected_profile
+        for event in starts + failures
+    )
+    assert all(
+        event.payload["automatic_retry_enforcement"] == "enforce"
+        and event.payload["output_budget_max_attempts"] == 1
+        and event.payload["blocking_required_target"] is False
+        and event.payload["effective_output_timeout_retry_mode"] == "enforce"
         for event in starts + failures
     )
     assert all(event.payload["shadow_would_timeout"] is None for event in starts)
@@ -7661,6 +8686,73 @@ def test_output_budget_speech_and_boolean_keep_two_attempt_technical_outcomes(
     )
     assert episode.resolution == expected_resolution
     assert episode.invariant_errors == ()
+
+
+def test_v1_output_budget_public_speech_preserves_two_attempt_legacy_recovery(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    model_client = client.app.state.v2_test_model_client
+    model_client.output_budget_failures_remaining_by_action["day_debate_speech"] = 2
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, identifiers["game_id"])
+        assert game is not None
+        frozen_rule = dict(game.rule_snapshot)
+        generation_policy = dict(frozen_rule["model_generation_policy_contract"])
+        generation_policy["schema_version"] = 1
+        generation_policy.pop("execution")
+        game.rule_snapshot = {
+            **frozen_rule,
+            "model_generation_policy_contract": generation_policy,
+        }
+
+    with client.websocket_connect(identifiers["websocket_url"]) as websocket:
+        websocket.receive_json()
+        websocket.send_json(_ready_message("client.ready"))
+        websocket.receive_json()
+        while True:
+            message = websocket.receive()
+            if message.get("text") is None:
+                continue
+            terminal_state = json.loads(message["text"]).get("live_state")
+            if terminal_state in {"awaiting_observation", "failed"}:
+                break
+    assert terminal_state == "awaiting_observation"
+
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == identifiers["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+    technical = next(
+        event
+        for event in events
+        if event.event_type == "action_skipped_technical"
+        and event.payload.get("action_type") == "day_debate_speech"
+    )
+    action_events = [
+        event
+        for event in events
+        if event.payload.get("action_id") == technical.payload["action_id"]
+    ]
+    starts = [event for event in action_events if event.event_type == "model_request_started"]
+    failures = [event for event in action_events if event.event_type == "model_request_failed"]
+    retries = [event for event in action_events if event.event_type == "model_retry_scheduled"]
+    assert len(starts) == 2
+    assert len(failures) == 2
+    assert len(retries) == 1
+    assert all(event.payload["effective_attempt_limit"] == 2 for event in failures)
+    assert failures[-1].payload["automatic_retry_stop_reason"] == "attempt_limit_reached"
+    assert all(
+        event.payload["model_generation_policy_schema_version"] == 1
+        and event.payload["automatic_retry_enforcement"] == "legacy_behavior"
+        and event.payload["output_budget_max_attempts"] is None
+        for event in starts + failures
+    )
 
 
 def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) -> None:
@@ -7908,13 +9000,33 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
     assert batch_recovery_completed.record_seq < min(event.record_seq for event in committed)
 
 
-def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
+def _freeze_model_generation_policy_v2(
+    session_factory: sessionmaker[Session],
+    game_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, game_id)
+        assert game is not None
+        frozen_rule = dict(game.rule_snapshot)
+        generation_policy = current_model_generation_policy_contract()
+        execution = dict(generation_policy["execution"])
+        generation_policy["schema_version"] = 2
+        execution["blocking_required_target_output_timeout_mode"] = "legacy_behavior"
+        execution["blocking_required_target_queue_wait_budget_mode"] = "active_only"
+        execution.pop("required_target_exhaustion")
+        generation_policy["execution"] = execution
+        frozen_rule["model_generation_policy_contract"] = generation_policy
+        game.rule_snapshot = frozen_rule
+
+
+def test_schema2_vote_output_budget_family_caps_isolated_and_blocking_recovery(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.v2_test_model_client
     model_client.output_budget_failure_first_actor_action_types.add("exile_vote")
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v2(session_factory, identifiers["game_id"])
     headers = _operator_control_headers(
         client,
         session_factory,
@@ -7971,19 +9083,19 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
         ]
         assert len(family_starts) == 3
         assert len(family_failures) == 3
-        assert len({event.payload["action_id"] for event in family_starts}) == 2
+        assert len({event.payload["action_id"] for event in family_starts}) == 3
         assert [event.payload["effective_attempt_limit"] for event in family_failures] == [
-            2,
-            2,
+            1,
+            1,
             1,
         ]
         assert [event.payload["automatic_retry_scheduled"] for event in family_failures] == [
-            True,
+            False,
             False,
             False,
         ]
         assert [event.payload["automatic_retry_stop_reason"] for event in family_failures] == [
-            None,
+            "attempt_limit_reached",
             "attempt_limit_reached",
             "decision_family_budget_exhausted",
         ]
@@ -7992,7 +9104,7 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
         ] == [1, 2, 3]
         assert [event.payload["prior_output_budget_failures"] for event in family_failures] == [
             0,
-            0,
+            1,
             2,
         ]
         assert {event.payload["automatic_output_budget_budget"] for event in family_failures} == {3}
@@ -8001,21 +9113,16 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
             for event in family_failures
         )
 
-        suppressed = next(
-            event
-            for event in events_before_resume
-            if event.event_type == "model_automatic_retry_suppressed"
+        assert not any(
+            event.event_type == "model_automatic_retry_suppressed"
             and event.payload.get("decision_family_id") == decision_family_id
+            for event in events_before_resume
         )
-        assert suppressed.payload["failure_category"] == "output_budget"
-        assert suppressed.payload["automatic_machine_format_attempt_count"] == 0
-        assert suppressed.payload["automatic_output_budget_attempt_count"] == 3
-        assert suppressed.payload["prior_output_budget_failures"] == 3
-        assert suppressed.payload["automatic_output_budget_budget"] == 3
-        assert suppressed.payload["suppression_reason"] == ("decision_family_budget_exhausted")
-        source_failure_episode_ids = suppressed.payload["source_failure_episode_ids"]
-        assert len(source_failure_episode_ids) == 2
-        assert source_failure_episode_ids == list(dict.fromkeys(source_failure_episode_ids))
+        isolated_failure_episode_ids = [
+            event.payload["failure_episode_id"] for event in family_failures[:2]
+        ]
+        paused_failure_episode_id = family_failures[2].payload["failure_episode_id"]
+        assert len(set([*isolated_failure_episode_ids, paused_failure_episode_id])) == 3
 
         paused = next(
             event
@@ -8023,16 +9130,16 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
             if event.event_type == "model_action_paused"
             and event.payload.get("action_id") == recovery_action_id
         )
-        assert paused.payload["attempt_id"] is None
+        assert paused.payload["attempt_id"] == family_starts[2].payload["attempt_id"]
         assert paused.payload["failure_category"] == "output_budget"
-        assert paused.payload["reason_code"] == "decision_family_budget_exhausted"
-        assert paused.payload["exhaustion_scope"] == "decision_family"
+        assert paused.payload["reason_code"] == "model_attempts_exhausted"
+        assert paused.payload["exhaustion_scope"] == "action"
         assert paused.payload["automatic_output_budget_attempt_count"] == 3
         assert paused.payload["prior_output_budget_failures"] == 3
         assert paused.payload["automatic_output_budget_budget"] == 3
-        assert paused.payload["source_failure_episode_ids"] == source_failure_episode_ids
-        assert "failure_episode_id" not in paused.payload
-        assert not any(
+        assert "source_failure_episode_ids" not in paused.payload
+        assert paused.payload["failure_episode_id"] == paused_failure_episode_id
+        assert any(
             event.event_type == "model_request_started"
             and event.payload.get("action_id") == recovery_action_id
             for event in events_before_resume
@@ -8044,12 +9151,14 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
         }
         assert all(
             episodes_before_resume[episode_id].resolution == "isolated_action_failure"
-            for episode_id in source_failure_episode_ids
+            for episode_id in isolated_failure_episode_ids
         )
         assert all(
             episodes_before_resume[episode_id].invariant_errors == ()
-            for episode_id in source_failure_episode_ids
+            for episode_id in isolated_failure_episode_ids
         )
+        assert episodes_before_resume[paused_failure_episode_id].resolution == "operator_pause"
+        assert episodes_before_resume[paused_failure_episode_id].invariant_errors == ()
 
         model_client.output_budget_failure_first_actor_action_types.discard("exile_vote")
         model_client.output_budget_failures_remaining_by_action["exile_vote"] = 1
@@ -8088,20 +9197,24 @@ def test_vote_output_budget_family_caps_initial_recovery_and_preflight(
     operator_starts = [
         event for event in family_starts if event.payload.get("action_id") == recovery_action_id
     ]
-    assert len(operator_starts) == 2
-    assert [event.payload["retry_cycle"] for event in operator_starts] == [2, 2]
-    assert [event.payload["cycle_attempt_no"] for event in operator_starts] == [1, 2]
+    assert len(operator_starts) == 3
+    assert [event.payload["retry_cycle"] for event in operator_starts] == [1, 2, 2]
+    assert [event.payload["cycle_attempt_no"] for event in operator_starts] == [1, 1, 2]
     operator_failure = next(
         event
         for event in events
         if event.event_type == "model_request_failed"
         and event.payload.get("action_id") == recovery_action_id
+        and event.payload.get("retry_cycle") == 2
     )
     operator_episode_id = operator_failure.payload["failure_episode_id"]
-    assert operator_episode_id not in source_failure_episode_ids
+    assert operator_episode_id not in {
+        *isolated_failure_episode_ids,
+        paused_failure_episode_id,
+    }
     assert operator_failure.payload["automatic_output_budget_attempt_count"] == 3
     assert operator_failure.payload["automatic_retry_scheduled"] is True
-    assert operator_starts[1].payload["failure_episode_id"] == operator_episode_id
+    assert operator_starts[2].payload["failure_episode_id"] == operator_episode_id
     operator_response = next(
         event
         for event in events
@@ -9272,6 +10385,7 @@ def _prepare_day_state(
     game_id: str,
     *,
     phase_state: str = "public_discussion_open",
+    legacy_generation_policy: bool = False,
 ) -> None:
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, game_id)
@@ -9288,6 +10402,11 @@ def _prepare_day_state(
                 "speech_rounds": 1,
             }
         )
+        if legacy_generation_policy:
+            generation_policy = current_model_generation_policy_contract()
+            generation_policy["schema_version"] = 1
+            generation_policy.pop("execution")
+            frozen_rule["model_generation_policy_contract"] = generation_policy
         game.rule_snapshot = {**frozen_rule, "rule_set": rule_set}
         game.phase_id = "day_1"
         game.phase_state = phase_state
@@ -9335,12 +10454,256 @@ def test_private_action_decision_is_owner_only_and_never_public(v2_context) -> N
     )
 
 
-def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_order(
+def test_new_policy_skips_private_memory_generation_without_blocking_night(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
     _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = sorted(
+        (player for player in before.players if player.alive),
+        key=lambda player: player.seat,
+    )
+    actions = _SummaryOnlyPrivateMemoryActions()
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    transition = asyncio.run(
+        engine._close_day(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            reason="test_non_blocking_private_memories",
+            summarize=True,
+        )
+    )
+
+    assert transition.phase_id == "night_2"
+    assert actions.memory_calls == 0
+    assert len(actions.judge_specs) == 1
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == created["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+    assert facts == []
+    skipped = next(
+        event for event in events if event.event_type == "private_round_memory_generation_skipped"
+    )
+    assert skipped.payload == {
+        "audience": "god_view",
+        "audience_contract_version": 1,
+        "round_no": 1,
+        "batch_id": f"{created['game_id']}:round_1:private_memories",
+        "reason": "non_blocking_latency_policy",
+        "public_cutoff_record_seq": before.last_record_seq,
+        "player_ids": [player.player_id for player in players],
+    }
+    completed = next(
+        event for event in events if event.event_type == "day_private_memory_batch_completed"
+    )
+    assert completed.payload["private_round_memory_mode"] == ("reuse_previous_non_blocking")
+    assert [item["status"] for item in completed.payload["memories"]] == [
+        "generation_skipped_non_blocking"
+    ] * len(players)
+    phase_changed = next(event for event in events if event.event_type == "game_phase_changed")
+    assert completed.record_seq < phase_changed.record_seq
+
+
+def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    first_round = repository.snapshot(created["game_id"])
+    owner = min(first_round.players, key=lambda player: player.seat)
+    memory_text = "上一轮我暂时怀疑2号，下一轮继续核对其票型。"
+    fact_id, created_fact = repository.record_private_round_memory(
+        game_id=created["game_id"],
+        player_id=owner.player_id,
+        round_no=1,
+        memory=memory_text,
+        batch_id=f"{created['game_id']}:round_1:private_memories",
+        commit_index=1,
+    )
+    assert created_fact is True
+
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        match = db.get(V2MatchState, created["game_id"])
+        assert game is not None and run is not None and match is not None
+        game.phase_id = "day_2"
+        game.phase_state = "public_discussion_open"
+        game.status = "ready"
+        run.status = "ready"
+        match.round_no = 2
+
+    actions = _SummaryOnlyPrivateMemoryActions()
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+    transition = asyncio.run(
+        engine._close_day(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            reason="test_previous_private_memory_preserved",
+            summarize=True,
+        )
+    )
+
+    assert transition.phase_id == "night_3"
+    assert actions.memory_calls == 0
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+    assert [fact.knowledge_fact_id for fact in facts] == [fact_id]
+    knowledge = repository.private_knowledge(
+        game_id=created["game_id"],
+        player_id=owner.player_id,
+    )
+    memory = next(item for item in knowledge if item["knowledge_fact_id"] == fact_id)
+    assert memory["authority"] == "actor_memory"
+    assert memory["occurred_in"] == {"period": "day", "round_no": 1}
+    assert memory["payload"]["memory"] == memory_text
+
+
+def test_new_policy_summary_failure_does_not_skip_memory_or_advance_phase(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    actions = _SummaryOnlyPrivateMemoryActions(judge_result=False)
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(V2DayRuntimeError, match="day_summary_failed"):
+        asyncio.run(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_non_blocking_summary_failure",
+                summarize=True,
+            )
+        )
+
+    after = repository.snapshot(created["game_id"])
+    assert (after.phase_id, after.phase_state, after.round_no) == (
+        before.phase_id,
+        before.phase_state,
+        before.round_no,
+    )
+    assert actions.memory_calls == 0
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == created["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+    completed = next(
+        event for event in events if event.event_type == "day_private_memory_batch_completed"
+    )
+    assert completed.payload["public_summary_status"] == "failed"
+    assert completed.payload["memories"] == []
+    assert all(event.event_type != "private_round_memory_generation_skipped" for event in events)
+    assert all(event.event_type != "game_phase_changed" for event in events)
+
+
+def test_new_policy_summary_cancellation_is_recorded_and_propagated(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    cancellation = asyncio.CancelledError("summary_cancelled_for_test")
+    actions = _SummaryOnlyPrivateMemoryActions(judge_error=cancellation)
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(
+        asyncio.CancelledError,
+        match="summary_cancelled_for_test",
+    ) as raised:
+        asyncio.run(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_non_blocking_summary_cancellation",
+                summarize=True,
+            )
+        )
+
+    assert raised.value is cancellation
+    after = repository.snapshot(created["game_id"])
+    assert (after.phase_id, after.phase_state, after.round_no) == (
+        before.phase_id,
+        before.phase_state,
+        before.round_no,
+    )
+    assert actions.memory_calls == 0
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == created["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+    canceled = next(
+        event for event in events if event.event_type == "day_private_memory_batch_canceled"
+    )
+    assert canceled.payload["private_round_memory_mode"] == ("reuse_previous_non_blocking")
+    assert all(
+        event.event_type
+        not in {
+            "private_round_memory_generation_skipped",
+            "day_private_memory_batch_completed",
+            "game_phase_changed",
+        }
+        for event in events
+    )
+
+
+def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_order(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(
+        session_factory,
+        created["game_id"],
+        legacy_generation_policy=True,
+    )
     repository = V2MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(
@@ -9438,7 +10801,11 @@ def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_or
 def test_private_round_memory_generation_failure_is_isolated(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"])
+    _prepare_day_state(
+        session_factory,
+        created["game_id"],
+        legacy_generation_policy=True,
+    )
     repository = V2MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(before.players, key=lambda player: player.seat)
@@ -9493,7 +10860,11 @@ def test_private_round_memory_generation_failure_is_isolated(v2_context) -> None
 def test_private_round_memory_batch_cancellation_commits_nothing(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"])
+    _prepare_day_state(
+        session_factory,
+        created["game_id"],
+        legacy_generation_policy=True,
+    )
     repository = V2MatchRepository(session_factory)
     state = repository.snapshot(created["game_id"])
     players = sorted(state.players, key=lambda player: player.seat)
@@ -10096,6 +11467,243 @@ def test_vote_batch_is_concurrent_at_one_public_cutoff(v2_context) -> None:
         event.payload.get("voter_player_id") or event.payload.get("owner_id")
         for event in batch_events[:-1]
     ] == [voter_id for voter_id in expected_voter_ids for _event in range(2)]
+
+
+@pytest.mark.parametrize(
+    ("failure_code", "failure_category", "failure_mode"),
+    [
+        ("model_output_budget_exhausted", "output_budget", "output_budget_exhausted"),
+        ("model_total_timeout", "timeout", "action_wall_timeout"),
+    ],
+)
+def test_vote_batch_explicit_technical_outcome_abstains_without_recovery(
+    v2_context,
+    failure_code: str,
+    failure_category: str,
+    failure_mode: Literal[
+        "output_budget_exhausted",
+        "attempt_hard_timeout",
+        "action_wall_timeout",
+    ],
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    voters = sorted(before.players, key=lambda item: item.seat)
+    abstaining_voter = voters[1]
+    actions = _TechnicalVoteOutcomeActions(
+        repository=repository,
+        actor_id=abstaining_voter.player_id,
+        explicit_outcome=True,
+        failure_code=failure_code,
+        failure_category=failure_category,
+        failure_mode=failure_mode,
+    )
+    engine = V2DayEngine(repository=repository, action_engine=actions)  # type: ignore[arg-type]
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            action_type="exile_vote",
+            voters=voters,
+            candidates=voters,
+            weighted=True,
+            context={"vote_round": 1},
+        )
+    )
+
+    assert sum(totals.values()) == len(voters) - 1
+    actor_specs = [spec for spec in actions.specs if spec.actor_id == abstaining_voter.player_id]
+    assert len(actor_specs) == 1
+    assert actor_specs[0].context["vote_batch_stage"] == "concurrent_initial"
+    assert all(spec.target_exhaustion_outcome == "technical_abstain" for spec in actions.specs)
+
+    with session_factory() as db:
+        events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(V2GameRecordEvent.game_id == created["game_id"])
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        private_decisions = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_action_decision",
+                )
+            )
+        )
+    committed = [event for event in events if event.event_type == "day_vote_committed"]
+    abstention = next(
+        event
+        for event in committed
+        if event.payload["voter_player_id"] == abstaining_voter.player_id
+    )
+    assert abstention.payload["target_player_id"] is None
+    assert abstention.payload["weight"] == 0.0
+    assert abstention.payload["technical_status"] == "technical_abstain"
+    assert abstention.payload["technical_reason"] == failure_code
+    assert "source_action_id" not in abstention.payload
+    assert "supporting_event_record_seq" not in abstention.payload
+    assert "failure_episode_id" not in abstention.payload
+    assert "failure_mode" not in abstention.payload
+    technical_lineage = next(
+        event
+        for event in events
+        if event.event_type == "day_vote_technical_abstention_committed"
+        and event.payload["voter_player_id"] == abstaining_voter.player_id
+    )
+    assert technical_lineage.payload["audience"] == "god_view"
+    assert technical_lineage.payload["technical_reason"] == failure_code
+    assert technical_lineage.payload["failure_mode"] == failure_mode
+    assert technical_lineage.payload["source_action_id"].startswith("technical-vote-")
+    assert isinstance(technical_lineage.payload["supporting_event_record_seq"], int)
+    assert technical_lineage.payload["failure_episode_id"] == (
+        f"episode-{abstaining_voter.player_id}"
+    )
+    assert not any(event.event_type.startswith("day_vote_batch_recovery") for event in events)
+    resolved = next(event for event in events if event.event_type == "day_vote_resolved")
+    assert resolved.payload["voter_weights"][abstaining_voter.player_id] == 0.0
+    assert resolved.payload["technical_abstentions"] == [
+        {
+            "voter_player_id": abstaining_voter.player_id,
+            "technical_status": "technical_abstain",
+            "technical_reason": failure_code,
+        }
+    ]
+    assert abstaining_voter.player_id not in {fact.owner_id for fact in private_decisions}
+    assert len(private_decisions) == len(voters) - 1
+
+    projected_players = tuple(
+        V2ModelPlayerReference(
+            player_id=player.player_id,
+            seat=player.seat,
+            display_name=player.display_name,
+        )
+        for player in voters
+    )
+    _statements, vote_snapshots, public_events = model_context_module._project_public_history(
+        repository.snapshot(created["game_id"]).public_history,
+        players=projected_players,
+    )
+    projected_abstention = next(
+        event
+        for event in public_events
+        if event["kind"] == "day_vote" and event["voter_ref"] == f"seat_{abstaining_voter.seat}"
+    )
+    assert projected_abstention["target_ref"] is None
+    assert projected_abstention["weight"] == 0.0
+    assert projected_abstention["technical_status"] == "technical_abstain"
+    assert projected_abstention["technical_reason"] == failure_code
+    assert vote_snapshots[-1]["technical_abstentions"][0]["voter_player_id"] == (
+        f"seat_{abstaining_voter.seat}"
+    )
+
+
+@pytest.mark.parametrize("lineage_corruption", ["fake_seq", "wrong_action"])
+def test_vote_batch_rejects_unverified_technical_abstention_lineage(
+    v2_context,
+    lineage_corruption: Literal["fake_seq", "wrong_action"],
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    voters = sorted(repository.snapshot(created["game_id"]).players, key=lambda item: item.seat)
+    actions = _TechnicalVoteOutcomeActions(
+        repository=repository,
+        actor_id=voters[1].player_id,
+        explicit_outcome=True,
+        lineage_corruption=lineage_corruption,
+    )
+    engine = V2DayEngine(repository=repository, action_engine=actions)  # type: ignore[arg-type]
+
+    with pytest.raises(
+        V2RepositoryError,
+        match="day vote technical abstention lineage is invalid",
+    ):
+        asyncio.run(
+            engine._collect_votes(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                action_type="exile_vote",
+                voters=voters,
+                candidates=voters,
+                weighted=True,
+                context={"vote_round": 1},
+            )
+        )
+
+    with session_factory() as db:
+        durable_vote_events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == created["game_id"],
+                    V2GameRecordEvent.event_type.in_(
+                        (
+                            "day_vote_committed",
+                            "day_vote_technical_abstention_committed",
+                            "day_vote_resolved",
+                        )
+                    ),
+                )
+            )
+        )
+    assert durable_vote_events == []
+
+
+def test_vote_batch_failure_without_explicit_outcome_keeps_recovery_behavior(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    voters = sorted(repository.snapshot(created["game_id"]).players, key=lambda item: item.seat)
+    recovered_voter = voters[1]
+    actions = _TechnicalVoteOutcomeActions(
+        repository=repository,
+        actor_id=recovered_voter.player_id,
+        explicit_outcome=False,
+    )
+    engine = V2DayEngine(repository=repository, action_engine=actions)  # type: ignore[arg-type]
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            action_type="exile_vote",
+            voters=voters,
+            candidates=voters,
+            weighted=True,
+            context={"vote_round": 1},
+        )
+    )
+
+    assert sum(totals.values()) == len(voters)
+    actor_specs = [spec for spec in actions.specs if spec.actor_id == recovered_voter.player_id]
+    assert [spec.context["vote_batch_stage"] for spec in actor_specs] == [
+        "concurrent_initial",
+        "concurrent_recovery",
+    ]
+    with session_factory() as db:
+        committed = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == created["game_id"],
+                V2GameRecordEvent.event_type == "day_vote_committed",
+                V2GameRecordEvent.payload["voter_player_id"].as_string()
+                == recovered_voter.player_id,
+            )
+        )
+    assert committed is not None
+    assert committed.payload["target_player_id"] is not None
+    assert committed.payload["weight"] == 1.0
+    assert "technical_status" not in committed.payload
+    assert "technical_reason" not in committed.payload
 
 
 def test_vote_batch_finalize_failure_rolls_back_and_same_batch_retries_cleanly(
