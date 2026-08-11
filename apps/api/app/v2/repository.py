@@ -444,7 +444,11 @@ class V2ActionRepository:
             run = _run(db, game.current_run_id)
             pipeline_generation = _is_pipeline_generation_context(context)
             pre_exile_generation = _is_pre_exile_pipeline_context(context)
-            if pre_exile_generation and game.status in {"broadcasting", "ready"}:
+            if pre_exile_generation and game.status in {
+                "broadcasting",
+                "finalizing",
+                "ready",
+            }:
                 _bind_broadcast_pipeline_generation_claim(
                     db,
                     game=game,
@@ -2286,7 +2290,7 @@ def _bind_pre_exile_pipeline_generation_claim(
     ):
         raise V2RepositoryError("pre-exile pipeline contract is not enabled")
     if (
-        game.status not in {"broadcasting", "ready"}
+        game.status not in {"broadcasting", "finalizing", "ready"}
         or run.status != game.status
         or run.run_id != game.current_run_id
         or run.game_id != game.game_id
@@ -2372,7 +2376,7 @@ def _bind_pre_exile_pipeline_generation_claim(
             )
         )
     )
-    if game.status == "broadcasting":
+    if game.status in {"broadcasting", "finalizing"}:
         if (
             len(active) != 1
             or active[0].presentation_id != pipeline.predecessor_presentation_id

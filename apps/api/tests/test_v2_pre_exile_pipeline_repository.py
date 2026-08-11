@@ -186,6 +186,142 @@ def test_normal_and_technical_skip_last_speech_lineage_is_strict(
         _reserve_again(technical_skip_harness)
 
 
+def test_pre_exile_generation_claim_allows_finalizing_with_active_predecessor(
+    harness: _Harness,
+) -> None:
+    self_result = _record_self_result(harness, actor_id="wolf_1", explode=False)
+    assert self_result.state == "ready"
+    assert self_result.private_fact_record_seq is not None
+    harness.pipelines.reserve_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="wolf_1",
+        result_kind="exile_vote",
+        fence=harness.fence,
+    )
+    harness.actions.mark_finalizing(
+        identity=harness.predecessor,
+        tts_attempt_id="v2_tts_finalizing_pre_exile_vote",
+        sample_count=24_000,
+    )
+
+    action_id = "v2_action_finalizing_pre_exile_vote"
+    claim = _claim_initial(
+        harness,
+        actor_id="wolf_1",
+        result_kind="exile_vote",
+        action_id=action_id,
+    )
+
+    assert claim.action_id == action_id
+    assert claim.non_blocking is True
+    with harness.factory() as db:
+        result = db.scalar(
+            select(V2PreExileResult).where(
+                V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                V2PreExileResult.actor_player_id == "wolf_1",
+                V2PreExileResult.result_kind == "exile_vote",
+            )
+        )
+        opened = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == GAME_ID,
+                V2GameRecordEvent.event_type == "action_opened",
+                V2GameRecordEvent.payload["action_id"].as_string() == action_id,
+            )
+        )
+    assert result is not None and result.action_id == action_id
+    assert opened is not None
+    assert opened.payload["context"]["pipeline"]["result_kind"] == "exile_vote"
+
+
+def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecessor(
+    harness: _Harness,
+) -> None:
+    harness.pipelines.reserve_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="villager_3",
+        result_kind="exile_vote",
+        fence=harness.fence,
+    )
+    harness.close_predecessor()
+    harness.actions.mark_finalizing(
+        identity=harness.predecessor,
+        tts_attempt_id="v2_tts_finalizing_without_active_predecessor",
+        sample_count=24_000,
+    )
+
+    action_id = "v2_action_finalizing_without_active_predecessor"
+    with pytest.raises(V2RepositoryError, match="pre-exile predecessor is no longer active"):
+        _claim_initial(
+            harness,
+            actor_id="villager_3",
+            result_kind="exile_vote",
+            action_id=action_id,
+        )
+
+    with harness.factory() as db:
+        result = db.scalar(
+            select(V2PreExileResult).where(
+                V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                V2PreExileResult.actor_player_id == "villager_3",
+                V2PreExileResult.result_kind == "exile_vote",
+            )
+        )
+        opened = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == GAME_ID,
+                V2GameRecordEvent.event_type == "action_opened",
+                V2GameRecordEvent.payload["action_id"].as_string() == action_id,
+            )
+        )
+    assert result is not None and result.action_id is None
+    assert opened is None
+
+
+def test_day_speech_generation_claim_remains_rejected_while_finalizing(
+    harness: _Harness,
+) -> None:
+    harness.actions.mark_finalizing(
+        identity=harness.predecessor,
+        tts_attempt_id="v2_tts_finalizing_day_speech_generation",
+        sample_count=24_000,
+    )
+
+    action_id = "v2_action_finalizing_day_speech_generation"
+    context = {
+        **_speech_context(),
+        "action_id": action_id,
+        "actor": {"kind": "player", "id": "villager_3"},
+        "public_history_cutoff_record_seq": harness.pipeline.public_cutoff_record_seq,
+        "projection_at_seq": harness.pipeline.public_cutoff_record_seq,
+        "batch_id": "v2_slot_finalizing:generation",
+        "pipeline": {
+            "slot_id": "v2_slot_finalizing",
+            "stage": "generation",
+            "model_admission_mode": "idle_only",
+            "retry_mode": "empty_stream_once_while_predecessor_active",
+            "empty_stream_max_attempts": 2,
+        },
+    }
+    with (
+        bind_v2_run_fence(harness.fence),
+        pytest.raises(
+            V2RepositoryError,
+            match="day speech pipeline generation requires an active broadcast",
+        ),
+    ):
+        harness.actions.claim_action(
+            game_id=GAME_ID,
+            action_id=action_id,
+            context=context,
+            expected_phase_id=PHASE_ID,
+            expected_phase_state=PHASE_STATE,
+            audience="player_private",
+            context_audience="player_private",
+            non_blocking=True,
+        )
+
+
 def test_arbiter_requires_player_canonical_commit_but_not_technical_skip_commit(
     harness: _Harness,
     technical_skip_harness: _Harness,
