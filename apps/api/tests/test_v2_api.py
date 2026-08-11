@@ -68,6 +68,9 @@ from app.v2.day_speech_pipeline_contract import (
 from app.v2.execution import bind_v2_run_fence
 from app.v2.first_night_engine import V2NightEngine, _WorkingNight
 from app.v2.match_repository import V2DayVoteCommit, V2MatchRepository
+from app.v2.pre_exile_pipeline_contract import (
+    pre_exile_pipeline_contract_summary,
+)
 from app.v2.model_context import (
     V2ModelContextProjectionInvariantError,
     V2ModelPlayerReference,
@@ -1846,6 +1849,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
             "day_speech_pipeline_contract": day_speech_pipeline_contract_summary(
                 game.rule_snapshot
             ),
+            "pre_exile_pipeline_contract": pre_exile_pipeline_contract_summary(game.rule_snapshot),
         }
         assert events[1].payload == {
             "audience": "god_view",

@@ -11,6 +11,7 @@ import {
   type V2GodViewIdentitySnapshot,
   type V2GodViewLiveSnapshot,
   type V2GamePhase,
+  type V2DayProgress,
   type V2LiveState,
   type V2Presentation,
   type V2AbilityProgress,
@@ -58,6 +59,7 @@ export function GodViewPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
   const [abilityProgress, setAbilityProgress] = useState<V2AbilityProgress[]>([]);
+  const [dayProgress, setDayProgress] = useState<V2DayProgress | null>(null);
 
   useEffect(() => {
     if (hashToken) saveGodViewAccessToken(gameId, hashToken);
@@ -245,6 +247,7 @@ export function GodViewPage() {
               return;
             }
             if (message.type === "day.progress_changed") {
+              setDayProgress(message);
               return;
             }
             if (message.type === "match.state_changed") {
@@ -488,6 +491,8 @@ export function GodViewPage() {
               gamePhase,
               projectedMatchState,
               runtimeProjection,
+              dayProgress,
+              presentation !== null,
             )}
           </p>
           <dl>
@@ -506,6 +511,8 @@ export function GodViewPage() {
             gamePhase,
             projectedMatchState,
             runtimeProjection,
+            dayProgress,
+            presentation !== null,
           )}
         </p>
       ) : null}
@@ -617,6 +624,8 @@ function liveLabel(
   phase: V2GamePhase | null,
   match: GodViewSnapshot["match_state"] | null,
   runtime: V2RuntimeProjection | null,
+  dayProgress: V2DayProgress | null,
+  presentationActive: boolean,
 ): string {
   const matchStatus = effectiveMatchStatus(runtime, phase, match, state);
   const winner = effectiveWinner(runtime, match);
@@ -629,7 +638,20 @@ function liveLabel(
   const audioEnabled = runtime?.audio_mode === "tts";
   const legacyAudioUnknown = runtime?.audio_mode === "legacy_unknown";
   if (state === "waiting_to_start") return "等待观众点击进入，正式对局尚未开始";
+  if (
+    isDayPhase(phase) &&
+    !presentationActive &&
+    dayProgress?.stage.startsWith("pre_exile_")
+  ) {
+    return godDayProgressLabel(dayProgress);
+  }
   if (state === "ready") {
+    if (
+      isDayPhase(phase) &&
+      dayProgress?.stage.startsWith("pre_exile_")
+    ) {
+      return godDayProgressLabel(dayProgress);
+    }
     if (audioEnabled) return "音频已解锁，等待启动实时法官动作...";
     if (legacyAudioUnknown) return "旧记录音频模式未知，仅接收实时字幕...";
     return "纯文本通道已就绪，等待启动实时法官动作...";
@@ -638,7 +660,7 @@ function liveLabel(
     if (phase?.phase_state === "night_running") return "夜间私密动作正在实时请求大模型...";
     if (phase?.phase_state === "sheriff_election_ready") return "法官正在实时生成警长竞选开场...";
     if (phase?.phase_state === "public_day_ready") return "法官正在实时生成白天发言开场...";
-    if (isDayPhase(phase)) return "白天公开动作正在实时请求大模型...";
+    if (isDayPhase(phase)) return godDayProgressLabel(dayProgress);
     return isNight
       ? "法官正在通过大模型实时生成入夜播报..."
       : "法官正在通过大模型实时生成开场播报...";
@@ -676,6 +698,20 @@ function liveLabel(
   if (state === "canceled") return "本局已由管理员终止";
   if (state === "failed") return "本次实时动作已明确失败";
   return "正在读取当前实时状态...";
+}
+
+function godDayProgressLabel(progress: V2DayProgress | null): string {
+  if (progress?.stage === "pre_exile_special_action") {
+    return "正在后台确认特殊行动，未公开任何玩家选择...";
+  }
+  if (
+    progress?.stage === "pre_exile_vote_collecting" &&
+    progress.completed_count !== null &&
+    progress.total_count !== null
+  ) {
+    return `投票决策已完成 ${progress.completed_count}/${progress.total_count}，目标仍保密...`;
+  }
+  return "白天公开动作正在实时请求大模型...";
 }
 
 function abilityLabel(value: string): string {

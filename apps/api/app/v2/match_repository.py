@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import math
 from typing import Any, Literal
@@ -24,6 +24,11 @@ from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     frozen_player_model_configuration,
 )
+from app.v2.pre_exile_pipeline_contract import (
+    V2ResolvedPreExilePipelineContract,
+    pre_exile_context_sha256,
+    resolve_pre_exile_pipeline_contract,
+)
 from app.v2.models import (
     V2DaySpeechSlot,
     V2GameRecord,
@@ -33,6 +38,8 @@ from app.v2.models import (
     V2LivePresentation,
     V2MatchState,
     V2PlayerState,
+    V2PreExilePipeline,
+    V2PreExileResult,
     V2RoleAssignment,
 )
 from app.v2.repository import (
@@ -54,6 +61,11 @@ _NONTERMINAL_DAY_SPEECH_SLOT_STATES = (
     "generating",
     "ready",
     "presenting",
+)
+_NONTERMINAL_PRE_EXILE_PIPELINE_STATES = (
+    "collecting",
+    "no_explosion",
+    "votes_accepted",
 )
 
 
@@ -94,6 +106,9 @@ class V2MatchSnapshot:
     audio_mode: V2AudioMode
     players: tuple[V2MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
+    pre_exile_pipeline_contract: V2ResolvedPreExilePipelineContract = field(
+        default_factory=lambda: resolve_pre_exile_pipeline_contract({})
+    )
 
     def player(self, player_id: str) -> V2MatchPlayer:
         for player in self.players:
@@ -115,10 +130,29 @@ class V2DaySpeechPrefetchSnapshot:
 
 
 @dataclass(frozen=True)
+class V2PreExilePrefetchSnapshot:
+    match_snapshot: V2MatchSnapshot
+    public_cutoff_record_seq: int
+    predecessor_presentation_id: str
+    predecessor_action_id: str
+    predecessor_source_event_id: int
+    predecessor_source_record_seq: int
+    predecessor_sealed_record_seq: int
+    predecessor_actor_id: str
+
+
+@dataclass(frozen=True)
 class V2ExileResult:
     player_id: str
     outcome: str
     winner_after_exile: str | None
+
+
+@dataclass(frozen=True)
+class V2PreExileExplosionCommit:
+    outcome: Literal["no_explosion", "explosion_selected"]
+    selected_player_id: str | None
+    failed_player_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -459,6 +493,47 @@ class V2MatchRepository:
                 predecessor_actor_id=predecessor_turn_actor_id,
             )
 
+    def snapshot_for_pre_exile_pipeline(
+        self,
+        *,
+        game_id: str,
+        run_id: str,
+        phase_id: str,
+        phase_state: str,
+        predecessor_presentation_id: str,
+        predecessor_action_id: str,
+        predecessor_source_event_id: int,
+        predecessor_turn_player_id: str | None = None,
+    ) -> V2PreExilePrefetchSnapshot:
+        """Freeze the final sealed speech without publishing it before close."""
+
+        frozen = self.snapshot_for_day_speech_prefetch(
+            game_id=game_id,
+            run_id=run_id,
+            phase_id=phase_id,
+            phase_state=phase_state,
+            predecessor_presentation_id=predecessor_presentation_id,
+            predecessor_action_id=predecessor_action_id,
+            predecessor_source_event_id=predecessor_source_event_id,
+            predecessor_turn_player_id=predecessor_turn_player_id,
+        )
+        contract = frozen.match_snapshot.pre_exile_pipeline_contract
+        if not all(
+            contract.enables(action_type)
+            for action_type in ("werewolf_self_explosion", "exile_vote")
+        ):
+            raise V2RepositoryError("pre_exile_pipeline_contract_disabled")
+        return V2PreExilePrefetchSnapshot(
+            match_snapshot=frozen.match_snapshot,
+            public_cutoff_record_seq=frozen.public_cutoff_record_seq,
+            predecessor_presentation_id=frozen.predecessor_presentation_id,
+            predecessor_action_id=frozen.predecessor_action_id,
+            predecessor_source_event_id=frozen.predecessor_source_event_id,
+            predecessor_source_record_seq=frozen.predecessor_source_record_seq,
+            predecessor_sealed_record_seq=frozen.predecessor_sealed_record_seq,
+            predecessor_actor_id=frozen.predecessor_actor_id,
+        )
+
     def private_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
         with self._session_factory() as db:
             return player_private_knowledge(
@@ -514,11 +589,76 @@ class V2MatchRepository:
         votes: tuple[V2DayVoteCommit, ...],
         decision_context: dict[str, Any],
         resolution_payload: dict[str, Any],
+        pre_exile_pipeline_id: str | None = None,
     ) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
+            pre_exile_pipeline: V2PreExilePipeline | None = None
+            pre_exile_all_results: list[V2PreExileResult] = []
+            pre_exile_self_results: list[V2PreExileResult] = []
+            pre_exile_results: list[V2PreExileResult] = []
+            if pre_exile_pipeline_id is not None:
+                pre_exile_pipeline = db.scalar(
+                    select(V2PreExilePipeline)
+                    .where(V2PreExilePipeline.pipeline_id == pre_exile_pipeline_id)
+                    .with_for_update()
+                )
+                if pre_exile_pipeline is None:
+                    raise V2RepositoryError("unknown pre-exile pipeline")
+                pre_exile_all_results = list(
+                    db.scalars(
+                        select(V2PreExileResult)
+                        .where(V2PreExileResult.pipeline_id == pre_exile_pipeline_id)
+                        .order_by(
+                            V2PreExileResult.result_kind,
+                            V2PreExileResult.actor_player_id,
+                        )
+                        .with_for_update()
+                    )
+                )
+                pre_exile_results = [
+                    result for result in pre_exile_all_results if result.result_kind == "exile_vote"
+                ]
+                pre_exile_self_results = [
+                    result
+                    for result in pre_exile_all_results
+                    if result.result_kind == "self_explosion"
+                ]
+                if pre_exile_pipeline.state == "consumed":
+                    _validate_idempotent_pre_exile_vote_commit(
+                        db,
+                        game=game,
+                        pipeline=pre_exile_pipeline,
+                        results=pre_exile_all_results,
+                        phase_id=phase_id,
+                        phase_state=phase_state,
+                        round_no=round_no,
+                        action_type=action_type,
+                        batch_id=batch_id,
+                        public_cutoff_record_seq=public_cutoff_record_seq,
+                        expected_voter_ids=expected_voter_ids,
+                        votes=votes,
+                        decision_context=decision_context,
+                        resolution_payload=resolution_payload,
+                    )
+                    return
+                _validate_pre_exile_vote_commit_gate(
+                    db,
+                    game=game,
+                    match=match,
+                    pipeline=pre_exile_pipeline,
+                    results=pre_exile_results,
+                    self_results=pre_exile_self_results,
+                    phase_id=phase_id,
+                    phase_state=phase_state,
+                    round_no=round_no,
+                    action_type=action_type,
+                    public_cutoff_record_seq=public_cutoff_record_seq,
+                    expected_voter_ids=expected_voter_ids,
+                    votes=votes,
+                )
             _validate_day_vote_batch(
                 db,
                 game=game,
@@ -590,6 +730,39 @@ class V2MatchRepository:
                 audience="all",
                 payload=resolution_payload,
             )
+            if pre_exile_pipeline is not None:
+                consumed_at = _now()
+                for result in pre_exile_results:
+                    result.state = "committed"
+                    result.terminal_at = consumed_at
+                pre_exile_pipeline.state = "consumed"
+                pre_exile_pipeline.vote_batch_id = batch_id
+                pre_exile_pipeline.vote_decision_context_sha256 = pre_exile_context_sha256(
+                    decision_context
+                )
+                pre_exile_pipeline.votes_accepted_at = consumed_at
+                pre_exile_pipeline.consumed_at = consumed_at
+                pre_exile_pipeline.terminal_at = consumed_at
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="pre_exile_pipeline_consumed",
+                    audience="god_view",
+                    payload={
+                        "pipeline_id": pre_exile_pipeline.pipeline_id,
+                        "pipeline_run_id": pre_exile_pipeline.run_id,
+                        "phase_id": pre_exile_pipeline.phase_id,
+                        "round_no": pre_exile_pipeline.round_no,
+                        "state": "consumed",
+                        "vote_batch_id": batch_id,
+                        "vote_decision_context_sha256": (
+                            pre_exile_pipeline.vote_decision_context_sha256
+                        ),
+                        "committed_vote_count": len(pre_exile_results),
+                        "committed_result_count": len(pre_exile_all_results),
+                        "commit_mode": "durable_atomic_arbiter",
+                    },
+                )
 
     def record_private_round_memory(
         self,
@@ -816,6 +989,248 @@ class V2MatchRepository:
                 },
             )
 
+    def resolve_pre_exile_self_explosions(
+        self,
+        *,
+        game_id: str,
+        pipeline_id: str,
+        expected_wolf_ids: tuple[str, ...],
+        stage: str = "before_exile_vote",
+    ) -> V2PreExileExplosionCommit:
+        """Resolve the arbiter and mutate an explosion in one transaction."""
+
+        from app.v2.pre_exile_pipeline_repository import (  # avoids module cycle
+            _terminalize_result_actions,
+            _validate_predecessor_closed,
+        )
+
+        if (
+            not expected_wolf_ids
+            or len(set(expected_wolf_ids)) != len(expected_wolf_ids)
+            or any(
+                not isinstance(player_id, str) or not player_id for player_id in expected_wolf_ids
+            )
+        ):
+            raise V2RepositoryError("invalid expected pre-exile wolves")
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
+            _raise_if_stop_requested(db, game)
+            run = _run(db, game.current_run_id)
+            match = _match(db, game)
+            pipeline = db.scalar(
+                select(V2PreExilePipeline)
+                .where(V2PreExilePipeline.pipeline_id == pipeline_id)
+                .with_for_update()
+            )
+            if (
+                pipeline is None
+                or pipeline.game_id != game.game_id
+                or pipeline.run_id != game.current_run_id
+                or pipeline.fence_worker_id != run.worker_id
+                or pipeline.fence_token != run.fence_token
+                or pipeline.phase_id != game.phase_id
+                or pipeline.round_no != match.round_no
+            ):
+                raise V2RepositoryError("pre-exile self-explosion gate changed")
+            self_results = list(
+                db.scalars(
+                    select(V2PreExileResult)
+                    .where(
+                        V2PreExileResult.pipeline_id == pipeline.pipeline_id,
+                        V2PreExileResult.result_kind == "self_explosion",
+                    )
+                    .with_for_update()
+                )
+            )
+            by_actor = {row.actor_player_id: row for row in self_results}
+            if set(by_actor) != set(expected_wolf_ids):
+                raise V2RepositoryError("pre-exile self-explosion batch is incomplete")
+            failed = tuple(
+                player_id
+                for player_id in expected_wolf_ids
+                if by_actor[player_id].failure is not None
+            )
+            if pipeline.state in {
+                "no_explosion",
+                "votes_accepted",
+                "consumed",
+                "explosion_selected",
+            }:
+                if any(row.state != "committed" for row in self_results):
+                    raise V2RepositoryError(
+                        "resolved pre-exile self-explosion result is nonterminal"
+                    )
+                selected = pipeline.selected_explosion_player_id
+                return V2PreExileExplosionCommit(
+                    outcome=("explosion_selected" if selected is not None else "no_explosion"),
+                    selected_player_id=selected,
+                    failed_player_ids=failed,
+                )
+            if pipeline.state != "collecting":
+                raise V2RepositoryError(f"cannot resolve pre-exile pipeline from {pipeline.state}")
+            if any(row.state not in {"ready", "failed"} for row in self_results):
+                raise V2RepositoryError("pre-exile self-explosion batch is incomplete")
+            if any(
+                not isinstance(row.private_fact_id, str)
+                or not row.private_fact_id
+                or type(row.private_fact_record_seq) is not int
+                for row in self_results
+            ):
+                raise V2RepositoryError("pre-exile self-explosion private fact is incomplete")
+            for row in self_results:
+                _validate_pre_exile_self_fact_lineage(
+                    db,
+                    pipeline=pipeline,
+                    result=row,
+                )
+            predecessor_closed_record_seq = _validate_predecessor_closed(
+                db,
+                pipeline=pipeline,
+            )
+            _validate_pre_exile_predecessor_canonical_commit(
+                db,
+                pipeline=pipeline,
+                predecessor_closed_record_seq=predecessor_closed_record_seq,
+            )
+            wolf_rows = list(
+                db.execute(
+                    select(
+                        V2RoleAssignment.player_id,
+                        V2RoleAssignment.seat,
+                        V2PlayerState.alive,
+                    )
+                    .join(
+                        V2PlayerState,
+                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
+                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                    )
+                    .where(
+                        V2RoleAssignment.game_id == game.game_id,
+                        V2RoleAssignment.role_key == "werewolf",
+                    )
+                )
+            )
+            alive_wolves = {player_id: seat for player_id, seat, alive in wolf_rows if alive}
+            if set(alive_wolves) != set(expected_wolf_ids):
+                raise V2RepositoryError("pre-exile wolf roster changed")
+            affirmative = sorted(
+                (
+                    player_id
+                    for player_id in expected_wolf_ids
+                    if bool((by_actor[player_id].decision or {}).get("explode"))
+                ),
+                key=lambda player_id: alive_wolves[player_id],
+            )
+            resolved_at = _now()
+            pipeline.explosion_resolved_at = resolved_at
+            if affirmative:
+                selected = affirmative[0]
+                existing_vote_event = db.scalar(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == game.game_id,
+                        V2GameRecordEvent.run_id == game.current_run_id,
+                        V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                        V2GameRecordEvent.event_type.in_(
+                            ("day_vote_committed", "day_vote_resolved")
+                        ),
+                    )
+                )
+                if existing_vote_event is not None:
+                    raise V2RepositoryError("cannot resolve explosion after public vote commit")
+                vote_results = list(
+                    db.scalars(
+                        select(V2PreExileResult)
+                        .where(
+                            V2PreExileResult.pipeline_id == pipeline.pipeline_id,
+                            V2PreExileResult.result_kind == "exile_vote",
+                        )
+                        .with_for_update()
+                    )
+                )
+                _terminalize_result_actions(
+                    db,
+                    game=game,
+                    pipeline=pipeline,
+                    rows=vote_results,
+                    failure_code="pre_exile_vote_discarded_by_self_explosion",
+                    failure_stage="self_explosion_resolved",
+                    failure_episode_disposition="isolated_action_failure",
+                )
+                for result in vote_results:
+                    result.state = "discarded"
+                    result.terminal_at = resolved_at
+                _kill(
+                    db,
+                    game=game,
+                    player_id=selected,
+                    cause="werewolf_self_explosion",
+                )
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="werewolf_self_exploded",
+                    audience="all",
+                    payload={
+                        "round_no": match.round_no,
+                        "player_id": selected,
+                        "stage": stage,
+                        "outcome": "day_ended",
+                        "pipeline_id": pipeline.pipeline_id,
+                    },
+                )
+                pipeline.state = "explosion_selected"
+                pipeline.selected_explosion_player_id = selected
+                pipeline.terminal_at = resolved_at
+                outcome: Literal["no_explosion", "explosion_selected"] = "explosion_selected"
+            else:
+                selected = None
+                pipeline.state = "no_explosion"
+                outcome = "no_explosion"
+            for result in self_results:
+                result.state = "committed"
+                result.terminal_at = resolved_at
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="pre_exile_private_fact_committed",
+                    audience="god_view",
+                    payload={
+                        "pipeline_id": pipeline.pipeline_id,
+                        "result_id": result.result_id,
+                        "actor_player_id": result.actor_player_id,
+                        "knowledge_fact_id": result.private_fact_id,
+                        "provisional_record_seq": result.private_fact_record_seq,
+                        "visibility_mode": "committed_after_atomic_arbiter",
+                    },
+                )
+            _append_event(
+                db,
+                game=game,
+                event_type="pre_exile_self_explosions_resolved",
+                audience="god_view",
+                payload={
+                    "pipeline_id": pipeline.pipeline_id,
+                    "pipeline_run_id": pipeline.run_id,
+                    "phase_id": pipeline.phase_id,
+                    "round_no": pipeline.round_no,
+                    "state": pipeline.state,
+                    "eligible_count": len(expected_wolf_ids),
+                    "completed_count": len(expected_wolf_ids) - len(failed),
+                    "failed_count": len(failed),
+                    "affirmative_count": len(affirmative),
+                    "committed_self_result_count": len(self_results),
+                    "selected_player_id": selected,
+                    "selection_policy": "lowest_seat_affirmative",
+                    "outcome": outcome,
+                    "commit_mode": "durable_atomic_arbiter",
+                },
+            )
+            return V2PreExileExplosionCommit(
+                outcome=outcome,
+                selected_player_id=selected,
+                failed_player_ids=failed,
+            )
+
     def resolve_exile(self, *, game_id: str, player_id: str) -> V2ExileResult:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
@@ -1006,6 +1421,19 @@ class V2MatchRepository:
             )
             if open_slot_id is not None:
                 raise V2RepositoryError("cannot finish day with a nonterminal day speech slot")
+            open_pre_exile_pipeline_id = db.scalar(
+                select(V2PreExilePipeline.pipeline_id)
+                .where(
+                    V2PreExilePipeline.game_id == game.game_id,
+                    V2PreExilePipeline.run_id == game.current_run_id,
+                    V2PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
+                )
+                .order_by(V2PreExilePipeline.pipeline_id)
+                .limit(1)
+                .with_for_update()
+            )
+            if open_pre_exile_pipeline_id is not None:
+                raise V2RepositoryError("cannot finish day with a nonterminal pre-exile pipeline")
             match = _match(db, game)
             winner = _winner(db, game)
             previous_phase_id = game.phase_id
@@ -1133,6 +1561,69 @@ class V2MatchRepository:
                         "failure_code": failure_code,
                     },
                 )
+            invalidated_pre_exile_pipelines = list(
+                db.scalars(
+                    select(V2PreExilePipeline)
+                    .where(
+                        V2PreExilePipeline.game_id == game.game_id,
+                        V2PreExilePipeline.run_id == run.run_id,
+                        V2PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
+                    )
+                    .order_by(V2PreExilePipeline.pipeline_id)
+                    .with_for_update()
+                )
+            )
+            invalidated_pre_exile_result_count = 0
+            if invalidated_pre_exile_pipelines:
+                from app.v2.pre_exile_pipeline_repository import (
+                    _terminalize_result_actions,
+                )
+
+                for pipeline in invalidated_pre_exile_pipelines:
+                    results = list(
+                        db.scalars(
+                            select(V2PreExileResult)
+                            .where(V2PreExileResult.pipeline_id == pipeline.pipeline_id)
+                            .with_for_update()
+                        )
+                    )
+                    invalidated_pre_exile_result_count += len(results)
+                    _terminalize_result_actions(
+                        db,
+                        game=game,
+                        pipeline=pipeline,
+                        rows=results,
+                        failure_code="pre_exile_pipeline_invalidated",
+                        failure_stage="day_runtime_failed",
+                    )
+                    for result in results:
+                        if result.state not in {"committed", "discarded"}:
+                            result.state = "discarded"
+                            result.terminal_at = failed_at
+                    pipeline.state = "invalidated"
+                    pipeline.failure = {
+                        "kind": "runtime_failed",
+                        "reason_code": "day_runtime_failed",
+                        "failure_code": failure_code,
+                    }
+                    pipeline.terminal_at = failed_at
+                    _append_event(
+                        db,
+                        game=game,
+                        event_type="pre_exile_pipeline_invalidated",
+                        audience="god_view",
+                        payload={
+                            "pipeline_id": pipeline.pipeline_id,
+                            "pipeline_run_id": pipeline.run_id,
+                            "phase_id": pipeline.phase_id,
+                            "round_no": pipeline.round_no,
+                            "state": pipeline.state,
+                            "failure_kind": "runtime_failed",
+                            "reason_code": "day_runtime_failed",
+                            "failure_code": failure_code,
+                            "discarded_result_count": len(results),
+                        },
+                    )
             game.status = "failed"
             game.phase_state = "failed"
             run.status = "failed"
@@ -1140,6 +1631,9 @@ class V2MatchRepository:
             match = db.get(V2MatchState, game_id)
             if match is not None:
                 match.completion_reason = failure_code
+            # The session factory disables autoflush. Make the synthetic attempt/action
+            # terminals visible before deriving the run-level failure episode set.
+            db.flush()
             failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
                 db,
                 game=game,
@@ -1152,6 +1646,8 @@ class V2MatchRepository:
                 payload={
                     "failure_code": failure_code,
                     "invalidated_day_speech_slot_count": len(invalidated_slots),
+                    "invalidated_pre_exile_pipeline_count": len(invalidated_pre_exile_pipelines),
+                    "invalidated_pre_exile_result_count": (invalidated_pre_exile_result_count),
                     "failed_failure_episode_ids": list(failed_failure_episode_ids),
                     "failure_episode_disposition": "run_failure",
                 },
@@ -1282,6 +1778,7 @@ def _match_snapshot(
             resolve_model_generation_policy_contract(game.rule_snapshot)
         ),
         day_speech_pipeline_contract=resolve_day_speech_pipeline_contract(game.rule_snapshot),
+        pre_exile_pipeline_contract=resolve_pre_exile_pipeline_contract(game.rule_snapshot),
         audio_mode=delivery_audio_mode(game.delivery_snapshot),
         players=_players(db, game),
         public_history=public_history,
@@ -1518,6 +2015,428 @@ def _add_private_action_decision(
         },
     )
     return fact_id
+
+
+def _validate_pre_exile_predecessor_canonical_commit(
+    db: Session,
+    *,
+    pipeline: V2PreExilePipeline,
+    predecessor_closed_record_seq: int,
+) -> None:
+    game = db.get(V2GameRecord, pipeline.game_id)
+    presentation = db.scalar(
+        select(V2LivePresentation).where(
+            V2LivePresentation.game_id == pipeline.game_id,
+            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        )
+    )
+    opened = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == pipeline.game_id,
+                V2GameRecordEvent.run_id == pipeline.run_id,
+                V2GameRecordEvent.event_type == "action_opened",
+            )
+        )
+    )
+    matching_opened = [
+        event
+        for event in opened
+        if isinstance(event.payload, dict)
+        and event.payload.get("action_id") == pipeline.predecessor_action_id
+    ]
+    if presentation is None or len(matching_opened) != 1:
+        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+    context = matching_opened[0].payload.get("context")
+    if not isinstance(context, dict):
+        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+    action_type = context.get("action_type")
+    technical_skip = action_type == "judge_day_speech_technical_skip"
+    speech_order = context.get("speech_order")
+    final_speech_round = max(
+        1,
+        int(
+            (
+                ((game.rule_snapshot if game is not None else {}).get("rule_set") or {}).get(
+                    "speech_rounds"
+                )
+            )
+            or 1
+        ),
+    )
+    turn_player_id = context.get("skipped_player_id") if technical_skip else presentation.actor_id
+    if (
+        presentation.run_id != pipeline.run_id
+        or presentation.action_id != pipeline.predecessor_action_id
+        or presentation.state != "closed"
+        or presentation.closed_at is None
+        or matching_opened[0].record_seq >= pipeline.predecessor_source_record_seq
+        or predecessor_closed_record_seq <= pipeline.predecessor_sealed_record_seq
+        or context.get("speech_round") != final_speech_round
+        or not isinstance(speech_order, list)
+        or speech_order[-1:] != [turn_player_id]
+    ):
+        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+    commits = list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == pipeline.game_id,
+                V2GameRecordEvent.run_id == pipeline.run_id,
+                V2GameRecordEvent.event_type == "day_speech_committed",
+                V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+    )
+    if technical_skip:
+        public_skip_record_seq = context.get("public_skip_record_seq")
+        public_skip = (
+            db.scalar(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == pipeline.game_id,
+                    V2GameRecordEvent.run_id == pipeline.run_id,
+                    V2GameRecordEvent.record_seq == public_skip_record_seq,
+                    V2GameRecordEvent.event_type == "action_skipped_technical",
+                )
+            )
+            if type(public_skip_record_seq) is int
+            else None
+        )
+        public_skip_payload = (
+            public_skip.payload
+            if public_skip is not None and isinstance(public_skip.payload, dict)
+            else {}
+        )
+        if (
+            context.get("actor") != {"kind": "judge", "id": "judge"}
+            or presentation.actor_kind != "judge"
+            or presentation.actor_id != "judge"
+            or type(public_skip_record_seq) is not int
+            or public_skip_record_seq <= 0
+            or public_skip_record_seq >= matching_opened[0].record_seq
+            or public_skip_payload.get("audience") != "all"
+            or public_skip_payload.get("phase_id") != pipeline.phase_id
+            or public_skip_payload.get("round_no") != pipeline.round_no
+            or public_skip_payload.get("action_type") != "day_debate_speech"
+            or public_skip_payload.get("actor_id") != turn_player_id
+            or public_skip_payload.get("reason") != "technical_failure"
+            or commits
+        ):
+            raise V2RepositoryError("pre-exile technical-skip canonical predecessor changed")
+        return
+    expected_payload = canonical_event_payload(
+        {
+            "round_no": pipeline.round_no,
+            "stage": "day_debate",
+            "player_id": presentation.actor_id,
+            "speech": presentation.subtitle_text,
+        },
+        audience="all",
+    )
+    if (
+        action_type != "day_debate_speech"
+        or context.get("actor") != {"kind": "player", "id": presentation.actor_id}
+        or presentation.actor_kind != "player"
+        or len(commits) != 1
+        or commits[0].record_seq <= predecessor_closed_record_seq
+        or commits[0].payload != expected_payload
+    ):
+        raise V2RepositoryError("pre-exile predecessor canonical day speech is not committed")
+
+
+def _validate_pre_exile_self_fact_lineage(
+    db: Session,
+    *,
+    pipeline: V2PreExilePipeline,
+    result: V2PreExileResult,
+) -> None:
+    fact = db.get(V2KnowledgeFact, result.private_fact_id)
+    payload = fact.payload if fact is not None and isinstance(fact.payload, dict) else {}
+    fact_context = payload.get("context")
+    decision = payload.get("decision")
+    result_decision = result.decision or {}
+    matching_events = [
+        event
+        for event in db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == pipeline.game_id,
+                V2GameRecordEvent.run_id == pipeline.run_id,
+                V2GameRecordEvent.event_type == "private_knowledge_recorded",
+            )
+        )
+        if isinstance(event.payload, dict)
+        and event.payload.get("knowledge_fact_id") == result.private_fact_id
+    ]
+    if (
+        fact is None
+        or fact.game_id != pipeline.game_id
+        or fact.owner_scope != "player"
+        or fact.owner_id != result.actor_player_id
+        or fact.fact_type != "private_action_decision"
+        or payload.get("action_type") != "werewolf_self_explosion"
+        or payload.get("source_action_id") != result.action_id
+        or not isinstance(decision, dict)
+        or not isinstance(decision.get("explode"), bool)
+        or decision.get("explode") != result_decision.get("explode")
+        or not isinstance(fact_context, dict)
+        or fact_context.get("pipeline_id") != pipeline.pipeline_id
+        or fact_context.get("public_history_cutoff_record_seq") != pipeline.public_cutoff_record_seq
+        or fact_context.get("visibility_mode") != "pre_exile_provisional_until_atomic_arbiter"
+        or len(matching_events) != 1
+        or matching_events[0].record_seq != result.private_fact_record_seq
+        or matching_events[0].event_id <= 0
+        or matching_events[0].payload.get("pipeline_id") != pipeline.pipeline_id
+        or matching_events[0].payload.get("pipeline_run_id") != pipeline.run_id
+        or matching_events[0].payload.get("owner_scope") != "player"
+        or matching_events[0].payload.get("owner_id") != result.actor_player_id
+        or matching_events[0].payload.get("fact_type") != "private_action_decision"
+        or matching_events[0].payload.get("action_type") != "werewolf_self_explosion"
+        or matching_events[0].payload.get("source_action_id") != result.action_id
+        or matching_events[0].payload.get("audience") != "god_view"
+    ):
+        raise V2RepositoryError("pre-exile self-explosion private fact lineage changed")
+
+
+def _validate_pre_exile_vote_commit_gate(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    match: V2MatchState,
+    pipeline: V2PreExilePipeline,
+    results: list[V2PreExileResult],
+    self_results: list[V2PreExileResult],
+    phase_id: str,
+    phase_state: str,
+    round_no: int,
+    action_type: str,
+    public_cutoff_record_seq: int,
+    expected_voter_ids: tuple[str, ...],
+    votes: tuple[V2DayVoteCommit, ...],
+) -> None:
+    run = _run(db, game.current_run_id)
+    if (
+        pipeline.game_id != game.game_id
+        or pipeline.run_id != game.current_run_id
+        or pipeline.fence_worker_id != run.worker_id
+        or pipeline.fence_token != run.fence_token
+        or pipeline.phase_id != phase_id
+        or pipeline.round_no != round_no
+        or pipeline.state != "no_explosion"
+        or pipeline.selected_explosion_player_id is not None
+        or match.round_no != round_no
+        or game.phase_state != phase_state
+        or action_type != "exile_vote"
+        or pipeline.public_cutoff_record_seq != public_cutoff_record_seq
+    ):
+        raise V2RepositoryError("pre-exile vote commit gate changed")
+    presentation = db.scalar(
+        select(V2LivePresentation).where(
+            V2LivePresentation.game_id == game.game_id,
+            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        )
+    )
+    if (
+        presentation is None
+        or presentation.run_id != pipeline.run_id
+        or presentation.action_id != pipeline.predecessor_action_id
+        or presentation.state != "closed"
+        or presentation.closed_at is None
+    ):
+        raise V2RepositoryError("pre-exile votes cannot commit before predecessor close")
+    if not self_results or any(
+        result.state != "committed" or result.terminal_at is None for result in self_results
+    ):
+        raise V2RepositoryError("pre-exile self-explosion results are not atomically committed")
+    closed_events = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == pipeline.run_id,
+                V2GameRecordEvent.event_type == "speech_closed",
+                V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+            )
+        )
+    )
+    matching_closed = [
+        event
+        for event in closed_events
+        if isinstance(event.payload, dict)
+        and event.payload.get("action_id") == pipeline.predecessor_action_id
+        and event.payload.get("presentation_id") == pipeline.predecessor_presentation_id
+    ]
+    if len(matching_closed) != 1:
+        raise V2RepositoryError("pre-exile predecessor has no unique durable close event")
+    _validate_pre_exile_predecessor_canonical_commit(
+        db,
+        pipeline=pipeline,
+        predecessor_closed_record_seq=matching_closed[0].record_seq,
+    )
+    by_actor = {result.actor_player_id: result for result in results}
+    if (
+        len(by_actor) != len(results)
+        or set(by_actor) != set(expected_voter_ids)
+        or len(set(expected_voter_ids)) != len(expected_voter_ids)
+        or len(votes) != len(expected_voter_ids)
+    ):
+        raise V2RepositoryError("pre-exile vote result membership is incomplete")
+    for vote in votes:
+        result = by_actor.get(vote.voter_player_id)
+        if result is None or result.state not in {"ready", "failed"}:
+            raise V2RepositoryError("pre-exile vote result is not durable")
+        if result.state == "ready":
+            decision = result.decision or {}
+            if (
+                (
+                    result.failure is not None
+                    and not (
+                        result.recovery_action_id is not None
+                        and set(result.failure) == {"initial_admission_failure"}
+                    )
+                )
+                or vote.technical_status is not None
+                or decision.get("target_player_id") != vote.target_player_id
+                or decision.get("decision_note") != vote.decision_note
+            ):
+                raise V2RepositoryError("pre-exile committed vote changed its speculative result")
+            continue
+        failure = result.failure or {}
+        technical = failure.get("technical_outcome")
+        if not isinstance(technical, dict):
+            raise V2RepositoryError("pre-exile failed vote has no technical abstention lineage")
+        if (
+            vote.technical_status != "technical_abstain"
+            or vote.source_action_id != (result.recovery_action_id or result.action_id)
+            or vote.supporting_event_record_seq != failure.get("technical_outcome_record_seq")
+            or vote.failure_episode_id != technical.get("failure_episode_id")
+            or vote.failure_mode != technical.get("target_exhaustion_failure_mode")
+            or vote.technical_reason != technical.get("failure_code")
+        ):
+            raise V2RepositoryError("pre-exile technical abstention changed its speculative result")
+
+
+def _validate_idempotent_pre_exile_vote_commit(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    pipeline: V2PreExilePipeline,
+    results: list[V2PreExileResult],
+    phase_id: str,
+    phase_state: str,
+    round_no: int,
+    action_type: str,
+    batch_id: str,
+    public_cutoff_record_seq: int,
+    expected_voter_ids: tuple[str, ...],
+    votes: tuple[V2DayVoteCommit, ...],
+    decision_context: dict[str, Any],
+    resolution_payload: dict[str, Any],
+) -> None:
+    voter_ids = tuple(vote.voter_player_id for vote in votes)
+    if (
+        pipeline.vote_batch_id != batch_id
+        or any(result.state != "committed" for result in results)
+        or phase_id != pipeline.phase_id
+        or phase_state != game.phase_state
+        or round_no != pipeline.round_no
+        or action_type != "exile_vote"
+        or public_cutoff_record_seq != pipeline.public_cutoff_record_seq
+        or batch_id != f"{pipeline.phase_id}:exile_vote:{pipeline.public_cutoff_record_seq}:vote"
+        or expected_voter_ids != voter_ids
+        or len(set(expected_voter_ids)) != len(expected_voter_ids)
+        or decision_context.get("batch_id") != batch_id
+        or decision_context.get("public_cutoff_record_seq") != public_cutoff_record_seq
+        or pipeline.vote_decision_context_sha256 != pre_exile_context_sha256(decision_context)
+    ):
+        raise V2RepositoryError("consumed pre-exile pipeline has different durable output")
+    vote_results = {
+        result.actor_player_id: result for result in results if result.result_kind == "exile_vote"
+    }
+    if set(vote_results) != set(expected_voter_ids):
+        raise V2RepositoryError(
+            "consumed pre-exile pipeline has different durable result membership"
+        )
+    for vote in votes:
+        result = vote_results[vote.voter_player_id]
+        if vote.technical_status is None:
+            decision = result.decision or {}
+            if (
+                decision.get("target_player_id") != vote.target_player_id
+                or decision.get("decision_note") != vote.decision_note
+            ):
+                raise V2RepositoryError("pre-exile retry changed a committed private vote")
+        else:
+            failure = result.failure or {}
+            technical = failure.get("technical_outcome")
+            if (
+                vote.decision_note is not None
+                or vote.technical_status != "technical_abstain"
+                or not isinstance(technical, dict)
+                or vote.source_action_id != (result.recovery_action_id or result.action_id)
+                or vote.supporting_event_record_seq != failure.get("technical_outcome_record_seq")
+                or vote.failure_episode_id != technical.get("failure_episode_id")
+                or vote.failure_mode != technical.get("target_exhaustion_failure_mode")
+                or vote.technical_reason != technical.get("failure_code")
+            ):
+                raise V2RepositoryError("pre-exile retry changed a committed technical vote")
+    events = list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == pipeline.run_id,
+                V2GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+    )
+    committed = [
+        event
+        for event in events
+        if isinstance(event.payload, dict)
+        and event.payload.get("batch_id") == batch_id
+        and event.event_type == "day_vote_committed"
+    ]
+    resolved = [
+        event
+        for event in events
+        if isinstance(event.payload, dict)
+        and event.payload.get("batch_id") == batch_id
+        and event.event_type == "day_vote_resolved"
+    ]
+    if len(committed) != len(votes) or len(resolved) != 1:
+        raise V2RepositoryError("pre-exile vote commit is not idempotent")
+    durable_votes = [
+        (
+            event.payload.get("voter_player_id"),
+            event.payload.get("target_player_id"),
+            event.payload.get("weight"),
+            event.payload.get("technical_status"),
+            event.payload.get("technical_reason"),
+        )
+        for event in committed
+    ]
+    requested_votes = [
+        (
+            vote.voter_player_id,
+            vote.target_player_id,
+            vote.weight,
+            vote.technical_status,
+            vote.technical_reason,
+        )
+        for vote in votes
+    ]
+    durable_resolution = {
+        key: value
+        for key, value in resolved[0].payload.items()
+        if key not in {"audience", "audience_contract_version"}
+    }
+    if (
+        durable_votes != requested_votes
+        or type(resolution_payload) is not dict
+        or resolution_payload != durable_resolution
+    ):
+        raise V2RepositoryError("pre-exile retry changed an already committed vote batch")
 
 
 def _validate_day_vote_batch(

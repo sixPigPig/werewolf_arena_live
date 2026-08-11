@@ -534,6 +534,177 @@ class V2DaySpeechSlot(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class V2PreExilePipeline(Base):
+    __tablename__ = "v2_pre_exile_pipelines"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id",
+            "run_id",
+            "phase_id",
+            "round_no",
+            name="uq_v2_pre_exile_pipelines_day",
+        ),
+        UniqueConstraint(
+            "game_id",
+            "run_id",
+            "predecessor_presentation_id",
+            name="uq_v2_pre_exile_pipelines_predecessor",
+        ),
+        CheckConstraint(
+            "state IN ('collecting', 'no_explosion', 'explosion_selected', "
+            "'votes_accepted', 'consumed', 'canceled', 'invalidated')",
+            name="ck_v2_pre_exile_pipelines_state",
+        ),
+        CheckConstraint(
+            "fence_token >= 0",
+            name="ck_v2_pre_exile_pipelines_fence_nonnegative",
+        ),
+        CheckConstraint(
+            "round_no >= 1 AND predecessor_source_event_id >= 1 AND "
+            "predecessor_source_record_seq >= 1 AND "
+            "predecessor_sealed_record_seq > predecessor_source_record_seq AND "
+            "public_cutoff_record_seq >= predecessor_sealed_record_seq",
+            name="ck_v2_pre_exile_pipelines_cutoff_lineage",
+        ),
+        Index("ix_v2_pre_exile_pipelines_game_state", "game_id", "state"),
+        Index("ix_v2_pre_exile_pipelines_run_state", "run_id", "state"),
+    )
+
+    pipeline_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    fence_worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fence_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    phase_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    round_no: Mapped[int] = mapped_column(nullable=False)
+    predecessor_action_id: Mapped[str] = mapped_column(String(48), nullable=False)
+    predecessor_presentation_id: Mapped[str] = mapped_column(String(48), nullable=False)
+    predecessor_source_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    predecessor_source_record_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    predecessor_sealed_record_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    public_cutoff_record_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    public_history_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="collecting", server_default="collecting"
+    )
+    selected_explosion_player_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    vote_batch_id: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    vote_decision_context_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    explosion_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    votes_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class V2PreExileResult(Base):
+    __tablename__ = "v2_pre_exile_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_id",
+            "actor_player_id",
+            "result_kind",
+            name="uq_v2_pre_exile_results_member",
+        ),
+        UniqueConstraint("action_id", name="uq_v2_pre_exile_results_action"),
+        UniqueConstraint(
+            "recovery_action_id",
+            name="uq_v2_pre_exile_results_recovery_action",
+        ),
+        UniqueConstraint("attempt_id", name="uq_v2_pre_exile_results_attempt"),
+        UniqueConstraint(
+            "game_id",
+            "response_record_seq",
+            name="uq_v2_pre_exile_results_response_event",
+        ),
+        UniqueConstraint(
+            "private_fact_id",
+            name="uq_v2_pre_exile_results_private_fact",
+        ),
+        CheckConstraint(
+            "result_kind IN ('self_explosion', 'exile_vote')",
+            name="ck_v2_pre_exile_results_kind",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'generating', 'ready', 'failed', "
+            "'accepted', 'committed', 'discarded')",
+            name="ck_v2_pre_exile_results_state",
+        ),
+        Index("ix_v2_pre_exile_results_pipeline_state", "pipeline_id", "state"),
+        Index("ix_v2_pre_exile_results_game_actor", "game_id", "actor_player_id"),
+    )
+
+    result_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("v2_pre_exile_pipelines.pipeline_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    actor_player_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    result_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="reserved", server_default="reserved"
+    )
+    action_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    recovery_action_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    recovery_attempt_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    recovery_response_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    recovery_terminal_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    attempt_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    response_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    terminal_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    result_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    failure_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    failure: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    private_fact_id: Mapped[str | None] = mapped_column(
+        String(48),
+        ForeignKey("v2_knowledge_facts.knowledge_fact_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    private_fact_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    generation_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class V2VoiceAsset(Base):
     __tablename__ = "v2_voice_assets"
     __table_args__ = (

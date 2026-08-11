@@ -59,6 +59,7 @@ from app.v2.public_projection import (
     project_public_rule_snapshot,
 )
 from app.v2.protocol import live_state
+from app.v2.pre_exile_pipeline_repository import V2PreExilePipelineRepository
 from app.v2.repository import V2ActionRepository, V2PresentationIdentity
 from app.v2.runtime_state import project_v2_runtime_state
 from app.v2.service import (
@@ -467,6 +468,7 @@ class V2LiveRuntime:
             enforce_execution_fence=True,
         )
         self._day_speech_pipeline_repository = V2DaySpeechPipelineRepository(session_factory)
+        self._pre_exile_pipeline_repository = V2PreExilePipelineRepository(session_factory)
         self._action_engine = V2ActionEngine(
             repository=self._repository,
             model_client=model_client,
@@ -482,6 +484,7 @@ class V2LiveRuntime:
             repository=self._match_repository,
             action_engine=self._action_engine,
             day_speech_pipeline_repository=self._day_speech_pipeline_repository,
+            pre_exile_pipeline_repository=self._pre_exile_pipeline_repository,
         )
         self._first_night_engine = V2NightEngine(
             repository=self._night_repository,

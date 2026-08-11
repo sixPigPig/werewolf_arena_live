@@ -40,6 +40,10 @@ from app.v2.model_context_contract import freeze_model_context_contract
 from app.v2.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
+from app.v2.pre_exile_pipeline_contract import (
+    freeze_pre_exile_pipeline_contract,
+    pre_exile_pipeline_contract_summary,
+)
 from app.v2.role_assignment import assign_private_roles
 
 
@@ -83,8 +87,10 @@ def create_waiting_game(
     if rule_snapshot is not None or players_snapshot is not None:
         if rule_snapshot is None or players_snapshot is None:
             raise ValueError("rule and player snapshots must be provided together")
-    frozen_rule_snapshot = freeze_day_speech_pipeline_contract(
-        freeze_model_generation_policy_contract(freeze_model_context_contract(rule_snapshot))
+    frozen_rule_snapshot = freeze_pre_exile_pipeline_contract(
+        freeze_day_speech_pipeline_contract(
+            freeze_model_generation_policy_contract(freeze_model_context_contract(rule_snapshot))
+        )
     )
     if created_from_lobby:
         assert players_snapshot is not None
@@ -152,6 +158,9 @@ def create_waiting_game(
                     )
                 },
                 "day_speech_pipeline_contract": day_speech_pipeline_contract_summary(
+                    frozen_rule_snapshot
+                ),
+                "pre_exile_pipeline_contract": pre_exile_pipeline_contract_summary(
                     frozen_rule_snapshot
                 ),
             },

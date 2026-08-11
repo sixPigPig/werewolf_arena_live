@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.v2.models import V2GameRecordEvent, V2KnowledgeFact
+from app.v2.models import V2GameRecordEvent, V2KnowledgeFact, V2PreExileResult
 
 
 _KNOWLEDGE_EVENT_TYPES = frozenset(
@@ -13,6 +13,7 @@ _KNOWLEDGE_EVENT_TYPES = frozenset(
         "ability_activation_completed",
         "ability_activation_technical_no_action",
         "private_knowledge_recorded",
+        "pre_exile_private_fact_committed",
         "hunter_response_resolved",
     }
 )
@@ -38,6 +39,28 @@ def player_private_knowledge(
     )
     if not rows:
         return []
+
+    provisional_fact_ids = {
+        row.knowledge_fact_id for row in rows if _is_pre_exile_provisional_fact(row)
+    }
+    if provisional_fact_ids:
+        committed_fact_ids = set(
+            db.scalars(
+                select(V2PreExileResult.private_fact_id).where(
+                    V2PreExileResult.private_fact_id.in_(provisional_fact_ids),
+                    V2PreExileResult.result_kind == "self_explosion",
+                    V2PreExileResult.state == "committed",
+                )
+            )
+        )
+        rows = [
+            row
+            for row in rows
+            if row.knowledge_fact_id not in provisional_fact_ids
+            or row.knowledge_fact_id in committed_fact_ids
+        ]
+        if not rows:
+            return []
 
     events = list(
         db.scalars(
@@ -70,6 +93,10 @@ def player_private_knowledge(
         event = event_by_fact_id.get(row.knowledge_fact_id)
         if event is None and row.source_activation_id is not None:
             event = event_by_activation_id.get(row.source_activation_id)
+        if _is_pre_exile_provisional_fact(row) and (
+            event is None or event.event_type != "pre_exile_private_fact_committed"
+        ):
+            continue
         payload = dict(row.payload or {})
         occurred_in = _occurred_in(row.fact_type, payload)
         projected.append(
@@ -97,6 +124,18 @@ def player_private_knowledge(
             }
         )
     return projected
+
+
+def _is_pre_exile_provisional_fact(row: V2KnowledgeFact) -> bool:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    context = payload.get("context")
+    return (
+        row.fact_type == "private_action_decision"
+        and payload.get("action_type") == "werewolf_self_explosion"
+        and isinstance(context, dict)
+        and isinstance(context.get("pipeline_id"), str)
+        and context.get("visibility_mode") == "pre_exile_provisional_until_atomic_arbiter"
+    )
 
 
 def _occurred_in(fact_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:

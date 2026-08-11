@@ -74,7 +74,7 @@ from app.v2.model_generation_policy_contract import (
     resolve_model_generation_policy_contract,
 )
 from app.v2.live_runtime import _audience_targets
-from app.v2.protocol import V2LiveProtocolError, audio_frame
+from app.v2.protocol import V2LiveProtocolError, audio_frame, day_progress
 from app.v2.public_projection import (
     V2PublicProjectionError,
     project_public_player_seats,
@@ -2995,6 +2995,41 @@ def test_voice_recorder_discards_only_an_uncommitted_finalized_asset(tmp_path: P
 
     assert not final_path.exists()
     assert not (tmp_path / "game/uncommitted.wav.writing").exists()
+
+
+def test_public_day_progress_exposes_only_anonymous_vote_counts() -> None:
+    message = day_progress(
+        game_id="v2_game_test",
+        run_id="v2_run_test",
+        round_no=3,
+        stage="pre_exile_vote_collecting",
+        completed_count=4,
+        total_count=9,
+    )
+
+    assert message["completed_count"] == 4
+    assert message["total_count"] == 9
+    assert "player_id" not in message
+    assert "target_player_id" not in message
+
+
+@pytest.mark.parametrize(
+    ("completed_count", "total_count"),
+    [(None, 9), (4, None), (-1, 9), (10, 9), (True, 9)],
+)
+def test_public_day_progress_rejects_invalid_or_partial_counts(
+    completed_count: int | None,
+    total_count: int | None,
+) -> None:
+    with pytest.raises(V2LiveProtocolError):
+        day_progress(
+            game_id="v2_game_test",
+            run_id="v2_run_test",
+            round_no=3,
+            stage="pre_exile_vote_collecting",
+            completed_count=completed_count,
+            total_count=total_count,
+        )
 
 
 def test_tts_v3_client_frame_layout_matches_event_protocol() -> None:

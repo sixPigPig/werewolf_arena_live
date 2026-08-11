@@ -38,6 +38,7 @@ def project_public_rule_snapshot(
     if not isinstance(rule_set, dict):
         if set(rule_snapshot) <= {
             "day_speech_pipeline_contract",
+            "pre_exile_pipeline_contract",
             "model_context_contract",
             "model_generation_policy_contract",
         }:

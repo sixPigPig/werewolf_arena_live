@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+import copy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -48,6 +49,8 @@ from app.v2.protocol import (
     match_state_changed,
     player_state_changed,
 )
+from app.v2.pre_exile_pipeline_contract import pre_exile_context_sha256
+from app.v2.pre_exile_pipeline_repository import V2PreExilePipelineRepository
 from app.v2.repository import (
     V2ExecutionOwnershipLost,
     V2PhaseTransition,
@@ -150,6 +153,40 @@ class _DaySpeechPrefetchLaunch:
     fatal: BaseException | None = None
 
 
+@dataclass
+class _PreExileLaunch:
+    presentation_closed: asyncio.Event
+    predecessor_committed: asyncio.Event
+    pipeline: Any | None = None
+    frozen: Any | None = None
+    run_fence: Any | None = None
+    task: asyncio.Task[Any] | None = None
+    preparation_error: BaseException | None = None
+
+
+@dataclass(frozen=True)
+class _PreparedPreExileVote:
+    pipeline_id: str
+    run_fence: Any | None
+    frozen_state: V2MatchSnapshot
+    public_history_cutoff_record_seq: int
+    initial_results_by_voter: dict[str, V2ActionResult]
+    frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class _PreExileOutcome:
+    pipeline_id: str
+    selected_explosion_player_id: str | None = None
+    prepared_vote: _PreparedPreExileVote | None = None
+
+
+@dataclass(frozen=True)
+class _PublicDiscussionResult:
+    exploded: bool
+    pre_exile_launch: _PreExileLaunch | None = None
+
+
 def _prepared_day_speech_from_slot(
     slot: V2DaySpeechSlotSnapshot,
 ) -> _PreparedDaySpeech:
@@ -247,10 +284,12 @@ class V2DayEngine:
         repository: V2MatchRepository,
         action_engine: V2ActionEngine,
         day_speech_pipeline_repository: V2DaySpeechPipelineRepository | None = None,
+        pre_exile_pipeline_repository: V2PreExilePipelineRepository | None = None,
     ) -> None:
         self._repository = repository
         self._actions = action_engine
         self._day_speech_pipeline = day_speech_pipeline_repository
+        self._pre_exile_pipeline = pre_exile_pipeline_repository
 
     async def resolve_pending_death_aftermath(
         self,
@@ -366,12 +405,18 @@ class V2DayEngine:
                     objective=f"宣布第{state.round_no}天白天讨论开始，并请存活玩家依次公开发言",
                 )
 
+            discussion = _PublicDiscussionResult(exploded=False)
             if "debate" in actions:
-                exploded = await self._run_public_discussion(
+                discussion_result = await self._run_public_discussion(
                     game_id=game_id,
                     broadcaster=broadcaster,
                 )
-                if exploded:
+                discussion = (
+                    discussion_result
+                    if isinstance(discussion_result, _PublicDiscussionResult)
+                    else _PublicDiscussionResult(exploded=discussion_result)
+                )
+                if discussion.exploded:
                     await self._resolve_death_aftermath(game_id=game_id, broadcaster=broadcaster)
                     return await self._close_day(
                         game_id=game_id,
@@ -381,11 +426,27 @@ class V2DayEngine:
                     )
 
             if "vote" in actions:
-                exploded = await self._offer_all_wolves_explosion(
-                    game_id=game_id,
-                    broadcaster=broadcaster,
-                    stage="before_exile_vote",
+                pre_exile = (
+                    await self._consume_pre_exile_launch(
+                        launch=discussion.pre_exile_launch,
+                        broadcaster=broadcaster,
+                    )
+                    if discussion.pre_exile_launch is not None
+                    else None
                 )
+                if pre_exile is None:
+                    exploded = await self._offer_all_wolves_explosion(
+                        game_id=game_id,
+                        broadcaster=broadcaster,
+                        stage="before_exile_vote",
+                    )
+                else:
+                    exploded = pre_exile.selected_explosion_player_id is not None
+                    if exploded:
+                        await self._commit_pre_exile_explosion(
+                            outcome=pre_exile,
+                            broadcaster=broadcaster,
+                        )
                 if exploded:
                     await self._resolve_death_aftermath(game_id=game_id, broadcaster=broadcaster)
                     return await self._close_day(
@@ -394,7 +455,23 @@ class V2DayEngine:
                         reason="pre_vote_self_explosion",
                         summarize=False,
                     )
-                exile = await self._run_exile_vote(game_id=game_id, broadcaster=broadcaster)
+                prepared_vote = pre_exile.prepared_vote if pre_exile is not None else None
+                exile = await self._run_exile_vote(
+                    game_id=game_id,
+                    broadcaster=broadcaster,
+                    pre_exile_pipeline_id=(prepared_vote.pipeline_id if prepared_vote else None),
+                    pre_exile_run_fence=(prepared_vote.run_fence if prepared_vote else None),
+                    frozen_state=(prepared_vote.frozen_state if prepared_vote else None),
+                    frozen_private_facts_by_voter=(
+                        prepared_vote.frozen_private_facts_by_voter if prepared_vote else None
+                    ),
+                    initial_results_by_voter=(
+                        prepared_vote.initial_results_by_voter if prepared_vote else None
+                    ),
+                    public_history_cutoff_record_seq=(
+                        prepared_vote.public_history_cutoff_record_seq if prepared_vote else None
+                    ),
+                )
                 if exile is not None:
                     await self._resolve_exile_aftermath(
                         game_id=game_id,
@@ -761,11 +838,12 @@ class V2DayEngine:
         *,
         game_id: str,
         broadcaster: V2BroadcastPort,
-    ) -> bool:
+    ) -> _PublicDiscussionResult | bool:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         order = await self._speech_order(state=state, broadcaster=broadcaster)
         rounds = max(1, int(state.rule.get("speech_rounds") or 1))
+        pre_exile_launch: _PreExileLaunch | None = None
         for speech_round in range(1, rounds + 1):
             if await self._offer_all_wolves_explosion(
                 game_id=game_id,
@@ -785,19 +863,82 @@ class V2DayEngine:
                     player = current.player(player_id)
                     if not player.alive:
                         continue
-                    decision = await self._player_action(
-                        game_id=game_id,
-                        player=player,
-                        broadcaster=broadcaster,
-                        action_type="day_debate_speech",
-                        objective="发表本轮白天讨论发言。",
-                        candidates=[],
-                        target_optional=None,
-                        output_kind="public_speech",
-                        extra_context={"speech_round": speech_round, "speech_order": order},
-                    )
+                    final_public_turn = speech_round == rounds and player_id == order[-1]
+                    if final_public_turn and self._pre_exile_pipeline_enabled(current):
+                        pre_exile_launch = _PreExileLaunch(
+                            presentation_closed=asyncio.Event(),
+                            predecessor_committed=asyncio.Event(),
+                        )
+                    try:
+                        decision = await self._player_action(
+                            game_id=game_id,
+                            player=player,
+                            broadcaster=broadcaster,
+                            action_type="day_debate_speech",
+                            objective="发表本轮白天讨论发言。",
+                            candidates=[],
+                            target_optional=None,
+                            output_kind="public_speech",
+                            extra_context={
+                                "speech_round": speech_round,
+                                "speech_order": order,
+                            },
+                            on_presentation_opened=(
+                                lambda identity, launch=pre_exile_launch: (
+                                    (
+                                        self._launch_pre_exile_pipeline(
+                                            launch=launch,
+                                            identity=identity,
+                                            phase_state=current.phase_state,
+                                            speech_round=speech_round,
+                                            speech_order=order,
+                                            broadcaster=broadcaster,
+                                        )
+                                        if launch is not None
+                                        else None
+                                    )
+                                    if final_public_turn
+                                    else None
+                                )
+                            ),
+                            on_presentation_closed=(
+                                lambda _identity, launch=pre_exile_launch: (
+                                    (
+                                        launch.presentation_closed.set()
+                                        if launch is not None
+                                        else None
+                                    )
+                                    if final_public_turn
+                                    else None
+                                )
+                            ),
+                        )
+                    except asyncio.CancelledError:
+                        if final_public_turn and pre_exile_launch is not None:
+                            await self._abort_pre_exile_launch(
+                                pre_exile_launch,
+                                reason_code="predecessor_presentation_canceled",
+                            )
+                        raise
+                    except BaseException:
+                        if final_public_turn and pre_exile_launch is not None:
+                            await self._abort_pre_exile_launch(
+                                pre_exile_launch,
+                                reason_code="predecessor_presentation_failed",
+                            )
+                        raise
                     assert isinstance(decision, V2ModelDecision)
-                    self._record_speech(current, player, decision, "day_debate")
+                    try:
+                        self._record_speech(current, player, decision, "day_debate")
+                    except BaseException:
+                        if final_public_turn and pre_exile_launch is not None:
+                            await self._abort_pre_exile_launch(
+                                pre_exile_launch,
+                                reason_code="predecessor_canonical_speech_commit_failed",
+                            )
+                        raise
+                    if final_public_turn and pre_exile_launch is not None:
+                        pre_exile_launch.predecessor_committed.set()
                 continue
 
             prepared: _DaySpeechPrefetchOutcome | None = None
@@ -824,6 +965,12 @@ class V2DayEngine:
                     )
                     prepared = None
                 next_player_id = order[turn_offset + 1] if turn_offset + 1 < len(order) else None
+                final_public_turn = speech_round == rounds and next_player_id is None
+                if final_public_turn and self._pre_exile_pipeline_enabled(current):
+                    pre_exile_launch = _PreExileLaunch(
+                        presentation_closed=asyncio.Event(),
+                        predecessor_committed=asyncio.Event(),
+                    )
                 decision, next_prepared = await self._run_day_speech_pipeline_turn(
                     state=current,
                     player=player,
@@ -833,18 +980,28 @@ class V2DayEngine:
                     speech_round=speech_round,
                     speech_order=order,
                     broadcaster=broadcaster,
+                    pre_exile_launch=(pre_exile_launch if final_public_turn else None),
                 )
                 try:
                     self._record_speech(current, player, decision, "day_debate")
                 except BaseException:
+                    if final_public_turn and pre_exile_launch is not None:
+                        await self._abort_pre_exile_launch(
+                            pre_exile_launch,
+                            reason_code="predecessor_canonical_speech_commit_failed",
+                        )
                     if next_prepared is not None:
                         self._cancel_day_speech_slot(
                             next_prepared.slot.slot_id,
                             reason_code="prefetch_predecessor_commit_failed",
                         )
                     raise
+                if final_public_turn and pre_exile_launch is not None:
+                    pre_exile_launch.predecessor_committed.set()
                 prepared = next_prepared
-        return False
+        if pre_exile_launch is None or pre_exile_launch.task is None:
+            return False
+        return _PublicDiscussionResult(exploded=False, pre_exile_launch=pre_exile_launch)
 
     def _day_speech_pipeline_enabled(self, state: V2MatchSnapshot) -> bool:
         return bool(
@@ -852,6 +1009,684 @@ class V2DayEngine:
             and state.audio_mode == "tts"
             and state.day_speech_pipeline_contract.max_lookahead == 1
             and state.day_speech_pipeline_contract.enables("day_debate_speech")
+        )
+
+    def _pre_exile_pipeline_enabled(self, state: V2MatchSnapshot) -> bool:
+        contract = getattr(state, "pre_exile_pipeline_contract", None)
+        return bool(
+            self._pre_exile_pipeline is not None
+            and contract is not None
+            and callable(getattr(contract, "enables", None))
+            and contract.enables("werewolf_self_explosion")
+            and contract.enables("exile_vote")
+            and bool(state.rule.get("werewolf_self_explosion_enabled"))
+            and any(player.alive and player.role_key == "werewolf" for player in state.players)
+            and "vote" in set(state.rule.get("day_actions") or [])
+        )
+
+    def _launch_pre_exile_pipeline(
+        self,
+        *,
+        launch: _PreExileLaunch,
+        identity: V2PresentationIdentity,
+        phase_state: str,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+        predecessor_turn_player_id: str | None = None,
+    ) -> None:
+        pipeline_repository = self._pre_exile_pipeline
+        if pipeline_repository is None or launch.task is not None:
+            return
+        try:
+            frozen = self._repository.snapshot_for_pre_exile_pipeline(
+                game_id=identity.game_id,
+                run_id=identity.run_id,
+                phase_id=identity.phase_id,
+                phase_state=phase_state,
+                predecessor_presentation_id=identity.presentation_id,
+                predecessor_action_id=identity.action_id,
+                predecessor_source_event_id=identity.source_event_id,
+                predecessor_turn_player_id=predecessor_turn_player_id,
+            )
+            if not self._pre_exile_pipeline_enabled(frozen.match_snapshot):
+                return
+            if (
+                speech_round
+                != max(
+                    1,
+                    int(frozen.match_snapshot.rule.get("speech_rounds") or 1),
+                )
+                or not speech_order
+                or frozen.predecessor_actor_id != speech_order[-1]
+            ):
+                raise V2DayRuntimeError("pre_exile_predecessor_is_not_final_public_turn")
+            pipeline = pipeline_repository.reserve_pipeline(
+                game_id=identity.game_id,
+                phase_id=identity.phase_id,
+                round_no=frozen.match_snapshot.round_no,
+                predecessor_action_id=frozen.predecessor_action_id,
+                predecessor_presentation_id=frozen.predecessor_presentation_id,
+                predecessor_source_event_id=frozen.predecessor_source_event_id,
+                predecessor_source_record_seq=frozen.predecessor_source_record_seq,
+                predecessor_sealed_record_seq=frozen.predecessor_sealed_record_seq,
+                public_cutoff_record_seq=frozen.public_cutoff_record_seq,
+                public_history_sha256=pre_exile_context_sha256(
+                    list(frozen.match_snapshot.public_history)
+                ),
+                fence=identity.run_fence,
+            )
+            launch.frozen = frozen
+            launch.pipeline = pipeline
+            launch.run_fence = identity.run_fence
+            sealed_private_facts = {
+                player.player_id: [
+                    copy.deepcopy(fact)
+                    for fact in self._repository.private_knowledge(
+                        game_id=identity.game_id,
+                        player_id=player.player_id,
+                    )
+                    if _private_fact_visible_at_public_cutoff(
+                        fact,
+                        frozen.public_cutoff_record_seq,
+                    )
+                ]
+                for player in frozen.match_snapshot.players
+                if player.alive
+            }
+            launch.task = asyncio.create_task(
+                self._generate_pre_exile_pipeline(
+                    launch=launch,
+                    sealed_private_facts=sealed_private_facts,
+                    broadcaster=broadcaster,
+                ),
+                name=f"pre-exile:{pipeline.pipeline_id}",
+            )
+        except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+            raise
+        except BaseException as exc:
+            launch.preparation_error = exc
+            if launch.pipeline is not None:
+                try:
+                    pipeline_repository.invalidate_pipeline(
+                        pipeline_id=launch.pipeline.pipeline_id,
+                        reason_code="pre_exile_launch_preparation_failed",
+                        fence=identity.run_fence,
+                    )
+                except BaseException:
+                    logger.exception(
+                        "Live V2 could not invalidate failed pre-exile launch",
+                        extra={"game_id": identity.game_id},
+                    )
+            logger.exception(
+                "Live V2 pre-exile launch failed before member generation",
+                extra={
+                    "game_id": identity.game_id,
+                    "action_id": identity.action_id,
+                    "presentation_id": identity.presentation_id,
+                },
+            )
+
+    async def _abort_pre_exile_launch(
+        self,
+        launch: _PreExileLaunch,
+        *,
+        reason_code: str,
+    ) -> None:
+        task = launch.task
+        if task is not None and not task.done():
+            task.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        if launch.pipeline is None or self._pre_exile_pipeline is None:
+            return
+        try:
+            self._pre_exile_pipeline.invalidate_pipeline(
+                pipeline_id=launch.pipeline.pipeline_id,
+                reason_code=reason_code,
+                fence=launch.run_fence,
+            )
+        except V2ExecutionOwnershipLost:
+            raise
+        except Exception:
+            logger.exception(
+                "Live V2 could not invalidate abandoned pre-exile pipeline",
+                extra={
+                    "pipeline_id": launch.pipeline.pipeline_id,
+                    "reason_code": reason_code,
+                },
+            )
+
+    async def _generate_pre_exile_pipeline(
+        self,
+        *,
+        launch: _PreExileLaunch,
+        sealed_private_facts: dict[str, list[dict[str, Any]]],
+        broadcaster: V2BroadcastPort,
+    ) -> _PreExileOutcome:
+        pipeline_repository = self._pre_exile_pipeline
+        if pipeline_repository is None or launch.pipeline is None or launch.frozen is None:
+            raise V2DayRuntimeError("pre_exile_pipeline_launch_incomplete")
+        pipeline = launch.pipeline
+        frozen = launch.frozen
+        state: V2MatchSnapshot = frozen.match_snapshot
+        self._actions.check_cancellation(state.game_id)
+        await broadcaster.broadcast_json(
+            day_progress(
+                game_id=state.game_id,
+                run_id=state.run_id,
+                round_no=state.round_no,
+                stage="pre_exile_special_action",
+            )
+        )
+        alive = sorted(
+            (player for player in state.players if player.alive), key=lambda item: item.seat
+        )
+        wolves = (
+            [player for player in alive if player.role_key == "werewolf"]
+            if bool(state.rule.get("werewolf_self_explosion_enabled"))
+            else []
+        )
+        voters = [player for player in alive if player.state.get("can_vote", True)]
+        vote_batch_id = f"{state.phase_id}:exile_vote:{frozen.public_cutoff_record_seq}:vote"
+        result_slots = {
+            ("self_explosion", wolf.player_id): pipeline_repository.reserve_result(
+                pipeline_id=pipeline.pipeline_id,
+                actor_player_id=wolf.player_id,
+                result_kind="self_explosion",
+                fence=launch.run_fence,
+            )
+            for wolf in wolves
+        }
+        result_slots.update(
+            {
+                ("exile_vote", voter.player_id): pipeline_repository.reserve_result(
+                    pipeline_id=pipeline.pipeline_id,
+                    actor_player_id=voter.player_id,
+                    result_kind="exile_vote",
+                    fence=launch.run_fence,
+                )
+                for voter in voters
+            }
+        )
+        vote_results: dict[str, V2ActionResult] = {}
+        vote_private_facts_by_voter: dict[str, list[dict[str, Any]]] = {}
+        self_explosion_rows: dict[str, Any] = {}
+        vote_tasks: dict[str, asyncio.Task[tuple[V2ActionResult, Any]]] = {}
+        discard_votes = asyncio.Event()
+        vote_progress_visible = asyncio.Event()
+        vote_progress_lock = asyncio.Lock()
+        completed_vote_count = 0
+
+        async def publish_member_terminal(result_kind: str, recorded: Any) -> None:
+            nonlocal completed_vote_count
+            if result_kind == "self_explosion":
+                await broadcaster.broadcast_json(
+                    day_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        round_no=state.round_no,
+                        stage="pre_exile_special_action",
+                    )
+                )
+                return
+            if (
+                recorded.failure is not None
+                and _persisted_pre_exile_failure_category(recorded.failure) == "admission_capacity"
+            ):
+                return
+            async with vote_progress_lock:
+                completed_vote_count += 1
+                if vote_progress_visible.is_set():
+                    await broadcaster.broadcast_json(
+                        day_progress(
+                            game_id=state.game_id,
+                            run_id=state.run_id,
+                            round_no=state.round_no,
+                            stage="pre_exile_vote_collecting",
+                            completed_count=completed_vote_count,
+                            total_count=len(voters),
+                        )
+                    )
+
+        async def run_member(
+            *,
+            player: V2MatchPlayer,
+            result_kind: Literal["self_explosion", "exile_vote"],
+            private_facts: list[dict[str, Any]],
+            on_model_admission_pending: Callable[[], None] | None = None,
+        ) -> tuple[V2ActionResult, Any]:
+            slot = result_slots[(result_kind, player.player_id)]
+            if slot.state != "reserved":
+                raise V2DayRuntimeError(
+                    f"pre_exile_member_not_resumable:{slot.result_id}:{slot.state}"
+                )
+            if result_kind == "self_explosion":
+                action_result = await self._player_action(
+                    game_id=state.game_id,
+                    player=player,
+                    broadcaster=broadcaster,
+                    action_type="werewolf_self_explosion",
+                    objective="决定是否立即自爆。",
+                    candidates=[],
+                    target_optional=None,
+                    audience="god_view",
+                    output_kind="private_decision",
+                    decision_contract=V2DecisionContract(
+                        kind="boolean",
+                        boolean_field="explode",
+                        speech_mode="forbidden",
+                        decision_note_mode="optional",
+                        decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
+                        true_meaning="立即自爆",
+                        false_meaning="不自爆",
+                    ),
+                    extra_context={
+                        "public_stage": "before_exile_vote",
+                        "public_cutoff_record_seq": frozen.public_cutoff_record_seq,
+                        "public_history_cutoff_record_seq": (frozen.public_cutoff_record_seq),
+                        "current_action_effect": _self_explosion_action_effect(
+                            state=state,
+                            stage="before_exile_vote",
+                            pre_sheriff=False,
+                        ),
+                        "batch_resolution_policy": "lowest_seat_affirmative",
+                    },
+                    frozen_state=state,
+                    frozen_private_facts=private_facts,
+                    defer_presentation=True,
+                    isolated_failure=True,
+                    allow_failure=True,
+                    batch_id=pipeline.pipeline_id,
+                    model_admission_mode="normal",
+                    pipeline_slot_id=pipeline.pipeline_id,
+                    pipeline_stage="generation",
+                    pipeline_kind="pre_exile",
+                    pipeline_result_kind="self_explosion",
+                    on_model_admission_pending=on_model_admission_pending,
+                    return_result=True,
+                )
+            else:
+                candidates = [
+                    candidate for candidate in alive if candidate.player_id != player.player_id
+                ]
+                decision_family_id = _vote_decision_family_id(
+                    batch_id=vote_batch_id,
+                    action_type="exile_vote",
+                    voter=player,
+                    candidates=candidates,
+                    projection_at_seq=frozen.public_cutoff_record_seq,
+                    model_context_contract=state.model_context_contract,
+                )
+                action_result = await self._player_action(
+                    game_id=state.game_id,
+                    player=player,
+                    broadcaster=broadcaster,
+                    action_type="exile_vote",
+                    objective="投票选择一名合法候选人。",
+                    candidates=candidates,
+                    target_optional=False,
+                    output_kind="private_vote",
+                    decision_contract=V2DecisionContract(
+                        kind="target",
+                        target_mode="required",
+                        speech_mode="forbidden",
+                        decision_note_mode="optional",
+                        decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
+                    ),
+                    audience="god_view",
+                    extra_context={
+                        "vote_round": 1,
+                        "public_cutoff_record_seq": frozen.public_cutoff_record_seq,
+                        "public_history_cutoff_record_seq": (frozen.public_cutoff_record_seq),
+                        "vote_batch_stage": "concurrent_initial",
+                        **(
+                            {"own_self_explosion_decision": False}
+                            if player.role_key == "werewolf"
+                            else {}
+                        ),
+                    },
+                    frozen_state=state,
+                    frozen_private_facts=private_facts,
+                    defer_presentation=True,
+                    isolated_failure=True,
+                    allow_failure=True,
+                    batch_id=vote_batch_id,
+                    decision_family_id=decision_family_id,
+                    automatic_machine_format_budget=(_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET),
+                    automatic_output_budget_budget=(_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET),
+                    target_exhaustion_outcome="technical_abstain",
+                    model_admission_mode="idle_only",
+                    pipeline_slot_id=pipeline.pipeline_id,
+                    pipeline_stage="generation",
+                    pipeline_kind="pre_exile",
+                    pipeline_result_kind="exile_vote",
+                    return_result=True,
+                )
+            if not isinstance(action_result, V2ActionResult) or action_result.action_id is None:
+                raise V2DayRuntimeError("pre_exile_member_action_result_missing")
+            if (
+                action_result.failure is not None
+                and action_result.failure.category == "canceled"
+                and not discard_votes.is_set()
+            ):
+                self._actions.check_cancellation(state.game_id)
+                raise V2DayRuntimeError("pre_exile_member_canceled_without_discard")
+            try:
+                if action_result.failure is not None:
+                    if action_result.terminal_event_record_seq is None:
+                        raise V2DayRuntimeError("pre_exile_member_failure_terminal_lineage_missing")
+                    recorded = pipeline_repository.record_failure(
+                        pipeline_id=pipeline.pipeline_id,
+                        actor_player_id=player.player_id,
+                        result_kind=result_kind,
+                        action_id=action_result.action_id,
+                        failure_record_seq=action_result.terminal_event_record_seq,
+                        fence=launch.run_fence,
+                    )
+                else:
+                    recorded = pipeline_repository.record_result(
+                        pipeline_id=pipeline.pipeline_id,
+                        actor_player_id=player.player_id,
+                        result_kind=result_kind,
+                        action_id=action_result.action_id,
+                        response_record_seq=action_result.model_response_record_seq,
+                        terminal_record_seq=(
+                            action_result.terminal_event_record_seq
+                            if action_result.model_response_record_seq is not None
+                            else None
+                        ),
+                        technical_outcome_record_seq=(
+                            action_result.technical_outcome.supporting_event_record_seq
+                            if action_result.technical_outcome is not None
+                            else None
+                        ),
+                        fence=launch.run_fence,
+                    )
+            except Exception:
+                if discard_votes.is_set() and result_kind == "exile_vote":
+                    return action_result, slot
+                raise
+            await publish_member_terminal(result_kind, recorded)
+            return action_result, recorded
+
+        async def start_vote(
+            player: V2MatchPlayer,
+            private_facts: list[dict[str, Any]],
+        ) -> tuple[V2ActionResult, Any]:
+            vote_private_facts_by_voter[player.player_id] = copy.deepcopy(private_facts)
+            result, recorded = await run_member(
+                player=player,
+                result_kind="exile_vote",
+                private_facts=private_facts,
+            )
+            vote_results[player.player_id] = result
+            return result, recorded
+
+        normal_admission_pending = {wolf.player_id: asyncio.Event() for wolf in wolves}
+        normal_batch_admission_ready = asyncio.Event()
+
+        async def run_wolf_chain(wolf: V2MatchPlayer) -> tuple[V2ActionResult, Any]:
+            admission_pending = normal_admission_pending[wolf.player_id]
+            try:
+                result, recorded = await run_member(
+                    player=wolf,
+                    result_kind="self_explosion",
+                    private_facts=sealed_private_facts[wolf.player_id],
+                    on_model_admission_pending=admission_pending.set,
+                )
+            finally:
+                # A pre-admission terminal failure also releases the idle
+                # launch barrier; there is then no normal waiter to protect.
+                admission_pending.set()
+            self_explosion_rows[wolf.player_id] = recorded
+            decision = recorded.decision if isinstance(recorded.decision, dict) else {}
+            if not bool(decision.get("explode")):
+                await normal_batch_admission_ready.wait()
+                private_fact_id = recorded.private_fact_id
+                provisional_fact = pipeline_repository.get_provisional_self_explosion_fact(
+                    pipeline_id=pipeline.pipeline_id,
+                    actor_player_id=wolf.player_id,
+                    private_fact_id=private_fact_id,
+                    fence=launch.run_fence,
+                )
+                vote_private_facts = _pre_exile_wolf_vote_private_facts(
+                    base=sealed_private_facts[wolf.player_id],
+                    owner_facts=[provisional_fact],
+                    owner_player_id=wolf.player_id,
+                    pipeline_id=pipeline.pipeline_id,
+                    private_fact_id=private_fact_id,
+                    private_fact_record_seq=recorded.private_fact_record_seq,
+                    public_cutoff_record_seq=frozen.public_cutoff_record_seq,
+                )
+                vote_tasks[wolf.player_id] = asyncio.create_task(
+                    start_vote(wolf, vote_private_facts),
+                    name=f"pre-exile-wolf-vote:{wolf.player_id}",
+                )
+            return result, recorded
+
+        wolf_tasks = [
+            asyncio.create_task(
+                run_wolf_chain(wolf),
+                name=f"pre-exile-self-explosion:{wolf.player_id}",
+            )
+            for wolf in wolves
+        ]
+        try:
+            await asyncio.gather(*(event.wait() for event in normal_admission_pending.values()))
+            for task in wolf_tasks:
+                if task.done() and not task.cancelled():
+                    task_error = task.exception()
+                    if task_error is not None:
+                        raise task_error
+            normal_batch_admission_ready.set()
+            for voter in voters:
+                if voter.role_key != "werewolf":
+                    vote_tasks[voter.player_id] = asyncio.create_task(
+                        start_vote(voter, sealed_private_facts[voter.player_id]),
+                        name=f"pre-exile-vote:{voter.player_id}",
+                    )
+            await asyncio.gather(*wolf_tasks)
+            affirmative_ids = [
+                wolf.player_id
+                for wolf in wolves
+                if bool(
+                    (
+                        self_explosion_rows[wolf.player_id].decision
+                        if isinstance(
+                            self_explosion_rows[wolf.player_id].decision,
+                            dict,
+                        )
+                        else {}
+                    ).get("explode")
+                )
+            ]
+            if affirmative_ids:
+                discard_votes.set()
+                for task in vote_tasks.values():
+                    if not task.done():
+                        task.cancel("pre_exile_vote_discarded_by_self_explosion")
+                await asyncio.gather(*vote_tasks.values(), return_exceptions=True)
+            # The model work may finish while the final speech is still being
+            # presented.  The arbiter must not mutate match state until that
+            # predecessor has also been committed to the canonical day log.
+            await launch.predecessor_committed.wait()
+            self._actions.check_cancellation(state.game_id)
+            resolution = self._repository.resolve_pre_exile_self_explosions(
+                game_id=state.game_id,
+                pipeline_id=pipeline.pipeline_id,
+                expected_wolf_ids=tuple(wolf.player_id for wolf in wolves),
+            )
+            if resolution.outcome == "explosion_selected":
+                await broadcaster.broadcast_json(
+                    day_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        round_no=state.round_no,
+                        stage="pre_exile_special_action",
+                    )
+                )
+                return _PreExileOutcome(
+                    pipeline_id=pipeline.pipeline_id,
+                    selected_explosion_player_id=resolution.selected_player_id,
+                )
+            async with vote_progress_lock:
+                vote_progress_visible.set()
+                await broadcaster.broadcast_json(
+                    day_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        round_no=state.round_no,
+                        stage="pre_exile_vote_collecting",
+                        completed_count=completed_vote_count,
+                        total_count=len(voters),
+                    )
+                )
+            await asyncio.gather(*vote_tasks.values())
+            if set(vote_results) != {voter.player_id for voter in voters}:
+                raise V2DayRuntimeError("pre_exile_vote_result_set_incomplete")
+            if set(vote_private_facts_by_voter) != {voter.player_id for voter in voters}:
+                raise V2DayRuntimeError("pre_exile_vote_private_context_set_incomplete")
+            self._actions.check_cancellation(state.game_id)
+            vote_rows = {
+                row.actor_player_id: row
+                for row in pipeline_repository.list_results(pipeline.pipeline_id)
+                if row.result_kind == "exile_vote"
+            }
+            if set(vote_rows) != {voter.player_id for voter in voters}:
+                raise V2DayRuntimeError("pre_exile_vote_durable_result_set_incomplete")
+            for voter_id, row in vote_rows.items():
+                if row.failure is None:
+                    continue
+                if vote_results[voter_id].technical_outcome is not None:
+                    continue
+                category = _persisted_pre_exile_failure_category(row.failure)
+                if category != "admission_capacity":
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_failure_not_recoverable:{voter_id}:{category}"
+                    )
+            has_capacity_recovery = any(
+                row.failure is not None
+                and _persisted_pre_exile_failure_category(row.failure) == "admission_capacity"
+                for row in vote_rows.values()
+            )
+            if not has_capacity_recovery:
+                await broadcaster.broadcast_json(
+                    day_progress(
+                        game_id=state.game_id,
+                        run_id=state.run_id,
+                        round_no=state.round_no,
+                        stage="before_exile_vote",
+                        completed_count=len(voters),
+                        total_count=len(voters),
+                    )
+                )
+            return _PreExileOutcome(
+                pipeline_id=pipeline.pipeline_id,
+                prepared_vote=_PreparedPreExileVote(
+                    pipeline_id=pipeline.pipeline_id,
+                    run_fence=launch.run_fence,
+                    frozen_state=state,
+                    public_history_cutoff_record_seq=frozen.public_cutoff_record_seq,
+                    initial_results_by_voter=vote_results,
+                    frozen_private_facts_by_voter=vote_private_facts_by_voter,
+                ),
+            )
+        except BaseException:
+            for task in [*wolf_tasks, *vote_tasks.values()]:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *wolf_tasks,
+                *vote_tasks.values(),
+                return_exceptions=True,
+            )
+            raise
+
+    async def _consume_pre_exile_launch(
+        self,
+        *,
+        launch: _PreExileLaunch,
+        broadcaster: V2BroadcastPort,
+    ) -> _PreExileOutcome | None:
+        if launch.task is None:
+            if launch.pipeline is None:
+                return None
+            raise V2DayRuntimeError("pre_exile_pipeline_reserved_without_task") from (
+                launch.preparation_error
+            )
+        try:
+            outcome = await launch.task
+        except V2ExecutionOwnershipLost:
+            raise
+        except BaseException:
+            if launch.pipeline is not None and self._pre_exile_pipeline is not None:
+                try:
+                    self._pre_exile_pipeline.invalidate_pipeline(
+                        pipeline_id=launch.pipeline.pipeline_id,
+                        reason_code="pre_exile_generation_failed",
+                        fence=launch.run_fence,
+                    )
+                except V2ExecutionOwnershipLost:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Live V2 could not invalidate failed pre-exile generation",
+                        extra={"pipeline_id": launch.pipeline.pipeline_id},
+                    )
+            raise
+        self._actions.check_cancellation(
+            outcome.prepared_vote.frozen_state.game_id
+            if outcome.prepared_vote
+            else launch.frozen.match_snapshot.game_id
+        )
+        return outcome
+
+    async def _commit_pre_exile_explosion(
+        self,
+        *,
+        outcome: _PreExileOutcome,
+        broadcaster: V2BroadcastPort,
+    ) -> None:
+        pipeline_repository = self._pre_exile_pipeline
+        selected_id = outcome.selected_explosion_player_id
+        if pipeline_repository is None or selected_id is None:
+            raise V2DayRuntimeError("pre_exile_explosion_outcome_incomplete")
+        pipeline = pipeline_repository.get_pipeline(outcome.pipeline_id)
+        state = self._repository.snapshot(pipeline.game_id)
+        self._actions.check_cancellation(state.game_id)
+        selected = state.player(selected_id)
+        if (
+            pipeline.state != "explosion_selected"
+            or pipeline.selected_explosion_player_id != selected_id
+            or selected.alive
+        ):
+            raise V2DayRuntimeError("pre_exile_explosion_was_not_atomically_committed")
+        current = state
+        if not await self._judge(
+            state=current,
+            broadcaster=broadcaster,
+            action_type="judge_werewolf_self_explosion",
+            objective=(f"公开宣布{selected.seat}号发动狼人自爆并立即出局，当天剩余流程中止"),
+            success_phase_state=current.phase_state,
+            context={
+                "player_id": selected.player_id,
+                "player_seat": selected.seat,
+                "stage": "before_exile_vote",
+                "outcome": "day_ended",
+                "batch_id": pipeline.pipeline_id,
+            },
+        ):
+            raise V2DayRuntimeError("self_explosion_announcement_failed")
+        await self._broadcast_death(
+            state=current,
+            player_id=selected.player_id,
+            cause="werewolf_self_explosion",
+            broadcaster=broadcaster,
+        )
+        await self._broadcast_match_state(
+            self._repository.snapshot(state.game_id),
+            broadcaster,
         )
 
     async def _run_day_speech_pipeline_turn(
@@ -865,6 +1700,7 @@ class V2DayEngine:
         speech_round: int,
         speech_order: list[str],
         broadcaster: V2BroadcastPort,
+        pre_exile_launch: _PreExileLaunch | None = None,
     ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
         pipeline = self._day_speech_pipeline
         if pipeline is None:
@@ -880,6 +1716,7 @@ class V2DayEngine:
                     speech_round=speech_round,
                     speech_order=speech_order,
                     broadcaster=broadcaster,
+                    pre_exile_launch=pre_exile_launch,
                 )
             # Schema v1 and the schema-v2 capacity rejection policy preserve
             # the original foreground sequential fallback.
@@ -896,23 +1733,34 @@ class V2DayEngine:
                     presentation_id=identity.presentation_id,
                 )
             if next_player_id is None:
-                return
-            self._launch_day_speech_prefetch(
-                launch=launch,
-                task_group=task_group,
-                parent_task=current_task,
-                identity=identity,
-                phase_state=state.phase_state,
-                next_player_id=next_player_id,
-                next_turn_index=next_turn_index,
-                speech_round=speech_round,
-                speech_order=speech_order,
-                broadcaster=broadcaster,
-            )
+                if pre_exile_launch is not None:
+                    self._launch_pre_exile_pipeline(
+                        launch=pre_exile_launch,
+                        identity=identity,
+                        phase_state=state.phase_state,
+                        speech_round=speech_round,
+                        speech_order=speech_order,
+                        broadcaster=broadcaster,
+                    )
+            else:
+                self._launch_day_speech_prefetch(
+                    launch=launch,
+                    task_group=task_group,
+                    parent_task=current_task,
+                    identity=identity,
+                    phase_state=state.phase_state,
+                    next_player_id=next_player_id,
+                    next_turn_index=next_turn_index,
+                    speech_round=speech_round,
+                    speech_order=speech_order,
+                    broadcaster=broadcaster,
+                )
 
         def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
             nonlocal presentation_closed_at
             presentation_closed_at = asyncio.get_running_loop().time()
+            if pre_exile_launch is not None:
+                pre_exile_launch.presentation_closed.set()
 
         action_result: V2ActionResult | None = None
         body_error: BaseException | None = None
@@ -976,6 +1824,11 @@ class V2DayEngine:
             if body_error is not None:
                 raise body_error
         except asyncio.CancelledError:
+            if pre_exile_launch is not None:
+                await self._abort_pre_exile_launch(
+                    pre_exile_launch,
+                    reason_code="predecessor_presentation_canceled",
+                )
             if prepared is not None:
                 self._cancel_day_speech_slot(
                     prepared.slot.slot_id,
@@ -990,6 +1843,11 @@ class V2DayEngine:
                 raise launch.fatal
             raise
         except BaseException:
+            if pre_exile_launch is not None:
+                await self._abort_pre_exile_launch(
+                    pre_exile_launch,
+                    reason_code="predecessor_presentation_failed",
+                )
             if prepared is not None:
                 self._cancel_day_speech_slot(
                     prepared.slot.slot_id,
@@ -1086,6 +1944,7 @@ class V2DayEngine:
         speech_round: int,
         speech_order: list[str],
         broadcaster: V2BroadcastPort,
+        pre_exile_launch: _PreExileLaunch | None = None,
     ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
         launch = _DaySpeechPrefetchLaunch()
         current_task = asyncio.current_task()
@@ -1093,6 +1952,16 @@ class V2DayEngine:
 
         def on_presentation_opened(identity: V2PresentationIdentity) -> None:
             if next_player_id is None:
+                if pre_exile_launch is not None:
+                    self._launch_pre_exile_pipeline(
+                        launch=pre_exile_launch,
+                        identity=identity,
+                        phase_state=state.phase_state,
+                        speech_round=speech_round,
+                        speech_order=speech_order,
+                        broadcaster=broadcaster,
+                        predecessor_turn_player_id=player.player_id,
+                    )
                 return
             self._launch_day_speech_prefetch(
                 launch=launch,
@@ -1111,6 +1980,8 @@ class V2DayEngine:
         def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
             nonlocal presentation_closed_at
             presentation_closed_at = asyncio.get_running_loop().time()
+            if pre_exile_launch is not None:
+                pre_exile_launch.presentation_closed.set()
 
         decision: V2ModelDecision | None = None
         body_error: BaseException | None = None
@@ -1142,6 +2013,11 @@ class V2DayEngine:
             if body_error is not None:
                 raise body_error
         except asyncio.CancelledError:
+            if pre_exile_launch is not None:
+                await self._abort_pre_exile_launch(
+                    pre_exile_launch,
+                    reason_code="technical_skip_presentation_canceled",
+                )
             if launch.slot is not None:
                 self._cancel_day_speech_slot(
                     launch.slot.slot_id,
@@ -1151,6 +2027,11 @@ class V2DayEngine:
                 raise launch.fatal
             raise
         except BaseException:
+            if pre_exile_launch is not None:
+                await self._abort_pre_exile_launch(
+                    pre_exile_launch,
+                    reason_code="technical_skip_presentation_failed",
+                )
             if launch.slot is not None:
                 self._cancel_day_speech_slot(
                     launch.slot.slot_id,
@@ -1583,9 +2464,15 @@ class V2DayEngine:
         *,
         game_id: str,
         broadcaster: V2BroadcastPort,
+        pre_exile_pipeline_id: str | None = None,
+        pre_exile_run_fence: Any | None = None,
+        frozen_state: V2MatchSnapshot | None = None,
+        frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]] | None = None,
+        initial_results_by_voter: dict[str, V2ActionResult] | None = None,
+        public_history_cutoff_record_seq: int | None = None,
     ) -> V2ExileResult | None:
         self._actions.check_cancellation(game_id)
-        state = self._repository.snapshot(game_id)
+        state = frozen_state or self._repository.snapshot(game_id)
         alive = [item for item in state.players if item.alive]
         voters = [item for item in alive if item.state.get("can_vote", True)]
         votes = await self._collect_votes(
@@ -1596,6 +2483,12 @@ class V2DayEngine:
             candidates=alive,
             weighted=True,
             context={"vote_round": 1},
+            pre_exile_pipeline_id=pre_exile_pipeline_id,
+            pre_exile_run_fence=pre_exile_run_fence,
+            frozen_state=frozen_state,
+            frozen_private_facts_by_voter=frozen_private_facts_by_voter,
+            initial_results_by_voter=initial_results_by_voter,
+            public_history_cutoff_record_seq=public_history_cutoff_record_seq,
         )
         leaders = _leaders(votes)
         if len(leaders) != 1:
@@ -1843,11 +2736,23 @@ class V2DayEngine:
         candidates: list[V2MatchPlayer],
         weighted: bool,
         context: dict[str, Any],
+        pre_exile_pipeline_id: str | None = None,
+        pre_exile_run_fence: Any | None = None,
+        frozen_state: V2MatchSnapshot | None = None,
+        frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]] | None = None,
+        initial_results_by_voter: dict[str, V2ActionResult] | None = None,
+        public_history_cutoff_record_seq: int | None = None,
     ) -> dict[str, float]:
         self._actions.check_cancellation(game_id)
         totals: dict[str, float] = defaultdict(float)
-        state = self._repository.snapshot(game_id)
-        public_cutoff_record_seq = state.last_record_seq
+        state = frozen_state or self._repository.snapshot(game_id)
+        public_cutoff_record_seq = (
+            public_history_cutoff_record_seq
+            if public_history_cutoff_record_seq is not None
+            else state.last_record_seq
+        )
+        if public_cutoff_record_seq != state.last_record_seq:
+            raise V2DayRuntimeError("day_vote_frozen_public_cutoff_mismatch")
         batch_id = f"{state.phase_id}:{action_type}:{public_cutoff_record_seq}:vote"
         prepared: list[tuple[V2MatchPlayer, list[V2MatchPlayer]]] = []
         for voter in sorted(voters, key=lambda item: item.seat):
@@ -1877,6 +2782,17 @@ class V2DayEngine:
         output_budget_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
         technical_abstain_reasons: list[str | None] = [None for _item in prepared]
         technical_abstain_results: list[V2ActionResult | None] = [None for _item in prepared]
+        pre_exile_vote_rows: dict[str, Any] = {}
+        if pre_exile_pipeline_id is not None:
+            if self._pre_exile_pipeline is None or initial_results_by_voter is None:
+                raise V2DayRuntimeError("pre_exile_vote_recovery_context_missing")
+            pre_exile_vote_rows = {
+                row.actor_player_id: row
+                for row in self._pre_exile_pipeline.list_results(pre_exile_pipeline_id)
+                if row.result_kind == "exile_vote"
+            }
+            if set(pre_exile_vote_rows) != {voter.player_id for voter, _eligible in prepared}:
+                raise V2DayRuntimeError("pre_exile_vote_durable_result_set_changed")
 
         async def request_vote(
             index: int,
@@ -1889,6 +2805,7 @@ class V2DayEngine:
                 "sequential_recovery",
             ],
             preflight_pause_failure: V2PreflightPauseFailure | None = None,
+            pre_exile_recovery: dict[str, Any] | None = None,
         ) -> V2ActionResult:
             isolated = stage != "sequential_recovery"
             result = await self._player_action(
@@ -1911,10 +2828,25 @@ class V2DayEngine:
                 extra_context={
                     **context,
                     "public_cutoff_record_seq": public_cutoff_record_seq,
+                    **(
+                        {"public_history_cutoff_record_seq": (public_cutoff_record_seq)}
+                        if frozen_state is not None
+                        else {}
+                    ),
                     "vote_batch_stage": stage,
+                    **(
+                        {"pre_exile_recovery": pre_exile_recovery}
+                        if pre_exile_recovery is not None
+                        else {}
+                    ),
                 },
                 frozen_state=state,
-                projection_at_seq=public_cutoff_record_seq,
+                frozen_private_facts=(
+                    frozen_private_facts_by_voter.get(voter.player_id)
+                    if frozen_private_facts_by_voter is not None
+                    else None
+                ),
+                projection_at_seq=(None if frozen_state is not None else public_cutoff_record_seq),
                 defer_presentation=isolated,
                 isolated_failure=isolated,
                 allow_failure=isolated,
@@ -1980,14 +2912,28 @@ class V2DayEngine:
         # still missing after that enter the blocking path one at a time. This
         # preserves durable pause/operator-retry semantics without publishing
         # a partial tally.
-        initial_results = list(
-            await asyncio.gather(
-                *(
-                    request_vote(index, voter, eligible, stage="concurrent_initial")
-                    for index, (voter, eligible) in enumerate(prepared)
+        if initial_results_by_voter is None:
+            initial_results = list(
+                await asyncio.gather(
+                    *(
+                        request_vote(index, voter, eligible, stage="concurrent_initial")
+                        for index, (voter, eligible) in enumerate(prepared)
+                    )
                 )
             )
-        )
+        else:
+            missing_voter_ids = [
+                voter.player_id
+                for voter, _eligible in prepared
+                if voter.player_id not in initial_results_by_voter
+            ]
+            if missing_voter_ids:
+                raise V2DayRuntimeError(
+                    "pre_exile_vote_results_incomplete:" + ",".join(missing_voter_ids)
+                )
+            initial_results = [
+                initial_results_by_voter[voter.player_id] for voter, _eligible in prepared
+            ]
         for index, result in enumerate(initial_results):
             observe_failure(index, result)
             observe_technical_outcome(index, result)
@@ -1998,6 +2944,147 @@ class V2DayEngine:
             if decision is None and technical_abstain_reasons[index] is None
         ]
         initial_failed_voter_ids = [prepared[index][0].player_id for index in failed_indexes]
+        if failed_indexes and pre_exile_pipeline_id is not None:
+            pipeline_repository = self._pre_exile_pipeline
+            if pipeline_repository is None:
+                raise V2DayRuntimeError("pre_exile_pipeline_repository_missing")
+            if (
+                getattr(
+                    state.pre_exile_pipeline_contract,
+                    "speculative_vote_capacity_recovery_mode",
+                    None,
+                )
+                != "normal_batch_after_close_once"
+            ):
+                raise V2DayRuntimeError("pre_exile_capacity_recovery_contract_unsupported")
+            recovery_inputs: list[tuple[int, dict[str, Any]]] = []
+            for index in failed_indexes:
+                voter = prepared[index][0]
+                row = pre_exile_vote_rows[voter.player_id]
+                category = _persisted_pre_exile_failure_category(row.failure or {})
+                if (
+                    category != "admission_capacity"
+                    or not isinstance(row.action_id, str)
+                    or not row.action_id
+                ):
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_failure_not_recoverable:{voter.player_id}:{category}"
+                    )
+                recovery_inputs.append(
+                    (
+                        index,
+                        {
+                            "pipeline_id": pre_exile_pipeline_id,
+                            "result_id": row.result_id,
+                            "source_action_id": row.action_id,
+                            "model_admission_mode": "normal",
+                        },
+                    )
+                )
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="day_vote_batch_recovery_started",
+                audience="god_view",
+                payload={
+                    "round_no": state.round_no,
+                    "action_type": action_type,
+                    "batch_id": batch_id,
+                    "public_cutoff_record_seq": public_cutoff_record_seq,
+                    "failed_voter_ids": initial_failed_voter_ids,
+                    "recovery_mode": "pre_exile_idle_capacity_normal_once",
+                },
+            )
+            recovery_results = list(
+                await asyncio.gather(
+                    *(
+                        request_vote(
+                            index,
+                            prepared[index][0],
+                            prepared[index][1],
+                            stage="concurrent_recovery",
+                            pre_exile_recovery=recovery,
+                        )
+                        for index, recovery in recovery_inputs
+                    )
+                )
+            )
+            recovered_voter_ids: list[str] = []
+            technical_voter_ids: list[str] = []
+            for (index, _recovery), result in zip(
+                recovery_inputs,
+                recovery_results,
+                strict=True,
+            ):
+                voter = prepared[index][0]
+                source = pre_exile_vote_rows[voter.player_id]
+                if result.action_id is None:
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_recovery_action_missing:{voter.player_id}"
+                    )
+                if result.failure is not None:
+                    if result.failure.category == "canceled":
+                        self._actions.check_cancellation(game_id)
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_recovery_failed:{voter.player_id}:{result.failure.code}"
+                    )
+                adopted = pipeline_repository.adopt_vote_recovery_result(
+                    pipeline_id=pre_exile_pipeline_id,
+                    actor_player_id=voter.player_id,
+                    source_action_id=source.action_id,
+                    recovery_action_id=result.action_id,
+                    response_record_seq=result.model_response_record_seq,
+                    terminal_record_seq=(
+                        result.terminal_event_record_seq
+                        if result.model_response_record_seq is not None
+                        else None
+                    ),
+                    technical_outcome_record_seq=(
+                        result.technical_outcome.supporting_event_record_seq
+                        if result.technical_outcome is not None
+                        else None
+                    ),
+                    fence=pre_exile_run_fence,
+                )
+                if adopted.action_id != source.action_id:
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_recovery_source_changed:{voter.player_id}"
+                    )
+                decisions[index] = result.decision
+                if observe_technical_outcome(index, result):
+                    technical_voter_ids.append(voter.player_id)
+                elif result.decision is None:
+                    raise V2DayRuntimeError(
+                        f"pre_exile_vote_recovery_result_missing:{voter.player_id}"
+                    )
+                else:
+                    recovered_voter_ids.append(voter.player_id)
+            recovery_payload: dict[str, Any] = {
+                "round_no": state.round_no,
+                "action_type": action_type,
+                "batch_id": batch_id,
+                "public_cutoff_record_seq": public_cutoff_record_seq,
+                "recovered_voter_ids": recovered_voter_ids,
+                "recovery_mode": "pre_exile_idle_capacity_normal_once",
+            }
+            if technical_voter_ids:
+                recovery_payload["technical_abstained_voter_ids"] = technical_voter_ids
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="day_vote_batch_recovery_completed",
+                audience="god_view",
+                payload=recovery_payload,
+            )
+            await broadcaster.broadcast_json(
+                day_progress(
+                    game_id=state.game_id,
+                    run_id=state.run_id,
+                    round_no=state.round_no,
+                    stage="before_exile_vote",
+                    completed_count=len(prepared),
+                    total_count=len(prepared),
+                )
+            )
+            failed_indexes = []
         if failed_indexes:
             self._repository.append_event(
                 game_id=game_id,
@@ -2280,6 +3367,7 @@ class V2DayEngine:
             votes=tuple(committed),
             decision_context=decision_context,
             resolution_payload=resolution_payload,
+            pre_exile_pipeline_id=pre_exile_pipeline_id,
         )
         return dict(totals)
 
@@ -2916,6 +4004,7 @@ class V2DayEngine:
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
         frozen_state: V2MatchSnapshot | None = None,
+        frozen_private_facts: list[dict[str, Any]] | None = None,
         projection_at_seq: int | None = None,
         defer_presentation: bool = False,
         isolated_failure: bool = False,
@@ -2934,12 +4023,15 @@ class V2DayEngine:
         model_admission_mode: V2ProviderAdmissionMode = "normal",
         pipeline_slot_id: str | None = None,
         pipeline_stage: Literal["generation", "presentation"] | None = None,
+        pipeline_kind: Literal["pre_exile"] | None = None,
+        pipeline_result_kind: Literal["self_explosion", "exile_vote"] | None = None,
         pipeline_empty_stream_max_attempts: Literal[1, 2] = 1,
         pipeline_retry_mode: Literal[
             "disabled",
             "empty_stream_once_while_predecessor_active",
         ] = "disabled",
         model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        on_model_admission_pending: Callable[[], None] | None = None,
         return_result: bool = False,
     ) -> V2ModelDecision | V2ActionResult | None:
         self._actions.check_cancellation(game_id)
@@ -2950,9 +4042,13 @@ class V2DayEngine:
             raise V2DayRuntimeError(
                 "projection_at_seq must equal the explicitly frozen state cutoff"
             )
-        private_facts = self._repository.private_knowledge(
-            game_id=game_id,
-            player_id=player.player_id,
+        private_facts = (
+            [dict(item) for item in frozen_private_facts]
+            if frozen_private_facts is not None
+            else self._repository.private_knowledge(
+                game_id=game_id,
+                player_id=player.player_id,
+            )
         )
         if player.role_key == "werewolf":
             private_facts = [
@@ -3069,6 +4165,8 @@ class V2DayEngine:
             model_admission_mode=model_admission_mode,
             pipeline_slot_id=pipeline_slot_id,
             pipeline_stage=pipeline_stage,
+            pipeline_kind=pipeline_kind,
+            pipeline_result_kind=pipeline_result_kind,
             pipeline_empty_stream_max_attempts=pipeline_empty_stream_max_attempts,
             pipeline_retry_mode=pipeline_retry_mode,
         )
@@ -3097,6 +4195,8 @@ class V2DayEngine:
                 result_kwargs["on_presentation_closed"] = on_presentation_closed
             if model_retry_guard is not None:
                 result_kwargs["model_retry_guard"] = model_retry_guard
+            if on_model_admission_pending is not None:
+                result_kwargs["on_model_admission_pending"] = on_model_admission_pending
             result = await result_method(**result_kwargs)
         else:
             decision_kwargs: dict[str, Any] = {
@@ -3242,6 +4342,78 @@ def _required_target(decision: V2ModelDecision) -> str:
     if decision.target_player_id is None:
         raise V2DayRuntimeError("required vote target is missing")
     return decision.target_player_id
+
+
+def _private_fact_visible_at_public_cutoff(
+    fact: dict[str, Any],
+    public_cutoff_record_seq: int,
+) -> bool:
+    known_at_seq = fact.get("known_at_seq")
+    record_seq = fact.get("record_seq")
+    clock = known_at_seq if type(known_at_seq) is int else record_seq
+    return type(clock) is int and clock <= public_cutoff_record_seq
+
+
+def _persisted_pre_exile_failure_category(failure: dict[str, Any]) -> str | None:
+    request = failure.get("model_request_failed")
+    if isinstance(request, dict):
+        category = request.get("failure_category")
+        if isinstance(category, str):
+            return category
+    action = failure.get("action_failed")
+    if isinstance(action, dict):
+        category = action.get("failure_category") or action.get("failure_kind")
+        if isinstance(category, str):
+            return category
+    return None
+
+
+def _pre_exile_wolf_vote_private_facts(
+    *,
+    base: list[dict[str, Any]],
+    owner_facts: list[dict[str, Any]],
+    owner_player_id: str,
+    pipeline_id: str,
+    private_fact_id: str | None,
+    private_fact_record_seq: int | None,
+    public_cutoff_record_seq: int,
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(private_fact_id, str)
+        or not private_fact_id
+        or type(private_fact_record_seq) is not int
+        or private_fact_record_seq <= public_cutoff_record_seq
+    ):
+        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
+    own = [
+        copy.deepcopy(fact)
+        for fact in owner_facts
+        if fact.get("knowledge_fact_id") == private_fact_id
+    ]
+    if len(own) != 1:
+        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
+    fact = own[0]
+    payload = fact.get("payload")
+    decision = payload.get("decision") if isinstance(payload, dict) else None
+    fact_context = payload.get("context") if isinstance(payload, dict) else None
+    if (
+        fact.get("owner_scope") != "player"
+        or fact.get("owner_id") != owner_player_id
+        or fact.get("fact_type") != "private_action_decision"
+        or fact.get("source_event_type") != "private_knowledge_recorded"
+        or fact.get("record_seq") != private_fact_record_seq
+        or fact.get("known_at_seq") != private_fact_record_seq
+        or not isinstance(payload, dict)
+        or payload.get("action_type") != "werewolf_self_explosion"
+        or not isinstance(fact_context, dict)
+        or fact_context.get("pipeline_id") != pipeline_id
+        or fact_context.get("public_history_cutoff_record_seq") != public_cutoff_record_seq
+        or fact_context.get("visibility_mode") != "pre_exile_provisional_until_atomic_arbiter"
+        or not isinstance(decision, dict)
+        or decision.get("explode") is not False
+    ):
+        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_invalid")
+    return [*copy.deepcopy(base), fact]
 
 
 def _failure_code(exc: Exception) -> str:

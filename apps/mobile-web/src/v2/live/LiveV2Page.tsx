@@ -11,6 +11,7 @@ import {
   parseV2ServerMessage,
   type V2AbilityProgress,
   type V2DirectorScene,
+  type V2DayProgress,
   type V2GamePhase,
   type V2GodViewNightResolved,
   type V2GodViewPlayerIdentity,
@@ -76,7 +77,7 @@ export function LiveV2Page() {
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nightProgress, setNightProgress] = useState<NightProgress>(null);
-  const [dayProgress, setDayProgress] = useState<string | null>(null);
+  const [dayProgress, setDayProgress] = useState<V2DayProgress | null>(null);
   const [audioActive, setAudioActive] = useState(false);
   const [reactingPlayerIds, setReactingPlayerIds] = useState<Set<string>>(
     () => new Set(),
@@ -361,7 +362,7 @@ export function LiveV2Page() {
               return;
             }
             if (message.type === "day.progress_changed") {
-              setDayProgress(message.stage);
+              setDayProgress(message);
               return;
             }
             if (message.type === "match.state_changed") {
@@ -521,6 +522,7 @@ export function LiveV2Page() {
     viewingMode,
     directorScene,
     runtimeProjection,
+    presentation !== null,
   );
 
   return (
@@ -657,10 +659,11 @@ function liveProcessLabel(
   phase: V2GamePhase | null,
   match: V2MatchState | null,
   nightProgress: NightProgress,
-  dayProgress: string | null,
+  dayProgress: V2DayProgress | null,
   viewingMode: V2ViewingMode,
   directorScene: V2DirectorScene | null,
   runtime: V2RuntimeProjection | null,
+  presentationActive: boolean,
 ): string {
   const matchStatus = effectiveMatchStatus(runtime, phase, match, liveState);
   const winner = effectiveWinner(runtime, match);
@@ -679,6 +682,13 @@ function liveProcessLabel(
   if (connectionState === "idle") return "舞台已就位，等待观众入场";
   if (connectionState === "connecting") return "正在连接当前实时进度";
   if (liveState === "waiting_to_start") return "玩家与规则已冻结，等待开幕";
+  if (
+    isDayPhase(phase) &&
+    !presentationActive &&
+    dayProgress?.stage.startsWith("pre_exile_")
+  ) {
+    return dayProgressLabel(dayProgress);
+  }
   if (liveState === "finalizing") {
     return audioEnabled
       ? "本句播完，正在保存同源语音"
@@ -731,9 +741,19 @@ function nightProgressLabel(stage: NightProgress): string {
   return "夜幕中的下一项动作正在准备";
 }
 
-function dayProgressLabel(stage: string | null): string {
+function dayProgressLabel(progress: V2DayProgress | null): string {
+  const stage = progress?.stage ?? null;
   if (!stage || stage === "day_started") return "白天公开流程正在展开";
   if (stage === "pre_sheriff_election") return "警长竞选即将开始";
+  if (stage === "pre_exile_special_action") return "正在确认是否有特殊行动";
+  if (
+    progress !== null &&
+    stage === "pre_exile_vote_collecting" &&
+    progress.completed_count !== null &&
+    progress.total_count !== null
+  ) {
+    return `投票决策已完成 ${progress.completed_count}/${progress.total_count}`;
+  }
   if (stage === "before_exile_vote") return "发言结束，放逐投票即将开始";
   if (stage.startsWith("discussion_round_")) return "存活玩家正在依次公开发言";
   if (stage.includes("sheriff")) return "警长竞选与投票正在进行";

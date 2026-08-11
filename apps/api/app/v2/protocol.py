@@ -234,12 +234,32 @@ def day_progress(
     run_id: str,
     round_no: int,
     stage: str,
+    completed_count: int | None = None,
+    total_count: int | None = None,
 ) -> dict[str, Any]:
+    if (completed_count is None) != (total_count is None):
+        raise V2LiveProtocolError("day progress counts must be provided together")
+    if completed_count is not None and (
+        type(completed_count) is not int
+        or type(total_count) is not int
+        or completed_count < 0
+        or total_count <= 0
+        or completed_count > total_count
+    ):
+        raise V2LiveProtocolError("invalid public day progress counts")
+    fields: dict[str, Any] = {"round_no": round_no, "stage": stage}
+    if completed_count is not None:
+        fields.update(
+            {
+                "completed_count": completed_count,
+                "total_count": total_count,
+            }
+        )
     return control_message(
         message_type="day.progress_changed",
         game_id=game_id,
         run_id=run_id,
-        fields={"round_no": round_no, "stage": stage},
+        fields=fields,
     )
 
 

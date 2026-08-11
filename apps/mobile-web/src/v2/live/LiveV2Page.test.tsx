@@ -619,6 +619,19 @@ describe("LiveV2Page", () => {
 
     act(() => {
       socket.emitJson({
+        ...base("day.progress_changed"),
+        round_no: 2,
+        stage: "pre_exile_vote_collecting",
+        completed_count: 7,
+        total_count: 10,
+      });
+    });
+    expect(
+      screen.getAllByText("投票决策已完成 7/10").length,
+    ).toBeGreaterThan(0);
+
+    act(() => {
+      socket.emitJson({
         ...base("game.phase_changed"),
         phase_seq: 7,
         previous_phase_id: "day_2",

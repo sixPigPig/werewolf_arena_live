@@ -201,6 +201,8 @@ class V2SpeechSpec:
     model_admission_mode: V2ProviderAdmissionMode = "normal"
     pipeline_slot_id: str | None = None
     pipeline_stage: Literal["generation", "presentation"] | None = None
+    pipeline_kind: Literal["pre_exile"] | None = None
+    pipeline_result_kind: Literal["self_explosion", "exile_vote"] | None = None
     pipeline_empty_stream_max_attempts: Literal[1, 2] = 1
     pipeline_retry_mode: Literal[
         "disabled",
@@ -230,6 +232,15 @@ class V2SpeechSpec:
             raise ValueError("pipeline slot and stage must be provided together")
         if self.pipeline_slot_id is not None and not self.pipeline_slot_id.strip():
             raise ValueError("pipeline slot id must be non-empty")
+        if self.pipeline_kind == "pre_exile":
+            if self.pipeline_stage != "generation":
+                raise ValueError("pre-exile pipeline only supports generation")
+            if self.pipeline_result_kind not in {"self_explosion", "exile_vote"}:
+                raise ValueError("pre-exile pipeline requires a result kind")
+            if self.audience != "god_view":
+                raise ValueError("pre-exile pipeline generation must stay in god view")
+        elif self.pipeline_result_kind is not None:
+            raise ValueError("pipeline result kind requires a pre-exile pipeline")
         if self.pipeline_stage == "generation" and not (
             self.defer_presentation and self.isolated_failure
         ):
@@ -877,6 +888,7 @@ class V2ActionEngine:
         on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
         on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
         model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        on_model_admission_pending: Callable[[], None] | None = None,
     ) -> V2ModelDecision | None:
         result = await self.run_player_decision_result(
             game_id=game_id,
@@ -885,6 +897,7 @@ class V2ActionEngine:
             on_presentation_opened=on_presentation_opened,
             on_presentation_closed=on_presentation_closed,
             model_retry_guard=model_retry_guard,
+            on_model_admission_pending=on_model_admission_pending,
         )
         return result.decision if result is not None else None
 
@@ -897,6 +910,7 @@ class V2ActionEngine:
         on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
         on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
         model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        on_model_admission_pending: Callable[[], None] | None = None,
     ) -> V2ActionResult | None:
         return await self._run_model_action(
             game_id=game_id,
@@ -906,6 +920,7 @@ class V2ActionEngine:
             on_presentation_opened=on_presentation_opened,
             on_presentation_closed=on_presentation_closed,
             model_retry_guard=model_retry_guard,
+            on_model_admission_pending=on_model_admission_pending,
         )
 
     async def present_player_decision(
@@ -974,6 +989,7 @@ class V2ActionEngine:
         on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
         on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
         model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        on_model_admission_pending: Callable[[], None] | None = None,
     ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
         judge_configuration = None
@@ -1039,6 +1055,7 @@ class V2ActionEngine:
         last_output_budget_failure_code: str | None = None
         tts_attempt_id: str | None = None
         retry_cycle = 1
+        model_admission_pending_notified = False
 
         def clear_active_failure_episode() -> None:
             nonlocal active_failure_episode_id
@@ -1468,6 +1485,13 @@ class V2ActionEngine:
                             try:
 
                                 async def generate_once() -> V2ModelDecision:
+                                    nonlocal model_admission_pending_notified
+                                    if (
+                                        on_model_admission_pending is not None
+                                        and not model_admission_pending_notified
+                                    ):
+                                        on_model_admission_pending()
+                                        model_admission_pending_notified = True
                                     if progress_capable:
                                         progress_kwargs: dict[str, Any] = {
                                             "action_context": model_context,
@@ -2655,11 +2679,14 @@ class V2ActionEngine:
                         extra={"game_id": claim.game_id, "action_id": claim.action_id},
                     )
             if spec.pipeline_stage == "generation":
-                cancellation_code = (
-                    "day_speech_prefetch_post_close_deadline"
-                    if exc.args and exc.args[0] == "day_speech_prefetch_post_close_deadline"
-                    else "day_speech_prefetch_canceled"
-                )
+                if spec.pipeline_kind == "pre_exile":
+                    cancellation_code = "pre_exile_pipeline_generation_canceled"
+                else:
+                    cancellation_code = (
+                        "day_speech_prefetch_post_close_deadline"
+                        if exc.args and exc.args[0] == "day_speech_prefetch_post_close_deadline"
+                        else "day_speech_prefetch_canceled"
+                    )
                 cancellation_kind = (
                     "timeout"
                     if cancellation_code == "day_speech_prefetch_post_close_deadline"
@@ -2742,13 +2769,15 @@ class V2ActionEngine:
                         exc_info=True,
                         extra={"game_id": claim.game_id, "action_id": claim.action_id},
                     )
-                if cancellation_kind == "timeout" and cancellation_terminal_record_seq is not None:
+                if cancellation_terminal_record_seq is not None and (
+                    cancellation_kind == "timeout" or spec.pipeline_kind == "pre_exile"
+                ):
                     return V2ActionResult(
                         action_id=claim.action_id,
                         terminal_event_record_seq=cancellation_terminal_record_seq,
                         failure=V2ActionFailure(
                             code=cancellation_code,
-                            category="timeout",
+                            category=("timeout" if cancellation_kind == "timeout" else "canceled"),
                             terminal_attempt_id=model_attempt_id,
                             machine_format_failure_count=machine_format_failure_count,
                             last_machine_format_attempt_id=last_machine_format_attempt_id,
@@ -2995,19 +3024,31 @@ def _action_context(
         ),
         **(
             {
-                "pipeline": {
-                    "slot_id": spec.pipeline_slot_id,
-                    "stage": spec.pipeline_stage,
-                    "model_admission_mode": spec.model_admission_mode,
-                    **(
-                        {
-                            "retry_mode": spec.pipeline_retry_mode,
-                            "empty_stream_max_attempts": (spec.pipeline_empty_stream_max_attempts),
-                        }
-                        if spec.pipeline_retry_mode != "disabled"
-                        else {}
-                    ),
-                }
+                "pipeline": (
+                    {
+                        "kind": "pre_exile",
+                        "pipeline_id": spec.pipeline_slot_id,
+                        "result_kind": spec.pipeline_result_kind,
+                        "stage": spec.pipeline_stage,
+                        "model_admission_mode": spec.model_admission_mode,
+                    }
+                    if spec.pipeline_kind == "pre_exile"
+                    else {
+                        "slot_id": spec.pipeline_slot_id,
+                        "stage": spec.pipeline_stage,
+                        "model_admission_mode": spec.model_admission_mode,
+                        **(
+                            {
+                                "retry_mode": spec.pipeline_retry_mode,
+                                "empty_stream_max_attempts": (
+                                    spec.pipeline_empty_stream_max_attempts
+                                ),
+                            }
+                            if spec.pipeline_retry_mode != "disabled"
+                            else {}
+                        ),
+                    }
+                )
             }
             if spec.pipeline_slot_id is not None
             else {}
@@ -3353,7 +3394,7 @@ def _technical_exhaustion_outcome(
     # A prefetched turn is not yet public.  Its failure must stay private and
     # fall back to the normal foreground turn instead of publishing a skip
     # while the predecessor is still speaking.
-    if spec.pipeline_stage == "generation":
+    if spec.pipeline_stage == "generation" and spec.pipeline_kind != "pre_exile":
         return None
     if not model_failure_disposition(exc).pausable:
         return None

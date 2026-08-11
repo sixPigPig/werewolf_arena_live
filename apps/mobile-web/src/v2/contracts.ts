@@ -430,6 +430,8 @@ export type V2DayProgress = {
   server_time: string;
   round_no: number;
   stage: string;
+  completed_count: number | null;
+  total_count: number | null;
 };
 
 export type V2PresentationClosed = {
@@ -857,11 +859,27 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
     };
   }
   if (type === "day.progress_changed") {
+    const hasCompletedCount = value.completed_count !== undefined;
+    const hasTotalCount = value.total_count !== undefined;
+    if (hasCompletedCount !== hasTotalCount) throw invalid();
+    const completedCount = hasCompletedCount
+      ? integer(value.completed_count, 0)
+      : null;
+    const totalCount = hasTotalCount ? integer(value.total_count, 1) : null;
+    if (
+      completedCount !== null &&
+      totalCount !== null &&
+      completedCount > totalCount
+    ) {
+      throw invalid();
+    }
     return {
       ...base,
       type,
       round_no: integer(value.round_no, 1),
       stage: text(value.stage),
+      completed_count: completedCount,
+      total_count: totalCount,
     };
   }
   if (type === "presentation.opened") {
