@@ -775,6 +775,17 @@ class _ProgressThenSlowModelClient(FakeV2ModelClient):
                     token_kind="reasoning",
                 ),
                 V2ModelProgress(
+                    stage="stream_delta",
+                    provider_request_id="provider-stream-progress",
+                    elapsed_ms=8,
+                    reasoning_delta="正在核对存活玩家。",
+                    reasoning_character_count=9,
+                    text_character_count=0,
+                    estimated_reasoning_tokens=9,
+                    estimated_output_tokens=9,
+                    usage_update_count=0,
+                ),
+                V2ModelProgress(
                     stage="first_text",
                     provider_request_id="provider-stream-progress",
                     elapsed_ms=9,
@@ -9848,6 +9859,9 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
             "model_first_token_received"
         )
         assert event_types.index("model_first_token_received") < event_types.index(
+            "model_stream_progress"
+        )
+        assert event_types.index("model_stream_progress") < event_types.index(
             "model_first_text_delta_received"
         )
         assert event_types.index("model_first_text_delta_received") < event_types.index(
@@ -9911,6 +9925,13 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
     assert failed_attempt["shadow_would_timeout"] is None
     assert failed_attempt["failure_stage"] == "stream"
     assert failed_attempt["timeout_scope"] == "attempt_budget"
+    request_detail = client.get(
+        f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests/{attempt_id}"
+    )
+    assert request_detail.status_code == 200, request_detail.text
+    assert request_detail.json()["stream_reasoning"] == "正在核对存活玩家。"
+    assert request_detail.json()["stream_estimated_reasoning_tokens"] == 9
+    assert request_detail.json()["stream_content_truncated"] is False
 
 
 def test_admin_retries_the_same_paused_model_action(v2_context) -> None:

@@ -959,6 +959,36 @@ export function parseV2ModelRequest(value: unknown): V2ModelRequest {
       record.passive_observations === undefined
         ? []
         : array(record.passive_observations).map(object),
+    stream_reasoning:
+      record.stream_reasoning === undefined
+        ? null
+        : nullableText(record.stream_reasoning),
+    stream_text:
+      record.stream_text === undefined ? null : nullableText(record.stream_text),
+    stream_reasoning_character_count:
+      record.stream_reasoning_character_count === undefined
+        ? 0
+        : integer(record.stream_reasoning_character_count, 0),
+    stream_text_character_count:
+      record.stream_text_character_count === undefined
+        ? 0
+        : integer(record.stream_text_character_count, 0),
+    stream_estimated_reasoning_tokens:
+      record.stream_estimated_reasoning_tokens === undefined
+        ? null
+        : nullableInteger(record.stream_estimated_reasoning_tokens, 0),
+    stream_estimated_output_tokens:
+      record.stream_estimated_output_tokens === undefined
+        ? null
+        : nullableInteger(record.stream_estimated_output_tokens, 0),
+    stream_content_truncated:
+      record.stream_content_truncated === undefined
+        ? false
+        : boolean(record.stream_content_truncated),
+    stream_progress_updated_at:
+      record.stream_progress_updated_at === undefined
+        ? null
+        : nullableDate(record.stream_progress_updated_at),
   };
 }
 

@@ -1691,6 +1691,99 @@ describe("V2 game record detail workspace", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows live reasoning and refreshes token counts while the model is running", async () => {
+    const liveRequest = {
+      ...detail.model_requests[0],
+      status: "running",
+      output_source: "unavailable",
+      raw_response: null,
+      parsed_output: null,
+      passive_observations: [],
+      provider_usage: null,
+      usage_update_count: 0,
+      usage_conflict_observed: null,
+      usage_consistency: null,
+      finish_reason: null,
+      completed_at: null,
+      stream_reasoning: "第一步：核对场上身份。",
+      stream_text: null,
+      stream_reasoning_character_count: 10,
+      stream_text_character_count: 0,
+      stream_estimated_reasoning_tokens: 10,
+      stream_estimated_output_tokens: 10,
+      stream_content_truncated: false,
+      stream_progress_updated_at: "2026-07-23T08:00:04Z",
+    };
+    stubRecordFetch({
+      ...detail,
+      title: "实时推理验收",
+      last_record_seq: 5,
+      presentations: [],
+      voice_assets: [],
+      events: [
+        detail.events[0],
+        detail.events[1],
+        detail.events[2],
+        detail.events[3],
+        event(5, "model_stream_progress", {
+          action_id: actionId,
+          attempt_id: "v2_model_attempt_1",
+          estimated_output_tokens: 10,
+        }),
+      ],
+      model_requests: [liveRequest],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "实时推理验收" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输出" }));
+    const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
+    const liveStream = within(outputPanel).getByRole("region", {
+      name: "实时推理与 Token",
+    });
+    expect(within(liveStream).getByText("实时推理")).toBeVisible();
+    expect(within(liveStream).getByText("生成中 · 约每秒刷新")).toBeVisible();
+    expect(within(liveStream).getByText("当前输出 Token")).toBeVisible();
+    expect(within(liveStream).getAllByText("≈ 10（实时估算）")).toHaveLength(2);
+    expect(
+      within(liveStream).getByLabelText("模型实时推理内容"),
+    ).toHaveTextContent("第一步：核对场上身份。");
+    expect(
+      within(liveStream).getByText(/不作为计费或最终诊断依据/),
+    ).toBeVisible();
+
+    Object.assign(liveRequest, {
+      provider_usage: { output_tokens: 25, reasoning_tokens: 18 },
+      stream_reasoning: "第一步：核对场上身份。第二步：形成发言。",
+      stream_reasoning_character_count: 19,
+      stream_estimated_reasoning_tokens: 19,
+      stream_estimated_output_tokens: 25,
+      stream_progress_updated_at: "2026-07-23T08:00:05Z",
+      usage_update_count: 1,
+    });
+
+    await waitFor(
+      () => {
+        expect(
+          within(liveStream).getByText("25（Provider）"),
+        ).toBeVisible();
+        expect(
+          within(liveStream).getByText("18（Provider）"),
+        ).toBeVisible();
+        expect(
+          within(liveStream).getByLabelText("模型实时推理内容"),
+        ).toHaveTextContent("第二步：形成发言。");
+      },
+      { timeout: 2_500 },
+    );
+  });
+
   it("preloads saved voice metadata and shows the persisted duration", async () => {
     stubRecordFetch({
       ...detail,

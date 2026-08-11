@@ -549,9 +549,16 @@ export function ReadableModelOutput({
   if (request.output_source === "unavailable") {
     return (
       <div className="v2-inspector-panel">
+        <LiveModelStream request={request} />
         <ModelOutputDiagnostics request={request} />
         <OutputEnforcementAudit request={request} />
-        <Empty description="模型尚未返回，或没有可恢复的输出" />
+        <Empty
+          description={
+            request.status === "running"
+              ? "模型正在推理，最终输出尚未返回"
+              : "模型尚未返回，或没有可恢复的输出"
+          }
+        />
       </div>
     );
   }
@@ -591,6 +598,7 @@ export function ReadableModelOutput({
           type="warning"
         />
       ) : null}
+      <LiveModelStream request={request} />
       <ModelOutputDiagnostics request={request} />
       <OutputEnforcementAudit request={request} />
       {request.passive_observations.length ? (
@@ -746,6 +754,90 @@ export function ModelOutputDiagnostics({
   );
 }
 
+function LiveModelStream({ request }: { request: V2ModelRequest }) {
+  const hasReasoning = Boolean(request.stream_reasoning);
+  const hasText = Boolean(request.stream_text);
+  if (!hasReasoning && request.status !== "running") return null;
+
+  const usage = request.provider_usage;
+  const usesEstimatedTokens =
+    usage?.output_tokens === undefined || usage.reasoning_tokens === undefined;
+  const tokenValue = (providerValue: number | undefined, estimate: number | null) =>
+    providerValue === undefined
+      ? estimate === null
+        ? "等待首个片段"
+        : `≈ ${estimate.toLocaleString("zh-CN")}（实时估算）`
+      : `${providerValue.toLocaleString("zh-CN")}（Provider）`;
+  return (
+    <section aria-label="实时推理与 Token" className="v2-model-stream">
+      <Flex align="center" gap={8} justify="space-between" wrap>
+        <Typography.Text strong>
+          {request.status === "running" ? "实时推理" : "推理内容（流式留存）"}
+        </Typography.Text>
+        <Space size={6} wrap>
+          <Tag color={request.status === "running" ? "processing" : "default"}>
+            {request.status === "running" ? "生成中 · 约每秒刷新" : "已结束"}
+          </Tag>
+          {request.stream_progress_updated_at ? (
+            <Typography.Text type="secondary">
+              更新于 {formatClock(request.stream_progress_updated_at)}
+            </Typography.Text>
+          ) : null}
+        </Space>
+      </Flex>
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "live-output-tokens",
+            label: "当前输出 Token",
+            children: tokenValue(
+              usage?.output_tokens,
+              request.stream_estimated_output_tokens,
+            ),
+          },
+          {
+            key: "live-reasoning-tokens",
+            label: "当前推理 Token",
+            children: tokenValue(
+              usage?.reasoning_tokens,
+              request.stream_estimated_reasoning_tokens,
+            ),
+          },
+        ]}
+        size="small"
+      />
+      {usesEstimatedTokens ? (
+        <Alert
+          description="生成中的数字按已收到文本做本地估算，不作为计费或最终诊断依据；Provider 返回 usage 后会自动切换为其原始值。"
+          showIcon
+          type="info"
+        />
+      ) : null}
+      <div className="v2-model-stream-block">
+        <Typography.Text strong>推理内容</Typography.Text>
+        <pre aria-label="模型实时推理内容">
+          {request.stream_reasoning ??
+            "尚未收到可展示的推理片段（Provider 可能不返回推理内容）。"}
+        </pre>
+      </div>
+      {hasText && request.status === "running" ? (
+        <div className="v2-model-stream-block">
+          <Typography.Text strong>正在生成的输出</Typography.Text>
+          <pre aria-label="模型实时输出内容">{request.stream_text}</pre>
+        </div>
+      ) : null}
+      {request.stream_content_truncated ? (
+        <Alert
+          description="该次流式内容超过 Admin 展示上限，这里只显示前 200,000 个字符；字符计数和最终 Provider usage 仍保留原值。"
+          showIcon
+          type="warning"
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
   const contractVersion =
     request.model_context_schema_version === null
@@ -807,6 +899,7 @@ function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
         title="历史或未知合同仅提供通用 JSON"
         type="warning"
       />
+      <LiveModelStream request={request} />
       <ModelOutputDiagnostics request={request} />
       <pre aria-label="历史模型输出原始 JSON">{prettyJson(value)}</pre>
     </div>

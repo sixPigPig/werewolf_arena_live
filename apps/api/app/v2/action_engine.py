@@ -551,6 +551,31 @@ class _ModelAttemptProgressTrace:
                     "first_visible_text_ms": progress.elapsed_ms,
                 },
             )
+        if progress.stage == "stream_delta":
+            return (
+                "model_stream_progress",
+                {
+                    "provider_request_id": progress.provider_request_id,
+                    "elapsed_ms": progress.elapsed_ms,
+                    "reasoning_delta": progress.reasoning_delta,
+                    "text_delta": progress.text_delta,
+                    "reasoning_character_count": progress.reasoning_character_count,
+                    "text_character_count": progress.text_character_count,
+                    "estimated_reasoning_tokens": progress.estimated_reasoning_tokens,
+                    "estimated_output_tokens": progress.estimated_output_tokens,
+                    "provider_usage": progress.provider_usage,
+                    "usage_update_count": progress.usage_update_count,
+                    "token_count_source": (
+                        "provider"
+                        if progress.provider_usage is not None
+                        and (
+                            "output_tokens" in progress.provider_usage
+                            or "reasoning_tokens" in progress.provider_usage
+                        )
+                        else "local_estimate"
+                    ),
+                },
+            )
         raise AssertionError(f"unknown model progress stage {progress.stage}")
 
     def failure_stage(self) -> str:

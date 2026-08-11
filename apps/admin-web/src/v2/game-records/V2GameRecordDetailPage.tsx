@@ -1130,6 +1130,9 @@ function RequestDetailsContent({
     queryFn: ({ signal }) =>
       readV2ModelRequest(gameId, attemptId, signal),
     queryKey: v2GameRecordKeys.modelRequest(gameId, attemptId),
+    refetchInterval: (currentQuery) =>
+      currentQuery.state.data?.status === "running" ? 1_000 : false,
+    refetchIntervalInBackground: false,
   });
   const fullRequest = requestQuery.data ?? null;
   return (

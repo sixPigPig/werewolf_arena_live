@@ -789,6 +789,14 @@ class AdminV2ModelRequestResponse(AdminV2ModelRequestSummaryResponse):
     raw_response: str | None
     parsed_output: dict[str, Any] | None
     passive_observations: list[dict[str, Any]]
+    stream_reasoning: str | None
+    stream_text: str | None
+    stream_reasoning_character_count: int
+    stream_text_character_count: int
+    stream_estimated_reasoning_tokens: int | None
+    stream_estimated_output_tokens: int | None
+    stream_content_truncated: bool
+    stream_progress_updated_at: datetime | None
 
 
 class AdminV2ModelRequestPageResponse(BaseModel):

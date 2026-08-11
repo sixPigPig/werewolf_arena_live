@@ -163,7 +163,7 @@ def test_v11_prompt_only_explains_derived_fields_that_are_present() -> None:
                 "known_at_seq": 40,
                 "occurred_in": {"period": "day", "round_no": 2},
                 "announced_in": {"period": "day", "round_no": 2},
-            }
+            },
         ],
         questions=[
             {
@@ -1687,7 +1687,9 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
         "admitted",
         "response_headers",
         "first_token",
+        "stream_delta",
         "first_text",
+        "stream_delta",
     ]
     headers = progress[2].response_headers
     assert headers is not None
@@ -1708,9 +1710,19 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
     }.isdisjoint(headers)
     assert progress[3].provider_request_id == "chatcmpl-progress"
     assert progress[3].token_kind == "reasoning"
-    assert progress[4].provider_request_id == "chatcmpl-progress"
-    assert progress[4].token_kind == "text"
-    assert progress[2].elapsed_ms <= progress[3].elapsed_ms <= progress[4].elapsed_ms
+    first_stream = progress[4]
+    assert first_stream.reasoning_delta == "thinking"
+    assert first_stream.text_delta is None
+    assert first_stream.reasoning_character_count == 8
+    assert first_stream.estimated_reasoning_tokens == 2
+    assert progress[5].provider_request_id == "chatcmpl-progress"
+    assert progress[5].token_kind == "text"
+    final_stream = progress[6]
+    assert final_stream.reasoning_delta is None
+    assert final_stream.text_delta == '{"speech":"进度响应"}'
+    assert final_stream.estimated_output_tokens is not None
+    assert final_stream.estimated_output_tokens > first_stream.estimated_reasoning_tokens
+    assert progress[2].elapsed_ms <= progress[3].elapsed_ms <= progress[5].elapsed_ms
 
 
 def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> None:

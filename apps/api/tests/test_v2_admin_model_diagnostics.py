@@ -15,7 +15,11 @@ from app.v2.model_context_contract import (
     MODEL_VIEW_SELECTOR_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.router import _admin_expanded_known_events, _admin_model_requests
+from app.v2.router import (
+    _admin_event_summary,
+    _admin_expanded_known_events,
+    _admin_model_requests,
+)
 
 
 GAME_ID = "v2_game_admin_diag"
@@ -287,6 +291,7 @@ def _event(
         event_id=record_seq,
         record_seq=record_seq,
         event_type=event_type,
+        payload_schema_version=1,
         payload=payload,
         created_at=NOW + timedelta(milliseconds=record_seq),
     )
@@ -310,6 +315,101 @@ def _action_opened(
         },
         run_id=run_id,
     )
+
+
+def test_admin_model_request_reconstructs_live_reasoning_and_usage() -> None:
+    events = [
+        _action_opened(action_type="day_debate_speech"),
+        _event(
+            2,
+            "model_request_started",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "attempt_no": 1,
+                "retry_cycle": 1,
+                "audience": "private",
+                "request_kind": "speech",
+                "request_payload": {"model": "test-model", "stream": True},
+            },
+        ),
+        _event(
+            3,
+            "model_stream_progress",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "provider_request_id": "provider-live-1",
+                "reasoning_delta": "第一步：核对身份。",
+                "text_delta": None,
+                "reasoning_character_count": 9,
+                "text_character_count": 0,
+                "estimated_reasoning_tokens": 9,
+                "estimated_output_tokens": 9,
+                "usage_update_count": 0,
+            },
+        ),
+        _event(
+            4,
+            "model_stream_progress",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "provider_request_id": "provider-live-1",
+                "reasoning_delta": "第二步：选择发言。",
+                "text_delta": '{"speech":',
+                "reasoning_character_count": 18,
+                "text_character_count": 10,
+                "estimated_reasoning_tokens": 18,
+                "estimated_output_tokens": 24,
+                "provider_usage": {
+                    "output_tokens": 25,
+                    "reasoning_tokens": 18,
+                },
+                "usage_update_count": 1,
+            },
+        ),
+    ]
+
+    request = _admin_model_requests(
+        events,
+        [],
+        expanded_known_events_attempt_id=ATTEMPT_ID,
+    )[0]
+
+    assert request.status == "running"
+    assert request.output_source == "unavailable"
+    assert request.provider_request_id == "provider-live-1"
+    assert request.stream_reasoning == "第一步：核对身份。第二步：选择发言。"
+    assert request.stream_text == '{"speech":'
+    assert request.stream_reasoning_character_count == 18
+    assert request.stream_text_character_count == 10
+    assert request.stream_estimated_reasoning_tokens == 18
+    assert request.stream_estimated_output_tokens == 24
+    assert request.stream_content_truncated is False
+    assert request.stream_progress_updated_at == events[-1].created_at
+    assert request.provider_usage == {"output_tokens": 25, "reasoning_tokens": 18}
+    assert request.usage_update_count == 1
+
+
+def test_admin_event_summary_omits_live_stream_content() -> None:
+    summary = _admin_event_summary(
+        _event(
+            3,
+            "model_stream_progress",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "reasoning_delta": "不应进入增量事件列表",
+                "text_delta": "不应进入增量事件列表",
+                "estimated_output_tokens": 12,
+            },
+        )
+    )
+
+    assert "reasoning_delta" not in summary.payload
+    assert "text_delta" not in summary.payload
+    assert summary.payload["estimated_output_tokens"] == 12
 
 
 def test_admin_model_request_projects_stream_retry_and_episode_diagnostics() -> None:

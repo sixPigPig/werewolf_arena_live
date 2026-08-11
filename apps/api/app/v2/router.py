@@ -1324,6 +1324,7 @@ _ADMIN_ACTION_CONTEXT_KEYS = {
     "round_no",
     "window_id",
 }
+_ADMIN_STREAM_CONTENT_LIMIT = 200_000
 
 
 def _admin_event_summary(event: object) -> AdminV2EventResponse:
@@ -1344,6 +1345,9 @@ def _admin_event_summary(event: object) -> AdminV2EventResponse:
         projected.pop("passive_observations", None)
     elif event.event_type == "model_request_failed":
         projected.pop("raw_response", None)
+    elif event.event_type == "model_stream_progress":
+        projected.pop("reasoning_delta", None)
+        projected.pop("text_delta", None)
     return AdminV2EventResponse.model_validate(
         {**event.__dict__, "payload": projected},
     )
@@ -1474,6 +1478,7 @@ def _admin_model_requests(
     response_headers: dict[tuple[str | None, str], object] = {}
     first_tokens: dict[tuple[str | None, str], object] = {}
     first_texts: dict[tuple[str | None, str], object] = {}
+    stream_progresses: dict[tuple[str | None, str], list[object]] = {}
     failures: dict[tuple[str | None, str], object] = {}
     retry_schedules: dict[tuple[str | None, str], object] = {}
     action_failures: dict[tuple[str | None, str], object] = {}
@@ -1512,6 +1517,8 @@ def _admin_model_requests(
             first_tokens[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_first_text_delta_received" and isinstance(attempt_id, str):
             first_texts[(event_run_id, attempt_id)] = event
+        elif event.event_type == "model_stream_progress" and isinstance(attempt_id, str):
+            stream_progresses.setdefault((event_run_id, attempt_id), []).append(event)
         elif event.event_type == "model_response_received" and isinstance(attempt_id, str):
             responses[(event_run_id, attempt_id)] = event
         elif event.event_type == "model_request_failed" and isinstance(attempt_id, str):
@@ -1572,6 +1579,11 @@ def _admin_model_requests(
             if first_text is not None and isinstance(first_text.payload, dict)
             else {}
         )
+        stream_snapshot = _admin_model_stream_snapshot(
+            stream_progresses.get(attempt_key, []),
+            include_content=attempt_id == expanded_known_events_attempt_id,
+        )
+        stream_payload = stream_snapshot["last_payload"]
         failure = failures.get(attempt_key) or action_failures.get(action_key)
         failure_payload = (
             failure.payload if failure is not None and isinstance(failure.payload, dict) else {}
@@ -1687,6 +1699,7 @@ def _admin_model_requests(
             or first_payload.get("provider_request_id")
             or first_text_payload.get("provider_request_id")
             or headers_payload.get("provider_request_id")
+            or stream_payload.get("provider_request_id")
             or failure_payload.get("provider_request_id")
         )
         passive_observations = (
@@ -1769,7 +1782,13 @@ def _admin_model_requests(
             retry_payload.get("automatic_output_budget_budget"),
             payload.get("automatic_output_budget_budget"),
         )
-        diagnostic_payload = response_payload if response is not None else failure_payload
+        diagnostic_payload = (
+            response_payload
+            if response is not None
+            else failure_payload
+            if failure is not None
+            else stream_payload
+        )
         raw_generation_policy_contract_status = _first_str(
             diagnostic_payload.get("model_generation_policy_contract_status"),
             payload.get("model_generation_policy_contract_status"),
@@ -1971,6 +1990,14 @@ def _admin_model_requests(
                 parsed_output=parsed_output,
                 passive_observation_count=len(passive_observations),
                 passive_observations=passive_observations,
+                stream_reasoning=stream_snapshot["reasoning"],
+                stream_text=stream_snapshot["text"],
+                stream_reasoning_character_count=(stream_snapshot["reasoning_character_count"]),
+                stream_text_character_count=stream_snapshot["text_character_count"],
+                stream_estimated_reasoning_tokens=(stream_snapshot["estimated_reasoning_tokens"]),
+                stream_estimated_output_tokens=stream_snapshot["estimated_output_tokens"],
+                stream_content_truncated=stream_snapshot["content_truncated"],
+                stream_progress_updated_at=stream_snapshot["updated_at"],
                 output_source=output_source,
                 provider_request_id=(
                     provider_request_id if isinstance(provider_request_id, str) else None
@@ -2310,6 +2337,56 @@ def _admin_provider_usage(value: object) -> dict[str, int] | None:
         if isinstance(item, int) and not isinstance(item, bool) and item >= 0
     }
     return normalized or None
+
+
+def _admin_model_stream_snapshot(
+    events: list[object],
+    *,
+    include_content: bool,
+) -> dict[str, Any]:
+    reasoning_parts: list[str] = []
+    text_parts: list[str] = []
+    last_payload: dict[str, Any] = {}
+    updated_at: datetime | None = None
+    for event in events if include_content else events[-1:]:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if include_content:
+            reasoning_delta = payload.get("reasoning_delta")
+            text_delta = payload.get("text_delta")
+            if isinstance(reasoning_delta, str):
+                reasoning_parts.append(reasoning_delta)
+            if isinstance(text_delta, str):
+                text_parts.append(text_delta)
+        last_payload = payload
+        candidate_updated_at = getattr(event, "created_at", None)
+        if isinstance(candidate_updated_at, datetime):
+            updated_at = candidate_updated_at
+
+    reasoning = "".join(reasoning_parts)
+    text = "".join(text_parts)
+    reasoning_character_count = _first_int(last_payload.get("reasoning_character_count"))
+    text_character_count = _first_int(last_payload.get("text_character_count"))
+    if reasoning_character_count is None:
+        reasoning_character_count = len(reasoning)
+    if text_character_count is None:
+        text_character_count = len(text)
+    content_truncated = (
+        len(reasoning) > _ADMIN_STREAM_CONTENT_LIMIT
+        or len(text) > _ADMIN_STREAM_CONTENT_LIMIT
+        or reasoning_character_count > len(reasoning)
+        or text_character_count > len(text)
+    )
+    return {
+        "reasoning": reasoning[:_ADMIN_STREAM_CONTENT_LIMIT] or None,
+        "text": text[:_ADMIN_STREAM_CONTENT_LIMIT] or None,
+        "reasoning_character_count": reasoning_character_count,
+        "text_character_count": text_character_count,
+        "estimated_reasoning_tokens": _first_int(last_payload.get("estimated_reasoning_tokens")),
+        "estimated_output_tokens": _first_int(last_payload.get("estimated_output_tokens")),
+        "content_truncated": content_truncated,
+        "updated_at": updated_at,
+        "last_payload": last_payload,
+    }
 
 
 def _record_fields(value: object, *names: str) -> dict[str, object]:

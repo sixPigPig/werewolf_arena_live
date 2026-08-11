@@ -387,6 +387,14 @@ export type V2ModelRequest = V2ModelRequestSummary & {
   raw_response: string | null;
   parsed_output: Record<string, unknown> | null;
   passive_observations: Array<Record<string, unknown>>;
+  stream_reasoning: string | null;
+  stream_text: string | null;
+  stream_reasoning_character_count: number;
+  stream_text_character_count: number;
+  stream_estimated_reasoning_tokens: number | null;
+  stream_estimated_output_tokens: number | null;
+  stream_content_truncated: boolean;
+  stream_progress_updated_at: string | null;
 };
 
 export type V2ModelRequestPage = {

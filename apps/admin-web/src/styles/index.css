@@ -7349,6 +7349,36 @@ a {
   margin: 8px 0 0;
 }
 
+.v2-model-stream {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #91caff;
+  border-radius: 8px;
+  background: #f5faff;
+}
+
+.v2-model-stream-block {
+  display: grid;
+  gap: 8px;
+}
+
+.v2-model-stream-block pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  color: #344054;
+  background: #fff;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .v2-result-copy {
   padding: 12px;
   border-radius: 6px;

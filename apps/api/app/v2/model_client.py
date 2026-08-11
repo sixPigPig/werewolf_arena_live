@@ -172,6 +172,7 @@ V2ModelProgressStage = Literal[
     "response_headers",
     "first_token",
     "first_text",
+    "stream_delta",
 ]
 V2ModelTokenKind = Literal["reasoning", "text"]
 
@@ -187,6 +188,14 @@ class V2ModelProgress:
     queue_wait_ms: int | None = None
     provider_in_flight: int | None = None
     provider_concurrency_limit: int | None = None
+    reasoning_delta: str | None = None
+    text_delta: str | None = None
+    reasoning_character_count: int | None = None
+    text_character_count: int | None = None
+    estimated_reasoning_tokens: int | None = None
+    estimated_output_tokens: int | None = None
+    provider_usage: V2ProviderUsage | None = None
+    usage_update_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -340,6 +349,7 @@ class _ProviderUsageState:
 
 
 _RETRYABLE_HTTP_STATUSES = frozenset({429, 502, 503, 504})
+_STREAM_PROGRESS_INTERVAL_SECONDS = 1.0
 _RETRYABLE_TRANSPORT_ERRORS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -835,8 +845,54 @@ class V2ModelClient:
         response_headers: dict[str, str] = {}
         provider_request_id = attempt_id
         text = ""
+        reasoning_text = ""
+        pending_reasoning_delta = ""
+        pending_text_delta = ""
+        last_stream_progress_at: float | None = None
+        last_stream_usage_update_count = 0
         finish_reason: V2ModelFinishReason | None = None
         usage_state = _ProviderUsageState()
+
+        def emit_stream_progress(*, force: bool = False) -> None:
+            nonlocal pending_reasoning_delta
+            nonlocal pending_text_delta
+            nonlocal last_stream_progress_at
+            nonlocal last_stream_usage_update_count
+            if on_progress is None:
+                return
+            usage_changed = usage_state.update_count != last_stream_usage_update_count
+            if not pending_reasoning_delta and not pending_text_delta and not usage_changed:
+                return
+            emitted_at = loop.time()
+            if (
+                not force
+                and last_stream_progress_at is not None
+                and emitted_at - last_stream_progress_at < _STREAM_PROGRESS_INTERVAL_SECONDS
+            ):
+                return
+            on_progress(
+                V2ModelProgress(
+                    stage="stream_delta",
+                    provider_request_id=provider_request_id,
+                    elapsed_ms=round((emitted_at - started) * 1000),
+                    reasoning_delta=pending_reasoning_delta or None,
+                    text_delta=pending_text_delta or None,
+                    reasoning_character_count=len(reasoning_text),
+                    text_character_count=len(text),
+                    estimated_reasoning_tokens=_estimated_stream_token_count(reasoning_text),
+                    estimated_output_tokens=(
+                        _estimated_stream_token_count(reasoning_text)
+                        + _estimated_stream_token_count(text)
+                    ),
+                    provider_usage=usage_state.selected(),
+                    usage_update_count=usage_state.update_count,
+                )
+            )
+            pending_reasoning_delta = ""
+            pending_text_delta = ""
+            last_stream_progress_at = emitted_at
+            last_stream_usage_update_count = usage_state.update_count
+
         payload = (
             build_model_request_payload(
                 action_context,
@@ -1002,11 +1058,15 @@ class V2ModelClient:
                     if provider_event.reasoning_delta:
                         reasoning_delta_count += 1
                         token_kind = "reasoning"
+                        reasoning_text += provider_event.reasoning_delta
+                        pending_reasoning_delta += provider_event.reasoning_delta
                     if provider_event.text_delta:
                         text_delta_count += 1
                         token_kind = token_kind or "text"
                         text += provider_event.text_delta
+                        pending_text_delta += provider_event.text_delta
                     if token_kind is None:
+                        emit_stream_progress(force=provider_event.usage_is_terminal)
                         continue
                     progress_at = loop.time()
                     if last_progress_at is not None:
@@ -1040,7 +1100,12 @@ class V2ModelClient:
                                     token_kind="text",
                                 )
                             )
+                    emit_stream_progress()
+        except asyncio.CancelledError:
+            emit_stream_progress(force=True)
+            raise
         except V2ModelError as exc:
+            emit_stream_progress(force=True)
             _enrich_model_error_from_stream(
                 exc,
                 started=started,
@@ -1060,6 +1125,7 @@ class V2ModelClient:
             )
             raise
         except TimeoutError as exc:
+            emit_stream_progress(force=True)
             timeout_scope: Literal["first_token", "attempt_hard"] = (
                 "attempt_hard" if loop.time() - started >= self._total_seconds else "first_token"
             )
@@ -1094,6 +1160,7 @@ class V2ModelClient:
             )
             raise timeout_error from exc
         except (httpx.HTTPError, OSError) as exc:
+            emit_stream_progress(force=True)
             root = _root_exception(exc)
             root_errno = getattr(root, "errno", None)
             transport_error = V2ModelError(
@@ -1140,6 +1207,7 @@ class V2ModelClient:
                 usage_state=usage_state,
             )
             raise transport_error from exc
+        emit_stream_progress(force=True)
         if not text.strip() or first_token_at is None:
             exc = V2ModelError(
                 (
@@ -1450,6 +1518,30 @@ def _transport_failure_stage(
     if isinstance(exc, (httpx.ReadError, httpx.RemoteProtocolError)):
         return "read"
     return "transport"
+
+
+def _estimated_stream_token_count(text: str) -> int:
+    """Return a tokenizer-independent live estimate, never a billing value."""
+    estimated = 0
+    compact_run = 0
+
+    def flush_compact_run() -> None:
+        nonlocal compact_run
+        nonlocal estimated
+        if compact_run:
+            estimated += (compact_run + 3) // 4
+            compact_run = 0
+
+    for character in text:
+        if character.isspace():
+            flush_compact_run()
+        elif character.isascii() and (character.isalnum() or character == "_"):
+            compact_run += 1
+        else:
+            flush_compact_run()
+            estimated += 1
+    flush_compact_run()
+    return estimated
 
 
 def _provider_event(
