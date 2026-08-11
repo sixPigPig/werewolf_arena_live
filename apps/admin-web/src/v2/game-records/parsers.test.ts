@@ -757,6 +757,8 @@ describe("V2 game record parsers", () => {
       last_progress_ms: 72,
       failure_kind: "model",
       failure_code: "model_output_budget_exhausted",
+      failure_impact: "operational_failure",
+      counts_as_failure: true,
       effective_attempt_limit: 2,
       retry_delay_ms: 250,
       required_retry_window_ms: 1_250,
@@ -833,6 +835,8 @@ describe("V2 game record parsers", () => {
       automatic_output_budget_attempt_count: 3,
       automatic_output_budget_budget: 3,
       model_generation_policy_contract_status: "supported",
+      failure_impact: "operational_failure",
+      counts_as_failure: true,
       model_generation_policy_schema_version: 1,
       model_generation_policy_classification_version: 1,
       model_generation_policy_enforcement: "observe_only",
@@ -856,6 +860,18 @@ describe("V2 game record parsers", () => {
         failure_resolution: undefined,
       }).failure_resolution,
     ).toBe("legacy_unavailable");
+    expect(
+      parseV2ModelRequest({
+        ...rawRequest,
+        failure_code: "model_prefetch_capacity_unavailable",
+        failure_impact: "expected_control_flow",
+        counts_as_failure: false,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      failure_impact: "expected_control_flow",
+      counts_as_failure: false,
+    });
     expect(() =>
       parseV2ModelRequest({
         ...rawRequest,

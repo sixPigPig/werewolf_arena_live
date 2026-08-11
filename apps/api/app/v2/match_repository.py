@@ -262,12 +262,11 @@ class V2MatchRepository:
                 )
             predecessor = active_presentations[0]
             technical_skip_predecessor = predecessor_turn_player_id is not None
-            if (
-                technical_skip_predecessor
-                and resolve_day_speech_pipeline_contract(game.rule_snapshot).schema_version != 2
-            ):
+            if technical_skip_predecessor and resolve_day_speech_pipeline_contract(
+                game.rule_snapshot
+            ).schema_version not in {2, 3}:
                 raise V2RepositoryError(
-                    "technical skip prefetch predecessor requires pipeline schema v2"
+                    "technical skip prefetch predecessor requires pipeline schema v2 or v3"
                 )
             if (
                 predecessor.presentation_id != predecessor_presentation_id

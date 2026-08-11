@@ -83,6 +83,10 @@ class V2ModelError(RuntimeError):
         provider_concurrency_limit: int | None = None,
         reasoning_delta_count: int = 0,
         text_delta_count: int = 0,
+        reasoning_character_count: int | None = None,
+        text_character_count: int | None = None,
+        estimated_reasoning_tokens: int | None = None,
+        estimated_output_tokens: int | None = None,
         max_inter_delta_ms: int | None = None,
         last_progress_ms: int | None = None,
         finish_reason: V2ModelFinishReason | None = None,
@@ -114,6 +118,10 @@ class V2ModelError(RuntimeError):
         self.provider_concurrency_limit = provider_concurrency_limit
         self.reasoning_delta_count = reasoning_delta_count
         self.text_delta_count = text_delta_count
+        self.reasoning_character_count = reasoning_character_count
+        self.text_character_count = text_character_count
+        self.estimated_reasoning_tokens = estimated_reasoning_tokens
+        self.estimated_output_tokens = estimated_output_tokens
         self.max_inter_delta_ms = max_inter_delta_ms
         self.last_progress_ms = last_progress_ms
         self.finish_reason = finish_reason
@@ -194,8 +202,14 @@ class V2ModelProgress:
     text_character_count: int | None = None
     estimated_reasoning_tokens: int | None = None
     estimated_output_tokens: int | None = None
+    reasoning_delta_count: int | None = None
+    text_delta_count: int | None = None
+    max_inter_delta_ms: int | None = None
+    last_progress_ms: int | None = None
     provider_usage: V2ProviderUsage | None = None
     usage_update_count: int | None = None
+    usage_conflict_observed: bool | None = None
+    usage_consistency: V2UsageConsistency | None = None
 
 
 @dataclass(frozen=True)
@@ -884,8 +898,18 @@ class V2ModelClient:
                         _estimated_stream_token_count(reasoning_text)
                         + _estimated_stream_token_count(text)
                     ),
+                    reasoning_delta_count=reasoning_delta_count,
+                    text_delta_count=text_delta_count,
+                    max_inter_delta_ms=max_inter_delta_ms,
+                    last_progress_ms=(
+                        round((last_progress_at - started) * 1000)
+                        if last_progress_at is not None
+                        else None
+                    ),
                     provider_usage=usage_state.selected(),
                     usage_update_count=usage_state.update_count,
+                    usage_conflict_observed=usage_state.conflict_observed,
+                    usage_consistency=_provider_usage_consistency(usage_state.selected()),
                 )
             )
             pending_reasoning_delta = ""

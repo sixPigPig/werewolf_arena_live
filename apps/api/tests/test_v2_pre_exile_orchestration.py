@@ -27,7 +27,7 @@ from app.v2.match_repository import (
     V2PreExileExplosionCommit,
     V2PreExilePrefetchSnapshot,
 )
-from app.v2.model_client import V2ModelDecision
+from app.v2.model_client import V2ModelDecision, V2ModelError
 from app.v2.model_context import project_model_action_context
 from app.v2.model_context_compaction import expand_known_events_v6
 from app.v2.model_context_contract import current_model_context_contract
@@ -627,6 +627,8 @@ class _GenerationActions:
         self.pipeline = pipeline
         self.specs: list[V2SpeechSpec] = []
         self.start_order: list[tuple[str, str, str]] = []
+        self.model_retry_guards: dict[str, Any] = {}
+        self.initial_retry_guard_results: dict[str, bool] = {}
         self._seq = 300
 
     def check_cancellation(self, _game_id: str) -> None:
@@ -643,6 +645,13 @@ class _GenerationActions:
     ) -> V2ActionResult:
         del game_id, broadcaster
         self.specs.append(spec)
+        model_retry_guard = _kwargs.get("model_retry_guard")
+        if model_retry_guard is not None:
+            self.model_retry_guards[spec.actor_id] = model_retry_guard
+            self.initial_retry_guard_results[spec.actor_id] = model_retry_guard(
+                V2ModelError("model_empty_stream"),
+                1,
+            )
         self.start_order.append(
             (str(spec.pipeline_result_kind), spec.model_admission_mode, spec.actor_id)
         )
@@ -750,6 +759,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
         assert repository.resolve_calls == []
         assert repository.finalize_calls == []
         assert not task.done()
+        launch.presentation_closed.set()
         predecessor_committed.set()
         outcome = await task
         return outcome, repository, pipeline_repository, actions
@@ -770,11 +780,52 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
         ("self_explosion", "normal", "wolf_1"),
         ("self_explosion", "normal", "wolf_2"),
     ]
+    self_explosion_specs = [
+        spec for spec in actions.specs if spec.pipeline_result_kind == "self_explosion"
+    ]
+    assert all(
+        spec.pipeline_retry_mode == "empty_stream_once_while_predecessor_active"
+        and spec.pipeline_empty_stream_max_attempts == 2
+        for spec in self_explosion_specs
+    )
+    assert actions.initial_retry_guard_results == {"wolf_1": True, "wolf_2": True}
+    assert all(
+        guard(V2ModelError("model_empty_stream"), 1) is False
+        for guard in actions.model_retry_guards.values()
+    )
+    self_context = _action_context(
+        game_id="v2_game_pre_exile",
+        action_id="v2_action_project_self_explosion",
+        spec=self_explosion_specs[0],
+    )
+    assert self_context["pipeline"] == {
+        "kind": "pre_exile",
+        "pipeline_id": "v2_preex_pipeline",
+        "result_kind": "self_explosion",
+        "stage": "generation",
+        "model_admission_mode": "normal",
+        "retry_mode": "empty_stream_once_while_predecessor_active",
+        "empty_stream_max_attempts": 2,
+    }
     wolf_vote = next(
         spec
         for spec in actions.specs
         if spec.pipeline_result_kind == "exile_vote" and spec.actor_id == "wolf_1"
     )
+    assert wolf_vote.pipeline_retry_mode == "disabled"
+    assert wolf_vote.pipeline_empty_stream_max_attempts == 1
+    vote_context = _action_context(
+        game_id="v2_game_pre_exile",
+        action_id="v2_action_project_wolf_vote_context",
+        spec=wolf_vote,
+    )
+    assert set(vote_context["pipeline"]) == {
+        "kind",
+        "pipeline_id",
+        "result_kind",
+        "stage",
+        "model_admission_mode",
+    }
     assert wolf_vote.context is not None
     private_ids = {
         fact.get("knowledge_fact_id")

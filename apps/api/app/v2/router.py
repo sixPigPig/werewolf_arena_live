@@ -104,6 +104,7 @@ from app.v2.model_context_contract import (
     PROMPT_TEMPLATE_VERSION,
 )
 from app.v2.model_failure_episode import FailureEpisode, derive_failure_episodes
+from app.v2.model_failure_impact import classify_model_failure_impact
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
 from app.v2.models import V2GameRun
@@ -1897,6 +1898,32 @@ def _admin_model_requests(
             if failure_episode is not None
             else None
         )
+        failure_impact = classify_model_failure_impact(
+            has_failure=failure is not None,
+            failure_code=(
+                failure_payload.get("failure_code")
+                if isinstance(failure_payload.get("failure_code"), str)
+                else None
+            ),
+            failure_category=(
+                failure_payload.get("failure_category")
+                if isinstance(failure_payload.get("failure_category"), str)
+                else None
+            ),
+            failure_stage=(
+                failure_payload.get("failure_stage")
+                if isinstance(failure_payload.get("failure_stage"), str)
+                else None
+            ),
+            failure_resolution=failure_resolution,
+            provider_activity_observed=(
+                headers_event is not None
+                or first_token is not None
+                or first_text is not None
+                or bool(stream_progresses.get(attempt_key))
+                or response is not None
+            ),
+        )
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,
@@ -2083,6 +2110,8 @@ def _admin_model_requests(
                     if isinstance(failure_payload.get("failure_category"), str)
                     else None
                 ),
+                failure_impact=failure_impact.failure_impact,
+                counts_as_failure=failure_impact.counts_as_failure,
                 repair_kind=(
                     response_payload.get("repair_kind")
                     if isinstance(response_payload.get("repair_kind"), str)

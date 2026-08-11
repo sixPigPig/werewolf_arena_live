@@ -220,6 +220,11 @@ export type V2ModelFailureResolution =
   | "invariant_conflict"
   | "legacy_unavailable";
 
+export type V2ModelFailureImpact =
+  | "expected_control_flow"
+  | "user_visible_degradation"
+  | "operational_failure";
+
 export type V2FailureEpisodeEventRef = {
   event_type: string;
   event_id: number | string | null;
@@ -326,6 +331,8 @@ export type V2ModelRequestSummary = {
   failure_kind: string | null;
   failure_code: string | null;
   failure_category?: string | null;
+  failure_impact: V2ModelFailureImpact | null;
+  counts_as_failure: boolean;
   repair_kind?: string | null;
   output_enforcement?: V2OutputEnforcementAudit | null;
   application_validation_result?: "accepted" | "rejected" | null;

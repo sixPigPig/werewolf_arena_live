@@ -192,9 +192,9 @@ class V2DaySpeechPipelineRepository:
             contract = resolve_day_speech_pipeline_contract(game.rule_snapshot)
             if not contract.enables(action_type):
                 raise V2DaySpeechPipelineRepositoryError("day_speech_pipeline_contract_disabled")
-            if predecessor_turn_player_id is not None and contract.schema_version != 2:
+            if predecessor_turn_player_id is not None and contract.schema_version not in {2, 3}:
                 raise V2DaySpeechPipelineRepositoryError(
-                    "technical skip predecessor requires pipeline schema v2"
+                    "technical skip predecessor requires pipeline schema v2 or v3"
                 )
             if game.status != "broadcasting" or run.status != "broadcasting":
                 raise V2DaySpeechPipelineRepositoryError(

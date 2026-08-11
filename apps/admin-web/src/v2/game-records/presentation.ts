@@ -571,10 +571,21 @@ export function groupV2Phases(
         (count, item) => count + item.modelRequests.length,
         0,
       ),
-      failureCount: phaseItems.filter((item) => item.status === "failed").length,
+      failureCount: phaseItems.filter(timelineItemCountsAsFailure).length,
       isCurrent: phaseId === currentPhaseId,
     };
   });
+}
+
+function timelineItemCountsAsFailure(item: V2TimelineItem): boolean {
+  if (item.status !== "failed") return false;
+  const failedModelRequests = item.modelRequests.filter(
+    (request) => request.status === "failed",
+  );
+  if (failedModelRequests.length === 0) return true;
+  return failedModelRequests.some(
+    (request) => request.counts_as_failure !== false,
+  );
 }
 
 export function phaseLabel(phaseId: string): string {

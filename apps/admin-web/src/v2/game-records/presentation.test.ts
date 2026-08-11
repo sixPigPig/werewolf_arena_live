@@ -5,6 +5,7 @@ import {
   buildV2HistoricalIdentities,
   buildV2RoundSummaries,
   buildV2Timeline,
+  groupV2Phases,
   phaseLabel,
 } from "@/v2/game-records/presentation";
 import type {
@@ -152,6 +153,44 @@ describe("V2 game record presentation", () => {
       "tts_stream_started",
       "tts_stream_completed",
     ]);
+  });
+
+  it("keeps expected control-flow actions failed while excluding them from phase failures", () => {
+    const actionId = "v2_action_expected_control_flow";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          context: {
+            action_type: "day_debate_speech",
+            phase_id: "day_1",
+            actor: { kind: "player", id: "player-1" },
+          },
+        }),
+        event(2, "action_failed", {
+          action_id: actionId,
+          failure_code: "model_prefetch_capacity_unavailable",
+        }),
+      ],
+      model_requests: [
+        {
+          action_id: actionId,
+          status: "failed",
+          counts_as_failure: false,
+        },
+      ],
+      presentations: [],
+      voice_assets: [],
+      player_identities: identities,
+      player_states: [],
+      players_snapshot: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline[0]?.status).toBe("failed");
+    expect(groupV2Phases(timeline, "day_1")[0]).toMatchObject({
+      modelRequestCount: 1,
+      failureCount: 0,
+    });
   });
 
   it("builds deterministic round digests from persisted settlement events", () => {

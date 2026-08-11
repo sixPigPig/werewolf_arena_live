@@ -11,6 +11,7 @@ import type {
   V2ModelRequest,
   V2ModelActionRetryResult,
   V2ModelRequestAudienceSource,
+  V2ModelFailureImpact,
   V2ModelFailureResolution,
   V2ModelRequestPage,
   V2ModelRequestSummary,
@@ -291,6 +292,23 @@ export function parseV2ModelRequestSummary(
             "invariant_conflict",
             "legacy_unavailable",
           ] as const);
+  const status = oneOf(record.status, [
+    "running",
+    "succeeded",
+    "failed",
+  ] as const);
+  const failureImpact: V2ModelFailureImpact | null =
+    record.failure_impact === undefined
+      ? status === "failed"
+        ? "operational_failure"
+        : null
+      : record.failure_impact === null
+        ? null
+        : oneOf(record.failure_impact, [
+            "expected_control_flow",
+            "user_visible_degradation",
+            "operational_failure",
+          ] as const);
   return {
     attempt_id: text(record.attempt_id),
     decision_family_id:
@@ -393,7 +411,7 @@ export function parseV2ModelRequestSummary(
               promptTemplateVersion,
             },
           ),
-    status: oneOf(record.status, ["running", "succeeded", "failed"] as const),
+    status,
     input_source: oneOf(
       record.input_source,
       ["persisted", "reconstructed", "unavailable"] as const,
@@ -545,6 +563,11 @@ export function parseV2ModelRequestSummary(
     ...(record.failure_category === undefined
       ? {}
       : { failure_category: nullableText(record.failure_category) }),
+    failure_impact: failureImpact,
+    counts_as_failure:
+      record.counts_as_failure === undefined
+        ? status === "failed"
+        : boolean(record.counts_as_failure),
     ...(record.repair_kind === undefined
       ? {}
       : { repair_kind: nullableText(record.repair_kind) }),

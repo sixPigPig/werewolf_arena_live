@@ -13,6 +13,7 @@ from app.v2.action_engine import (
     V2ActionEngine,
     V2ActionFailure,
     V2ActionResult,
+    V2DecisionContract,
     V2SpeechSpec,
 )
 from app.v2.model_client import V2ModelDecision, V2ModelError, V2ModelTarget
@@ -570,6 +571,65 @@ def test_prefetch_empty_stream_does_not_retry_after_predecessor_closed(tmp_path:
     )
 
 
+def test_pipeline_retry_mode_never_retries_output_budget_exhaustion(tmp_path: Path) -> None:
+    class _LegacyGenerationPolicyRepository(_Repository):
+        def claim_action(self, **values: Any) -> V2ActionClaim:
+            return replace(
+                super().claim_action(**values),
+                model_generation_policy_contract=None,
+            )
+
+    repository = _LegacyGenerationPolicyRepository()
+    model_client = _SequenceModelClient(
+        [
+            V2ModelError(
+                "model_output_budget_exhausted",
+                retryable=True,
+                failure_stage="stream",
+                first_token_seen=True,
+            ),
+            V2ModelDecision(
+                target_player_id=None,
+                speech=None,
+                provider_request_id="must-not-run-same-budget-retry",
+                first_token_ms=2,
+                completed_ms=5,
+                boolean_field="explode",
+                boolean_value=True,
+            ),
+        ]
+    )
+    engine = _engine(repository, model_client, tmp_path)
+    guard_calls: list[int] = []
+
+    result = asyncio.run(
+        engine.run_player_decision_result(
+            game_id="v2_game_action_lineage",
+            broadcaster=_Broadcaster(),
+            spec=_pre_exile_self_explosion_generation_spec(),
+            model_retry_guard=lambda _exc, attempt_no: guard_calls.append(attempt_no) or True,
+        )
+    )
+
+    assert result is not None and result.decision is not None
+    assert result.decision.boolean_field == "explode"
+    assert result.decision.boolean_value is False
+    assert model_client.calls == 1
+    assert guard_calls == []
+    failure = next(
+        event
+        for _record_seq, event in repository.events
+        if event["event_type"] == "model_request_failed"
+    )
+    assert failure["payload"]["failure_code"] == "model_output_budget_exhausted"
+    assert failure["payload"]["effective_attempt_limit"] == 1
+    assert failure["payload"]["automatic_retry_scheduled"] is False
+    assert failure["payload"]["pipeline_retry_guard_allowed"] is None
+    assert not any(
+        event["event_type"] == "model_retry_scheduled" for _record_seq, event in repository.events
+    )
+
+
 def test_prefetch_post_close_deadline_terminalizes_attempt_action_and_result(
     tmp_path: Path,
 ) -> None:
@@ -718,6 +778,42 @@ def _foreground_spec() -> V2SpeechSpec:
         model_id="test-model",
         model_supports_thinking=False,
         model_parameters=_model_parameters(),
+    )
+
+
+def _pre_exile_self_explosion_generation_spec() -> V2SpeechSpec:
+    return V2SpeechSpec(
+        action_type="werewolf_self_explosion",
+        phase_id="day_1",
+        required_phase_state="public_discussion_open",
+        objective="在最后公开发言播放期间决定是否自爆。",
+        success_live_state="ready",
+        success_phase_state="public_discussion_open",
+        actor_kind="player",
+        actor_id="wolf_1",
+        audience="god_view",
+        model_provider="agent_plan",
+        model_id="test-model",
+        model_supports_thinking=False,
+        model_parameters=_model_parameters(),
+        output_kind="private_decision",
+        decision_contract=V2DecisionContract(
+            kind="boolean",
+            boolean_field="explode",
+            speech_mode="forbidden",
+            true_meaning="立即自爆",
+            false_meaning="不自爆",
+        ),
+        context={"public_history_cutoff_record_seq": 41},
+        defer_presentation=True,
+        isolated_failure=True,
+        batch_id="v2_preex_pipeline",
+        pipeline_slot_id="v2_preex_pipeline",
+        pipeline_stage="generation",
+        pipeline_kind="pre_exile",
+        pipeline_result_kind="self_explosion",
+        pipeline_empty_stream_max_attempts=2,
+        pipeline_retry_mode="empty_stream_once_while_predecessor_active",
     )
 
 

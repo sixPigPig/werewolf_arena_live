@@ -1715,6 +1715,13 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
     assert first_stream.text_delta is None
     assert first_stream.reasoning_character_count == 8
     assert first_stream.estimated_reasoning_tokens == 2
+    assert first_stream.reasoning_delta_count == 1
+    assert first_stream.text_delta_count == 0
+    assert first_stream.max_inter_delta_ms is None
+    assert first_stream.last_progress_ms is not None
+    assert first_stream.usage_update_count == 0
+    assert first_stream.usage_conflict_observed is False
+    assert first_stream.usage_consistency == "unavailable"
     assert progress[5].provider_request_id == "chatcmpl-progress"
     assert progress[5].token_kind == "text"
     final_stream = progress[6]
@@ -1722,7 +1729,95 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
     assert final_stream.text_delta == '{"speech":"进度响应"}'
     assert final_stream.estimated_output_tokens is not None
     assert final_stream.estimated_output_tokens > first_stream.estimated_reasoning_tokens
+    assert final_stream.reasoning_delta_count == 1
+    assert final_stream.text_delta_count == 1
+    assert final_stream.max_inter_delta_ms is not None
+    assert final_stream.last_progress_ms is not None
+    assert first_stream.last_progress_ms <= final_stream.last_progress_ms
+    assert final_stream.usage_update_count == 0
+    assert final_stream.usage_conflict_observed is False
+    assert final_stream.usage_consistency == "unavailable"
     assert progress[2].elapsed_ms <= progress[3].elapsed_ms <= progress[5].elapsed_ms
+
+
+def test_cancelled_stream_force_flushes_cumulative_progress_diagnostics() -> None:
+    class PendingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"id":"chatcmpl-cancelled-progress","choices":[{"delta":'
+                b'{"reasoning_content":"thinking"}}]}\n\n'
+            )
+            yield (
+                'data: {"id":"chatcmpl-cancelled-progress","choices":[{"delta":'
+                '{"content":"草稿"}}],"usage":{"prompt_tokens":20,'
+                '"completion_tokens":12,"total_tokens":32,'
+                '"completion_tokens_details":{"reasoning_tokens":10}}}\n\n'
+            ).encode()
+            await asyncio.Event().wait()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=PendingStream())
+
+    client = _client(handler)
+    target = client.resolve_model_target(
+        model_supports_thinking=True,
+        model_provider="deepseek",
+        model_id="deepseek-v4-flash",
+        model_parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens_mode": "manual",
+            "max_tokens": 2048,
+        },
+    )
+    progress: list[V2ModelProgress] = []
+
+    async def run_and_cancel() -> None:
+        first_text_seen = asyncio.Event()
+
+        def on_progress(item: V2ModelProgress) -> None:
+            progress.append(item)
+            if item.stage == "first_text":
+                first_text_seen.set()
+
+        task = asyncio.create_task(
+            client.generate_action_decision_with_progress(
+                action_context=_action_context(),
+                attempt_id="v2_model_cancelled_progress",
+                target=target,
+                on_progress=on_progress,
+            )
+        )
+        await asyncio.wait_for(first_text_seen.wait(), timeout=0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await client.aclose()
+
+    asyncio.run(run_and_cancel())
+
+    stream_progress = [item for item in progress if item.stage == "stream_delta"]
+    assert len(stream_progress) == 2
+    final_stream = stream_progress[-1]
+    assert final_stream.reasoning_delta is None
+    assert final_stream.text_delta == "草稿"
+    assert final_stream.reasoning_delta_count == 1
+    assert final_stream.text_delta_count == 1
+    assert final_stream.reasoning_character_count == 8
+    assert final_stream.text_character_count == 2
+    assert final_stream.estimated_reasoning_tokens == 2
+    assert final_stream.estimated_output_tokens == 4
+    assert final_stream.max_inter_delta_ms is not None
+    assert final_stream.last_progress_ms is not None
+    assert final_stream.provider_usage == {
+        "input_tokens": 20,
+        "output_tokens": 12,
+        "total_tokens": 32,
+        "reasoning_tokens": 10,
+    }
+    assert final_stream.usage_update_count == 1
+    assert final_stream.usage_conflict_observed is False
+    assert final_stream.usage_consistency == "exact"
 
 
 def test_sheriff_withdraw_uses_boolean_contract_without_target_player_id() -> None:

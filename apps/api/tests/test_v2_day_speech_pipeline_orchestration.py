@@ -397,6 +397,7 @@ class _Actions:
         block_generation: bool = False,
         block_prefetch_generation: bool = False,
         complete_prefetch_on_cancel: bool = False,
+        prefetch_generation_release: asyncio.Event | None = None,
     ) -> None:
         self.repository = repository
         self.failed_prefetch_actors = set(failed_prefetch_actors or ())
@@ -405,6 +406,7 @@ class _Actions:
         self.block_generation = block_generation
         self.block_prefetch_generation = block_prefetch_generation
         self.complete_prefetch_on_cancel = complete_prefetch_on_cancel
+        self.prefetch_generation_release = prefetch_generation_release
         self.foreground_actors: list[str] = []
         self.prefetched_actors: list[str] = []
         self.precomputed_actors: list[str] = []
@@ -412,7 +414,9 @@ class _Actions:
         self.generation_specs: list[V2SpeechSpec] = []
         self.active_presentations: set[str] = set()
         self.generation_started = asyncio.Event()
+        self.presentation_closed = asyncio.Event()
         self.active_generation_count = 0
+        self.generation_action_ids: list[str] = []
         self.technical_skips: list[dict[str, Any]] = []
         self.model_retry_guards: list[Any] = []
         self._action_index = 0
@@ -491,8 +495,11 @@ class _Actions:
             self.overlaps.append((predecessor, spec.actor_id))
         self._action_index += 1
         action_id = f"v2_generation_{self._action_index}_{spec.actor_id}"
+        self.generation_action_ids.append(action_id)
         try:
-            if self.block_generation or self.block_prefetch_generation:
+            if self.prefetch_generation_release is not None:
+                await self.prefetch_generation_release.wait()
+            elif self.block_generation or self.block_prefetch_generation:
                 try:
                     await asyncio.Event().wait()
                 except asyncio.CancelledError as exc:
@@ -600,6 +607,7 @@ class _Actions:
         finally:
             self.active_presentations.discard(spec.actor_id)
         self.repository.close_presentation(identity)
+        self.presentation_closed.set()
         terminal_event_record_seq = self.repository.allocate_event()
         if on_presentation_closed is not None:
             on_presentation_closed(identity)
@@ -685,7 +693,7 @@ def _snapshot(
     pipeline_enabled: bool = True,
     speech_rounds: int = 1,
     player_count: int = 3,
-    schema_version: int = 2,
+    schema_version: int = 3,
     post_close_grace_ms: int | None = None,
 ) -> V2MatchSnapshot:
     rule_snapshot: dict[str, Any] = {}
@@ -700,8 +708,27 @@ def _snapshot(
                 "admission_mode": "idle_only",
                 "fallback_mode": "fallback_sequential",
             }
-        else:
+        elif schema_version == 2:
+            rule_snapshot["day_speech_pipeline_contract"] = {
+                "schema_version": 2,
+                "mode": "one_ahead",
+                "action_types": ["day_debate_speech"],
+                "max_lookahead": 1,
+                "context_source": "active_sealed_predecessor",
+                "admission_mode": "idle_only",
+                "fallback_mode": "fallback_sequential",
+                "post_predecessor_close_grace_ms": 30_000,
+                "duplicate_foreground_fallback_forbidden_failure_categories": [
+                    "output_budget",
+                    "timeout",
+                ],
+                "early_transport_hidden_retry_max_retries": 1,
+                "prefetch_capacity_unavailable_fallback_mode": "fallback_sequential",
+            }
+        elif schema_version == 3:
             rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
+        else:
+            raise ValueError("unsupported test day speech pipeline schema")
     resolved_pipeline_contract = resolve_day_speech_pipeline_contract(rule_snapshot)
     if post_close_grace_ms is not None:
         resolved_pipeline_contract = replace(
@@ -804,6 +831,7 @@ def _engine(
     block_generation: bool = False,
     block_prefetch_generation: bool = False,
     complete_prefetch_on_cancel: bool = False,
+    prefetch_generation_release: asyncio.Event | None = None,
 ) -> tuple[_DayEngine, _MatchRepository, _PipelineRepository, _Actions]:
     repository = _MatchRepository(snapshot)
     pipeline = _PipelineRepository(repository)
@@ -815,6 +843,7 @@ def _engine(
         block_generation=block_generation,
         block_prefetch_generation=block_prefetch_generation,
         complete_prefetch_on_cancel=complete_prefetch_on_cancel,
+        prefetch_generation_release=prefetch_generation_release,
     )
     engine = _DayEngine(
         repository=repository,  # type: ignore[arg-type]
@@ -892,7 +921,7 @@ def test_schema_v2_prefetch_failure_technically_skips_without_foreground_request
     failure_category: str,
 ) -> None:
     engine, repository, pipeline, actions = _engine(
-        _snapshot(player_count=2),
+        _snapshot(player_count=2, schema_version=2),
         prefetch_failures={"player_2": (failure_code, failure_category)},
     )
 
@@ -918,7 +947,7 @@ def test_schema_v2_prefetch_failure_technically_skips_without_foreground_request
 
 def test_schema_v2_unfrozen_failure_preserves_foreground_fallback() -> None:
     engine, repository, pipeline, actions = _engine(
-        _snapshot(player_count=2),
+        _snapshot(player_count=2, schema_version=2),
         prefetch_failures={"player_2": ("model_decision_contract_invalid", "internal_invariant")},
     )
 
@@ -986,7 +1015,7 @@ def test_schema_v1_prefetch_failure_preserves_foreground_fallback() -> None:
 
 def test_schema_v2_post_close_grace_cancels_prefetch_and_technically_skips() -> None:
     engine, repository, pipeline, actions = _engine(
-        _snapshot(player_count=2, post_close_grace_ms=5),
+        _snapshot(player_count=2, schema_version=2, post_close_grace_ms=5),
         block_prefetch_generation=True,
     )
 
@@ -1005,7 +1034,7 @@ def test_schema_v2_post_close_grace_cancels_prefetch_and_technically_skips() -> 
 
 def test_schema_v2_deadline_race_keeps_result_that_durably_became_ready() -> None:
     engine, repository, pipeline, actions = _engine(
-        _snapshot(player_count=2, post_close_grace_ms=5),
+        _snapshot(player_count=2, schema_version=2, post_close_grace_ms=5),
         block_prefetch_generation=True,
         complete_prefetch_on_cancel=True,
     )
@@ -1022,8 +1051,13 @@ def test_schema_v2_deadline_race_keeps_result_that_durably_became_ready() -> Non
     ]
 
 
-def test_schema_v2_prefetch_passes_guarded_empty_stream_retry_policy() -> None:
-    engine, _repository, _pipeline, actions = _engine(_snapshot(player_count=2))
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_guarded_empty_stream_retry_policy_is_preserved(
+    schema_version: int,
+) -> None:
+    engine, _repository, _pipeline, actions = _engine(
+        _snapshot(player_count=2, schema_version=schema_version)
+    )
 
     asyncio.run(engine._run_public_discussion(game_id=GAME_ID, broadcaster=_Broadcaster()))
 
@@ -1033,6 +1067,45 @@ def test_schema_v2_prefetch_passes_guarded_empty_stream_retry_policy() -> None:
     assert spec.pipeline_retry_mode == "empty_stream_once_while_predecessor_active"
     assert len(actions.model_retry_guards) == 1
     assert callable(actions.model_retry_guards[0])
+
+
+def test_schema_v3_waits_for_same_inflight_prefetch_after_predecessor_closes() -> None:
+    async def scenario() -> tuple[_MatchRepository, _PipelineRepository, _Actions]:
+        release = asyncio.Event()
+        engine, repository, pipeline, actions = _engine(
+            _snapshot(player_count=2, schema_version=3),
+            prefetch_generation_release=release,
+        )
+        task = asyncio.create_task(
+            engine._run_public_discussion(game_id=GAME_ID, broadcaster=_Broadcaster())
+        )
+        await asyncio.wait_for(actions.generation_started.wait(), timeout=0.5)
+        await asyncio.wait_for(actions.presentation_closed.wait(), timeout=0.5)
+        await asyncio.sleep(0)
+
+        assert task.done() is False
+        assert actions.active_generation_count == 1
+        assert actions.generation_action_ids == ["v2_generation_2_player_2"]
+        assert actions.foreground_actors == ["player_1"]
+        assert actions.prefetched_actors == ["player_2"]
+        assert actions.technical_skips == []
+        assert pipeline.slots["v2_slot_1"].state == "generating"
+
+        release.set()
+        await asyncio.wait_for(task, timeout=0.5)
+        return repository, pipeline, actions
+
+    repository, pipeline, actions = asyncio.run(scenario())
+
+    assert actions.active_generation_count == 0
+    assert actions.generation_action_ids == ["v2_generation_2_player_2"]
+    assert actions.precomputed_actors == ["player_2"]
+    assert actions.technical_skips == []
+    assert pipeline.slots["v2_slot_1"].state == "consumed"
+    assert [item["player_id"] for item in repository.public_commits] == [
+        "player_1",
+        "player_2",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -2340,6 +2340,38 @@ describe("V2 game record detail workspace", () => {
     );
   });
 
+  it("excludes expected control flow from the headline failure count", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "预取控制流计数验收",
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          status: "failed",
+          terminal: true,
+          failure_code: "model_prefetch_capacity_unavailable",
+          failure_category: "admission_capacity",
+          failure_impact: "expected_control_flow",
+          counts_as_failure: false,
+        },
+      ],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "预取控制流计数验收" }),
+    ).toBeVisible();
+    const summary = screen.getByRole("region", { name: "对局摘要" });
+    const failureLabel = within(summary).getByText("有效失败");
+    expect(failureLabel.closest(".v2-record-summary-metric")).toHaveTextContent(
+      "有效失败0",
+    );
+    const controlFlowLabel = within(summary).getByText("内部控制流");
+    expect(
+      controlFlowLabel.closest(".v2-record-summary-metric"),
+    ).toHaveTextContent("内部控制流1");
+  });
+
   it("renders an old Chat Completions request as generic raw JSON", async () => {
     stubRecordFetch(deepSeekDetail);
     const user = userEvent.setup();

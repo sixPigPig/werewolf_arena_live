@@ -2117,7 +2117,8 @@ def _bind_broadcast_pipeline_generation_claim(
     except V2DaySpeechPipelineContractError as exc:
         raise V2RepositoryError(str(exc)) from exc
     expected_pipeline_keys = {"slot_id", "stage", "model_admission_mode"}
-    if contract.schema_version == 2:
+    guarded_retry_enabled = contract.early_transport_hidden_retry_max_retries == 1
+    if guarded_retry_enabled:
         expected_pipeline_keys.update({"retry_mode", "empty_stream_max_attempts"})
     if (
         set(pipeline) != expected_pipeline_keys
@@ -2132,7 +2133,7 @@ def _bind_broadcast_pipeline_generation_claim(
         or context_audience != "player_private"
     ):
         raise V2RepositoryError("day speech pipeline generation claim is not isolated")
-    if contract.schema_version == 2 and (
+    if guarded_retry_enabled and (
         pipeline.get("retry_mode") != "empty_stream_once_while_predecessor_active"
         or pipeline.get("empty_stream_max_attempts")
         != 1 + contract.early_transport_hidden_retry_max_retries
@@ -2244,13 +2245,6 @@ def _bind_pre_exile_pipeline_generation_claim(
     pipeline_context = context.get("pipeline")
     if type(pipeline_context) is not dict:
         raise V2RepositoryError("pre-exile pipeline context is invalid")
-    expected_keys = {
-        "kind",
-        "pipeline_id",
-        "result_kind",
-        "stage",
-        "model_admission_mode",
-    }
     result_kind = pipeline_context.get("result_kind")
     expected_action_type = (
         "werewolf_self_explosion"
@@ -2260,6 +2254,26 @@ def _bind_pre_exile_pipeline_generation_claim(
         else None
     )
     expected_admission = "normal" if result_kind == "self_explosion" else "idle_only"
+    try:
+        contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
+    except V2PreExilePipelineContractError as exc:
+        raise V2RepositoryError(str(exc)) from exc
+    guarded_self_explosion_retry = (
+        result_kind == "self_explosion"
+        and contract.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
+    )
+    expected_empty_stream_max_attempts = (
+        1 + contract.self_explosion_early_empty_stream_hidden_retry_max_retries
+    )
+    expected_keys = {
+        "kind",
+        "pipeline_id",
+        "result_kind",
+        "stage",
+        "model_admission_mode",
+    }
+    if guarded_self_explosion_retry:
+        expected_keys.update({"retry_mode", "empty_stream_max_attempts"})
     if (
         set(pipeline_context) != expected_keys
         or pipeline_context.get("kind") != "pre_exile"
@@ -2273,12 +2287,17 @@ def _bind_pre_exile_pipeline_generation_claim(
         or activation_id is not None
         or audience != "god_view"
         or context_audience != "god_view"
+        or (
+            guarded_self_explosion_retry
+            and (
+                pipeline_context.get("retry_mode")
+                != "empty_stream_once_while_predecessor_active"
+                or pipeline_context.get("empty_stream_max_attempts")
+                != expected_empty_stream_max_attempts
+            )
+        )
     ):
         raise V2RepositoryError("pre-exile pipeline generation claim is not isolated")
-    try:
-        contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
-    except V2PreExilePipelineContractError as exc:
-        raise V2RepositoryError(str(exc)) from exc
     if (
         not contract.enables(expected_action_type)
         or contract.self_explosion_admission_mode != "normal"

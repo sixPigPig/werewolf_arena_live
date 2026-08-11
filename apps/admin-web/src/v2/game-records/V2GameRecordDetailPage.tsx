@@ -507,8 +507,16 @@ function V2GameRecordWorkspace({
           Date.parse(run.started_at),
       )
     : null;
-  const failureCount = game.model_requests.filter(
-    (item) => item.status === "failed" && item.terminal !== false,
+  const terminalFailedRequests = game.model_requests.filter(
+    (item) =>
+      item.status === "failed" &&
+      item.terminal !== false,
+  );
+  const failureCount = terminalFailedRequests.filter(
+    (item) => item.counts_as_failure,
+  ).length;
+  const expectedControlFlowCount = terminalFailedRequests.filter(
+    (item) => !item.counts_as_failure,
   ).length;
 
   return (
@@ -547,7 +555,11 @@ function V2GameRecordWorkspace({
             label="模型请求"
             value={String(game.model_requests.length)}
           />
-          <SummaryMetric label="失败" value={String(failureCount)} />
+          <SummaryMetric label="有效失败" value={String(failureCount)} />
+          <SummaryMetric
+            label="内部控制流"
+            value={String(expectedControlFlowCount)}
+          />
           <SummaryMetric
             label="当前阶段"
             value={
@@ -1545,6 +1557,11 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             children: request?.failure_stage ?? "—",
           },
           {
+            key: "failure-impact",
+            label: "失败影响",
+            children: failureImpactLabel(request?.failure_impact ?? null),
+          },
+          {
             key: "timeout-scope",
             label: "超时预算范围",
             children: timeoutScopeLabel(request?.timeout_scope ?? null),
@@ -1877,13 +1894,21 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
       {request?.failure_code ? (
         <Alert
           description={
-            request.failure_category
-              ? `${request.failure_category} · ${request.failure_code}`
-              : request.failure_code
+            `${
+              request.failure_category
+                ? `${request.failure_category} · ${request.failure_code}`
+                : request.failure_code
+            } · ${failureImpactLabel(request.failure_impact)}`
           }
           showIcon
-          title={request.failure_kind ?? "模型请求失败"}
-          type="error"
+          title={
+            request.failure_impact === "expected_control_flow"
+              ? "流水线控制流（不计入有效失败）"
+              : (request.failure_kind ?? "模型请求失败")
+          }
+          type={
+            request.failure_impact === "expected_control_flow" ? "info" : "error"
+          }
         />
       ) : null}
       {request?.repair_kind ? (
@@ -2186,6 +2211,21 @@ function failureResolutionLabel(
     legacy_unavailable: "旧记录无法派生",
   };
   return `${labels[resolution]}（${resolution}）`;
+}
+
+function failureImpactLabel(
+  impact: V2ModelRequestSummary["failure_impact"],
+) {
+  if (impact === null) return "—";
+  const labels: Record<
+    NonNullable<V2ModelRequestSummary["failure_impact"]>,
+    string
+  > = {
+    expected_control_flow: "预期控制流，不计入有效失败",
+    user_visible_degradation: "用户可见降级",
+    operational_failure: "运行故障",
+  };
+  return `${labels[impact]}（${impact}）`;
 }
 
 function failureEpisodeEventRefLabel(

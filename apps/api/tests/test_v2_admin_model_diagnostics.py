@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import app.v2.router as v2_router
 from app.v2.model_failure_episode import stable_failure_episode_id
+from app.v2.model_failure_impact import classify_model_failure_impact
 from app.v2.model_context_compaction import encode_known_events_v6
 from app.v2.model_context_contract import (
     CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
@@ -882,3 +883,129 @@ def test_admin_model_request_derives_episodes_per_run() -> None:
     assert request.failure_resolution == "unresolved"
     assert request.resolution_updated_at_record_seq == 3
     assert request.failure_episode_invariant_errors == []
+
+
+def test_admin_model_request_classifies_failure_impact_without_rewriting_status() -> None:
+    cases = (
+        (
+            "model_prefetch_capacity_unavailable",
+            "admission_capacity",
+            "provider_admission",
+            "expected_control_flow",
+            False,
+        ),
+        (
+            "pre_exile_pipeline_generation_canceled",
+            "canceled",
+            "pipeline_generation",
+            "expected_control_flow",
+            False,
+        ),
+        (
+            "day_speech_prefetch_post_close_deadline",
+            "timeout",
+            "pipeline_generation",
+            "user_visible_degradation",
+            True,
+        ),
+        (
+            "model_transport_failed",
+            "transport",
+            "stream",
+            "operational_failure",
+            True,
+        ),
+    )
+
+    for failure_code, failure_category, failure_stage, impact, counts in cases:
+        events = [
+            _action_opened(),
+            _event(
+                2,
+                "model_request_started",
+                {
+                    "action_id": ACTION_ID,
+                    "attempt_id": ATTEMPT_ID,
+                    "retry_cycle": 1,
+                    "audience": "private",
+                    "request_payload": {},
+                },
+            ),
+            _event(
+                3,
+                "model_request_failed",
+                {
+                    "action_id": ACTION_ID,
+                    "attempt_id": ATTEMPT_ID,
+                    "retry_cycle": 1,
+                    "audience": "private",
+                    "failure_code": failure_code,
+                    "failure_category": failure_category,
+                    "failure_stage": failure_stage,
+                },
+            ),
+        ]
+
+        request = _admin_model_requests(events, [])[0]
+
+        assert request.status == "failed"
+        assert request.failure_code == failure_code
+        assert request.failure_impact == impact
+        assert request.counts_as_failure is counts
+
+
+def test_capacity_failure_with_provider_activity_counts_as_operational_failure() -> None:
+    events = [
+        _action_opened(),
+        _event(
+            2,
+            "model_request_started",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "retry_cycle": 1,
+                "audience": "private",
+                "request_payload": {},
+            },
+        ),
+        _event(
+            3,
+            "model_response_headers_received",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "provider_request_id": "provider-contacted",
+            },
+        ),
+        _event(
+            4,
+            "model_request_failed",
+            {
+                "action_id": ACTION_ID,
+                "attempt_id": ATTEMPT_ID,
+                "retry_cycle": 1,
+                "audience": "private",
+                "failure_code": "model_prefetch_capacity_unavailable",
+                "failure_category": "admission_capacity",
+                "failure_stage": "provider_admission",
+            },
+        ),
+    ]
+
+    request = _admin_model_requests(events, [])[0]
+
+    assert request.failure_impact == "operational_failure"
+    assert request.counts_as_failure is True
+
+
+def test_failure_impact_uses_durable_technical_resolution_when_available() -> None:
+    impact = classify_model_failure_impact(
+        has_failure=True,
+        failure_code="model_empty_stream",
+        failure_category="invalid_response",
+        failure_stage="stream",
+        failure_resolution="technical_skip",
+    )
+
+    assert impact.failure_impact == "user_visible_degradation"
+    assert impact.counts_as_failure is True

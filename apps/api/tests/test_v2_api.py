@@ -783,13 +783,42 @@ class _ProgressThenSlowModelClient(FakeV2ModelClient):
                     text_character_count=0,
                     estimated_reasoning_tokens=9,
                     estimated_output_tokens=9,
+                    reasoning_delta_count=3,
+                    text_delta_count=0,
+                    max_inter_delta_ms=4,
+                    last_progress_ms=8,
                     usage_update_count=0,
+                    usage_conflict_observed=False,
+                    usage_consistency="unavailable",
                 ),
                 V2ModelProgress(
                     stage="first_text",
                     provider_request_id="provider-stream-progress",
                     elapsed_ms=9,
                     token_kind="text",
+                ),
+                V2ModelProgress(
+                    stage="stream_delta",
+                    provider_request_id="provider-stream-progress",
+                    elapsed_ms=10,
+                    text_delta="草稿",
+                    reasoning_character_count=9,
+                    text_character_count=2,
+                    estimated_reasoning_tokens=9,
+                    estimated_output_tokens=11,
+                    reasoning_delta_count=3,
+                    text_delta_count=1,
+                    max_inter_delta_ms=4,
+                    last_progress_ms=10,
+                    provider_usage={
+                        "input_tokens": 20,
+                        "output_tokens": 12,
+                        "reasoning_tokens": 10,
+                        "total_tokens": 32,
+                    },
+                    usage_update_count=1,
+                    usage_conflict_observed=False,
+                    usage_consistency="exact",
                 ),
             )
         )
@@ -816,6 +845,10 @@ class _ProgressThenSlowModelClient(FakeV2ModelClient):
             target=target,
             check_cancellation=check_cancellation,
         )
+
+
+class _ManagedProgressThenSlowModelClient(_ProgressThenSlowModelClient):
+    manages_attempt_timeout = True
 
 
 class _QueuedManagedModelClient(FakeV2ModelClient):
@@ -9822,11 +9855,11 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
     runtime._action_engine._model_retry_policy = V2ModelRetryPolicy(
         max_attempts=2,
         attempt_total_seconds=0.05,
-        action_total_seconds=0.2,
+        action_total_seconds=0.05,
         base_delay_seconds=0,
         jitter_seconds=0,
     )
-    model_client = _ProgressThenSlowModelClient()
+    model_client = _ManagedProgressThenSlowModelClient()
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
 
@@ -9868,7 +9901,7 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
             "model_request_failed"
         )
         assert failure.payload["failure_stage"] == "stream"
-        assert failure.payload["timeout_scope"] == "attempt_budget"
+        assert failure.payload["timeout_scope"] == "action_budget"
         assert failure.payload["provider_request_id"] == "provider-stream-progress"
         assert failure.payload["response_headers_seen"] is True
         assert failure.payload["response_headers"] == {
@@ -9879,6 +9912,23 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
         assert failure.payload["first_token_ms"] == 7
         assert failure.payload["first_token_kind"] == "reasoning"
         assert failure.payload["first_visible_text_ms"] == 9
+        assert failure.payload["reasoning_delta_count"] == 3
+        assert failure.payload["text_delta_count"] == 1
+        assert failure.payload["reasoning_character_count"] == 9
+        assert failure.payload["text_character_count"] == 2
+        assert failure.payload["estimated_reasoning_tokens"] == 9
+        assert failure.payload["estimated_output_tokens"] == 11
+        assert failure.payload["max_inter_delta_ms"] == 4
+        assert failure.payload["last_progress_ms"] == 10
+        assert failure.payload["provider_usage"] == {
+            "input_tokens": 20,
+            "output_tokens": 12,
+            "reasoning_tokens": 10,
+            "total_tokens": 32,
+        }
+        assert failure.payload["usage_update_count"] == 1
+        assert failure.payload["usage_conflict_observed"] is False
+        assert failure.payload["usage_consistency"] == "exact"
         assert failure.payload["reasoning_only_elapsed_ms"] == 2
         assert failure.payload["shadow_would_timeout"] is None
         starts = [
@@ -9887,23 +9937,7 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
             if event.event_type == "model_request_started"
             and event.payload.get("action_id") == failure.payload["action_id"]
         ]
-        assert len(starts) == 2
-        first_tokens_by_attempt = {
-            item.payload["attempt_id"]: [
-                event
-                for event in events
-                if event.event_type == "model_first_token_received"
-                and event.payload.get("attempt_id") == item.payload["attempt_id"]
-            ]
-            for item in starts
-        }
-        assert all(len(rows) == 1 for rows in first_tokens_by_attempt.values())
-        assert (
-            first_tokens_by_attempt[starts[1].payload["attempt_id"]][0].payload[
-                "observation_source"
-            ]
-            == "decision_result_fallback"
-        )
+        assert len(starts) == 1
 
     assert client.post("/api/v1/admin/dev-login").status_code == 200
     request_page = client.get(
@@ -9921,16 +9955,33 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
     }
     assert failed_attempt["first_token_kind"] == "reasoning"
     assert failed_attempt["first_visible_text_ms"] == 9
+    assert failed_attempt["reasoning_delta_count"] == 3
+    assert failed_attempt["text_delta_count"] == 1
+    assert failed_attempt["max_inter_delta_ms"] == 4
+    assert failed_attempt["last_progress_ms"] == 10
+    assert failed_attempt["provider_usage"] == {
+        "input_tokens": 20,
+        "output_tokens": 12,
+        "reasoning_tokens": 10,
+        "total_tokens": 32,
+    }
+    assert failed_attempt["usage_update_count"] == 1
+    assert failed_attempt["usage_conflict_observed"] is False
+    assert failed_attempt["usage_consistency"] == "exact"
     assert failed_attempt["reasoning_only_elapsed_ms"] == 2
     assert failed_attempt["shadow_would_timeout"] is None
     assert failed_attempt["failure_stage"] == "stream"
-    assert failed_attempt["timeout_scope"] == "attempt_budget"
+    assert failed_attempt["timeout_scope"] == "action_budget"
     request_detail = client.get(
         f"/api/v1/admin/v2/games/{identifiers['game_id']}/model-requests/{attempt_id}"
     )
     assert request_detail.status_code == 200, request_detail.text
     assert request_detail.json()["stream_reasoning"] == "正在核对存活玩家。"
+    assert request_detail.json()["stream_text"] == "草稿"
+    assert request_detail.json()["stream_reasoning_character_count"] == 9
+    assert request_detail.json()["stream_text_character_count"] == 2
     assert request_detail.json()["stream_estimated_reasoning_tokens"] == 9
+    assert request_detail.json()["stream_estimated_output_tokens"] == 11
     assert request_detail.json()["stream_content_truncated"] is False
 
 

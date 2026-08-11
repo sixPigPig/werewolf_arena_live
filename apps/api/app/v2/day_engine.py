@@ -1217,6 +1217,14 @@ class V2DayEngine:
         vote_progress_visible = asyncio.Event()
         vote_progress_lock = asyncio.Lock()
         completed_vote_count = 0
+        pre_exile_contract = state.pre_exile_pipeline_contract
+        self_explosion_hidden_retry_count = (
+            pre_exile_contract.self_explosion_early_empty_stream_hidden_retry_max_retries
+        )
+        guarded_self_explosion_retry = self_explosion_hidden_retry_count == 1
+
+        def predecessor_is_still_active(_exc: V2ModelError, _attempt_no: int) -> bool:
+            return not launch.presentation_closed.is_set()
 
         async def publish_member_terminal(result_kind: str, recorded: Any) -> None:
             nonlocal completed_vote_count
@@ -1303,6 +1311,17 @@ class V2DayEngine:
                     pipeline_stage="generation",
                     pipeline_kind="pre_exile",
                     pipeline_result_kind="self_explosion",
+                    pipeline_empty_stream_max_attempts=(
+                        1 + self_explosion_hidden_retry_count
+                    ),
+                    pipeline_retry_mode=(
+                        "empty_stream_once_while_predecessor_active"
+                        if guarded_self_explosion_retry
+                        else "disabled"
+                    ),
+                    model_retry_guard=(
+                        predecessor_is_still_active if guarded_self_explosion_retry else None
+                    ),
                     on_model_admission_pending=on_model_admission_pending,
                     return_result=True,
                 )
@@ -1874,7 +1893,11 @@ class V2DayEngine:
         pipeline = self._day_speech_pipeline
         if pipeline is None or launch.task is None:
             return
-        grace_ms = state.day_speech_pipeline_contract.post_predecessor_close_grace_ms
+        contract = state.day_speech_pipeline_contract
+        if contract.post_predecessor_close_wait_mode == "await_same_inflight_to_terminal":
+            await launch.task
+            return
+        grace_ms = contract.post_predecessor_close_grace_ms
         if grace_ms is None:
             return
         loop = asyncio.get_running_loop()
@@ -1917,7 +1940,7 @@ class V2DayEngine:
         failed_prefetch: _FailedDaySpeechPrefetch,
     ) -> bool:
         contract = state.day_speech_pipeline_contract
-        if contract.schema_version != 2:
+        if contract.schema_version not in {2, 3}:
             return False
         failure = failed_prefetch.failure
         if (
@@ -2232,9 +2255,7 @@ class V2DayEngine:
         if pipeline is None:
             return None
         contract = frozen_state.day_speech_pipeline_contract
-        guarded_empty_stream_retry = (
-            contract.schema_version == 2 and contract.early_transport_hidden_retry_max_retries == 1
-        )
+        guarded_empty_stream_retry = contract.early_transport_hidden_retry_max_retries == 1
         model_retry_guard: Callable[[V2ModelError, int], bool] | None = None
         if guarded_empty_stream_retry:
 

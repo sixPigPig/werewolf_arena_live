@@ -711,6 +711,15 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     failure_kind: str | None
     failure_code: str | None
     failure_category: str | None
+    failure_impact: (
+        Literal[
+            "expected_control_flow",
+            "user_visible_degradation",
+            "operational_failure",
+        ]
+        | None
+    )
+    counts_as_failure: bool
     repair_kind: str | None
     application_validation_result: Literal["accepted", "rejected"] | None
     retryable: bool | None

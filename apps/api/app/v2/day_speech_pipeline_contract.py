@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-DAY_SPEECH_PIPELINE_SCHEMA_VERSION = 2
+DAY_SPEECH_PIPELINE_SCHEMA_VERSION = 3
 
 _CONTRACT_KEY = "day_speech_pipeline_contract"
 _UNSUPPORTED_ERROR = "unsupported_day_speech_pipeline_contract"
@@ -28,6 +28,15 @@ _CONTRACT_KEYS_V2 = frozenset(
         "prefetch_capacity_unavailable_fallback_mode",
     }
 )
+_CONTRACT_KEYS_V3 = frozenset(
+    {
+        *_CONTRACT_KEYS_V1,
+        "post_predecessor_close_wait_mode",
+        "duplicate_foreground_fallback_forbidden_failure_categories",
+        "early_transport_hidden_retry_max_retries",
+        "prefetch_capacity_unavailable_fallback_mode",
+    }
+)
 
 
 class V2DaySpeechPipelineContractError(ValueError):
@@ -46,6 +55,11 @@ class V2ResolvedDaySpeechPipelineContract:
     admission_mode: Literal["idle_only", "disabled"]
     fallback_mode: Literal["fallback_sequential", "sequential"]
     post_predecessor_close_grace_ms: int | None
+    post_predecessor_close_wait_mode: Literal[
+        "disabled",
+        "deadline_then_technical_skip",
+        "await_same_inflight_to_terminal",
+    ]
     duplicate_foreground_fallback_forbidden_failure_categories: tuple[
         Literal["output_budget", "timeout"], ...
     ]
@@ -71,7 +85,7 @@ def current_day_speech_pipeline_contract() -> dict[str, Any]:
         "context_source": "active_sealed_predecessor",
         "admission_mode": "idle_only",
         "fallback_mode": "fallback_sequential",
-        "post_predecessor_close_grace_ms": 30_000,
+        "post_predecessor_close_wait_mode": "await_same_inflight_to_terminal",
         "duplicate_foreground_fallback_forbidden_failure_categories": [
             "output_budget",
             "timeout",
@@ -92,6 +106,27 @@ def _schema_v1_day_speech_pipeline_contract() -> dict[str, Any]:
         "context_source": "active_sealed_predecessor",
         "admission_mode": "idle_only",
         "fallback_mode": "fallback_sequential",
+    }
+
+
+def _schema_v2_day_speech_pipeline_contract() -> dict[str, Any]:
+    """Return the exact P3 contract retained for frozen-game compatibility."""
+
+    return {
+        "schema_version": 2,
+        "mode": "one_ahead",
+        "action_types": ["day_debate_speech"],
+        "max_lookahead": 1,
+        "context_source": "active_sealed_predecessor",
+        "admission_mode": "idle_only",
+        "fallback_mode": "fallback_sequential",
+        "post_predecessor_close_grace_ms": 30_000,
+        "duplicate_foreground_fallback_forbidden_failure_categories": [
+            "output_budget",
+            "timeout",
+        ],
+        "early_transport_hidden_retry_max_retries": 1,
+        "prefetch_capacity_unavailable_fallback_mode": "fallback_sequential",
     }
 
 
@@ -120,6 +155,7 @@ def resolve_day_speech_pipeline_contract(
             admission_mode="disabled",
             fallback_mode="sequential",
             post_predecessor_close_grace_ms=None,
+            post_predecessor_close_wait_mode="disabled",
             duplicate_foreground_fallback_forbidden_failure_categories=(),
             early_transport_hidden_retry_max_retries=0,
             prefetch_capacity_unavailable_fallback_mode="disabled",
@@ -137,18 +173,23 @@ def resolve_day_speech_pipeline_contract(
         admission_mode="idle_only",
         fallback_mode="fallback_sequential",
         post_predecessor_close_grace_ms=(
-            contract["post_predecessor_close_grace_ms"]
+            contract["post_predecessor_close_grace_ms"] if schema_version == 2 else None
+        ),
+        post_predecessor_close_wait_mode=(
+            contract["post_predecessor_close_wait_mode"]
             if schema_version == DAY_SPEECH_PIPELINE_SCHEMA_VERSION
-            else None
+            else "deadline_then_technical_skip"
+            if schema_version == 2
+            else "disabled"
         ),
         duplicate_foreground_fallback_forbidden_failure_categories=(
             tuple(contract["duplicate_foreground_fallback_forbidden_failure_categories"])
-            if schema_version == DAY_SPEECH_PIPELINE_SCHEMA_VERSION
+            if schema_version in {2, DAY_SPEECH_PIPELINE_SCHEMA_VERSION}
             else ()
         ),
         early_transport_hidden_retry_max_retries=(
             contract["early_transport_hidden_retry_max_retries"]
-            if schema_version == DAY_SPEECH_PIPELINE_SCHEMA_VERSION
+            if schema_version in {2, DAY_SPEECH_PIPELINE_SCHEMA_VERSION}
             else 0
         ),
         prefetch_capacity_unavailable_fallback_mode="fallback_sequential",
@@ -159,14 +200,21 @@ def validate_day_speech_pipeline_contract(contract: Any) -> dict[str, Any]:
     if type(contract) is not dict:
         _raise_unsupported()
     schema_version = contract.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {1, 2}:
+    if type(schema_version) is not int or schema_version not in {
+        1,
+        2,
+        DAY_SPEECH_PIPELINE_SCHEMA_VERSION,
+    }:
         _raise_unsupported()
-    expected = (
-        _schema_v1_day_speech_pipeline_contract()
-        if schema_version == 1
-        else current_day_speech_pipeline_contract()
-    )
-    expected_keys = _CONTRACT_KEYS_V1 if schema_version == 1 else _CONTRACT_KEYS_V2
+    if schema_version == 1:
+        expected = _schema_v1_day_speech_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V1
+    elif schema_version == 2:
+        expected = _schema_v2_day_speech_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V2
+    else:
+        expected = current_day_speech_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V3
     if set(contract) != expected_keys:
         _raise_unsupported()
     for key, expected_value in expected.items():
@@ -199,6 +247,7 @@ def day_speech_pipeline_contract_summary(
         "admission_mode": resolved.admission_mode,
         "fallback_mode": resolved.fallback_mode,
         "post_predecessor_close_grace_ms": resolved.post_predecessor_close_grace_ms,
+        "post_predecessor_close_wait_mode": resolved.post_predecessor_close_wait_mode,
         "duplicate_foreground_fallback_forbidden_failure_categories": list(
             resolved.duplicate_foreground_fallback_forbidden_failure_categories
         ),

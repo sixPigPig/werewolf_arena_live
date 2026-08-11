@@ -32,6 +32,7 @@ from app.v2.model_client import (
     V2ProviderAdmissionMode,
     V2ModelTarget,
     V2QualityError,
+    V2UsageConsistency,
     model_failure_disposition,
 )
 from app.v2.model_failure_episode import stable_failure_episode_id
@@ -239,6 +240,11 @@ class V2SpeechSpec:
                 raise ValueError("pre-exile pipeline requires a result kind")
             if self.audience != "god_view":
                 raise ValueError("pre-exile pipeline generation must stay in god view")
+            if (
+                self.pipeline_retry_mode != "disabled"
+                and self.pipeline_result_kind != "self_explosion"
+            ):
+                raise ValueError("pre-exile pipeline retry is reserved for self-explosion")
         elif self.pipeline_result_kind is not None:
             raise ValueError("pipeline result kind requires a pre-exile pipeline")
         if self.pipeline_stage == "generation" and not (
@@ -260,6 +266,8 @@ class V2SpeechSpec:
             raise ValueError("pipeline retry mode is reserved for pipeline generation")
         if self.pipeline_retry_mode == "disabled" and self.pipeline_empty_stream_max_attempts != 1:
             raise ValueError("pipeline attempt expansion requires an enabled retry mode")
+        if self.pipeline_retry_mode != "disabled" and self.pipeline_empty_stream_max_attempts != 2:
+            raise ValueError("pipeline retry mode requires exactly two attempts")
         if self.target_exhaustion_outcome is not None and not (
             self.decision_contract.kind == "target"
             and self.decision_contract.target_mode == "required"
@@ -476,6 +484,18 @@ class _ModelAttemptProgressTrace:
     queue_wait_ms: int = 0
     provider_in_flight: int | None = None
     provider_concurrency_limit: int | None = None
+    reasoning_delta_count: int = 0
+    text_delta_count: int = 0
+    reasoning_character_count: int | None = None
+    text_character_count: int | None = None
+    estimated_reasoning_tokens: int | None = None
+    estimated_output_tokens: int | None = None
+    max_inter_delta_ms: int | None = None
+    last_progress_ms: int | None = None
+    provider_usage: dict[str, int] | None = None
+    usage_update_count: int = 0
+    usage_conflict_observed: bool = False
+    usage_consistency: V2UsageConsistency = "unavailable"
     queued_recorded: bool = False
     admitted_recorded: bool = False
     response_headers_recorded: bool = False
@@ -552,6 +572,60 @@ class _ModelAttemptProgressTrace:
                 },
             )
         if progress.stage == "stream_delta":
+            if progress.reasoning_delta_count is not None:
+                self.reasoning_delta_count = max(
+                    self.reasoning_delta_count,
+                    progress.reasoning_delta_count,
+                )
+            if progress.text_delta_count is not None:
+                self.text_delta_count = max(
+                    self.text_delta_count,
+                    progress.text_delta_count,
+                )
+            if progress.reasoning_character_count is not None:
+                self.reasoning_character_count = max(
+                    self.reasoning_character_count or 0,
+                    progress.reasoning_character_count,
+                )
+            if progress.text_character_count is not None:
+                self.text_character_count = max(
+                    self.text_character_count or 0,
+                    progress.text_character_count,
+                )
+            if progress.estimated_reasoning_tokens is not None:
+                self.estimated_reasoning_tokens = max(
+                    self.estimated_reasoning_tokens or 0,
+                    progress.estimated_reasoning_tokens,
+                )
+            if progress.estimated_output_tokens is not None:
+                self.estimated_output_tokens = max(
+                    self.estimated_output_tokens or 0,
+                    progress.estimated_output_tokens,
+                )
+            if progress.max_inter_delta_ms is not None:
+                self.max_inter_delta_ms = max(
+                    self.max_inter_delta_ms or 0,
+                    progress.max_inter_delta_ms,
+                )
+            if progress.last_progress_ms is not None:
+                self.last_progress_ms = max(
+                    self.last_progress_ms or 0,
+                    progress.last_progress_ms,
+                )
+            if progress.usage_update_count is not None:
+                if progress.usage_update_count >= self.usage_update_count:
+                    self.usage_update_count = progress.usage_update_count
+                    self.provider_usage = (
+                        dict(progress.provider_usage)
+                        if progress.provider_usage is not None
+                        else None
+                    )
+                    if progress.usage_consistency is not None:
+                        self.usage_consistency = progress.usage_consistency
+            if progress.usage_conflict_observed is not None:
+                self.usage_conflict_observed = (
+                    self.usage_conflict_observed or progress.usage_conflict_observed
+                )
             return (
                 "model_stream_progress",
                 {
@@ -563,8 +637,14 @@ class _ModelAttemptProgressTrace:
                     "text_character_count": progress.text_character_count,
                     "estimated_reasoning_tokens": progress.estimated_reasoning_tokens,
                     "estimated_output_tokens": progress.estimated_output_tokens,
+                    "reasoning_delta_count": progress.reasoning_delta_count,
+                    "text_delta_count": progress.text_delta_count,
+                    "max_inter_delta_ms": progress.max_inter_delta_ms,
+                    "last_progress_ms": progress.last_progress_ms,
                     "provider_usage": progress.provider_usage,
                     "usage_update_count": progress.usage_update_count,
+                    "usage_conflict_observed": progress.usage_conflict_observed,
+                    "usage_consistency": progress.usage_consistency,
                     "token_count_source": (
                         "provider"
                         if progress.provider_usage is not None
@@ -1659,16 +1739,28 @@ class V2ActionEngine:
                             )
                             pipeline_retry_guard_allowed: bool | None = None
                             pipeline_retry_guard_error = False
-                            if (
+                            pipeline_retry_enabled = (
                                 spec.pipeline_stage == "generation"
                                 and spec.pipeline_retry_mode
                                 == "empty_stream_once_while_predecessor_active"
+                            )
+                            if (
+                                pipeline_retry_enabled
+                                and disposition.category == "output_budget"
+                            ):
+                                # The guarded expansion is exclusively for an empty
+                                # stream. Repeating the same output budget can spend
+                                # the full reasoning allocation again without adding
+                                # any new recovery signal.
+                                effective_attempt_limit = 1
+                            if (
+                                pipeline_retry_enabled
                                 and disposition.category == "transport"
                             ):
-                                # P2.1 only permits a second physical attempt for the
-                                # known empty-stream case, and only while the preceding
-                                # public presentation is still active. Other transport
-                                # failures retain a single-attempt prefetch contract.
+                                # The frozen pipeline contract only permits a second
+                                # physical attempt for the known empty-stream case and
+                                # only while the predecessor presentation is active.
+                                # Other transport failures remain single-attempt.
                                 pipeline_retry_guard_allowed = False
                                 effective_attempt_limit = 1
                                 if (
@@ -1685,7 +1777,7 @@ class V2ActionEngine:
                                     except Exception:
                                         pipeline_retry_guard_error = True
                                         logger.warning(
-                                            "Live V2 day speech retry guard failed closed",
+                                            "Live V2 pipeline retry guard failed closed",
                                             exc_info=True,
                                             extra={
                                                 "game_id": claim.game_id,
@@ -3056,6 +3148,16 @@ def _action_context(
                         "result_kind": spec.pipeline_result_kind,
                         "stage": spec.pipeline_stage,
                         "model_admission_mode": spec.model_admission_mode,
+                        **(
+                            {
+                                "retry_mode": spec.pipeline_retry_mode,
+                                "empty_stream_max_attempts": (
+                                    spec.pipeline_empty_stream_max_attempts
+                                ),
+                            }
+                            if spec.pipeline_retry_mode != "disabled"
+                            else {}
+                        ),
                     }
                     if spec.pipeline_kind == "pre_exile"
                     else {
@@ -3615,6 +3717,10 @@ def _model_failure_payload(
         "provider_concurrency_limit": exc.provider_concurrency_limit,
         "reasoning_delta_count": exc.reasoning_delta_count,
         "text_delta_count": exc.text_delta_count,
+        "reasoning_character_count": exc.reasoning_character_count,
+        "text_character_count": exc.text_character_count,
+        "estimated_reasoning_tokens": exc.estimated_reasoning_tokens,
+        "estimated_output_tokens": exc.estimated_output_tokens,
         "max_inter_delta_ms": exc.max_inter_delta_ms,
         "last_progress_ms": exc.last_progress_ms,
         "finish_reason": exc.finish_reason,
@@ -3705,6 +3811,39 @@ def _enrich_model_error_from_progress(
         exc.provider_concurrency_limit = progress.provider_concurrency_limit
     if progress_capable and exc.failure_stage is None:
         exc.failure_stage = progress.failure_stage()
+    exc.reasoning_delta_count = max(
+        exc.reasoning_delta_count,
+        progress.reasoning_delta_count,
+    )
+    exc.text_delta_count = max(
+        exc.text_delta_count,
+        progress.text_delta_count,
+    )
+    for field_name in (
+        "reasoning_character_count",
+        "text_character_count",
+        "estimated_reasoning_tokens",
+        "estimated_output_tokens",
+        "max_inter_delta_ms",
+        "last_progress_ms",
+    ):
+        observed = getattr(progress, field_name)
+        if observed is None:
+            continue
+        current = getattr(exc, field_name)
+        setattr(exc, field_name, max(current or 0, observed))
+    if progress.usage_update_count > exc.usage_update_count:
+        exc.provider_usage = (
+            dict(progress.provider_usage) if progress.provider_usage is not None else None
+        )
+        exc.usage_update_count = progress.usage_update_count
+        exc.usage_consistency = progress.usage_consistency
+    elif exc.provider_usage is None and progress.provider_usage is not None:
+        exc.provider_usage = dict(progress.provider_usage)
+        exc.usage_consistency = progress.usage_consistency
+    exc.usage_conflict_observed = (
+        exc.usage_conflict_observed or progress.usage_conflict_observed
+    )
 
 
 def _enrich_model_error_from_decision(

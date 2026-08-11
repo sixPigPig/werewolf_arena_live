@@ -213,6 +213,7 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
     assert legacy.mode == "sequential"
     assert legacy.max_lookahead == 0
     assert legacy.post_predecessor_close_grace_ms is None
+    assert legacy.post_predecessor_close_wait_mode == "disabled"
     assert legacy.duplicate_foreground_fallback_forbidden_failure_categories == ()
     assert legacy.early_transport_hidden_retry_max_retries == 0
     assert legacy.prefetch_capacity_unavailable_fallback_mode == "disabled"
@@ -234,18 +235,49 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
     assert schema_v1.schema_version == 1
     assert schema_v1.fallback_mode == "fallback_sequential"
     assert schema_v1.post_predecessor_close_grace_ms is None
+    assert schema_v1.post_predecessor_close_wait_mode == "disabled"
     assert schema_v1.duplicate_foreground_fallback_forbidden_failure_categories == ()
     assert schema_v1.early_transport_hidden_retry_max_retries == 0
     assert schema_v1.prefetch_capacity_unavailable_fallback_mode == "fallback_sequential"
+
+    schema_v2_contract = {
+        "schema_version": 2,
+        "mode": "one_ahead",
+        "action_types": ["day_debate_speech"],
+        "max_lookahead": 1,
+        "context_source": "active_sealed_predecessor",
+        "admission_mode": "idle_only",
+        "fallback_mode": "fallback_sequential",
+        "post_predecessor_close_grace_ms": 30_000,
+        "duplicate_foreground_fallback_forbidden_failure_categories": [
+            "output_budget",
+            "timeout",
+        ],
+        "early_transport_hidden_retry_max_retries": 1,
+        "prefetch_capacity_unavailable_fallback_mode": "fallback_sequential",
+    }
+    schema_v2 = resolve_day_speech_pipeline_contract(
+        {"day_speech_pipeline_contract": schema_v2_contract}
+    )
+    assert schema_v2.status == "supported"
+    assert schema_v2.schema_version == 2
+    assert schema_v2.post_predecessor_close_grace_ms == 30_000
+    assert schema_v2.post_predecessor_close_wait_mode == "deadline_then_technical_skip"
+    assert schema_v2.duplicate_foreground_fallback_forbidden_failure_categories == (
+        "output_budget",
+        "timeout",
+    )
+    assert schema_v2.early_transport_hidden_retry_max_retries == 1
 
     frozen = freeze_day_speech_pipeline_contract({"rule_set": {"id": "test"}})
     assert frozen["day_speech_pipeline_contract"] == (current_day_speech_pipeline_contract())
     resolved = resolve_day_speech_pipeline_contract(frozen)
     assert resolved.status == "supported"
-    assert resolved.schema_version == 2
+    assert resolved.schema_version == 3
     assert resolved.enables("day_debate_speech")
     assert not resolved.enables("sheriff_campaign_speech")
-    assert resolved.post_predecessor_close_grace_ms == 30_000
+    assert resolved.post_predecessor_close_grace_ms is None
+    assert resolved.post_predecessor_close_wait_mode == "await_same_inflight_to_terminal"
     assert resolved.duplicate_foreground_fallback_forbidden_failure_categories == (
         "output_budget",
         "timeout",
@@ -259,9 +291,18 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
         {
             key: value
             for key, value in current_day_speech_pipeline_contract().items()
+            if key != "post_predecessor_close_wait_mode"
+        },
+        {
+            **current_day_speech_pipeline_contract(),
+            "post_predecessor_close_wait_mode": "deadline_then_technical_skip",
+        },
+        {**current_day_speech_pipeline_contract(), "post_predecessor_close_grace_ms": 30_000},
+        {
+            key: value
+            for key, value in schema_v2_contract.items()
             if key != "post_predecessor_close_grace_ms"
         },
-        {**current_day_speech_pipeline_contract(), "post_predecessor_close_grace_ms": True},
         {**schema_v1_contract, "post_predecessor_close_grace_ms": 30_000},
     ]
     for malformed_contract in malformed_contracts:
@@ -298,14 +339,15 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
         summary = created.payload["day_speech_pipeline_contract"]
         assert summary == {
             "status": "supported",
-            "schema_version": 2,
+            "schema_version": 3,
             "mode": "one_ahead",
             "action_types": ["day_debate_speech"],
             "max_lookahead": 1,
             "context_source": "active_sealed_predecessor",
             "admission_mode": "idle_only",
             "fallback_mode": "fallback_sequential",
-            "post_predecessor_close_grace_ms": 30_000,
+            "post_predecessor_close_grace_ms": None,
+            "post_predecessor_close_wait_mode": "await_same_inflight_to_terminal",
             "duplicate_foreground_fallback_forbidden_failure_categories": [
                 "output_budget",
                 "timeout",

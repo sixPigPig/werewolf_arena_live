@@ -1232,7 +1232,7 @@ def _validate_sealed_last_speech(
     if technical_skip:
         public_skip_record_seq = context.get("public_skip_record_seq")
         if (
-            resolve_day_speech_pipeline_contract(game.rule_snapshot).schema_version != 2
+            resolve_day_speech_pipeline_contract(game.rule_snapshot).schema_version not in {2, 3}
             or actor != {"kind": "judge", "id": "judge"}
             or presentation.actor_kind != "judge"
             or presentation.actor_id != "judge"
@@ -1417,18 +1417,36 @@ def _validate_result_action_opened(
         "werewolf_self_explosion" if row.result_kind == "self_explosion" else "exile_vote"
     )
     expected_admission = "normal" if row.result_kind == "self_explosion" else "idle_only"
+    game = db.get(V2GameRecord, pipeline.game_id)
+    if game is None:
+        raise V2PreExilePipelineRepositoryError("pre-exile action game is missing")
+    contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
+    guarded_self_explosion_retry = (
+        row.result_kind == "self_explosion"
+        and contract.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
+    )
+    expected_pipeline_context = {
+        "kind": "pre_exile",
+        "pipeline_id": pipeline.pipeline_id,
+        "result_kind": row.result_kind,
+        "stage": "generation",
+        "model_admission_mode": expected_admission,
+        **(
+            {
+                "retry_mode": "empty_stream_once_while_predecessor_active",
+                "empty_stream_max_attempts": (
+                    1 + contract.self_explosion_early_empty_stream_hidden_retry_max_retries
+                ),
+            }
+            if guarded_self_explosion_retry
+            else {}
+        ),
+    }
     if (
         opened is None
         or type(context) is not dict
         or type(pipeline_context) is not dict
-        or pipeline_context
-        != {
-            "kind": "pre_exile",
-            "pipeline_id": pipeline.pipeline_id,
-            "result_kind": row.result_kind,
-            "stage": "generation",
-            "model_admission_mode": expected_admission,
-        }
+        or pipeline_context != expected_pipeline_context
         or context.get("action_id") != action_id
         or context.get("action_type") != expected_action_type
         or context.get("game_id") != pipeline.game_id

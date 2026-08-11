@@ -125,14 +125,9 @@ def test_contract_is_exact_and_legacy_missing_stays_sequential() -> None:
     assert legacy.status == "legacy_sequential"
     assert legacy.mode == "sequential"
     assert legacy.speculative_vote_capacity_recovery_mode == "disabled"
+    assert legacy.self_explosion_early_empty_stream_hidden_retry_max_retries == 0
 
-    frozen = freeze_pre_exile_pipeline_contract({"rule_set": {"id": "test"}})
-    assert frozen["pre_exile_pipeline_contract"] == (current_pre_exile_pipeline_contract())
-    resolved = resolve_pre_exile_pipeline_contract(frozen)
-    assert resolved.status == "supported"
-    assert resolved.speculative_vote_capacity_recovery_mode == ("normal_batch_after_close_once")
-    assert pre_exile_pipeline_contract_summary(frozen) == {
-        "status": "supported",
+    schema_v1_contract = {
         "schema_version": 1,
         "mode": "sealed_last_speech_overlap",
         "action_types": ["werewolf_self_explosion", "exile_vote"],
@@ -148,14 +143,57 @@ def test_contract_is_exact_and_legacy_missing_stays_sequential() -> None:
         "fallback_mode": "before_launch_sequential_only",
         "inflight_recovery_mode": "no_duplicate_provider",
     }
+    schema_v1 = resolve_pre_exile_pipeline_contract(
+        {"pre_exile_pipeline_contract": schema_v1_contract}
+    )
+    assert schema_v1.schema_version == 1
+    assert schema_v1.self_explosion_early_empty_stream_hidden_retry_max_retries == 0
 
-    malformed = dict(current_pre_exile_pipeline_contract())
-    malformed["fallback_mode"] = "sequential"
-    with pytest.raises(
-        V2PreExilePipelineContractError,
-        match="unsupported_pre_exile_pipeline_contract",
-    ):
-        resolve_pre_exile_pipeline_contract({"pre_exile_pipeline_contract": malformed})
+    frozen = freeze_pre_exile_pipeline_contract({"rule_set": {"id": "test"}})
+    assert frozen["pre_exile_pipeline_contract"] == (current_pre_exile_pipeline_contract())
+    resolved = resolve_pre_exile_pipeline_contract(frozen)
+    assert resolved.status == "supported"
+    assert resolved.schema_version == 2
+    assert resolved.speculative_vote_capacity_recovery_mode == ("normal_batch_after_close_once")
+    assert resolved.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
+    assert pre_exile_pipeline_contract_summary(frozen) == {
+        "status": "supported",
+        "schema_version": 2,
+        "mode": "sealed_last_speech_overlap",
+        "action_types": ["werewolf_self_explosion", "exile_vote"],
+        "launch_boundary": "last_public_speech_sealed",
+        "accept_boundary": "last_public_speech_closed",
+        "self_explosion_admission_mode": "normal",
+        "speculative_vote_admission_mode": "idle_only",
+        "speculative_vote_capacity_recovery_mode": "normal_batch_after_close_once",
+        "wolf_vote_gate": "own_no_explosion_result",
+        "vote_abort_policy": "any_explosion_discards_all_votes",
+        "private_context_mode": "sealed_snapshot_plus_own_no_explosion_fact",
+        "result_commit_mode": "durable_atomic_arbiter",
+        "fallback_mode": "before_launch_sequential_only",
+        "inflight_recovery_mode": "no_duplicate_provider",
+        "self_explosion_early_empty_stream_hidden_retry_max_retries": 1,
+    }
+
+    malformed_contracts = [
+        {**current_pre_exile_pipeline_contract(), "fallback_mode": "sequential"},
+        {
+            **current_pre_exile_pipeline_contract(),
+            "self_explosion_early_empty_stream_hidden_retry_max_retries": 0,
+        },
+        {
+            key: value
+            for key, value in current_pre_exile_pipeline_contract().items()
+            if key != "self_explosion_early_empty_stream_hidden_retry_max_retries"
+        },
+        {**schema_v1_contract, "self_explosion_early_empty_stream_hidden_retry_max_retries": 1},
+    ]
+    for malformed in malformed_contracts:
+        with pytest.raises(
+            V2PreExilePipelineContractError,
+            match="unsupported_pre_exile_pipeline_contract",
+        ):
+            resolve_pre_exile_pipeline_contract({"pre_exile_pipeline_contract": malformed})
 
 
 def test_normal_and_technical_skip_last_speech_lineage_is_strict(
@@ -276,6 +314,148 @@ def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecesso
         )
     assert result is not None and result.action_id is None
     assert opened is None
+
+
+def test_schema_v2_self_explosion_requires_retry_metadata_and_exile_vote_forbids_it(
+    harness: _Harness,
+) -> None:
+    harness.pipelines.reserve_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="wolf_1",
+        result_kind="self_explosion",
+        fence=harness.fence,
+    )
+    self_action_id = "v2_action_schema_v2_self_retry"
+    with (
+        bind_v2_run_fence(harness.fence),
+        pytest.raises(
+            V2RepositoryError,
+            match="pre-exile pipeline generation claim is not isolated",
+        ),
+    ):
+        harness.actions.claim_action(
+            game_id=GAME_ID,
+            action_id=self_action_id,
+            context=_initial_context(
+                harness,
+                action_id=self_action_id,
+                actor_id="wolf_1",
+                result_kind="self_explosion",
+                self_explosion_retry=False,
+            ),
+            expected_phase_id=PHASE_ID,
+            expected_phase_state=PHASE_STATE,
+            audience="god_view",
+            context_audience="god_view",
+            non_blocking=True,
+        )
+    self_claim = _claim_initial(
+        harness,
+        actor_id="wolf_1",
+        result_kind="self_explosion",
+        action_id=self_action_id,
+    )
+    assert self_claim.action_id == self_action_id
+
+    _record_self_result(harness, actor_id="wolf_2", explode=False)
+    harness.pipelines.reserve_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="wolf_2",
+        result_kind="exile_vote",
+        fence=harness.fence,
+    )
+    vote_action_id = "v2_action_schema_v2_vote_no_retry"
+    vote_context = _initial_context(
+        harness,
+        action_id=vote_action_id,
+        actor_id="wolf_2",
+        result_kind="exile_vote",
+    )
+    vote_context["pipeline"].update(
+        {
+            "retry_mode": "empty_stream_once_while_predecessor_active",
+            "empty_stream_max_attempts": 2,
+        }
+    )
+    with (
+        bind_v2_run_fence(harness.fence),
+        pytest.raises(
+            V2RepositoryError,
+            match="pre-exile pipeline generation claim is not isolated",
+        ),
+    ):
+        harness.actions.claim_action(
+            game_id=GAME_ID,
+            action_id=vote_action_id,
+            context=vote_context,
+            expected_phase_id=PHASE_ID,
+            expected_phase_state=PHASE_STATE,
+            audience="god_view",
+            context_audience="god_view",
+            non_blocking=True,
+        )
+    vote_claim = _claim_initial(
+        harness,
+        actor_id="wolf_2",
+        result_kind="exile_vote",
+        action_id=vote_action_id,
+    )
+    assert vote_claim.action_id == vote_action_id
+
+
+def test_schema_v1_self_explosion_preserves_legacy_pipeline_context() -> None:
+    engine, harness = _build_harness(pre_exile_schema_version=1)
+    try:
+        harness.pipelines.reserve_result(
+            pipeline_id=harness.pipeline.pipeline_id,
+            actor_player_id="wolf_1",
+            result_kind="self_explosion",
+            fence=harness.fence,
+        )
+        action_id = "v2_action_schema_v1_self_legacy"
+        with (
+            bind_v2_run_fence(harness.fence),
+            pytest.raises(
+                V2RepositoryError,
+                match="pre-exile pipeline generation claim is not isolated",
+            ),
+        ):
+            harness.actions.claim_action(
+                game_id=GAME_ID,
+                action_id=action_id,
+                context=_initial_context(
+                    harness,
+                    action_id=action_id,
+                    actor_id="wolf_1",
+                    result_kind="self_explosion",
+                ),
+                expected_phase_id=PHASE_ID,
+                expected_phase_state=PHASE_STATE,
+                audience="god_view",
+                context_audience="god_view",
+                non_blocking=True,
+            )
+        with bind_v2_run_fence(harness.fence):
+            claim = harness.actions.claim_action(
+                game_id=GAME_ID,
+                action_id=action_id,
+                context=_initial_context(
+                    harness,
+                    action_id=action_id,
+                    actor_id="wolf_1",
+                    result_kind="self_explosion",
+                    self_explosion_retry=False,
+                ),
+                expected_phase_id=PHASE_ID,
+                expected_phase_state=PHASE_STATE,
+                audience="god_view",
+                context_audience="god_view",
+                non_blocking=True,
+            )
+        assert claim is not None
+        assert claim.action_id == action_id
+    finally:
+        engine.dispose()
 
 
 def test_day_speech_generation_claim_remains_rejected_while_finalizing(
@@ -983,7 +1163,11 @@ def test_cancelled_pipeline_hides_provisional_fact_and_non_atomic_mutators_fail(
         )
 
 
-def _build_harness(*, technical_skip: bool = False) -> tuple[Any, _Harness]:
+def _build_harness(
+    *,
+    technical_skip: bool = False,
+    pre_exile_schema_version: int = 2,
+) -> tuple[Any, _Harness]:
     engine = create_engine(
         "sqlite+pysqlite://",
         connect_args={"check_same_thread": False},
@@ -1003,6 +1187,15 @@ def _build_harness(*, technical_skip: bool = False) -> tuple[Any, _Harness]:
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
     rule_snapshot = freeze_pre_exile_pipeline_contract(rule_snapshot)
+    if pre_exile_schema_version == 1:
+        schema_v1_contract = dict(rule_snapshot["pre_exile_pipeline_contract"])
+        schema_v1_contract["schema_version"] = 1
+        schema_v1_contract.pop(
+            "self_explosion_early_empty_stream_hidden_retry_max_retries"
+        )
+        rule_snapshot["pre_exile_pipeline_contract"] = schema_v1_contract
+    elif pre_exile_schema_version != 2:
+        raise ValueError("unsupported pre-exile test schema")
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
@@ -1237,6 +1430,7 @@ def _initial_context(
     action_id: str,
     actor_id: str,
     result_kind: str,
+    self_explosion_retry: bool = True,
 ) -> dict[str, Any]:
     action_type = "werewolf_self_explosion" if result_kind == "self_explosion" else "exile_vote"
     return {
@@ -1271,6 +1465,14 @@ def _initial_context(
             "result_kind": result_kind,
             "stage": "generation",
             "model_admission_mode": ("normal" if result_kind == "self_explosion" else "idle_only"),
+            **(
+                {
+                    "retry_mode": "empty_stream_once_while_predecessor_active",
+                    "empty_stream_max_attempts": 2,
+                }
+                if result_kind == "self_explosion" and self_explosion_retry
+                else {}
+            ),
         },
     }
 
@@ -1281,6 +1483,7 @@ def _claim_initial(
     actor_id: str,
     result_kind: str,
     action_id: str,
+    self_explosion_retry: bool = True,
 ) -> V2ActionClaim:
     with bind_v2_run_fence(harness.fence):
         claim = harness.actions.claim_action(
@@ -1291,6 +1494,7 @@ def _claim_initial(
                 action_id=action_id,
                 actor_id=actor_id,
                 result_kind=result_kind,
+                self_explosion_retry=self_explosion_retry,
             ),
             expected_phase_id=PHASE_ID,
             expected_phase_state=PHASE_STATE,
