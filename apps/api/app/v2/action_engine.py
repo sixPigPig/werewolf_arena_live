@@ -29,6 +29,7 @@ from app.v2.model_client import (
     V2ModelDecision,
     V2ModelError,
     V2ModelProgress,
+    V2ProviderAdmissionMode,
     V2ModelTarget,
     V2QualityError,
     model_failure_disposition,
@@ -99,6 +100,7 @@ class V2ModelPort(Protocol):
         attempt_id: str | None,
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
+        admission_mode: V2ProviderAdmissionMode = "normal",
     ) -> V2ModelDecision: ...
 
 
@@ -196,6 +198,14 @@ class V2SpeechSpec:
     prior_output_budget_failures: int = 0
     automatic_output_budget_budget: int | None = None
     preflight_pause_failure: V2PreflightPauseFailure | None = None
+    model_admission_mode: V2ProviderAdmissionMode = "normal"
+    pipeline_slot_id: str | None = None
+    pipeline_stage: Literal["generation", "presentation"] | None = None
+    pipeline_empty_stream_max_attempts: Literal[1, 2] = 1
+    pipeline_retry_mode: Literal[
+        "disabled",
+        "empty_stream_once_while_predecessor_active",
+    ] = "disabled"
 
     def __post_init__(self) -> None:
         if self.prior_machine_format_failures < 0:
@@ -214,6 +224,31 @@ class V2SpeechSpec:
             raise ValueError("automatic_output_budget_budget must be non-negative")
         if self.preflight_pause_failure is not None and self.isolated_failure:
             raise ValueError("preflight pause requires a blocking action")
+        if self.model_admission_mode not in {"normal", "idle_only"}:
+            raise ValueError("unsupported model admission mode")
+        if (self.pipeline_slot_id is None) != (self.pipeline_stage is None):
+            raise ValueError("pipeline slot and stage must be provided together")
+        if self.pipeline_slot_id is not None and not self.pipeline_slot_id.strip():
+            raise ValueError("pipeline slot id must be non-empty")
+        if self.pipeline_stage == "generation" and not (
+            self.defer_presentation and self.isolated_failure
+        ):
+            raise ValueError("pipeline generation must be isolated and defer presentation")
+        if self.pipeline_stage == "presentation" and self.defer_presentation:
+            raise ValueError("pipeline presentation cannot defer presentation")
+        if self.model_admission_mode == "idle_only" and self.pipeline_stage != "generation":
+            raise ValueError("idle-only admission is reserved for pipeline generation")
+        if self.pipeline_empty_stream_max_attempts not in {1, 2}:
+            raise ValueError("unsupported pipeline empty-stream attempt limit")
+        if self.pipeline_retry_mode not in {
+            "disabled",
+            "empty_stream_once_while_predecessor_active",
+        }:
+            raise ValueError("unsupported pipeline retry mode")
+        if self.pipeline_retry_mode != "disabled" and self.pipeline_stage != "generation":
+            raise ValueError("pipeline retry mode is reserved for pipeline generation")
+        if self.pipeline_retry_mode == "disabled" and self.pipeline_empty_stream_max_attempts != 1:
+            raise ValueError("pipeline attempt expansion requires an enabled retry mode")
         if self.target_exhaustion_outcome is not None and not (
             self.decision_contract.kind == "target"
             and self.decision_contract.target_mode == "required"
@@ -309,8 +344,18 @@ class V2ActionResult:
     decision: V2ModelDecision | None = None
     failure: V2ActionFailure | None = None
     technical_outcome: V2ActionTechnicalOutcome | None = None
+    model_response_record_seq: int | None = None
+    terminal_event_record_seq: int | None = None
 
     def __post_init__(self) -> None:
+        for field_name, value in (
+            ("model_response_record_seq", self.model_response_record_seq),
+            ("terminal_event_record_seq", self.terminal_event_record_seq),
+        ):
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError(f"{field_name} must be a positive integer")
+            if value is not None and not self.action_id:
+                raise ValueError(f"{field_name} requires an action_id")
         if self.failure is not None and not self.action_id:
             raise ValueError("failed action result requires an action_id")
         if self.technical_outcome is not None:
@@ -718,17 +763,128 @@ class V2ActionEngine:
             is not None
         )
 
+    async def complete_pipeline_speech_technical_skip(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        player_id: str,
+        player_seat: int,
+        action_type: str,
+        phase_id: str,
+        required_phase_state: str,
+        round_no: int,
+        speech_round: int,
+        speech_order: list[str],
+        source_slot_id: str,
+        source_action_id: str,
+        source_failure: V2ActionFailure,
+        source_terminal_event_record_seq: int,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+    ) -> V2ActionResult | None:
+        """Commit and announce a prefetched public-speech technical skip.
+
+        The source model action is already terminal. This method never opens a
+        second player-model request; it records a sanitized public fact and
+        presents a fixed judge cue instead.
+        """
+
+        if action_type != "day_debate_speech":
+            raise ValueError("pipeline technical skip only supports day debate speech")
+        if type(player_seat) is not int or player_seat <= 0:
+            raise ValueError("pipeline technical skip requires a positive player seat")
+        if type(round_no) is not int or round_no <= 0:
+            raise ValueError("pipeline technical skip requires a positive round number")
+        if type(speech_round) is not int or speech_round <= 0:
+            raise ValueError("pipeline technical skip requires a positive speech round")
+        if not speech_order or any(not player for player in speech_order):
+            raise ValueError("pipeline technical skip requires a speech order")
+        if (
+            type(source_terminal_event_record_seq) is not int
+            or source_terminal_event_record_seq <= 0
+        ):
+            raise ValueError("pipeline technical skip requires terminal source lineage")
+
+        public_record_seq = self._repository.append_event(
+            game_id=game_id,
+            event_type="action_skipped_technical",
+            audience="all",
+            payload={
+                "action_id": source_action_id,
+                "phase_id": phase_id,
+                "round_no": round_no,
+                "action_type": action_type,
+                "actor_id": player_id,
+                "player_seat": player_seat,
+                "reason": "technical_failure",
+            },
+        )
+        self._repository.append_event(
+            game_id=game_id,
+            event_type="day_speech_technical_skip_lineage_recorded",
+            audience="god_view",
+            payload={
+                "phase_id": phase_id,
+                "round_no": round_no,
+                "action_type": action_type,
+                "player_id": player_id,
+                "player_seat": player_seat,
+                "source_slot_id": source_slot_id,
+                "source_action_id": source_action_id,
+                "source_terminal_event_record_seq": source_terminal_event_record_seq,
+                "source_failure_code": source_failure.code,
+                "source_failure_category": source_failure.category,
+                "source_attempt_id": source_failure.terminal_attempt_id,
+                "source_failure_episode_id": source_failure.failure_episode_id,
+                "public_skip_record_seq": public_record_seq,
+            },
+        )
+        return await self._run_model_action(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=V2SpeechSpec(
+                action_type="judge_day_speech_technical_skip",
+                phase_id=phase_id,
+                required_phase_state=required_phase_state,
+                objective=f"说明{player_seat}号本轮因技术原因未能完成发言，流程继续",
+                success_live_state="ready",
+                success_phase_state=required_phase_state,
+                actor_kind="judge",
+                actor_id="judge",
+                audience="all",
+                context={
+                    "round_no": round_no,
+                    "player_seat": player_seat,
+                    "skipped_player_id": player_id,
+                    "speech_round": speech_round,
+                    "speech_order": list(speech_order),
+                    "public_skip_record_seq": public_record_seq,
+                },
+                best_effort=False,
+            ),
+            decision=False,
+            on_presentation_opened=on_presentation_opened,
+            on_presentation_closed=on_presentation_closed,
+        )
+
     async def run_player_decision(
         self,
         *,
         game_id: str,
         broadcaster: V2BroadcastPort,
         spec: V2SpeechSpec,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
     ) -> V2ModelDecision | None:
         result = await self.run_player_decision_result(
             game_id=game_id,
             broadcaster=broadcaster,
             spec=spec,
+            on_presentation_opened=on_presentation_opened,
+            on_presentation_closed=on_presentation_closed,
+            model_retry_guard=model_retry_guard,
         )
         return result.decision if result is not None else None
 
@@ -738,12 +894,18 @@ class V2ActionEngine:
         game_id: str,
         broadcaster: V2BroadcastPort,
         spec: V2SpeechSpec,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
     ) -> V2ActionResult | None:
         return await self._run_model_action(
             game_id=game_id,
             broadcaster=broadcaster,
             spec=spec,
             decision=True,
+            on_presentation_opened=on_presentation_opened,
+            on_presentation_closed=on_presentation_closed,
+            model_retry_guard=model_retry_guard,
         )
 
     async def present_player_decision(
@@ -753,16 +915,39 @@ class V2ActionEngine:
         broadcaster: V2BroadcastPort,
         spec: V2SpeechSpec,
         decision: V2ModelDecision,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
     ) -> bool:
         return (
-            await self._run_model_action(
+            await self.present_player_decision_result(
                 game_id=game_id,
                 broadcaster=broadcaster,
                 spec=spec,
-                decision=True,
-                precomputed_decision=decision,
+                decision=decision,
+                on_presentation_opened=on_presentation_opened,
+                on_presentation_closed=on_presentation_closed,
             )
             is not None
+        )
+
+    async def present_player_decision_result(
+        self,
+        *,
+        game_id: str,
+        broadcaster: V2BroadcastPort,
+        spec: V2SpeechSpec,
+        decision: V2ModelDecision,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+    ) -> V2ActionResult | None:
+        return await self._run_model_action(
+            game_id=game_id,
+            broadcaster=broadcaster,
+            spec=spec,
+            decision=True,
+            precomputed_decision=decision,
+            on_presentation_opened=on_presentation_opened,
+            on_presentation_closed=on_presentation_closed,
         )
 
     async def _run_judge_sentence(
@@ -786,6 +971,9 @@ class V2ActionEngine:
         spec: V2SpeechSpec,
         decision: bool,
         precomputed_decision: V2ModelDecision | None = None,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
     ) -> V2ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
         judge_configuration = None
@@ -833,7 +1021,11 @@ class V2ActionEngine:
         recorder: V2VoiceRecorder | None = None
         model_attempt_id: str | None = None
         model_attempt_no: int | None = None
+        current_cycle_attempt_no: int | None = None
+        model_request_started_recorded = False
         model_request_completed = False
+        model_response_record_seq: int | None = None
+        terminal_event_record_seq: int | None = None
         model_failure_recorded = False
         active_failure_episode_id: str | None = None
         resolved_generation_policy: V2ResolvedModelGenerationPolicy | None = None
@@ -1058,6 +1250,8 @@ class V2ActionEngine:
                         model_attempt_id = attempt_id
                         model_attempt_no += 1
                         cycle_attempt_no = cycle_attempt_index + 1
+                        current_cycle_attempt_no = cycle_attempt_no
+                        model_request_started_recorded = False
                         model_failure_recorded = False
                         binding_prior_failure_streak = (
                             self._repository.model_binding_failure_streak(
@@ -1252,6 +1446,7 @@ class V2ActionEngine:
                                 ),
                             },
                         )
+                        model_request_started_recorded = True
                         check_cancellation()
                         remaining = model_deadline - time.monotonic()
                         try:
@@ -1274,19 +1469,33 @@ class V2ActionEngine:
 
                                 async def generate_once() -> V2ModelDecision:
                                     if progress_capable:
+                                        progress_kwargs: dict[str, Any] = {
+                                            "action_context": model_context,
+                                            "attempt_id": model_attempt_id,
+                                            "target": model_target,
+                                            "check_cancellation": check_cancellation,
+                                            "on_progress": persist_model_progress,
+                                        }
+                                        if spec.model_admission_mode != "normal":
+                                            progress_kwargs["admission_mode"] = (
+                                                spec.model_admission_mode
+                                            )
                                         return await progress_method(
                                             self._model_client,
-                                            action_context=model_context,
-                                            attempt_id=model_attempt_id,
-                                            target=model_target,
-                                            check_cancellation=check_cancellation,
-                                            on_progress=persist_model_progress,
+                                            **progress_kwargs,
+                                        )
+                                    generation_kwargs: dict[str, Any] = {
+                                        "action_context": model_context,
+                                        "attempt_id": model_attempt_id,
+                                        "target": model_target,
+                                        "check_cancellation": check_cancellation,
+                                    }
+                                    if spec.model_admission_mode != "normal":
+                                        generation_kwargs["admission_mode"] = (
+                                            spec.model_admission_mode
                                         )
                                     return await self._model_client.generate_action_decision(
-                                        action_context=model_context,
-                                        attempt_id=model_attempt_id,
-                                        target=model_target,
-                                        check_cancellation=check_cancellation,
+                                        **generation_kwargs,
                                     )
 
                                 if manages_attempt_timeout:
@@ -1399,6 +1608,51 @@ class V2ActionEngine:
                                 policy=retry_policy,
                                 generation_policy=resolved_generation_policy,
                             )
+                            pipeline_retry_guard_allowed: bool | None = None
+                            pipeline_retry_guard_error = False
+                            if (
+                                spec.pipeline_stage == "generation"
+                                and spec.pipeline_retry_mode
+                                == "empty_stream_once_while_predecessor_active"
+                                and disposition.category == "transport"
+                            ):
+                                # P2.1 only permits a second physical attempt for the
+                                # known empty-stream case, and only while the preceding
+                                # public presentation is still active. Other transport
+                                # failures retain a single-attempt prefetch contract.
+                                pipeline_retry_guard_allowed = False
+                                effective_attempt_limit = 1
+                                if (
+                                    exc.code == "model_empty_stream"
+                                    and cycle_attempt_no < spec.pipeline_empty_stream_max_attempts
+                                    and model_retry_guard is not None
+                                ):
+                                    try:
+                                        pipeline_retry_guard_allowed = bool(
+                                            model_retry_guard(exc, cycle_attempt_no)
+                                        )
+                                    except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+                                        raise
+                                    except Exception:
+                                        pipeline_retry_guard_error = True
+                                        logger.warning(
+                                            "Live V2 day speech retry guard failed closed",
+                                            exc_info=True,
+                                            extra={
+                                                "game_id": claim.game_id,
+                                                "action_id": claim.action_id,
+                                                "slot_id": spec.pipeline_slot_id,
+                                            },
+                                        )
+                                if pipeline_retry_guard_allowed:
+                                    effective_attempt_limit = min(
+                                        retry_policy.max_attempts,
+                                        spec.pipeline_empty_stream_max_attempts,
+                                    )
+                                    # This retry is deliberately hidden inside the
+                                    # predecessor's playback window. Do not burn that
+                                    # narrow window on the generic backoff delay.
+                                    delay_seconds = 0.0
                             if (
                                 disposition.category == "output_budget"
                                 and retry_cycle == 1
@@ -1421,6 +1675,11 @@ class V2ActionEngine:
                             )
                             if not disposition.retryable:
                                 automatic_retry_stop_reason = "not_retryable"
+                            elif (
+                                pipeline_retry_guard_allowed is False
+                                and exc.code == "model_empty_stream"
+                            ):
+                                automatic_retry_stop_reason = "attempt_limit_reached"
                             elif not family_retry_available:
                                 automatic_retry_stop_reason = "decision_family_budget_exhausted"
                             elif cycle_attempt_no >= effective_attempt_limit:
@@ -1429,7 +1688,10 @@ class V2ActionEngine:
                                 automatic_retry_stop_reason = "insufficient_action_budget"
                             else:
                                 automatic_retry_stop_reason = None
-                            binding_failure_streak = binding_prior_failure_streak + 1
+                            binding_health_counted = disposition.category != "admission_capacity"
+                            binding_failure_streak = binding_prior_failure_streak + int(
+                                binding_health_counted
+                            )
                             binding_health_status = _model_binding_health_status(
                                 binding_failure_streak
                             )
@@ -1513,6 +1775,13 @@ class V2ActionEngine:
                                     "required_retry_window_ms": round(required_retry_window * 1000),
                                     "automatic_retry_scheduled": retryable,
                                     "automatic_retry_stop_reason": (automatic_retry_stop_reason),
+                                    "model_binding_health_counted": binding_health_counted,
+                                    "pipeline_retry_mode": spec.pipeline_retry_mode,
+                                    "pipeline_empty_stream_max_attempts": (
+                                        spec.pipeline_empty_stream_max_attempts
+                                    ),
+                                    "pipeline_retry_guard_allowed": (pipeline_retry_guard_allowed),
+                                    "pipeline_retry_guard_error": pipeline_retry_guard_error,
                                 }
                             )
                             if spec.decision_family_id is not None:
@@ -1565,26 +1834,27 @@ class V2ActionEngine:
                             )
                             model_failure_recorded = True
                             active_failure_episode_id = failure_episode_id
-                            self._repository.append_event(
-                                game_id=claim.game_id,
-                                event_type="model_binding_health_updated",
-                                audience="god_view",
-                                payload={
-                                    "action_id": claim.action_id,
-                                    "attempt_id": model_attempt_id,
-                                    "phase_id": spec.phase_id,
-                                    "actor_id": spec.actor_id,
-                                    "model_provider": model_target.provider,
-                                    "model_id": model_target.model_id,
-                                    "status": binding_health_status,
-                                    "consecutive_failure_count": (binding_failure_streak),
-                                    "failure_code": exc.code,
-                                    "failure_category": disposition.category,
-                                    "failure_stage": exc.failure_stage,
-                                    "first_token_seen": exc.first_token_seen,
-                                    "response_headers_seen": (exc.response_headers_seen),
-                                },
-                            )
+                            if binding_health_counted:
+                                self._repository.append_event(
+                                    game_id=claim.game_id,
+                                    event_type="model_binding_health_updated",
+                                    audience="god_view",
+                                    payload={
+                                        "action_id": claim.action_id,
+                                        "attempt_id": model_attempt_id,
+                                        "phase_id": spec.phase_id,
+                                        "actor_id": spec.actor_id,
+                                        "model_provider": model_target.provider,
+                                        "model_id": model_target.model_id,
+                                        "status": binding_health_status,
+                                        "consecutive_failure_count": (binding_failure_streak),
+                                        "failure_code": exc.code,
+                                        "failure_category": disposition.category,
+                                        "failure_stage": exc.failure_stage,
+                                        "first_token_seen": exc.first_token_seen,
+                                        "response_headers_seen": (exc.response_headers_seen),
+                                    },
+                                )
                             previous_attempt_id = model_attempt_id
                             if retryable:
                                 next_attempt_id = attempt_ids[cycle_attempt_index + 1]
@@ -1734,6 +2004,8 @@ class V2ActionEngine:
                                         ),
                                         supporting_event_record_seq=(technical_outcome_record_seq),
                                     ),
+                                    model_response_record_seq=model_response_record_seq,
+                                    terminal_event_record_seq=terminal_event_record_seq,
                                 )
                             technical_outcome = _technical_exhaustion_outcome(
                                 spec=spec,
@@ -1789,6 +2061,8 @@ class V2ActionEngine:
                                 return V2ActionResult(
                                     action_id=claim.action_id,
                                     decision=technical_decision,
+                                    model_response_record_seq=model_response_record_seq,
+                                    terminal_event_record_seq=terminal_event_record_seq,
                                 )
                             if (
                                 not spec.best_effort
@@ -1907,7 +2181,7 @@ class V2ActionEngine:
                     for key, value in parsed_output.items()
                     if key != "target_player_ref" and value is not None
                 }
-                self._repository.append_event(
+                model_response_record_seq = self._repository.append_event(
                     game_id=claim.game_id,
                     event_type="model_response_received",
                     audience=model_audience,
@@ -2137,6 +2411,8 @@ class V2ActionEngine:
                 return V2ActionResult(
                     action_id=claim.action_id,
                     decision=model_decision,
+                    model_response_record_seq=model_response_record_seq,
+                    terminal_event_record_seq=terminal_event_record_seq,
                 )
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
@@ -2155,6 +2431,8 @@ class V2ActionEngine:
             await broadcaster.set_current(identity, 0, audience=spec.audience)
             await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
             await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
+            if on_presentation_opened is not None:
+                on_presentation_opened(identity)
             if not spec.best_effort:
                 await broadcaster.broadcast_json(
                     live_state(
@@ -2183,6 +2461,8 @@ class V2ActionEngine:
                     next_phase_state=spec.success_phase_state,
                     best_effort=spec.best_effort,
                 )
+                if on_presentation_closed is not None:
+                    on_presentation_closed(identity)
                 await broadcaster.broadcast_json(
                     presentation_closed(
                         identity,
@@ -2204,6 +2484,8 @@ class V2ActionEngine:
                 return V2ActionResult(
                     action_id=claim.action_id,
                     decision=model_decision,
+                    model_response_record_seq=model_response_record_seq,
+                    terminal_event_record_seq=terminal_event_record_seq,
                 )
             if identity.voice_asset_id is None:
                 raise V2RepositoryError("enabled TTS action has no voice asset")
@@ -2332,6 +2614,8 @@ class V2ActionEngine:
                 next_phase_state=spec.success_phase_state,
                 best_effort=spec.best_effort,
             )
+            if on_presentation_closed is not None:
+                on_presentation_closed(identity)
             await broadcaster.broadcast_json(
                 presentation_closed(
                     identity,
@@ -2357,14 +2641,135 @@ class V2ActionEngine:
             return V2ActionResult(
                 action_id=claim.action_id,
                 decision=model_decision,
+                model_response_record_seq=model_response_record_seq,
+                terminal_event_record_seq=terminal_event_record_seq,
             )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             if recorder is not None:
-                recorder.discard_finalized()
+                try:
+                    recorder.discard_finalized()
+                except BaseException:
+                    logger.warning(
+                        "Live V2 could not discard canceled voice recording",
+                        exc_info=True,
+                        extra={"game_id": claim.game_id, "action_id": claim.action_id},
+                    )
+            if spec.pipeline_stage == "generation":
+                cancellation_code = (
+                    "day_speech_prefetch_post_close_deadline"
+                    if exc.args and exc.args[0] == "day_speech_prefetch_post_close_deadline"
+                    else "day_speech_prefetch_canceled"
+                )
+                cancellation_kind = (
+                    "timeout"
+                    if cancellation_code == "day_speech_prefetch_post_close_deadline"
+                    else "canceled"
+                )
+                cancellation_terminal_record_seq: int | None = None
+                try:
+                    if (
+                        model_attempt_id is not None
+                        and model_request_started_recorded
+                        and model_attempt_no is not None
+                        and model_attempt_no > 0
+                        and current_cycle_attempt_no is not None
+                        and not model_request_completed
+                        and not model_failure_recorded
+                    ):
+                        failure_episode_id = active_failure_episode_id
+                        if failure_episode_id is None:
+                            failure_episode_id = stable_failure_episode_id(
+                                game_id=claim.game_id,
+                                run_id=claim.run_id,
+                                action_id=claim.action_id,
+                                retry_cycle=retry_cycle,
+                                first_failed_attempt_id=model_attempt_id,
+                            )
+                        self._repository.append_event(
+                            game_id=claim.game_id,
+                            event_type="model_request_failed",
+                            audience=model_audience,
+                            payload={
+                                "action_id": claim.action_id,
+                                "attempt_id": model_attempt_id,
+                                "attempt_no": model_attempt_no,
+                                "cycle_attempt_no": current_cycle_attempt_no,
+                                "retry_cycle": retry_cycle,
+                                "max_attempts": self._model_retry_policy.max_attempts,
+                                "failure_kind": cancellation_kind,
+                                "failure_code": cancellation_code,
+                                "failure_category": (
+                                    "timeout" if cancellation_kind == "timeout" else "canceled"
+                                ),
+                                "failure_episode_id": failure_episode_id,
+                                "retryable": False,
+                                "attempt_terminal": True,
+                                "action_recoverable": False,
+                                "run_terminal": False,
+                                "terminal": True,
+                                "automatic_retry_scheduled": False,
+                                "automatic_retry_stop_reason": "not_retryable",
+                                "pipeline_retry_mode": spec.pipeline_retry_mode,
+                                "pipeline_empty_stream_max_attempts": (
+                                    spec.pipeline_empty_stream_max_attempts
+                                ),
+                            },
+                        )
+                        active_failure_episode_id = failure_episode_id
+                        model_failure_recorded = True
+                    persisted_terminal_record_seq = self._repository.fail_action(
+                        claim=claim,
+                        failure_kind=cancellation_kind,
+                        failure_code=cancellation_code,
+                        identity=identity,
+                        tts_attempt_id=tts_attempt_id,
+                        best_effort=spec.best_effort,
+                        failure_episode_id=active_failure_episode_id,
+                        failure_episode_disposition="isolated_action_failure",
+                    )
+                    if (
+                        type(persisted_terminal_record_seq) is int
+                        and persisted_terminal_record_seq > 0
+                    ):
+                        cancellation_terminal_record_seq = persisted_terminal_record_seq
+                except V2ExecutionOwnershipLost:
+                    raise
+                except BaseException:
+                    # A stop request or secondary persistence error must never
+                    # replace the cancellation that reached this action.
+                    logger.warning(
+                        "Live V2 could not persist canceled day speech prefetch",
+                        exc_info=True,
+                        extra={"game_id": claim.game_id, "action_id": claim.action_id},
+                    )
+                if cancellation_kind == "timeout" and cancellation_terminal_record_seq is not None:
+                    return V2ActionResult(
+                        action_id=claim.action_id,
+                        terminal_event_record_seq=cancellation_terminal_record_seq,
+                        failure=V2ActionFailure(
+                            code=cancellation_code,
+                            category="timeout",
+                            terminal_attempt_id=model_attempt_id,
+                            machine_format_failure_count=machine_format_failure_count,
+                            last_machine_format_attempt_id=last_machine_format_attempt_id,
+                            last_machine_format_failure_code=last_machine_format_failure_code,
+                            output_budget_failure_count=output_budget_failure_count,
+                            last_output_budget_attempt_id=last_output_budget_attempt_id,
+                            last_output_budget_failure_code=last_output_budget_failure_code,
+                            failure_episode_id=active_failure_episode_id,
+                        ),
+                    )
             raise
         except V2ExecutionOwnershipLost:
             if recorder is not None:
-                recorder.discard_finalized()
+                try:
+                    recorder.discard_finalized()
+                except BaseException:
+                    logger.warning(
+                        "Live V2 could not discard ownership-lost voice recording",
+                        exc_info=True,
+                        extra={"game_id": claim.game_id, "action_id": claim.action_id},
+                    )
             raise
         except Exception as exc:
             if recorder is not None:
@@ -2467,7 +2872,7 @@ class V2ActionEngine:
                 },
             )
             try:
-                self._repository.fail_action(
+                persisted_terminal_event_record_seq = self._repository.fail_action(
                     claim=claim,
                     failure_kind=failure_kind,
                     failure_code=failure_code,
@@ -2481,6 +2886,11 @@ class V2ActionEngine:
                         else "run_failure"
                     ),
                 )
+                if (
+                    type(persisted_terminal_event_record_seq) is int
+                    and persisted_terminal_event_record_seq > 0
+                ):
+                    terminal_event_record_seq = persisted_terminal_event_record_seq
             except Exception:
                 logger.exception("Live V2 could not persist action failure")
             if identity is None and not spec.best_effort and not spec.defer_presentation:
@@ -2511,6 +2921,8 @@ class V2ActionEngine:
                 )
                 return V2ActionResult(
                     action_id=claim.action_id,
+                    model_response_record_seq=model_response_record_seq,
+                    terminal_event_record_seq=terminal_event_record_seq,
                     failure=V2ActionFailure(
                         code=failure_code,
                         category=failure_category,
@@ -2579,6 +2991,25 @@ def _action_context(
         **(
             {"projection_at_seq": spec.projection_at_seq}
             if spec.projection_at_seq is not None
+            else {}
+        ),
+        **(
+            {
+                "pipeline": {
+                    "slot_id": spec.pipeline_slot_id,
+                    "stage": spec.pipeline_stage,
+                    "model_admission_mode": spec.model_admission_mode,
+                    **(
+                        {
+                            "retry_mode": spec.pipeline_retry_mode,
+                            "empty_stream_max_attempts": (spec.pipeline_empty_stream_max_attempts),
+                        }
+                        if spec.pipeline_retry_mode != "disabled"
+                        else {}
+                    ),
+                }
+            }
+            if spec.pipeline_slot_id is not None
             else {}
         ),
     }
@@ -2919,6 +3350,11 @@ def _technical_exhaustion_outcome(
     exc: V2ModelError,
     attempt_id: str,
 ) -> tuple[V2ModelDecision, str] | None:
+    # A prefetched turn is not yet public.  Its failure must stay private and
+    # fall back to the normal foreground turn instead of publishing a skip
+    # while the predecessor is still speaking.
+    if spec.pipeline_stage == "generation":
+        return None
     if not model_failure_disposition(exc).pausable:
         return None
     if spec.action_type in _TECHNICAL_SKIP_ACTION_TYPES and spec.decision_contract.kind == "speech":

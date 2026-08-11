@@ -62,6 +62,9 @@ from app.v2.day_engine import (
     _SHERIFF_PK_SPEECH_OBJECTIVE,
     _leaders,
 )
+from app.v2.day_speech_pipeline_contract import (
+    day_speech_pipeline_contract_summary,
+)
 from app.v2.execution import bind_v2_run_fence
 from app.v2.first_night_engine import V2NightEngine, _WorkingNight
 from app.v2.match_repository import V2DayVoteCommit, V2MatchRepository
@@ -86,6 +89,7 @@ from app.v2.model_client import (
     V2ModelError,
     V2ModelProgress,
     V2ModelTarget,
+    V2ProviderAdmissionMode,
     V2QualityError,
     build_model_request_payload,
     model_failure_disposition,
@@ -102,6 +106,7 @@ from app.v2.models import (
     V2AbilityActivation,
     V2AbilityInstance,
     V2ActionWindow,
+    V2DaySpeechSlot,
     V2EffectIntent,
     V2GameControlRequest,
     V2GameRecord,
@@ -420,6 +425,7 @@ class FakeV2ModelClient:
         self.attempt_ids: list[str] = []
         self.call_delay_seconds = 0.0
         self.call_delays_seconds: list[float] = []
+        self.admission_modes: list[V2ProviderAdmissionMode] = []
         self.concurrent_barrier_action_types: set[str] = set()
         self.concurrent_barrier_expected = 0
         self.concurrent_barrier_started = 0
@@ -490,6 +496,7 @@ class FakeV2ModelClient:
         attempt_id: str,
         target: V2ModelTarget,
         check_cancellation: Any = None,
+        admission_mode: V2ProviderAdmissionMode = "normal",
     ) -> V2ModelDecision:
         if check_cancellation is not None:
             check_cancellation()
@@ -498,6 +505,7 @@ class FakeV2ModelClient:
         self.decision_contexts.append(action_context)
         assert attempt_id.startswith("v2_model_")
         self.attempt_ids.append(attempt_id)
+        self.admission_modes.append(admission_mode)
         assert target.provider == "agent_plan"
         assert target.model_id in {"private-model-id", "test-model"}
         call_delay_seconds = (
@@ -1834,6 +1842,9 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
+            "day_speech_pipeline_contract": day_speech_pipeline_contract_summary(
+                game.rule_snapshot
+            ),
         }
         assert events[1].payload == {
             "audience": "god_view",
@@ -3622,6 +3633,15 @@ def test_heartbeat_loss_is_durable_stale_and_does_not_release_owner(
     snapshot = client.get(created["snapshot_url"])
     assert snapshot.status_code == 200
     assert snapshot.json()["execution_state"] == "stale"
+    stale_claim = repository.start_and_claim_execution(
+        game_id=created["game_id"],
+        audience="player_public",
+        worker_id="v2_worker_must_not_reclaim_stale_run",
+        lease_seconds=30,
+    )
+    assert stale_claim.status == "already_owned"
+    assert stale_claim.fence is None
+    assert stale_claim.owner_hint == "v2_worker_heartbeat"
 
 
 def test_stale_fence_is_rejected_by_every_runtime_repository(v2_context) -> None:
@@ -6541,17 +6561,45 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             db.scalars(
                 select(V2LivePresentation).where(
                     V2LivePresentation.game_id == identifiers["game_id"],
-                    V2LivePresentation.action_id.in_(observed_action_ids),
                 )
             )
         )
+        day_speech_slots = list(
+            db.scalars(
+                select(V2DaySpeechSlot).where(
+                    V2DaySpeechSlot.game_id == identifiers["game_id"],
+                )
+            )
+        )
+        assert day_speech_slots
+        assert all(
+            slot.state == "consumed"
+            and slot.generation_action_id is not None
+            and slot.generation_response_record_seq is not None
+            and slot.presentation_action_id is not None
+            and slot.presentation_id is not None
+            and slot.consumed_at is not None
+            for slot in day_speech_slots
+        )
+        generation_action_ids = {
+            slot.generation_action_id for slot in day_speech_slots if slot.generation_action_id
+        }
+        presentation_action_ids = {
+            slot.presentation_action_id for slot in day_speech_slots if slot.presentation_action_id
+        }
+        assert generation_action_ids <= observed_action_ids
         assert {
-            presentation.action_id for presentation in adopted_presentations
-        } == observed_action_ids
+            presentation.action_id
+            for presentation in adopted_presentations
+            if presentation.subtitle_text == contradictory_speech
+        } == (observed_action_ids - generation_action_ids) | presentation_action_ids
         assert all(
             presentation.subtitle_text == contradictory_speech
             for presentation in adopted_presentations
+            if presentation.action_id
+            in ((observed_action_ids - generation_action_ids) | presentation_action_ids)
         )
+        assert "idle_only" in model_client.admission_modes
         length_normalized_action_ids = {
             event.payload["action_id"]
             for event in events
@@ -8283,18 +8331,48 @@ def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(
                 for event in events
             )
 
-        repaired_presentations = list(
+        all_presentations = list(
             db.scalars(
                 select(V2LivePresentation).where(
                     V2LivePresentation.game_id == identifiers["game_id"],
-                    V2LivePresentation.action_id.in_(repaired_action_ids),
                 )
             )
         )
-        assert {item.action_id for item in repaired_presentations} == repaired_action_ids
+        presentation_by_action_id = {
+            presentation.action_id: presentation for presentation in all_presentations
+        }
+        pipeline_slots = list(
+            db.scalars(
+                select(V2DaySpeechSlot).where(
+                    V2DaySpeechSlot.game_id == identifiers["game_id"],
+                )
+            )
+        )
+        slot_by_generation_action_id = {
+            slot.generation_action_id: slot
+            for slot in pipeline_slots
+            if slot.generation_action_id is not None
+        }
+
+        def presentation_for_model_action(action_id: str) -> V2LivePresentation:
+            slot = slot_by_generation_action_id.get(action_id)
+            presentation_action_id = action_id
+            if slot is not None:
+                assert slot.state == "consumed"
+                assert slot.presentation_action_id is not None
+                presentation_action_id = slot.presentation_action_id
+            presentation = presentation_by_action_id.get(presentation_action_id)
+            assert presentation is not None
+            return presentation
+
+        repaired_presentations = [
+            presentation_for_model_action(action_id) for action_id in repaired_action_ids
+        ]
         assert all(item.audience == "all" for item in repaired_presentations)
         assert all(
-            event.payload["parsed_output"]["speech"] in public_committed_texts
+            presentation_for_model_action(event.payload["action_id"]).subtitle_text
+            == event.payload["parsed_output"]["speech"]
+            and event.payload["parsed_output"]["speech"] in public_committed_texts
             for event in repaired_responses
         )
 
@@ -8331,21 +8409,13 @@ def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(
             )
             for action_id in causality_action_ids
         )
-        presentations = list(
-            db.scalars(
-                select(V2LivePresentation).where(
-                    V2LivePresentation.game_id == identifiers["game_id"],
-                    V2LivePresentation.action_id.in_(causality_action_ids),
-                )
-            )
-        )
-        assert {item.action_id for item in presentations} == causality_action_ids
         parsed_speech_by_action = {
             event.payload["action_id"]: event.payload["parsed_output"]["speech"]
             for event in causality_responses
         }
         assert all(
-            item.subtitle_text == parsed_speech_by_action[item.action_id] for item in presentations
+            presentation_for_model_action(action_id).subtitle_text == parsed_speech
+            for action_id, parsed_speech in parsed_speech_by_action.items()
         )
 
 
@@ -9300,7 +9370,12 @@ def test_model_retry_receives_a_separate_attempt_budget(v2_context) -> None:
     model_client = client.app.state.v2_test_model_client
     model_client.retryable_transport_failures_remaining = 1
     model_client.call_delays_seconds = [0.15, 0.15]
-    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    request = _six_player_create_request()
+    # This case isolates the foreground retry budget. TTS mode enables the
+    # independently tested day-speech prefetch pipeline, whose concurrent
+    # attempts would consume this fake client's global delay sequence.
+    request["audio_mode"] = "text_only"
+    identifiers = client.post("/api/v2/games", json=request).json()
 
     terminal_state = None
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:

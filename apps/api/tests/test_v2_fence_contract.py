@@ -150,6 +150,60 @@ def test_stale_fence_rejects_action_claim_without_opening_action(
         assert not _events_for_action(db, harness.game_id, "v2_action_stale_claim")
 
 
+@pytest.mark.parametrize(
+    ("clear_owner", "expected_status"),
+    [(False, "already_owned"), (True, "not_startable")],
+)
+def test_active_run_cannot_be_reclaimed_through_start_after_lease_stales(
+    fence_harness: _FenceHarness,
+    clear_owner: bool,
+    expected_status: str,
+) -> None:
+    harness = fence_harness
+    expired_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    with harness.session_factory.begin() as db:
+        run = db.get(V2GameRun, harness.run_id)
+        assert run is not None
+        run.lease_expires_at = None if clear_owner else expired_at
+        if clear_owner:
+            run.worker_id = None
+            run.worker_heartbeat_at = None
+    before_seq = _last_record_seq(harness)
+
+    result = harness.actions.start_and_claim_execution(
+        game_id=harness.game_id,
+        audience="player_public",
+        worker_id="v2_worker_replacement",
+        lease_seconds=300,
+    )
+
+    assert result.status == expected_status
+    assert result.fence is None
+    assert result.current_state == "ready"
+    assert result.owner_hint == (None if clear_owner else "v2_worker_original")
+    with harness.session_factory() as db:
+        game = db.get(V2GameRecord, harness.game_id)
+        run = db.get(V2GameRun, harness.run_id)
+        claim_events = list(
+            db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == harness.game_id,
+                    V2GameRecordEvent.event_type == "v2_run_execution_claimed",
+                )
+            )
+        )
+    assert game is not None and game.status == "ready"
+    assert run is not None and run.status == "ready"
+    assert run.worker_id == (None if clear_owner else "v2_worker_original")
+    if clear_owner:
+        assert run.lease_expires_at is None
+    else:
+        assert run.lease_expires_at is not None
+        assert run.lease_expires_at.replace(tzinfo=UTC) == expired_at
+    assert game.last_record_seq == before_seq
+    assert len(claim_events) == 1
+
+
 def test_stale_fence_rejects_presentation_creation_without_rows(
     fence_harness: _FenceHarness,
 ) -> None:

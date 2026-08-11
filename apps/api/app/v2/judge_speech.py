@@ -55,8 +55,7 @@ def render_judge_speech(
         text = (
             "天亮了，昨夜是平安夜。"
             if not death_seats
-            else "天亮了，昨夜出局的玩家是："
-            f"{'、'.join(f'{seat}号' for seat in death_seats)}。"
+            else f"天亮了，昨夜出局的玩家是：{'、'.join(f'{seat}号' for seat in death_seats)}。"
         )
     elif action_type == "judge_sheriff_election_opening":
         round_no = _positive_int(context.get("round_no"), "round_no")
@@ -108,6 +107,10 @@ def render_judge_speech(
         round_no = _positive_int(context.get("round_no"), "round_no")
         variables = {"round_no": round_no}
         text = f"第{round_no}天流程结束，即将入夜。"
+    elif action_type == "judge_day_speech_technical_skip":
+        player_seat = _positive_int(context.get("player_seat"), "player_seat")
+        variables = {"player_seat": player_seat}
+        text = f"{player_seat}号本轮因技术原因未能完成发言，流程继续。"
     elif action_type == "judge_game_completed":
         winner = _required_text(context.get("winner"), "winner")
         winner_name = {

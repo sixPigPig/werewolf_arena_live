@@ -36,6 +36,7 @@ from app.v2.contracts import (
     V2MatchStateResponse,
 )
 from app.v2.day_engine import V2DayEngine
+from app.v2.day_speech_pipeline_repository import V2DaySpeechPipelineRepository
 from app.v2.director_projection import project_director_scene
 from app.v2.god_view_projection import project_god_view_player_identities
 from app.v2.first_night_engine import V2NightEngine
@@ -465,6 +466,7 @@ class V2LiveRuntime:
             session_factory,
             enforce_execution_fence=True,
         )
+        self._day_speech_pipeline_repository = V2DaySpeechPipelineRepository(session_factory)
         self._action_engine = V2ActionEngine(
             repository=self._repository,
             model_client=model_client,
@@ -479,6 +481,7 @@ class V2LiveRuntime:
         self._day_engine = V2DayEngine(
             repository=self._match_repository,
             action_engine=self._action_engine,
+            day_speech_pipeline_repository=self._day_speech_pipeline_repository,
         )
         self._first_night_engine = V2NightEngine(
             repository=self._night_repository,

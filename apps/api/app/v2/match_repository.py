@@ -9,6 +9,10 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.v2.day_speech_pipeline_contract import (
+    V2ResolvedDaySpeechPipelineContract,
+    resolve_day_speech_pipeline_contract,
+)
 from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
 from app.v2.event_contract import canonical_event_payload
@@ -21,6 +25,7 @@ from app.v2.model_parameters import (
     frozen_player_model_configuration,
 )
 from app.v2.models import (
+    V2DaySpeechSlot,
     V2GameRecord,
     V2GameRecordEvent,
     V2GameRun,
@@ -37,9 +42,18 @@ from app.v2.repository import (
     V2RepositoryError,
     _open_failure_episode_ids_for_locked_run,
 )
+from app.v2.runtime_state import V2AudioMode, delivery_audio_mode
 from app.v2.win_conditions import (
     hunter_settlement_can_change_winner,
     winner_from_alive_roles,
+)
+
+
+_NONTERMINAL_DAY_SPEECH_SLOT_STATES = (
+    "reserved",
+    "generating",
+    "ready",
+    "presenting",
 )
 
 
@@ -76,6 +90,8 @@ class V2MatchSnapshot:
     max_rounds: int
     model_context_contract: dict[str, Any]
     model_generation_policy_contract: dict[str, Any] | None
+    day_speech_pipeline_contract: V2ResolvedDaySpeechPipelineContract
+    audio_mode: V2AudioMode
     players: tuple[V2MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
 
@@ -84,6 +100,18 @@ class V2MatchSnapshot:
             if player.player_id == player_id:
                 return player
         raise V2RepositoryError(f"unknown V2 player {player_id}")
+
+
+@dataclass(frozen=True)
+class V2DaySpeechPrefetchSnapshot:
+    match_snapshot: V2MatchSnapshot
+    public_cutoff_record_seq: int
+    predecessor_presentation_id: str
+    predecessor_action_id: str
+    predecessor_source_event_id: int
+    predecessor_source_record_seq: int
+    predecessor_sealed_record_seq: int
+    predecessor_actor_id: str
 
 
 @dataclass(frozen=True)
@@ -131,32 +159,304 @@ class V2MatchRepository:
             match = db.get(V2MatchState, game_id)
             if game is None or match is None:
                 raise V2RepositoryError(f"unknown game {game_id}")
-            rule = game.rule_snapshot.get("rule_set")
-            if not isinstance(rule, dict):
-                raise V2RepositoryError("V2 match has no frozen rule")
-            compiled_rule = dict(rule)
-            compiled_rule["day_actions"] = list(game.ability_snapshot.get("day_actions") or [])
-            compiled_rule["ability_policies"] = dict(game.ability_snapshot.get("policies") or {})
-            for key, value in dict(game.ability_snapshot.get("day_policies") or {}).items():
-                compiled_rule.setdefault(key, value)
-            return V2MatchSnapshot(
-                game_id=game.game_id,
-                run_id=game.current_run_id,
-                last_record_seq=game.last_record_seq,
-                phase_id=game.phase_id,
-                phase_state=game.phase_state,
-                round_no=match.round_no,
-                sheriff_player_id=match.sheriff_player_id,
-                sheriff_badge_state=match.sheriff_badge_state,
-                pre_sheriff_explosion_count=match.pre_sheriff_explosion_count,
-                rule=compiled_rule,
-                max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
-                model_context_contract=(frozen_model_context_contract(game.rule_snapshot) or {}),
-                model_generation_policy_contract=(
-                    resolve_model_generation_policy_contract(game.rule_snapshot)
-                ),
-                players=_players(db, game),
+            return _match_snapshot(
+                db,
+                game=game,
+                match=match,
                 public_history=_public_history(db, game_id),
+            )
+
+    def snapshot_for_day_speech_prefetch(
+        self,
+        *,
+        game_id: str,
+        run_id: str,
+        phase_id: str,
+        phase_state: str,
+        predecessor_presentation_id: str,
+        predecessor_action_id: str,
+        predecessor_source_event_id: int,
+        predecessor_turn_player_id: str | None = None,
+    ) -> V2DaySpeechPrefetchSnapshot:
+        """Freeze model context containing one active, sealed public predecessor.
+
+        The regular snapshot remains closed-presentation-only. This projection is
+        deliberately explicit so it cannot be reused as a public transport view.
+        """
+
+        self._ensure_state(game_id)
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
+            _raise_if_stop_requested(db, game)
+            if (
+                game.current_run_id != run_id
+                or game.phase_id != phase_id
+                or game.phase_state != phase_state
+                or not phase_id.startswith("day_")
+            ):
+                raise V2RepositoryError("day speech prefetch game/run/phase changed")
+            run = _run(db, run_id)
+            if (
+                run.game_id != game_id
+                or game.status not in {"broadcasting", "finalizing"}
+                or run.status != game.status
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor is not presenting")
+            match = _match(db, game)
+            cutoff = game.last_record_seq
+            latest_record_seq = db.scalar(
+                select(V2GameRecordEvent.record_seq)
+                .where(V2GameRecordEvent.game_id == game_id)
+                .order_by(V2GameRecordEvent.record_seq.desc())
+                .limit(1)
+            )
+            if latest_record_seq != cutoff:
+                raise V2RepositoryError("day speech prefetch record cutoff is inconsistent")
+            active_presentations = list(
+                db.scalars(
+                    select(V2LivePresentation)
+                    .where(
+                        V2LivePresentation.game_id == game_id,
+                        V2LivePresentation.state == "active",
+                    )
+                    .order_by(V2LivePresentation.presentation_seq)
+                )
+            )
+            if len(active_presentations) != 1:
+                raise V2RepositoryError(
+                    "day speech prefetch predecessor is not the unique active presentation"
+                )
+            predecessor = active_presentations[0]
+            technical_skip_predecessor = predecessor_turn_player_id is not None
+            if (
+                technical_skip_predecessor
+                and resolve_day_speech_pipeline_contract(game.rule_snapshot).schema_version != 2
+            ):
+                raise V2RepositoryError(
+                    "technical skip prefetch predecessor requires pipeline schema v2"
+                )
+            if (
+                predecessor.presentation_id != predecessor_presentation_id
+                or predecessor.action_id != predecessor_action_id
+                or predecessor.source_event_id != predecessor_source_event_id
+                or predecessor.run_id != run_id
+                or predecessor.phase_id != phase_id
+                or predecessor.actor_kind != ("judge" if technical_skip_predecessor else "player")
+                or (technical_skip_predecessor and predecessor.actor_id != "judge")
+                or predecessor.audience != "all"
+                or predecessor.closed_at is not None
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor identity is invalid")
+            latest_presentation_seq = db.scalar(
+                select(V2LivePresentation.presentation_seq)
+                .where(V2LivePresentation.game_id == game_id)
+                .order_by(V2LivePresentation.presentation_seq.desc())
+                .limit(1)
+            )
+            if (
+                latest_presentation_seq != predecessor.presentation_seq
+                or game.last_presentation_seq != predecessor.presentation_seq
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor is not latest")
+
+            source = db.get(
+                V2GameRecordEvent,
+                (game_id, predecessor_source_event_id),
+            )
+            source_payload = source.payload if source is not None else None
+            if (
+                source is None
+                or source.run_id != run_id
+                or source.record_seq > cutoff
+                or source.event_type != "speech_segment_committed"
+                or not isinstance(source_payload, dict)
+                or source_payload.get("audience") != "all"
+                or source_payload.get("action_id") != predecessor_action_id
+                or source_payload.get("presentation_id") != predecessor_presentation_id
+                or source_payload.get("speech_id") != predecessor.speech_id
+                or source_payload.get("segment_index") != predecessor.segment_index
+                or source_payload.get("text") != predecessor.subtitle_text
+                or not predecessor.subtitle_text.strip()
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor source is invalid")
+
+            lineage = list(
+                db.scalars(
+                    select(V2GameRecordEvent)
+                    .where(
+                        V2GameRecordEvent.game_id == game_id,
+                        V2GameRecordEvent.run_id == run_id,
+                        V2GameRecordEvent.record_seq <= cutoff,
+                        V2GameRecordEvent.event_type.in_(
+                            {
+                                "action_opened",
+                                "action_succeeded",
+                                "action_failed",
+                                "speech_opened",
+                                "speech_segment_committed",
+                                "speech_sealed",
+                                "speech_closed",
+                                "speech_interrupted",
+                            }
+                        ),
+                    )
+                    .order_by(V2GameRecordEvent.record_seq)
+                )
+            )
+            opened_actions = [
+                event
+                for event in lineage
+                if event.event_type == "action_opened"
+                and event.payload.get("action_id") == predecessor_action_id
+            ]
+            if len(opened_actions) != 1:
+                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+            opened = opened_actions[0]
+            action_context = opened.payload.get("context")
+            if (
+                opened.record_seq >= source.record_seq
+                or not isinstance(action_context, dict)
+                or action_context.get("action_id") != predecessor_action_id
+                or action_context.get("game_id") != game_id
+                or action_context.get("run_id") != run_id
+                or action_context.get("phase_id") != phase_id
+                or action_context.get("action_record_seq") != opened.record_seq
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+            predecessor_turn_actor_id = predecessor.actor_id
+            if technical_skip_predecessor:
+                speech_order = action_context.get("speech_order")
+                public_skip_record_seq = action_context.get("public_skip_record_seq")
+                if (
+                    action_context.get("action_type") != "judge_day_speech_technical_skip"
+                    or action_context.get("actor") != {"kind": "judge", "id": "judge"}
+                    or action_context.get("skipped_player_id") != predecessor_turn_player_id
+                    or type(action_context.get("speech_round")) is not int
+                    or action_context["speech_round"] <= 0
+                    or type(speech_order) is not list
+                    or predecessor_turn_player_id not in speech_order
+                    or type(public_skip_record_seq) is not int
+                    or public_skip_record_seq <= 0
+                    or public_skip_record_seq >= opened.record_seq
+                ):
+                    raise V2RepositoryError(
+                        "day speech technical skip predecessor action is invalid"
+                    )
+                public_skip = db.scalar(
+                    select(V2GameRecordEvent).where(
+                        V2GameRecordEvent.game_id == game_id,
+                        V2GameRecordEvent.run_id == run_id,
+                        V2GameRecordEvent.record_seq == public_skip_record_seq,
+                        V2GameRecordEvent.event_type == "action_skipped_technical",
+                    )
+                )
+                public_skip_payload = public_skip.payload if public_skip is not None else None
+                if (
+                    not isinstance(public_skip_payload, dict)
+                    or public_skip_payload.get("audience") != "all"
+                    or public_skip_payload.get("phase_id") != phase_id
+                    or public_skip_payload.get("round_no") != match.round_no
+                    or public_skip_payload.get("action_type") != "day_debate_speech"
+                    or public_skip_payload.get("actor_id") != predecessor_turn_player_id
+                ):
+                    raise V2RepositoryError(
+                        "day speech technical skip predecessor has no public fact"
+                    )
+                predecessor_turn_actor_id = predecessor_turn_player_id
+            elif action_context.get("action_type") != "day_debate_speech" or action_context.get(
+                "actor"
+            ) != {"kind": "player", "id": predecessor.actor_id}:
+                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+            speech_events = [
+                event
+                for event in lineage
+                if event.payload.get("presentation_id") == predecessor_presentation_id
+            ]
+            speech_opened = [
+                event for event in speech_events if event.event_type == "speech_opened"
+            ]
+            segments = [
+                event for event in speech_events if event.event_type == "speech_segment_committed"
+            ]
+            sealed = [event for event in speech_events if event.event_type == "speech_sealed"]
+            terminal_speech = [
+                event
+                for event in speech_events
+                if event.event_type in {"speech_closed", "speech_interrupted"}
+            ]
+            terminal_action = [
+                event
+                for event in lineage
+                if event.event_type in {"action_succeeded", "action_failed"}
+                and event.payload.get("action_id") == predecessor_action_id
+            ]
+            if (
+                len(speech_opened) != 1
+                or len(segments) != 1
+                or segments[0].event_id != source.event_id
+                or len(sealed) != 1
+                or terminal_speech
+                or terminal_action
+                or not (
+                    opened.record_seq
+                    < speech_opened[0].record_seq
+                    < source.record_seq
+                    < sealed[0].record_seq
+                    <= cutoff
+                )
+                or any(
+                    event.payload.get("action_id") != predecessor_action_id
+                    or event.payload.get("speech_id") != predecessor.speech_id
+                    or event.payload.get("audience") != "all"
+                    for event in (*speech_opened, *segments, *sealed)
+                )
+            ):
+                raise V2RepositoryError("day speech prefetch predecessor is not sealed")
+
+            public_history = list(
+                _public_history(
+                    db,
+                    game_id,
+                    at_or_before_record_seq=cutoff,
+                )
+            )
+            if not technical_skip_predecessor:
+                if any(int(item["record_seq"]) == source.record_seq for item in public_history):
+                    raise V2RepositoryError(
+                        "day speech prefetch history would duplicate predecessor"
+                    )
+                public_history.append(
+                    {
+                        "source_event_id": source.event_id,
+                        "record_seq": source.record_seq,
+                        "event_type": "public_player_speech_presented",
+                        "payload": {
+                            "round_no": _round_no(predecessor.phase_id),
+                            "stage": "day_debate_speech",
+                            "action_id": predecessor_action_id,
+                            "phase_id": predecessor.phase_id,
+                            "player_id": predecessor.actor_id,
+                            "speech": predecessor.subtitle_text,
+                        },
+                    }
+                )
+            public_history.sort(key=lambda item: int(item["record_seq"]))
+            snapshot = _match_snapshot(
+                db,
+                game=game,
+                match=match,
+                last_record_seq=cutoff,
+                public_history=tuple(public_history),
+            )
+            return V2DaySpeechPrefetchSnapshot(
+                match_snapshot=snapshot,
+                public_cutoff_record_seq=cutoff,
+                predecessor_presentation_id=predecessor_presentation_id,
+                predecessor_action_id=predecessor_action_id,
+                predecessor_source_event_id=source.event_id,
+                predecessor_source_record_seq=source.record_seq,
+                predecessor_sealed_record_seq=sealed[0].record_seq,
+                predecessor_actor_id=predecessor_turn_actor_id,
             )
 
     def private_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
@@ -693,6 +993,19 @@ class V2MatchRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
+            open_slot_id = db.scalar(
+                select(V2DaySpeechSlot.slot_id)
+                .where(
+                    V2DaySpeechSlot.game_id == game.game_id,
+                    V2DaySpeechSlot.run_id == game.current_run_id,
+                    V2DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
+                )
+                .order_by(V2DaySpeechSlot.slot_id)
+                .limit(1)
+                .with_for_update()
+            )
+            if open_slot_id is not None:
+                raise V2RepositoryError("cannot finish day with a nonterminal day speech slot")
             match = _match(db, game)
             winner = _winner(db, game)
             previous_phase_id = game.phase_id
@@ -779,11 +1092,51 @@ class V2MatchRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
+            run = _run(db, game.current_run_id)
+            failed_at = _now()
+            invalidated_slots = list(
+                db.scalars(
+                    select(V2DaySpeechSlot)
+                    .where(
+                        V2DaySpeechSlot.game_id == game.game_id,
+                        V2DaySpeechSlot.run_id == run.run_id,
+                        V2DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
+                    )
+                    .order_by(V2DaySpeechSlot.slot_id)
+                    .with_for_update()
+                )
+            )
+            for slot in invalidated_slots:
+                slot.state = "invalidated"
+                slot.failure = {
+                    "kind": "runtime_failed",
+                    "reason_code": "day_runtime_failed",
+                    "failure_code": failure_code,
+                }
+                slot.terminal_at = failed_at
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="day_speech_slot_invalidated",
+                    audience="god_view",
+                    payload={
+                        "slot_id": slot.slot_id,
+                        "slot_run_id": slot.run_id,
+                        "phase_id": slot.phase_id,
+                        "round_no": slot.round_no,
+                        "speech_round": slot.speech_round,
+                        "turn_index": slot.turn_index,
+                        "actor_player_id": slot.actor_player_id,
+                        "state": slot.state,
+                        "failure_kind": "runtime_failed",
+                        "reason_code": "day_runtime_failed",
+                        "failure_code": failure_code,
+                    },
+                )
             game.status = "failed"
             game.phase_state = "failed"
-            run = _run(db, game.current_run_id)
             run.status = "failed"
-            run.completed_at = _now()
+            run.completed_at = failed_at
             match = db.get(V2MatchState, game_id)
             if match is not None:
                 match.completion_reason = failure_code
@@ -798,6 +1151,7 @@ class V2MatchRepository:
                 audience="god_view",
                 payload={
                     "failure_code": failure_code,
+                    "invalidated_day_speech_slot_count": len(invalidated_slots),
                     "failed_failure_episode_ids": list(failed_failure_episode_ids),
                     "failure_episode_disposition": "run_failure",
                 },
@@ -895,14 +1249,61 @@ _PUBLIC_HISTORY_TYPES = {
 }
 
 
-def _public_history(db: Session, game_id: str) -> tuple[dict[str, Any], ...]:
+def _match_snapshot(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    match: V2MatchState,
+    public_history: tuple[dict[str, Any], ...],
+    last_record_seq: int | None = None,
+) -> V2MatchSnapshot:
+    rule = game.rule_snapshot.get("rule_set")
+    if not isinstance(rule, dict):
+        raise V2RepositoryError("V2 match has no frozen rule")
+    compiled_rule = dict(rule)
+    compiled_rule["day_actions"] = list(game.ability_snapshot.get("day_actions") or [])
+    compiled_rule["ability_policies"] = dict(game.ability_snapshot.get("policies") or {})
+    for key, value in dict(game.ability_snapshot.get("day_policies") or {}).items():
+        compiled_rule.setdefault(key, value)
+    return V2MatchSnapshot(
+        game_id=game.game_id,
+        run_id=game.current_run_id,
+        last_record_seq=(game.last_record_seq if last_record_seq is None else last_record_seq),
+        phase_id=game.phase_id,
+        phase_state=game.phase_state,
+        round_no=match.round_no,
+        sheriff_player_id=match.sheriff_player_id,
+        sheriff_badge_state=match.sheriff_badge_state,
+        pre_sheriff_explosion_count=match.pre_sheriff_explosion_count,
+        rule=compiled_rule,
+        max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
+        model_context_contract=(frozen_model_context_contract(game.rule_snapshot) or {}),
+        model_generation_policy_contract=(
+            resolve_model_generation_policy_contract(game.rule_snapshot)
+        ),
+        day_speech_pipeline_contract=resolve_day_speech_pipeline_contract(game.rule_snapshot),
+        audio_mode=delivery_audio_mode(game.delivery_snapshot),
+        players=_players(db, game),
+        public_history=public_history,
+    )
+
+
+def _public_history(
+    db: Session,
+    game_id: str,
+    *,
+    at_or_before_record_seq: int | None = None,
+) -> tuple[dict[str, Any], ...]:
+    event_conditions = [
+        V2GameRecordEvent.game_id == game_id,
+        V2GameRecordEvent.event_type.in_(_PUBLIC_HISTORY_TYPES),
+    ]
+    if at_or_before_record_seq is not None:
+        event_conditions.append(V2GameRecordEvent.record_seq <= at_or_before_record_seq)
     rows = list(
         db.scalars(
             select(V2GameRecordEvent)
-            .where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_type.in_(_PUBLIC_HISTORY_TYPES),
-            )
+            .where(*event_conditions)
             .order_by(V2GameRecordEvent.record_seq.desc())
         )
     )
@@ -916,23 +1317,51 @@ def _public_history(db: Session, game_id: str) -> tuple[dict[str, Any], ...]:
         }
         for row in rows
     ]
+    presentation_conditions = [
+        V2LivePresentation.game_id == game_id,
+        V2LivePresentation.actor_kind == "player",
+        V2LivePresentation.audience == "all",
+        V2LivePresentation.state == "closed",
+    ]
     presentations = list(
         db.scalars(
             select(V2LivePresentation)
-            .where(
-                V2LivePresentation.game_id == game_id,
-                V2LivePresentation.actor_kind == "player",
-                V2LivePresentation.audience == "all",
-                V2LivePresentation.state == "closed",
-            )
+            .where(*presentation_conditions)
             .order_by(V2LivePresentation.source_event_id)
         )
     )
-    action_types = _action_types_by_id(db, game_id)
+    source_events = {
+        row.event_id: row
+        for row in db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.event_id.in_({row.source_event_id for row in presentations}),
+            )
+        )
+    }
+    presentation_record_seq = {
+        row.presentation_id: (
+            source_events[row.source_event_id].record_seq
+            if row.source_event_id in source_events
+            else row.source_event_id
+        )
+        for row in presentations
+    }
+    if at_or_before_record_seq is not None:
+        presentations = [
+            row
+            for row in presentations
+            if presentation_record_seq[row.presentation_id] <= at_or_before_record_seq
+        ]
+    action_types = _action_types_by_id(
+        db,
+        game_id,
+        at_or_before_record_seq=at_or_before_record_seq,
+    )
     history.extend(
         {
             "source_event_id": row.source_event_id,
-            "record_seq": row.source_event_id,
+            "record_seq": presentation_record_seq[row.presentation_id],
             "event_type": "public_player_speech_presented",
             "payload": {
                 "round_no": _round_no(row.phase_id),
@@ -949,15 +1378,19 @@ def _public_history(db: Session, game_id: str) -> tuple[dict[str, Any], ...]:
     return tuple(history)
 
 
-def _action_types_by_id(db: Session, game_id: str) -> dict[str, str]:
-    rows = list(
-        db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_type == "action_opened",
-            )
-        )
-    )
+def _action_types_by_id(
+    db: Session,
+    game_id: str,
+    *,
+    at_or_before_record_seq: int | None = None,
+) -> dict[str, str]:
+    conditions = [
+        V2GameRecordEvent.game_id == game_id,
+        V2GameRecordEvent.event_type == "action_opened",
+    ]
+    if at_or_before_record_seq is not None:
+        conditions.append(V2GameRecordEvent.record_seq <= at_or_before_record_seq)
+    rows = list(db.scalars(select(V2GameRecordEvent).where(*conditions)))
     action_types: dict[str, str] = {}
     for row in rows:
         payload = row.payload if isinstance(row.payload, dict) else {}

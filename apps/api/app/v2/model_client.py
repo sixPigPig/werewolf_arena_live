@@ -24,6 +24,7 @@ from app.v2.model_parameters import (
 
 
 V2ModelFailureCategory = Literal[
+    "admission_capacity",
     "transport",
     "timeout",
     "machine_format",
@@ -46,6 +47,7 @@ V2UsageConsistency = Literal[
     "provider_total_mismatch",
     "unavailable",
 ]
+V2ProviderAdmissionMode = Literal["normal", "idle_only"]
 
 
 @dataclass(frozen=True)
@@ -246,19 +248,45 @@ class _ProviderGate:
         self.limit = limit
         self._semaphore = asyncio.Semaphore(limit)
         self._in_flight = 0
+        self._normal_waiters = 0
 
     @asynccontextmanager
     async def admit(
         self,
         *,
         check_cancellation: Callable[[], None] | None,
+        admission_mode: V2ProviderAdmissionMode = "normal",
     ):
         loop = asyncio.get_running_loop()
         queued_at = loop.time()
-        await _acquire_with_cancellation(
-            self._semaphore,
-            check_cancellation=check_cancellation,
-        )
+        if admission_mode == "idle_only":
+            _check(check_cancellation)
+            if self._normal_waiters > 0 or self._semaphore.locked():
+                raise V2ModelError(
+                    "model_prefetch_capacity_unavailable",
+                    retryable=False,
+                    failure_stage="provider_admission",
+                    queue_wait_ms=round((loop.time() - queued_at) * 1000),
+                    provider_in_flight=self._in_flight,
+                    provider_concurrency_limit=self.limit,
+                )
+            # No await can interleave between the checks above and an immediately
+            # available Semaphore acquisition on this event loop.  This reserves
+            # genuinely idle capacity without joining or bypassing the normal FIFO.
+            await self._semaphore.acquire()
+        elif admission_mode == "normal":
+            # Register before the first await so idle-only work cannot take an
+            # available permit while an earlier normal request is being queued.
+            self._normal_waiters += 1
+            try:
+                await _acquire_with_cancellation(
+                    self._semaphore,
+                    check_cancellation=check_cancellation,
+                )
+            finally:
+                self._normal_waiters -= 1
+        else:
+            raise ValueError(f"unsupported provider admission mode: {admission_mode}")
         self._in_flight += 1
         admission = _ProviderAdmission(
             queue_wait_ms=round((loop.time() - queued_at) * 1000),
@@ -368,6 +396,13 @@ _FINISH_REASONS = frozenset(
 
 
 def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
+    if exc.code == "model_prefetch_capacity_unavailable":
+        return V2FailureDisposition(
+            category="admission_capacity",
+            retryable=False,
+            pausable=False,
+            max_attempts=1,
+        )
     if exc.code == "model_output_budget_exhausted":
         return V2FailureDisposition(
             category="output_budget",
@@ -630,6 +665,7 @@ class V2ModelClient:
         attempt_id: str,
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
+        admission_mode: V2ProviderAdmissionMode = "normal",
     ) -> V2ModelDecision:
         return await self.generate_action_decision_with_progress(
             action_context=action_context,
@@ -637,6 +673,7 @@ class V2ModelClient:
             target=target,
             check_cancellation=check_cancellation,
             on_progress=None,
+            admission_mode=admission_mode,
         )
 
     async def generate_action_decision_with_progress(
@@ -647,6 +684,7 @@ class V2ModelClient:
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
         on_progress: Callable[[V2ModelProgress], None] | None = None,
+        admission_mode: V2ProviderAdmissionMode = "normal",
     ) -> V2ModelDecision:
         result = await self._stream_text(
             action_context=action_context,
@@ -656,6 +694,7 @@ class V2ModelClient:
             target=target,
             check_cancellation=check_cancellation,
             on_progress=on_progress,
+            admission_mode=admission_mode,
         )
         raw = result.text
         output_contract = _decision_output_contract(action_context)
@@ -727,6 +766,7 @@ class V2ModelClient:
         target: V2ModelTarget,
         check_cancellation: Callable[[], None] | None,
         on_progress: Callable[[V2ModelProgress], None] | None,
+        admission_mode: V2ProviderAdmissionMode,
     ) -> _StreamResult:
         _check(check_cancellation)
         route = self._routes[target.provider]
@@ -741,7 +781,10 @@ class V2ModelClient:
                     provider_concurrency_limit=route.max_in_flight,
                 )
             )
-        async with gate.admit(check_cancellation=check_cancellation) as admission:
+        async with gate.admit(
+            check_cancellation=check_cancellation,
+            admission_mode=admission_mode,
+        ) as admission:
             if on_progress is not None:
                 on_progress(
                     V2ModelProgress(

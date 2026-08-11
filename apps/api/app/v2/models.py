@@ -417,6 +417,123 @@ class V2LivePresentation(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class V2DaySpeechSlot(Base):
+    __tablename__ = "v2_day_speech_slots"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id",
+            "run_id",
+            "phase_id",
+            "speech_round",
+            "turn_index",
+            name="uq_v2_day_speech_slots_turn",
+        ),
+        UniqueConstraint(
+            "game_id",
+            "run_id",
+            "predecessor_presentation_id",
+            name="uq_v2_day_speech_slots_predecessor",
+        ),
+        UniqueConstraint(
+            "generation_action_id",
+            name="uq_v2_day_speech_slots_generation_action",
+        ),
+        UniqueConstraint(
+            "generation_attempt_id",
+            name="uq_v2_day_speech_slots_generation_attempt",
+        ),
+        UniqueConstraint(
+            "presentation_action_id",
+            name="uq_v2_day_speech_slots_presentation_action",
+        ),
+        UniqueConstraint(
+            "presentation_id",
+            name="uq_v2_day_speech_slots_presentation",
+        ),
+        UniqueConstraint(
+            "game_id",
+            "generation_response_record_seq",
+            name="uq_v2_day_speech_slots_response_event",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'generating', 'ready', 'presenting', 'consumed', "
+            "'failed', 'canceled', 'invalidated')",
+            name="ck_v2_day_speech_slots_state",
+        ),
+        CheckConstraint(
+            "action_type = 'day_debate_speech'",
+            name="ck_v2_day_speech_slots_action_type",
+        ),
+        CheckConstraint(
+            "fence_token >= 0",
+            name="ck_v2_day_speech_slots_fence_nonnegative",
+        ),
+        CheckConstraint(
+            "round_no >= 1 AND speech_round >= 1 AND turn_index >= 2",
+            name="ck_v2_day_speech_slots_position_positive",
+        ),
+        CheckConstraint(
+            "predecessor_source_event_id >= 1 AND predecessor_source_record_seq >= 1 AND "
+            "context_cutoff_record_seq >= predecessor_source_record_seq",
+            name="ck_v2_day_speech_slots_cutoff_lineage",
+        ),
+        Index("ix_v2_day_speech_slots_game_state", "game_id", "state"),
+        Index("ix_v2_day_speech_slots_run_state", "run_id", "state"),
+    )
+
+    slot_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    game_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_records.game_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("v2_game_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    fence_worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fence_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    phase_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    round_no: Mapped[int] = mapped_column(nullable=False)
+    speech_round: Mapped[int] = mapped_column(nullable=False)
+    turn_index: Mapped[int] = mapped_column(nullable=False)
+    action_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    actor_player_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    predecessor_action_id: Mapped[str] = mapped_column(String(48), nullable=False)
+    predecessor_presentation_id: Mapped[str] = mapped_column(String(48), nullable=False)
+    predecessor_source_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    predecessor_source_record_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    context_cutoff_record_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="reserved", server_default="reserved"
+    )
+    generation_action_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    generation_attempt_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    generation_response_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    presentation_action_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    presentation_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    failure_record_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    failure: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    generation_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    presenting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class V2VoiceAsset(Base):
     __tablename__ = "v2_voice_assets"
     __table_args__ = (

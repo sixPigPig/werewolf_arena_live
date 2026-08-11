@@ -32,6 +32,7 @@ from app.v2.action_engine import (
     _validate_model_target_decision,
 )
 from app.v2.director_projection import project_director_scene
+from app.v2.day_speech_pipeline_contract import current_day_speech_pipeline_contract
 from app.v2.god_view_access import (
     issue_god_view_access_token,
     verify_god_view_access_token,
@@ -832,6 +833,7 @@ def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> No
     assert (
         project_public_rule_snapshot(
             {
+                "day_speech_pipeline_contract": current_day_speech_pipeline_contract(),
                 "model_context_contract": {"model_context_schema_version": 11},
                 "model_generation_policy_contract": expected,
             }

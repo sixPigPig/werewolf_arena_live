@@ -10,6 +10,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.v2.ability_runtime import compile_ability_runtime_snapshot
+from app.v2.day_speech_pipeline_contract import (
+    day_speech_pipeline_contract_summary,
+    freeze_day_speech_pipeline_contract,
+)
 from app.v2.event_contract import canonical_event_payload
 from app.v2.models import (
     V2AbilityActivation,
@@ -79,8 +83,8 @@ def create_waiting_game(
     if rule_snapshot is not None or players_snapshot is not None:
         if rule_snapshot is None or players_snapshot is None:
             raise ValueError("rule and player snapshots must be provided together")
-    frozen_rule_snapshot = freeze_model_generation_policy_contract(
-        freeze_model_context_contract(rule_snapshot)
+    frozen_rule_snapshot = freeze_day_speech_pipeline_contract(
+        freeze_model_generation_policy_contract(freeze_model_context_contract(rule_snapshot))
     )
     if created_from_lobby:
         assert players_snapshot is not None
@@ -147,6 +151,9 @@ def create_waiting_game(
                         "enforcement",
                     )
                 },
+                "day_speech_pipeline_contract": day_speech_pipeline_contract_summary(
+                    frozen_rule_snapshot
+                ),
             },
             audience="all",
         ),
@@ -308,7 +315,7 @@ def current_action_context(db: Session, game_id: str) -> dict[str, Any] | None:
     game = get_game(db, game_id)
     if game.status not in {"generating", "broadcasting", "finalizing"}:
         return None
-    event = db.scalar(
+    events = db.scalars(
         select(V2GameRecordEvent)
         .where(
             V2GameRecordEvent.game_id == game_id,
@@ -316,12 +323,18 @@ def current_action_context(db: Session, game_id: str) -> dict[str, Any] | None:
             V2GameRecordEvent.event_type == "action_opened",
         )
         .order_by(V2GameRecordEvent.record_seq.desc())
-        .limit(1)
     )
-    if event is None or not isinstance(event.payload, dict):
-        return None
-    context = event.payload.get("context")
-    return context if isinstance(context, dict) else None
+    for event in events:
+        if not isinstance(event.payload, dict):
+            continue
+        context = event.payload.get("context")
+        if not isinstance(context, dict):
+            continue
+        pipeline = context.get("pipeline")
+        if type(pipeline) is dict and pipeline.get("stage") == "generation":
+            continue
+        return context
+    return None
 
 
 def role_assignment_count(db: Session, game_id: str) -> int | None:

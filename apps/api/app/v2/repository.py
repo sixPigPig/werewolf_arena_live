@@ -9,9 +9,14 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.v2.day_speech_pipeline_contract import (
+    V2DaySpeechPipelineContractError,
+    resolve_day_speech_pipeline_contract,
+)
 from app.v2.models import (
     V2AbilityActivation,
     V2ActionWindow,
+    V2DaySpeechSlot,
     V2EffectIntent,
     V2GameRecord,
     V2GameRecordEvent,
@@ -32,7 +37,11 @@ from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     validate_players_snapshot_model_configurations,
 )
-from app.v2.model_failure_episode import FailureEpisode, derive_failure_episodes
+from app.v2.model_failure_episode import (
+    FailureEpisode,
+    derive_failure_episodes,
+    stable_failure_episode_id,
+)
 from app.v2.execution import (
     V2RunFence,
     V2RunFenceRejected,
@@ -101,6 +110,8 @@ class V2PresentationIdentity:
     activation_id: str | None = None
     actor_kind: str = "judge"
     actor_id: str = "judge"
+    source_event_id: int | None = None
+    source_record_seq: int | None = None
 
 
 @dataclass(frozen=True)
@@ -418,7 +429,30 @@ class V2ActionRepository:
                 game.rule_snapshot
             )
             expected_live_state = "awaiting_observation" if best_effort else "ready"
-            if (
+            run = _run(db, game.current_run_id)
+            pipeline_generation = _is_pipeline_generation_context(context)
+            if game.status == "broadcasting":
+                if not pipeline_generation:
+                    return None
+                _bind_broadcast_pipeline_generation_claim(
+                    db,
+                    game=game,
+                    run=run,
+                    action_id=action_id,
+                    context=context,
+                    expected_phase_id=expected_phase_id,
+                    expected_phase_state=expected_phase_state,
+                    audience=audience,
+                    context_audience=context_audience,
+                    activation_id=activation_id,
+                    best_effort=best_effort,
+                    non_blocking=non_blocking,
+                )
+            elif pipeline_generation:
+                raise V2RepositoryError(
+                    "day speech pipeline generation requires an active broadcast"
+                )
+            elif (
                 game.status != expected_live_state
                 or game.phase_id != expected_phase_id
                 or game.phase_state != expected_phase_state
@@ -435,7 +469,6 @@ class V2ActionRepository:
                 )
                 if existing is not None:
                     return None
-            run = _run(db, game.current_run_id)
             if activation_id is not None:
                 activation = db.get(V2AbilityActivation, activation_id)
                 if (
@@ -567,6 +600,8 @@ class V2ActionRepository:
                     "text": subtitle_text,
                 },
             )
+            source_event_id = committed.event_id
+            source_record_seq = committed.record_seq
             _append_event(
                 db,
                 game=game,
@@ -637,6 +672,8 @@ class V2ActionRepository:
             voice_asset_id=voice_asset_id,
             storage_key=storage_key,
             subtitle_text=subtitle_text,
+            source_event_id=source_event_id,
+            source_record_seq=source_record_seq,
             activation_id=claim.activation_id,
             actor_kind=actor_kind,
             actor_id=actor_id,
@@ -1051,7 +1088,7 @@ class V2ActionRepository:
         failure_episode_id: str | None = None,
         failure_episode_disposition: Literal["isolated_action_failure", "run_failure"]
         | None = None,
-    ) -> None:
+    ) -> int:
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
@@ -1113,7 +1150,7 @@ class V2ActionRepository:
                             "failure_code": failure_code,
                         },
                     )
-            _append_event(
+            failed = _append_event(
                 db,
                 game=game,
                 run_id=claim.run_id,
@@ -1166,6 +1203,7 @@ class V2ActionRepository:
                             "reason": "non_blocking_retry_allowed",
                         },
                     )
+            return failed.record_seq
 
     def pause_model_action(
         self,
@@ -1546,6 +1584,52 @@ class V2ActionRepository:
                     },
                 )
 
+            canceled_day_speech_slots = list(
+                db.scalars(
+                    select(V2DaySpeechSlot)
+                    .where(
+                        V2DaySpeechSlot.game_id == game.game_id,
+                        V2DaySpeechSlot.run_id == run.run_id,
+                        V2DaySpeechSlot.state.in_(
+                            ("reserved", "generating", "ready", "presenting")
+                        ),
+                    )
+                    .order_by(V2DaySpeechSlot.slot_id)
+                    .with_for_update()
+                )
+            )
+            _terminalize_canceled_day_speech_actions(
+                db,
+                game=game,
+                run=run,
+                slots=canceled_day_speech_slots,
+            )
+            for slot in canceled_day_speech_slots:
+                slot.state = "canceled"
+                slot.failure = {
+                    "kind": "canceled",
+                    "reason_code": "operator_interrupted",
+                }
+                slot.terminal_at = canceled_at
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="day_speech_slot_canceled",
+                    audience="god_view",
+                    payload={
+                        "slot_id": slot.slot_id,
+                        "slot_run_id": slot.run_id,
+                        "phase_id": slot.phase_id,
+                        "round_no": slot.round_no,
+                        "speech_round": slot.speech_round,
+                        "turn_index": slot.turn_index,
+                        "actor_player_id": slot.actor_player_id,
+                        "state": slot.state,
+                        "reason_code": "operator_interrupted",
+                    },
+                )
+
             open_activations = list(
                 db.scalars(
                     select(V2AbilityActivation).where(
@@ -1635,6 +1719,10 @@ class V2ActionRepository:
                     },
                 )
 
+            # The terminal failure events above are new in this transaction.
+            # Production sessions disable autoflush, so flush before deriving
+            # the open episodes that game_canceled resolves.
+            db.flush()
             game.status = "canceled"
             run.status = "canceled"
             run.completed_at = canceled_at
@@ -1662,6 +1750,7 @@ class V2ActionRepository:
                     "canceled_window_count": len(open_windows),
                     "canceled_effect_count": len(pending_effects),
                     "canceled_model_recovery_count": len(active_recoveries),
+                    "canceled_day_speech_slot_count": len(canceled_day_speech_slots),
                     "invalidated_worker_id": invalidated_worker_id,
                     "invalidated_fence_token": invalidated_fence_token,
                     "canceled_failure_episode_ids": list(canceled_failure_episode_ids),
@@ -1672,6 +1761,172 @@ class V2ActionRepository:
                 status=run.status,
                 changed=True,
             )
+
+
+def _terminalize_canceled_day_speech_actions(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    run: V2GameRun,
+    slots: list[V2DaySpeechSlot],
+) -> None:
+    """Close hidden pipeline attempts/actions without bypassing stop globally."""
+
+    action_ids = tuple(
+        sorted(
+            {
+                action_id
+                for slot in slots
+                for action_id in (
+                    slot.generation_action_id,
+                    slot.presentation_action_id,
+                )
+                if isinstance(action_id, str) and action_id
+            }
+        )
+    )
+    if not action_ids:
+        return
+
+    events = list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == run.run_id,
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+    )
+    opened_by_action: dict[str, V2GameRecordEvent] = {}
+    terminal_action_ids: set[str] = set()
+    terminal_attempt_ids: set[str] = set()
+    starts_by_action: dict[str, list[V2GameRecordEvent]] = {
+        action_id: [] for action_id in action_ids
+    }
+    canceled_episode_ids_by_action: dict[str, set[str]] = {
+        action_id: set() for action_id in action_ids
+    }
+    action_id_set = set(action_ids)
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        action_id = payload.get("action_id")
+        if action_id not in action_id_set:
+            continue
+        if event.event_type == "action_opened":
+            opened_by_action[str(action_id)] = event
+        elif event.event_type in {"action_succeeded", "action_failed"}:
+            terminal_action_ids.add(str(action_id))
+        elif event.event_type == "model_request_started":
+            starts_by_action[str(action_id)].append(event)
+        elif event.event_type in {"model_response_received", "model_request_failed"}:
+            attempt_id = payload.get("attempt_id")
+            if isinstance(attempt_id, str) and attempt_id:
+                terminal_attempt_ids.add(attempt_id)
+
+    for episode in derive_failure_episodes(events):
+        if episode.is_open and episode.action_id in action_id_set:
+            canceled_episode_ids_by_action[episode.action_id].add(episode.failure_episode_id)
+
+    for action_id in action_ids:
+        opened = opened_by_action.get(action_id)
+        action_audience = _event_payload_audience(opened) if opened is not None else "god_view"
+        for started in starts_by_action[action_id]:
+            payload = started.payload if isinstance(started.payload, dict) else {}
+            attempt_id = payload.get("attempt_id")
+            if (
+                not isinstance(attempt_id, str)
+                or not attempt_id
+                or attempt_id in terminal_attempt_ids
+            ):
+                continue
+            retry_cycle = _positive_event_int(payload.get("retry_cycle"), default=1)
+            failure_episode_id = payload.get("failure_episode_id")
+            if not isinstance(failure_episode_id, str) or not failure_episode_id:
+                failure_episode_id = stable_failure_episode_id(
+                    game_id=game.game_id,
+                    run_id=run.run_id,
+                    action_id=action_id,
+                    retry_cycle=retry_cycle,
+                    first_failed_attempt_id=attempt_id,
+                )
+            canceled_episode_ids_by_action[action_id].add(failure_episode_id)
+            failure_payload: dict[str, Any] = {
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "attempt_no": _positive_event_int(payload.get("attempt_no"), default=1),
+                "cycle_attempt_no": _positive_event_int(
+                    payload.get("cycle_attempt_no"),
+                    default=1,
+                ),
+                "retry_cycle": retry_cycle,
+                "max_attempts": _positive_event_int(payload.get("max_attempts"), default=1),
+                "failure_kind": "canceled",
+                "failure_code": "day_speech_prefetch_canceled",
+                "failure_category": "canceled",
+                "failure_episode_id": failure_episode_id,
+                "retryable": False,
+                "attempt_terminal": True,
+                "action_recoverable": False,
+                "run_terminal": True,
+                "terminal": True,
+                "automatic_retry_scheduled": False,
+                "automatic_retry_stop_reason": "not_retryable",
+                "failure_stage": "operator_interrupted",
+                "provider_outcome_unknown": True,
+                "cancellation_reason_code": "operator_interrupted",
+            }
+            decision_family_id = payload.get("decision_family_id")
+            if isinstance(decision_family_id, str) and decision_family_id:
+                failure_payload["decision_family_id"] = decision_family_id
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_request_failed",
+                audience=action_audience,
+                payload=failure_payload,
+            )
+            terminal_attempt_ids.add(attempt_id)
+
+        if action_id in terminal_action_ids:
+            continue
+        if opened is None:
+            # Keep cancellation available across a historical binding gap,
+            # without inventing an action lifecycle that was never opened.
+            continue
+        opened_payload = opened.payload if isinstance(opened.payload, dict) else {}
+        canceled_failure_episode_ids = sorted(canceled_episode_ids_by_action[action_id])
+        _append_event(
+            db,
+            game=game,
+            run_id=run.run_id,
+            event_type="action_failed",
+            audience=_event_payload_audience(opened),
+            payload={
+                "action_id": action_id,
+                "activation_id": opened_payload.get("activation_id"),
+                "presentation_id": None,
+                "tts_attempt_id": None,
+                "failure_kind": "canceled",
+                "failure_code": "day_speech_prefetch_canceled",
+                "cancellation_reason_code": "operator_interrupted",
+                "canceled_failure_episode_ids": canceled_failure_episode_ids,
+            },
+        )
+        terminal_action_ids.add(action_id)
+
+
+def _event_payload_audience(event: V2GameRecordEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    audience = payload.get("audience")
+    return audience if isinstance(audience, str) and audience else "god_view"
+
+
+def _positive_event_int(value: object, *, default: int) -> int:
+    return (
+        value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else default
+    )
 
 
 def _locked_game(
@@ -1690,6 +1945,345 @@ def _locked_game(
         except V2RunFenceRejected as exc:
             raise V2ExecutionOwnershipLost(str(exc)) from exc
     return game
+
+
+def _is_pipeline_generation_context(context: dict[str, Any]) -> bool:
+    pipeline = context.get("pipeline")
+    return type(pipeline) is dict and pipeline.get("stage") == "generation"
+
+
+def _bind_broadcast_pipeline_generation_claim(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    run: V2GameRun,
+    action_id: str,
+    context: dict[str, Any],
+    expected_phase_id: str,
+    expected_phase_state: str,
+    audience: str,
+    context_audience: str,
+    activation_id: str | None,
+    best_effort: bool,
+    non_blocking: bool,
+) -> None:
+    """Validate and atomically bind the only action allowed during broadcast."""
+
+    pipeline = context.get("pipeline")
+    if type(pipeline) is not dict:
+        raise V2RepositoryError("day speech pipeline generation context is invalid")
+    try:
+        contract = resolve_day_speech_pipeline_contract(game.rule_snapshot)
+    except V2DaySpeechPipelineContractError as exc:
+        raise V2RepositoryError(str(exc)) from exc
+    expected_pipeline_keys = {"slot_id", "stage", "model_admission_mode"}
+    if contract.schema_version == 2:
+        expected_pipeline_keys.update({"retry_mode", "empty_stream_max_attempts"})
+    if (
+        set(pipeline) != expected_pipeline_keys
+        or pipeline.get("stage") != "generation"
+        or pipeline.get("model_admission_mode") != "idle_only"
+        or not isinstance(pipeline.get("slot_id"), str)
+        or not str(pipeline["slot_id"]).strip()
+        or not non_blocking
+        or best_effort
+        or activation_id is not None
+        or audience != "player_private"
+        or context_audience != "player_private"
+    ):
+        raise V2RepositoryError("day speech pipeline generation claim is not isolated")
+    if contract.schema_version == 2 and (
+        pipeline.get("retry_mode") != "empty_stream_once_while_predecessor_active"
+        or pipeline.get("empty_stream_max_attempts")
+        != 1 + contract.early_transport_hidden_retry_max_retries
+    ):
+        raise V2RepositoryError("day speech pipeline retry policy is not frozen")
+    if (
+        not contract.enables("day_debate_speech")
+        or contract.mode != "one_ahead"
+        or contract.max_lookahead != 1
+        or contract.context_source != "active_sealed_predecessor"
+        or contract.admission_mode != "idle_only"
+        or delivery_audio_mode(game.delivery_snapshot) != "tts"
+    ):
+        raise V2RepositoryError("day speech pipeline generation is not frozen and enabled")
+    if (
+        game.status != "broadcasting"
+        or run.status != "broadcasting"
+        or run.run_id != game.current_run_id
+        or run.game_id != game.game_id
+        or game.phase_id != expected_phase_id
+        or game.phase_state != expected_phase_state
+    ):
+        raise V2RepositoryError("day speech pipeline generation phase changed")
+
+    row = db.scalar(
+        select(V2DaySpeechSlot)
+        .where(V2DaySpeechSlot.slot_id == str(pipeline["slot_id"]))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        raise V2RepositoryError("unknown day speech pipeline slot")
+    fence = current_v2_run_fence()
+    if (
+        row.game_id != game.game_id
+        or row.run_id != run.run_id
+        or row.fence_worker_id != run.worker_id
+        or row.fence_token != run.fence_token
+        or (
+            fence is not None
+            and (
+                fence.run_id != row.run_id
+                or fence.worker_id != row.fence_worker_id
+                or fence.fence_token != row.fence_token
+            )
+        )
+    ):
+        raise V2ExecutionOwnershipLost("v2_day_speech_slot_fence_lost")
+    if row.state != "generating":
+        raise V2RepositoryError("day speech pipeline slot is not generating")
+    if row.generation_action_id is not None:
+        raise V2RepositoryError("day speech pipeline slot already claimed generation")
+    if (
+        row.phase_id != game.phase_id
+        or row.action_type != "day_debate_speech"
+        or type(context.get("schema_version")) is not int
+        or context.get("schema_version") != 1
+        or context.get("action_id") != action_id
+        or context.get("action_type") != row.action_type
+        or context.get("game_id") != game.game_id
+        or context.get("phase_id") != row.phase_id
+        or type(context.get("speech_round")) is not int
+        or context.get("speech_round") != row.speech_round
+        or type(context.get("projection_at_seq")) is not int
+        or context.get("projection_at_seq") != row.context_cutoff_record_seq
+        or type(context.get("public_cutoff_record_seq")) is not int
+        or context.get("public_cutoff_record_seq") != row.context_cutoff_record_seq
+        or type(context.get("output_contract")) is not dict
+        or context["output_contract"].get("kind") != "speech"
+    ):
+        raise V2RepositoryError("day speech pipeline generation context lineage is invalid")
+    actor = context.get("actor")
+    speech_order = context.get("speech_order")
+    batch_id = context.get("batch_id")
+    if (
+        actor != {"kind": "player", "id": row.actor_player_id}
+        or type(speech_order) is not list
+        or len(speech_order) < row.turn_index
+        or speech_order[row.turn_index - 1] != row.actor_player_id
+        or not isinstance(batch_id, str)
+        or not batch_id.strip()
+    ):
+        raise V2RepositoryError("day speech pipeline generation actor/turn is invalid")
+
+    _validate_pipeline_generation_predecessor(
+        db,
+        game=game,
+        row=row,
+        speech_order=speech_order,
+    )
+    row.generation_action_id = action_id
+
+
+def _validate_pipeline_generation_predecessor(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    row: V2DaySpeechSlot,
+    speech_order: list[Any],
+) -> None:
+    active = list(
+        db.scalars(
+            select(V2LivePresentation)
+            .where(
+                V2LivePresentation.game_id == game.game_id,
+                V2LivePresentation.state == "active",
+            )
+            .order_by(V2LivePresentation.presentation_seq)
+        )
+    )
+    if len(active) != 1:
+        raise V2RepositoryError(
+            "day speech pipeline predecessor is not the unique active presentation"
+        )
+    predecessor = active[0]
+    if row.turn_index < 2 or len(speech_order) < row.turn_index:
+        raise V2RepositoryError("day speech pipeline predecessor identity is invalid")
+    predecessor_turn_player_id = speech_order[row.turn_index - 2]
+    technical_skip_predecessor = predecessor.actor_kind == "judge"
+    predecessor_actor_valid = (
+        predecessor.actor_id == "judge"
+        if technical_skip_predecessor
+        else (
+            predecessor.actor_kind == "player"
+            and predecessor.actor_id == predecessor_turn_player_id
+        )
+    )
+    if (
+        predecessor.presentation_id != row.predecessor_presentation_id
+        or predecessor.action_id != row.predecessor_action_id
+        or predecessor.source_event_id != row.predecessor_source_event_id
+        or predecessor.run_id != row.run_id
+        or predecessor.phase_id != row.phase_id
+        or not predecessor_actor_valid
+        or predecessor.audience != "all"
+        or predecessor.closed_at is not None
+        or predecessor.voice_asset_id is None
+        or predecessor.presentation_seq != game.last_presentation_seq
+    ):
+        raise V2RepositoryError("day speech pipeline predecessor identity is invalid")
+    voice = db.get(V2VoiceAsset, predecessor.voice_asset_id)
+    if (
+        voice is None
+        or voice.game_id != row.game_id
+        or voice.run_id != row.run_id
+        or voice.action_id != row.predecessor_action_id
+        or voice.presentation_id != row.predecessor_presentation_id
+        or voice.audience != "all"
+        or voice.state not in {"writing", "ready"}
+    ):
+        raise V2RepositoryError("day speech pipeline predecessor TTS lineage is invalid")
+    source = db.get(
+        V2GameRecordEvent,
+        (row.game_id, row.predecessor_source_event_id),
+    )
+    source_payload = source.payload if source is not None else None
+    if (
+        source is None
+        or source.run_id != row.run_id
+        or source.record_seq != row.predecessor_source_record_seq
+        or source.record_seq > row.context_cutoff_record_seq
+        or source.event_type != "speech_segment_committed"
+        or type(source_payload) is not dict
+        or source_payload.get("audience") != "all"
+        or source_payload.get("action_id") != row.predecessor_action_id
+        or source_payload.get("presentation_id") != row.predecessor_presentation_id
+        or source_payload.get("speech_id") != predecessor.speech_id
+        or source_payload.get("segment_index") != predecessor.segment_index
+        or source_payload.get("text") != predecessor.subtitle_text
+        or not predecessor.subtitle_text.strip()
+    ):
+        raise V2RepositoryError("day speech pipeline predecessor source is invalid")
+
+    lineage = list(
+        db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == row.game_id,
+                V2GameRecordEvent.run_id == row.run_id,
+                V2GameRecordEvent.record_seq <= row.context_cutoff_record_seq,
+                V2GameRecordEvent.event_type.in_(
+                    {
+                        "action_opened",
+                        "action_succeeded",
+                        "action_failed",
+                        "speech_opened",
+                        "speech_segment_committed",
+                        "speech_sealed",
+                        "speech_closed",
+                        "speech_interrupted",
+                    }
+                ),
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+    )
+    opened = [
+        event
+        for event in lineage
+        if event.event_type == "action_opened"
+        and event.payload.get("action_id") == row.predecessor_action_id
+    ]
+    if len(opened) != 1:
+        raise V2RepositoryError("day speech pipeline predecessor action is invalid")
+    predecessor_context = opened[0].payload.get("context")
+    if (
+        type(predecessor_context) is not dict
+        or predecessor_context.get("action_id") != row.predecessor_action_id
+        or predecessor_context.get("game_id") != row.game_id
+        or predecessor_context.get("run_id") != row.run_id
+        or predecessor_context.get("phase_id") != row.phase_id
+        or predecessor_context.get("speech_round") != row.speech_round
+        or predecessor_context.get("speech_order") != speech_order
+        or predecessor_context.get("action_record_seq") != opened[0].record_seq
+    ):
+        raise V2RepositoryError("day speech pipeline predecessor action context is invalid")
+    if technical_skip_predecessor:
+        public_skip_record_seq = predecessor_context.get("public_skip_record_seq")
+        if (
+            predecessor_context.get("action_type") != "judge_day_speech_technical_skip"
+            or predecessor_context.get("actor") != {"kind": "judge", "id": "judge"}
+            or predecessor_context.get("skipped_player_id") != predecessor_turn_player_id
+            or predecessor_context.get("round_no") != row.round_no
+            or type(public_skip_record_seq) is not int
+            or public_skip_record_seq <= 0
+            or public_skip_record_seq >= opened[0].record_seq
+        ):
+            raise V2RepositoryError(
+                "day speech pipeline technical skip predecessor context is invalid"
+            )
+        public_skip = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == row.game_id,
+                V2GameRecordEvent.run_id == row.run_id,
+                V2GameRecordEvent.record_seq == public_skip_record_seq,
+                V2GameRecordEvent.event_type == "action_skipped_technical",
+            )
+        )
+        public_skip_payload = public_skip.payload if public_skip is not None else None
+        if (
+            public_skip is None
+            or type(public_skip_payload) is not dict
+            or public_skip_payload.get("audience") != "all"
+            or public_skip_payload.get("phase_id") != row.phase_id
+            or public_skip_payload.get("round_no") != row.round_no
+            or public_skip_payload.get("action_type") != row.action_type
+            or public_skip_payload.get("actor_id") != predecessor_turn_player_id
+            or public_skip_payload.get("reason") != "technical_failure"
+        ):
+            raise V2RepositoryError(
+                "day speech pipeline technical skip predecessor public fact is invalid"
+            )
+    elif predecessor_context.get("action_type") != row.action_type or predecessor_context.get(
+        "actor"
+    ) != {"kind": "player", "id": predecessor.actor_id}:
+        raise V2RepositoryError("day speech pipeline predecessor action context is invalid")
+    speech_events = [
+        event
+        for event in lineage
+        if event.payload.get("presentation_id") == row.predecessor_presentation_id
+    ]
+    speech_opened = [event for event in speech_events if event.event_type == "speech_opened"]
+    segments = [event for event in speech_events if event.event_type == "speech_segment_committed"]
+    sealed = [event for event in speech_events if event.event_type == "speech_sealed"]
+    terminal_speech = [
+        event
+        for event in speech_events
+        if event.event_type in {"speech_closed", "speech_interrupted"}
+    ]
+    terminal_action = [
+        event
+        for event in lineage
+        if event.event_type in {"action_succeeded", "action_failed"}
+        and event.payload.get("action_id") == row.predecessor_action_id
+    ]
+    if (
+        len(speech_opened) != 1
+        or len(segments) != 1
+        or segments[0].event_id != source.event_id
+        or len(sealed) != 1
+        or terminal_speech
+        or terminal_action
+        or not (
+            opened[0].record_seq
+            < speech_opened[0].record_seq
+            < source.record_seq
+            < sealed[0].record_seq
+            <= row.context_cutoff_record_seq
+        )
+    ):
+        raise V2RepositoryError("day speech pipeline predecessor is not active and sealed")
 
 
 def _as_utc(value: datetime) -> datetime:

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -10,11 +11,16 @@ from typing import Any, Literal
 
 from app.v2.action_engine import (
     V2ActionEngine,
+    V2ActionFailure,
     V2ActionResult,
     V2BroadcastPort,
     V2DecisionContract,
     V2PreflightPauseFailure,
     V2SpeechSpec,
+)
+from app.v2.day_speech_pipeline_repository import (
+    V2DaySpeechPipelineRepository,
+    V2DaySpeechSlotSnapshot,
 )
 from app.v2.match_repository import (
     V2DayVoteCommit,
@@ -34,7 +40,7 @@ from app.v2.model_context_contract import is_supported_model_context_contract
 from app.v2.model_generation_policy_contract import (
     resolve_model_generation_action_policy,
 )
-from app.v2.model_client import V2ModelDecision
+from app.v2.model_client import V2ModelDecision, V2ModelError, V2ProviderAdmissionMode
 from app.v2.protocol import (
     day_progress,
     game_phase_changed,
@@ -42,7 +48,11 @@ from app.v2.protocol import (
     match_state_changed,
     player_state_changed,
 )
-from app.v2.repository import V2ExecutionOwnershipLost, V2PhaseTransition
+from app.v2.repository import (
+    V2ExecutionOwnershipLost,
+    V2PhaseTransition,
+    V2PresentationIdentity,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -108,10 +118,102 @@ def _vote_decision_family_id(
 
 _PRIVATE_ROUND_MEMORY_MAX_CHARS = 400
 _DECISION_NOTE_MAX_CHARS = 80
+_DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE = "day_speech_prefetch_post_close_deadline"
 
 
 class V2DayRuntimeError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class _PreparedDaySpeech:
+    slot: V2DaySpeechSlotSnapshot
+    decision: V2ModelDecision
+
+
+@dataclass(frozen=True)
+class _FailedDaySpeechPrefetch:
+    slot: V2DaySpeechSlotSnapshot
+    source_action_id: str | None
+    failure: V2ActionFailure
+    terminal_event_record_seq: int | None
+
+
+_DaySpeechPrefetchOutcome = _PreparedDaySpeech | _FailedDaySpeechPrefetch
+
+
+@dataclass
+class _DaySpeechPrefetchLaunch:
+    slot: V2DaySpeechSlotSnapshot | None = None
+    task: asyncio.Task[None] | None = None
+    outcome: _DaySpeechPrefetchOutcome | None = None
+    fatal: BaseException | None = None
+
+
+def _prepared_day_speech_from_slot(
+    slot: V2DaySpeechSlotSnapshot,
+) -> _PreparedDaySpeech:
+    decision = slot.decision if isinstance(slot.decision, dict) else {}
+    speech = decision.get("speech")
+    if not isinstance(speech, str) or not speech.strip():
+        raise V2DayRuntimeError("ready day speech slot has no reusable speech")
+    target_player_id = decision.get("target_player_id")
+    decision_note = decision.get("decision_note")
+    return _PreparedDaySpeech(
+        slot=slot,
+        decision=V2ModelDecision(
+            target_player_id=(target_player_id if isinstance(target_player_id, str) else None),
+            speech=speech,
+            provider_request_id=(
+                slot.generation_attempt_id or slot.generation_action_id or slot.slot_id
+            ),
+            first_token_ms=0,
+            completed_ms=0,
+            decision_note=(decision_note if isinstance(decision_note, str) else None),
+        ),
+    )
+
+
+def _failed_day_speech_prefetch_from_slot(
+    slot: V2DaySpeechSlotSnapshot,
+) -> _FailedDaySpeechPrefetch:
+    persisted = slot.failure if isinstance(slot.failure, dict) else {}
+    action_failed = persisted.get("action_failed")
+    action_failed = action_failed if isinstance(action_failed, dict) else {}
+    request_failed = persisted.get("model_request_failed")
+    request_failed = request_failed if isinstance(request_failed, dict) else {}
+    reason_code = persisted.get("reason_code")
+    failure_code = action_failed.get("failure_code") or request_failed.get("failure_code")
+    if not isinstance(failure_code, str) or not failure_code:
+        failure_code = (
+            reason_code
+            if isinstance(reason_code, str) and reason_code
+            else "day_speech_prefetch_terminal_without_failure_lineage"
+        )
+    failure_category = request_failed.get("failure_category")
+    if failure_code == _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE:
+        failure_category = "timeout"
+    if not isinstance(failure_category, str):
+        failure_category = None
+    source_action_id = slot.generation_action_id or action_failed.get("action_id")
+    if not isinstance(source_action_id, str):
+        source_action_id = None
+    failure_episode_id = action_failed.get("failure_episode_id") or request_failed.get(
+        "failure_episode_id"
+    )
+    if not isinstance(failure_episode_id, str):
+        failure_episode_id = None
+    return _FailedDaySpeechPrefetch(
+        slot=slot,
+        source_action_id=source_action_id,
+        failure=V2ActionFailure(
+            code=failure_code,
+            category=failure_category,
+            terminal_attempt_id=slot.generation_attempt_id,
+            failure_episode_id=failure_episode_id,
+        ),
+        terminal_event_record_seq=slot.failure_record_seq,
+    )
 
 
 def speech_order_from_start(
@@ -144,9 +246,11 @@ class V2DayEngine:
         *,
         repository: V2MatchRepository,
         action_engine: V2ActionEngine,
+        day_speech_pipeline_repository: V2DaySpeechPipelineRepository | None = None,
     ) -> None:
         self._repository = repository
         self._actions = action_engine
+        self._day_speech_pipeline = day_speech_pipeline_repository
 
     async def resolve_pending_death_aftermath(
         self,
@@ -673,25 +777,717 @@ class V2DayEngine:
                 },
             ):
                 return True
-            for player_id in order:
+            round_state = self._repository.snapshot(game_id)
+            if not self._day_speech_pipeline_enabled(round_state):
+                for player_id in order:
+                    self._actions.check_cancellation(game_id)
+                    current = self._repository.snapshot(game_id)
+                    player = current.player(player_id)
+                    if not player.alive:
+                        continue
+                    decision = await self._player_action(
+                        game_id=game_id,
+                        player=player,
+                        broadcaster=broadcaster,
+                        action_type="day_debate_speech",
+                        objective="发表本轮白天讨论发言。",
+                        candidates=[],
+                        target_optional=None,
+                        output_kind="public_speech",
+                        extra_context={"speech_round": speech_round, "speech_order": order},
+                    )
+                    assert isinstance(decision, V2ModelDecision)
+                    self._record_speech(current, player, decision, "day_debate")
+                continue
+
+            prepared: _DaySpeechPrefetchOutcome | None = None
+            for turn_offset, player_id in enumerate(order):
                 self._actions.check_cancellation(game_id)
                 current = self._repository.snapshot(game_id)
                 player = current.player(player_id)
                 if not player.alive:
+                    if prepared is not None and prepared.slot.actor_player_id == player_id:
+                        self._cancel_day_speech_slot(
+                            prepared.slot.slot_id,
+                            reason_code="prefetched_actor_no_longer_alive",
+                        )
+                        prepared = None
                     continue
-                decision = await self._player_action(
-                    game_id=game_id,
+                if prepared is not None and (
+                    prepared.slot.actor_player_id != player_id
+                    or prepared.slot.speech_round != speech_round
+                    or prepared.slot.turn_index != turn_offset + 1
+                ):
+                    self._cancel_day_speech_slot(
+                        prepared.slot.slot_id,
+                        reason_code="prefetched_turn_no_longer_matches",
+                    )
+                    prepared = None
+                next_player_id = order[turn_offset + 1] if turn_offset + 1 < len(order) else None
+                decision, next_prepared = await self._run_day_speech_pipeline_turn(
+                    state=current,
                     player=player,
+                    prepared=prepared,
+                    next_player_id=next_player_id,
+                    next_turn_index=turn_offset + 2,
+                    speech_round=speech_round,
+                    speech_order=order,
                     broadcaster=broadcaster,
-                    action_type="day_debate_speech",
-                    objective="发表本轮白天讨论发言。",
-                    candidates=[],
-                    target_optional=None,
-                    output_kind="public_speech",
-                    extra_context={"speech_round": speech_round, "speech_order": order},
                 )
-                self._record_speech(current, player, decision, "day_debate")
+                try:
+                    self._record_speech(current, player, decision, "day_debate")
+                except BaseException:
+                    if next_prepared is not None:
+                        self._cancel_day_speech_slot(
+                            next_prepared.slot.slot_id,
+                            reason_code="prefetch_predecessor_commit_failed",
+                        )
+                    raise
+                prepared = next_prepared
         return False
+
+    def _day_speech_pipeline_enabled(self, state: V2MatchSnapshot) -> bool:
+        return bool(
+            self._day_speech_pipeline is not None
+            and state.audio_mode == "tts"
+            and state.day_speech_pipeline_contract.max_lookahead == 1
+            and state.day_speech_pipeline_contract.enables("day_debate_speech")
+        )
+
+    async def _run_day_speech_pipeline_turn(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+        prepared: _DaySpeechPrefetchOutcome | None,
+        next_player_id: str | None,
+        next_turn_index: int,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+    ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
+        pipeline = self._day_speech_pipeline
+        if pipeline is None:
+            raise V2DayRuntimeError("day speech pipeline repository is unavailable")
+        if isinstance(prepared, _FailedDaySpeechPrefetch):
+            if self._day_speech_prefetch_requires_technical_skip(state, prepared):
+                return await self._run_day_speech_technical_skip_turn(
+                    state=state,
+                    player=player,
+                    failed_prefetch=prepared,
+                    next_player_id=next_player_id,
+                    next_turn_index=next_turn_index,
+                    speech_round=speech_round,
+                    speech_order=speech_order,
+                    broadcaster=broadcaster,
+                )
+            # Schema v1 and the schema-v2 capacity rejection policy preserve
+            # the original foreground sequential fallback.
+            prepared = None
+        launch = _DaySpeechPrefetchLaunch()
+        current_task = asyncio.current_task()
+        presentation_closed_at: float | None = None
+
+        def on_presentation_opened(identity: V2PresentationIdentity) -> None:
+            if prepared is not None:
+                pipeline.mark_presenting(
+                    slot_id=prepared.slot.slot_id,
+                    presentation_action_id=identity.action_id,
+                    presentation_id=identity.presentation_id,
+                )
+            if next_player_id is None:
+                return
+            self._launch_day_speech_prefetch(
+                launch=launch,
+                task_group=task_group,
+                parent_task=current_task,
+                identity=identity,
+                phase_state=state.phase_state,
+                next_player_id=next_player_id,
+                next_turn_index=next_turn_index,
+                speech_round=speech_round,
+                speech_order=speech_order,
+                broadcaster=broadcaster,
+            )
+
+        def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
+            nonlocal presentation_closed_at
+            presentation_closed_at = asyncio.get_running_loop().time()
+
+        action_result: V2ActionResult | None = None
+        body_error: BaseException | None = None
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                try:
+                    candidate_result = await self._player_action(
+                        game_id=state.game_id,
+                        player=player,
+                        broadcaster=broadcaster,
+                        action_type="day_debate_speech",
+                        objective="发表本轮白天讨论发言。",
+                        candidates=[],
+                        target_optional=None,
+                        output_kind="public_speech",
+                        extra_context={
+                            "speech_round": speech_round,
+                            "speech_order": speech_order,
+                        },
+                        precomputed_decision=(prepared.decision if prepared is not None else None),
+                        on_presentation_opened=on_presentation_opened,
+                        on_presentation_closed=on_presentation_closed,
+                        pipeline_slot_id=(prepared.slot.slot_id if prepared is not None else None),
+                        pipeline_stage=("presentation" if prepared is not None else None),
+                        isolated_failure=prepared is not None,
+                        allow_failure=prepared is not None,
+                        return_result=True,
+                    )
+                    if not isinstance(candidate_result, V2ActionResult):
+                        body_error = V2DayRuntimeError("day_debate_speech_failed")
+                    else:
+                        action_result = candidate_result
+                        if action_result.failure is not None:
+                            if (
+                                prepared is not None
+                                and action_result.terminal_event_record_seq is not None
+                            ):
+                                pipeline.mark_failed(
+                                    slot_id=prepared.slot.slot_id,
+                                    failure_record_seq=(action_result.terminal_event_record_seq),
+                                )
+                            body_error = V2DayRuntimeError(
+                                "day_debate_speech_pipeline_presentation_failed"
+                            )
+                        elif action_result.decision is None:
+                            body_error = V2DayRuntimeError("day_debate_speech_failed")
+                        elif prepared is not None:
+                            pipeline.mark_consumed(slot_id=prepared.slot.slot_id)
+                except BaseException as exc:
+                    body_error = exc
+                if body_error is not None and launch.task is not None:
+                    launch.task.cancel()
+                elif launch.task is not None:
+                    await self._await_day_speech_prefetch_after_close(
+                        state=state,
+                        launch=launch,
+                        presentation_closed_at=presentation_closed_at,
+                    )
+            if launch.fatal is not None:
+                raise launch.fatal
+            if body_error is not None:
+                raise body_error
+        except asyncio.CancelledError:
+            if prepared is not None:
+                self._cancel_day_speech_slot(
+                    prepared.slot.slot_id,
+                    reason_code="prefetched_presentation_canceled",
+                )
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="prefetch_parent_canceled",
+                )
+            if launch.fatal is not None:
+                raise launch.fatal
+            raise
+        except BaseException:
+            if prepared is not None:
+                self._cancel_day_speech_slot(
+                    prepared.slot.slot_id,
+                    reason_code="prefetched_presentation_failed",
+                )
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="prefetch_predecessor_failed",
+                )
+            raise
+
+        if action_result is None or action_result.decision is None:
+            raise V2DayRuntimeError("day_debate_speech_failed")
+        return action_result.decision, launch.outcome
+
+    async def _await_day_speech_prefetch_after_close(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        launch: _DaySpeechPrefetchLaunch,
+        presentation_closed_at: float | None,
+    ) -> None:
+        pipeline = self._day_speech_pipeline
+        if pipeline is None or launch.task is None:
+            return
+        grace_ms = state.day_speech_pipeline_contract.post_predecessor_close_grace_ms
+        if grace_ms is None:
+            return
+        loop = asyncio.get_running_loop()
+        closed_at = presentation_closed_at or loop.time()
+        remaining_seconds = max(
+            0.0,
+            closed_at + (grace_ms / 1000) - loop.time(),
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(launch.task),
+                timeout=remaining_seconds,
+            )
+        except TimeoutError:
+            cancel_requested = launch.task.cancel(_DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE)
+            try:
+                await launch.task
+            except asyncio.CancelledError:
+                pass
+            if launch.slot is None:
+                return
+            launch.slot = pipeline.get_slot(launch.slot.slot_id)
+            if launch.slot.state == "ready":
+                launch.outcome = _prepared_day_speech_from_slot(launch.slot)
+            elif launch.slot.state == "failed" or (
+                launch.slot.state == "canceled"
+                and (launch.slot.failure or {}).get("reason_code")
+                == _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE
+            ):
+                launch.outcome = _failed_day_speech_prefetch_from_slot(launch.slot)
+            else:
+                raise V2DayRuntimeError(
+                    "day speech prefetch deadline did not durably terminate "
+                    f"its slot (cancel_requested={cancel_requested})"
+                )
+
+    def _day_speech_prefetch_requires_technical_skip(
+        self,
+        state: V2MatchSnapshot,
+        failed_prefetch: _FailedDaySpeechPrefetch,
+    ) -> bool:
+        contract = state.day_speech_pipeline_contract
+        if contract.schema_version != 2:
+            return False
+        failure = failed_prefetch.failure
+        if (
+            failure.code == "model_prefetch_capacity_unavailable"
+            or failure.category == "admission_capacity"
+        ):
+            return False
+        if (
+            failure.category in contract.duplicate_foreground_fallback_forbidden_failure_categories
+            or failure.code == "model_empty_stream"
+            or failure.code == _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE
+        ):
+            return True
+        return False
+
+    async def _run_day_speech_technical_skip_turn(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+        failed_prefetch: _FailedDaySpeechPrefetch,
+        next_player_id: str | None,
+        next_turn_index: int,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+    ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
+        launch = _DaySpeechPrefetchLaunch()
+        current_task = asyncio.current_task()
+        presentation_closed_at: float | None = None
+
+        def on_presentation_opened(identity: V2PresentationIdentity) -> None:
+            if next_player_id is None:
+                return
+            self._launch_day_speech_prefetch(
+                launch=launch,
+                task_group=task_group,
+                parent_task=current_task,
+                identity=identity,
+                phase_state=state.phase_state,
+                next_player_id=next_player_id,
+                next_turn_index=next_turn_index,
+                speech_round=speech_round,
+                speech_order=speech_order,
+                broadcaster=broadcaster,
+                predecessor_turn_player_id=player.player_id,
+            )
+
+        def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
+            nonlocal presentation_closed_at
+            presentation_closed_at = asyncio.get_running_loop().time()
+
+        decision: V2ModelDecision | None = None
+        body_error: BaseException | None = None
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                try:
+                    decision = await self._complete_day_speech_technical_skip(
+                        state=state,
+                        player=player,
+                        failed_prefetch=failed_prefetch,
+                        speech_round=speech_round,
+                        speech_order=speech_order,
+                        broadcaster=broadcaster,
+                        on_presentation_opened=on_presentation_opened,
+                        on_presentation_closed=on_presentation_closed,
+                    )
+                except BaseException as exc:
+                    body_error = exc
+                if body_error is not None and launch.task is not None:
+                    launch.task.cancel()
+                elif launch.task is not None:
+                    await self._await_day_speech_prefetch_after_close(
+                        state=state,
+                        launch=launch,
+                        presentation_closed_at=presentation_closed_at,
+                    )
+            if launch.fatal is not None:
+                raise launch.fatal
+            if body_error is not None:
+                raise body_error
+        except asyncio.CancelledError:
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="technical_skip_prefetch_parent_canceled",
+                )
+            if launch.fatal is not None:
+                raise launch.fatal
+            raise
+        except BaseException:
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="technical_skip_cue_failed",
+                )
+            raise
+        if decision is None:
+            raise V2DayRuntimeError("pipeline technical skip did not complete")
+        return decision, launch.outcome
+
+    async def _complete_day_speech_technical_skip(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+        failed_prefetch: _FailedDaySpeechPrefetch,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+    ) -> V2ModelDecision:
+        complete = getattr(
+            self._actions,
+            "complete_pipeline_speech_technical_skip",
+            None,
+        )
+        if not callable(complete):
+            raise V2DayRuntimeError("pipeline technical skip is unsupported")
+        if (
+            failed_prefetch.source_action_id is None
+            or failed_prefetch.terminal_event_record_seq is None
+        ):
+            raise V2DayRuntimeError("pipeline technical skip has incomplete source lineage")
+        result = await complete(
+            game_id=state.game_id,
+            broadcaster=broadcaster,
+            player_id=player.player_id,
+            player_seat=player.seat,
+            action_type="day_debate_speech",
+            phase_id=state.phase_id,
+            required_phase_state=state.phase_state,
+            round_no=state.round_no,
+            speech_round=speech_round,
+            speech_order=speech_order,
+            source_slot_id=failed_prefetch.slot.slot_id,
+            source_action_id=failed_prefetch.source_action_id,
+            source_failure=failed_prefetch.failure,
+            source_terminal_event_record_seq=(failed_prefetch.terminal_event_record_seq),
+            on_presentation_opened=on_presentation_opened,
+            on_presentation_closed=on_presentation_closed,
+        )
+        if not isinstance(result, V2ActionResult) or result.failure is not None:
+            raise V2DayRuntimeError("pipeline technical skip cue did not complete")
+        return V2ModelDecision(
+            target_player_id=None,
+            speech=None,
+            provider_request_id=(
+                failed_prefetch.failure.terminal_attempt_id or failed_prefetch.source_action_id
+            ),
+            first_token_ms=0,
+            completed_ms=0,
+        )
+
+    def _launch_day_speech_prefetch(
+        self,
+        *,
+        launch: _DaySpeechPrefetchLaunch,
+        task_group: asyncio.TaskGroup,
+        parent_task: asyncio.Task[Any] | None,
+        identity: V2PresentationIdentity,
+        phase_state: str,
+        next_player_id: str,
+        next_turn_index: int,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+        predecessor_turn_player_id: str | None = None,
+    ) -> None:
+        pipeline = self._day_speech_pipeline
+        if pipeline is None:
+            return
+        try:
+            if (
+                type(identity.source_event_id) is not int
+                or identity.source_event_id <= 0
+                or type(identity.source_record_seq) is not int
+                or identity.source_record_seq <= 0
+            ):
+                raise V2DayRuntimeError("day speech predecessor has no durable source lineage")
+            frozen = self._repository.snapshot_for_day_speech_prefetch(
+                game_id=identity.game_id,
+                run_id=identity.run_id,
+                phase_id=identity.phase_id,
+                phase_state=phase_state,
+                predecessor_presentation_id=identity.presentation_id,
+                predecessor_action_id=identity.action_id,
+                predecessor_source_event_id=identity.source_event_id,
+                predecessor_turn_player_id=predecessor_turn_player_id,
+            )
+            if (
+                not self._day_speech_pipeline_enabled(frozen.match_snapshot)
+                or frozen.predecessor_source_record_seq != identity.source_record_seq
+            ):
+                raise V2DayRuntimeError("day speech prefetch contract or lineage changed")
+            next_player = frozen.match_snapshot.player(next_player_id)
+            if not next_player.alive:
+                return
+            slot = pipeline.reserve_slot(
+                game_id=identity.game_id,
+                phase_id=identity.phase_id,
+                round_no=frozen.match_snapshot.round_no,
+                speech_round=speech_round,
+                turn_index=next_turn_index,
+                actor_player_id=next_player.player_id,
+                predecessor_action_id=identity.action_id,
+                predecessor_presentation_id=identity.presentation_id,
+                predecessor_source_event_id=identity.source_event_id,
+                predecessor_source_record_seq=identity.source_record_seq,
+                context_cutoff_record_seq=frozen.public_cutoff_record_seq,
+                predecessor_turn_player_id=predecessor_turn_player_id,
+            )
+            launch.slot = slot
+            if slot.state == "ready":
+                launch.outcome = _prepared_day_speech_from_slot(slot)
+                return
+            if slot.state == "failed" or (
+                slot.state == "canceled"
+                and (slot.failure or {}).get("reason_code")
+                == _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE
+            ):
+                launch.outcome = _failed_day_speech_prefetch_from_slot(slot)
+                return
+            if slot.state != "reserved":
+                self._cancel_day_speech_slot(
+                    slot.slot_id,
+                    reason_code="prefetch_slot_not_resumable",
+                )
+                return
+            slot = pipeline.mark_generating(slot_id=slot.slot_id)
+            launch.slot = slot
+
+            async def generate_guarded() -> None:
+                try:
+                    launch.outcome = await self._generate_prefetched_day_speech(
+                        frozen_state=frozen.match_snapshot,
+                        player=next_player,
+                        slot=slot,
+                        speech_round=speech_round,
+                        speech_order=speech_order,
+                        broadcaster=broadcaster,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except V2ExecutionOwnershipLost as exc:
+                    launch.fatal = exc
+                    if parent_task is not None and not parent_task.done():
+                        parent_task.cancel()
+
+            launch.task = task_group.create_task(generate_guarded())
+        except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="prefetch_preparation_interrupted",
+                )
+            raise
+        except Exception:
+            logger.exception(
+                "Live V2 day speech prefetch preparation failed; using foreground fallback",
+                extra={
+                    "game_id": identity.game_id,
+                    "run_id": identity.run_id,
+                    "phase_id": identity.phase_id,
+                    "predecessor_action_id": identity.action_id,
+                    "next_player_id": next_player_id,
+                    "speech_round": speech_round,
+                    "turn_index": next_turn_index,
+                },
+            )
+            if launch.slot is not None:
+                self._cancel_day_speech_slot(
+                    launch.slot.slot_id,
+                    reason_code="prefetch_preparation_failed",
+                )
+
+    async def _generate_prefetched_day_speech(
+        self,
+        *,
+        frozen_state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+        slot: V2DaySpeechSlotSnapshot,
+        speech_round: int,
+        speech_order: list[str],
+        broadcaster: V2BroadcastPort,
+    ) -> _DaySpeechPrefetchOutcome | None:
+        pipeline = self._day_speech_pipeline
+        if pipeline is None:
+            return None
+        contract = frozen_state.day_speech_pipeline_contract
+        guarded_empty_stream_retry = (
+            contract.schema_version == 2 and contract.early_transport_hidden_retry_max_retries == 1
+        )
+        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None
+        if guarded_empty_stream_retry:
+
+            def predecessor_is_still_active(
+                _exc: V2ModelError,
+                _attempt_no: int,
+            ) -> bool:
+                return pipeline.predecessor_is_active(slot.slot_id)
+
+            model_retry_guard = predecessor_is_still_active
+        try:
+            action_result = await self._player_action(
+                game_id=frozen_state.game_id,
+                player=player,
+                broadcaster=broadcaster,
+                action_type="day_debate_speech",
+                objective="发表本轮白天讨论发言。",
+                candidates=[],
+                target_optional=None,
+                output_kind="public_speech",
+                audience="player_private",
+                extra_context={
+                    "speech_round": speech_round,
+                    "speech_order": speech_order,
+                    "public_cutoff_record_seq": frozen_state.last_record_seq,
+                },
+                frozen_state=frozen_state,
+                projection_at_seq=frozen_state.last_record_seq,
+                defer_presentation=True,
+                isolated_failure=True,
+                allow_failure=True,
+                batch_id=slot.slot_id,
+                model_admission_mode="idle_only",
+                pipeline_slot_id=slot.slot_id,
+                pipeline_stage="generation",
+                pipeline_empty_stream_max_attempts=(
+                    1 + contract.early_transport_hidden_retry_max_retries
+                ),
+                pipeline_retry_mode=(
+                    "empty_stream_once_while_predecessor_active"
+                    if guarded_empty_stream_retry
+                    else "disabled"
+                ),
+                model_retry_guard=model_retry_guard,
+                return_result=True,
+            )
+            if not isinstance(action_result, V2ActionResult):
+                self._cancel_day_speech_slot(
+                    slot.slot_id,
+                    reason_code="prefetch_generation_not_claimed",
+                )
+                return None
+            if action_result.failure is not None:
+                if action_result.terminal_event_record_seq is None:
+                    self._cancel_day_speech_slot(
+                        slot.slot_id,
+                        reason_code="prefetch_failure_lineage_missing",
+                    )
+                    return None
+                failed_slot = pipeline.mark_failed(
+                    slot_id=slot.slot_id,
+                    failure_record_seq=action_result.terminal_event_record_seq,
+                )
+                return _FailedDaySpeechPrefetch(
+                    slot=failed_slot,
+                    source_action_id=action_result.action_id,
+                    failure=action_result.failure,
+                    terminal_event_record_seq=action_result.terminal_event_record_seq,
+                )
+            if (
+                action_result.action_id is None
+                or action_result.decision is None
+                or not action_result.decision.speech
+                or action_result.model_response_record_seq is None
+            ):
+                self._cancel_day_speech_slot(
+                    slot.slot_id,
+                    reason_code="prefetch_generation_lineage_incomplete",
+                )
+                return None
+            ready = pipeline.mark_ready(
+                slot_id=slot.slot_id,
+                generation_action_id=action_result.action_id,
+                generation_response_record_seq=action_result.model_response_record_seq,
+            )
+            return _PreparedDaySpeech(slot=ready, decision=action_result.decision)
+        except asyncio.CancelledError as exc:
+            cancellation_reason = (
+                exc.args[0]
+                if exc.args and exc.args[0] == _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE
+                else "prefetch_generation_canceled"
+            )
+            self._cancel_day_speech_slot(
+                slot.slot_id,
+                reason_code=cancellation_reason,
+            )
+            raise
+        except V2ExecutionOwnershipLost:
+            self._cancel_day_speech_slot(
+                slot.slot_id,
+                reason_code="prefetch_generation_ownership_lost",
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "Live V2 day speech prefetch generation failed; using foreground fallback",
+                extra={
+                    "game_id": frozen_state.game_id,
+                    "run_id": frozen_state.run_id,
+                    "slot_id": slot.slot_id,
+                    "player_id": player.player_id,
+                    "speech_round": speech_round,
+                },
+            )
+            self._cancel_day_speech_slot(
+                slot.slot_id,
+                reason_code="prefetch_generation_failed",
+            )
+            return None
+
+    def _cancel_day_speech_slot(self, slot_id: str, *, reason_code: str) -> None:
+        pipeline = self._day_speech_pipeline
+        if pipeline is None:
+            return
+        try:
+            slot = pipeline.get_slot(slot_id)
+            if slot.state in {"consumed", "failed", "canceled", "invalidated"}:
+                return
+            pipeline.cancel_slot(slot_id=slot_id, reason_code=reason_code)
+        except Exception:
+            logger.exception(
+                "Live V2 day speech slot cleanup failed",
+                extra={"slot_id": slot_id, "reason_code": reason_code},
+            )
 
     async def _speech_order(
         self,
@@ -2132,6 +2928,18 @@ class V2DayEngine:
         automatic_output_budget_budget: int | None = None,
         preflight_pause_failure: V2PreflightPauseFailure | None = None,
         target_exhaustion_outcome: Literal["technical_abstain"] | None = None,
+        precomputed_decision: V2ModelDecision | None = None,
+        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+        model_admission_mode: V2ProviderAdmissionMode = "normal",
+        pipeline_slot_id: str | None = None,
+        pipeline_stage: Literal["generation", "presentation"] | None = None,
+        pipeline_empty_stream_max_attempts: Literal[1, 2] = 1,
+        pipeline_retry_mode: Literal[
+            "disabled",
+            "empty_stream_once_while_predecessor_active",
+        ] = "disabled",
+        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
         return_result: bool = False,
     ) -> V2ModelDecision | V2ActionResult | None:
         self._actions.check_cancellation(game_id)
@@ -2258,22 +3066,56 @@ class V2DayEngine:
             automatic_output_budget_budget=automatic_output_budget_budget,
             preflight_pause_failure=preflight_pause_failure,
             target_exhaustion_outcome=target_exhaustion_outcome,
+            model_admission_mode=model_admission_mode,
+            pipeline_slot_id=pipeline_slot_id,
+            pipeline_stage=pipeline_stage,
+            pipeline_empty_stream_max_attempts=pipeline_empty_stream_max_attempts,
+            pipeline_retry_mode=pipeline_retry_mode,
         )
-        if return_result and callable(getattr(self._actions, "run_player_decision_result", None)):
-            result = await self._actions.run_player_decision_result(
+        if precomputed_decision is not None:
+            present_result = getattr(self._actions, "present_player_decision_result", None)
+            if not callable(present_result):
+                raise V2DayRuntimeError("pipeline presentation is unsupported")
+            result = await present_result(
                 game_id=game_id,
                 broadcaster=broadcaster,
                 spec=spec,
+                decision=precomputed_decision,
+                on_presentation_opened=on_presentation_opened,
+                on_presentation_closed=on_presentation_closed,
             )
+        elif return_result and callable(getattr(self._actions, "run_player_decision_result", None)):
+            result_method = self._actions.run_player_decision_result
+            result_kwargs: dict[str, Any] = {
+                "game_id": game_id,
+                "broadcaster": broadcaster,
+                "spec": spec,
+            }
+            if on_presentation_opened is not None:
+                result_kwargs["on_presentation_opened"] = on_presentation_opened
+            if on_presentation_closed is not None:
+                result_kwargs["on_presentation_closed"] = on_presentation_closed
+            if model_retry_guard is not None:
+                result_kwargs["model_retry_guard"] = model_retry_guard
+            result = await result_method(**result_kwargs)
         else:
-            decision = await self._actions.run_player_decision(
-                game_id=game_id,
-                broadcaster=broadcaster,
-                spec=spec,
-            )
+            decision_kwargs: dict[str, Any] = {
+                "game_id": game_id,
+                "broadcaster": broadcaster,
+                "spec": spec,
+            }
+            if on_presentation_opened is not None:
+                decision_kwargs["on_presentation_opened"] = on_presentation_opened
+            if on_presentation_closed is not None:
+                decision_kwargs["on_presentation_closed"] = on_presentation_closed
+            decision = await self._actions.run_player_decision(**decision_kwargs)
             result = V2ActionResult(decision=decision)
         decision = result.decision if result is not None else None
-        if decision is None and not allow_failure and result.technical_outcome is None:
+        if (
+            decision is None
+            and not allow_failure
+            and (result is None or result.technical_outcome is None)
+        ):
             raise V2DayRuntimeError(f"{action_type}_failed")
         if return_result:
             return result
