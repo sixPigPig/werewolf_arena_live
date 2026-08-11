@@ -2372,6 +2372,258 @@ describe("V2 game record detail workspace", () => {
     ).toHaveTextContent("内部控制流1");
   });
 
+  it("renders a capacity control-flow result as a gray skipped state everywhere", async () => {
+    const skippedAttempt = {
+      ...retryDetail.model_requests[1],
+      status: "skipped",
+      terminal: true,
+      failure_kind: "pipeline_control_flow",
+      failure_code: "model_prefetch_capacity_unavailable",
+      failure_category: "admission_capacity",
+      failure_impact: "expected_control_flow",
+      counts_as_failure: false,
+      failure_resolution: "technical_skip",
+    };
+    stubRecordFetch({
+      ...retryDetail,
+      title: "容量跳过视觉验收",
+      events: [
+        ...retryDetail.events.slice(0, -1),
+        event(10, "action_failed", {
+          action_id: actionId,
+          failure_code: "model_prefetch_capacity_unavailable",
+        }),
+      ],
+      model_requests: [retryDetail.model_requests[0], skippedAttempt],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "容量跳过视觉验收" }),
+    ).toBeVisible();
+    const summary = screen.getByRole("region", { name: "对局摘要" });
+    expect(
+      within(summary)
+        .getByText("有效失败")
+        .closest(".v2-record-summary-metric"),
+    ).toHaveTextContent("有效失败0");
+    expect(
+      within(summary)
+        .getByText("内部控制流")
+        .closest(".v2-record-summary-metric"),
+    ).toHaveTextContent("内部控制流1");
+
+    const timeline = document.querySelector(".v2-action-table");
+    expect(timeline).not.toBeNull();
+    const timelineStatus = within(timeline as HTMLElement)
+      .getByText("已跳过")
+      .closest(".v2-action-status");
+    expect(timelineStatus).toHaveClass("is-skipped");
+    expect(
+      timelineStatus?.querySelector(".anticon-minus-circle"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "筛选状态" }));
+    const skippedOption = await screen.findByText("已跳过", {
+      selector: ".ant-select-item-option-content",
+    });
+    expect(skippedOption).toBeInTheDocument();
+    expect(
+      screen.getByText("已取消", {
+        selector: ".ant-select-item-option-content",
+      }),
+    ).toBeInTheDocument();
+    await user.click(skippedOption);
+    expect(within(timeline as HTMLElement).getByText("已跳过")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const drawerTag = dialog.querySelector(
+      ".v2-request-drawer-title .v2-status-tag.is-skipped",
+    );
+    expect(drawerTag).toHaveTextContent("已跳过");
+    const attempts = within(dialog).getByRole("region", {
+      name: "模型请求尝试",
+    });
+    const skippedAttemptTag = within(attempts)
+      .getByText(/第 2 次 .*已跳过/)
+      .closest(".v2-status-tag");
+    expect(skippedAttemptTag).toHaveClass("is-skipped");
+    const controlFlowNotice = within(dialog).getByRole("note", {
+      name: "流水线控制流",
+    });
+    expect(controlFlowNotice).toHaveClass("v2-control-flow-notice");
+    expect(controlFlowNotice.closest(".ant-alert")).toBeNull();
+    expect(controlFlowNotice).toHaveTextContent(
+      "admission_capacity · model_prefetch_capacity_unavailable · 预期控制流，不计入有效失败",
+    );
+  });
+
+  it("renders an actively canceled request with neutral gray status styling", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "主动取消视觉验收",
+      events: [
+        ...detail.events.slice(0, -1),
+        event(7, "action_failed", {
+          action_id: actionId,
+          failure_code: "model_request_canceled",
+        }),
+      ],
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          status: "canceled",
+          terminal: true,
+          failure_kind: "canceled",
+          failure_code: "model_request_canceled",
+          failure_impact: "expected_control_flow",
+          counts_as_failure: false,
+          failure_resolution: "run_canceled",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "主动取消视觉验收" }),
+    ).toBeVisible();
+    const timeline = document.querySelector(".v2-action-table");
+    expect(timeline).not.toBeNull();
+    const timelineStatus = within(timeline as HTMLElement)
+      .getByText("已取消")
+      .closest(".v2-action-status");
+    expect(timelineStatus).toHaveClass("is-canceled");
+    expect(
+      timelineStatus?.querySelector(".anticon-stop"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "筛选状态" }));
+    await user.click(
+      await screen.findByText("已取消", {
+        selector: ".ant-select-item-option-content",
+      }),
+    );
+    expect(within(timeline as HTMLElement).getByText("已取消")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const drawerTag = dialog.querySelector(
+      ".v2-request-drawer-title .v2-status-tag.is-canceled",
+    );
+    expect(drawerTag).toHaveTextContent("已取消");
+  });
+
+  it("renders a paused terminal model timeout as failed instead of loading", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "终态超时列表验收",
+      events: [
+        event(1, "game_created", {}),
+        event(2, "action_opened", {
+          action_id: actionId,
+          context: {
+            phase_id: "opening",
+            action_type: "judge_opening_speech",
+            objective: "欢迎玩家并宣布对局开始",
+            actor: { kind: "judge", id: "judge" },
+          },
+        }),
+        event(3, "model_request_started", {
+          action_id: actionId,
+          attempt_id: "v2_model_terminal_timeout",
+        }),
+        event(4, "model_request_failed", {
+          action_id: actionId,
+          attempt_id: "v2_model_terminal_timeout",
+          failure_code: "model_stream_idle_timeout",
+          terminal: true,
+        }),
+        event(5, "model_action_retry_exhausted", {
+          action_id: actionId,
+          attempt_id: "v2_model_terminal_timeout",
+        }),
+        event(6, "model_action_paused", {
+          action_id: actionId,
+          attempt_id: "v2_model_terminal_timeout",
+          failure_code: "model_stream_idle_timeout",
+        }),
+      ],
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          attempt_id: "v2_model_terminal_timeout",
+          status: "failed",
+          terminal: true,
+          raw_response: null,
+          parsed_output: null,
+          output_source: "unavailable",
+          failure_kind: "model_error",
+          failure_code: "model_stream_idle_timeout",
+          failure_category: "timeout",
+          failure_impact: "operational_failure",
+          counts_as_failure: true,
+          completed_at: "2026-07-23T08:00:06Z",
+        },
+      ],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "终态超时列表验收" }),
+    ).toBeVisible();
+    const timeline = document.querySelector(".v2-action-table");
+    expect(timeline).not.toBeNull();
+    const status = within(timeline as HTMLElement)
+      .getByText("失败")
+      .closest(".v2-action-status");
+    expect(status).toHaveClass("is-failed");
+    expect(
+      status?.querySelector(".anticon-close-circle"),
+    ).toBeInTheDocument();
+    expect(status?.querySelector(".anticon-loading")).toBeNull();
+  });
+
+  it("keeps an authoritative action success above a prior control-flow request result", async () => {
+    stubRecordFetch({
+      ...detail,
+      title: "动作成功优先级验收",
+      model_requests: [
+        {
+          ...detail.model_requests[0],
+          status: "skipped",
+          terminal: true,
+          failure_code: "model_prefetch_capacity_unavailable",
+          failure_category: "admission_capacity",
+          failure_impact: "expected_control_flow",
+          counts_as_failure: false,
+        },
+      ],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "动作成功优先级验收" }),
+    ).toBeVisible();
+    const timeline = document.querySelector(".v2-action-table");
+    expect(timeline).not.toBeNull();
+    const actionRow = within(timeline as HTMLElement)
+      .getByRole("button", { name: "查看 法官 开场播报" })
+      .closest("tr");
+    expect(actionRow).not.toBeNull();
+    const status = within(actionRow as HTMLElement)
+      .getByText("成功")
+      .closest(".v2-action-status");
+    expect(status).toHaveClass("is-succeeded");
+    expect(status?.querySelector(".anticon-check-circle")).toBeInTheDocument();
+  });
+
   it("renders an old Chat Completions request as generic raw JSON", async () => {
     stubRecordFetch(deepSeekDetail);
     const user = userEvent.setup();

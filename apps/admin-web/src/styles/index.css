@@ -7221,8 +7221,16 @@ a {
   color: #d92d20;
 }
 
+.v2-action-status.is-skipped,
 .v2-action-status.is-canceled {
-  color: #f79009;
+  color: #667085;
+}
+
+.v2-status-tag.is-skipped,
+.v2-status-tag.is-canceled {
+  border-color: #d0d5dd;
+  color: #475467;
+  background: #f2f4f7;
 }
 
 .v2-action-timeline {
@@ -7347,6 +7355,27 @@ a {
 
 .v2-inspector-panel section > p {
   margin: 8px 0 0;
+}
+
+.v2-control-flow-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #475467;
+  background: #f9fafb;
+}
+
+.v2-control-flow-notice > .anticon {
+  margin-top: 3px;
+  color: #667085;
+}
+
+.v2-control-flow-notice > div {
+  display: grid;
+  gap: 3px;
 }
 
 .v2-model-stream {

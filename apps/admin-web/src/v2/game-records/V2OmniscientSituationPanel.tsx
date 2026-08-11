@@ -945,9 +945,13 @@ function describeSituationItem(
     resultLabel:
       item.status === "failed"
         ? "动作失败"
-        : item.status === "running"
-          ? "执行中"
-          : "动作成功",
+        : item.status === "skipped"
+          ? "动作已跳过"
+          : item.status === "canceled"
+            ? "动作已取消"
+            : item.status === "running"
+              ? "执行中"
+              : "动作成功",
     targetId: null,
     targetLabel: null,
   };

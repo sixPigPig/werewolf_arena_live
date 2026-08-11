@@ -810,6 +810,32 @@ describe("V2 game record parsers", () => {
 
     const request = parseV2ModelRequest(rawRequest);
 
+    expect(
+      parseV2ModelRequest({
+        ...rawRequest,
+        failure_impact: undefined,
+        counts_as_failure: undefined,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      failure_impact: "operational_failure",
+      counts_as_failure: true,
+    });
+    for (const status of ["skipped", "canceled"] as const) {
+      expect(
+        parseV2ModelRequest({
+          ...rawRequest,
+          status,
+          failure_impact: undefined,
+          counts_as_failure: undefined,
+        }),
+      ).toMatchObject({
+        status,
+        failure_impact: null,
+        counts_as_failure: false,
+      });
+    }
+
     expect(request).toMatchObject({
       finish_reason: "max_output_tokens",
       provider_usage: {

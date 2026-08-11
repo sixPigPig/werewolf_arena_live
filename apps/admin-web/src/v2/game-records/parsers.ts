@@ -296,6 +296,8 @@ export function parseV2ModelRequestSummary(
     "running",
     "succeeded",
     "failed",
+    "skipped",
+    "canceled",
   ] as const);
   const failureImpact: V2ModelFailureImpact | null =
     record.failure_impact === undefined

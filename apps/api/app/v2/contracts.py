@@ -644,7 +644,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     model_view_selector_version: int | None
     prompt_projection: dict[str, Any] | None
     output_enforcement: AdminV2OutputEnforcementResponse | None
-    status: Literal["running", "succeeded", "failed"]
+    status: Literal["running", "succeeded", "failed", "skipped", "canceled"]
     input_source: Literal["persisted", "reconstructed", "unavailable"]
     passive_observation_count: int
     output_source: Literal["persisted", "legacy_inferred", "unavailable"]

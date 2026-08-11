@@ -1673,7 +1673,13 @@ def _admin_model_requests(
             output_source = "unavailable"
 
         if response is not None:
-            status: Literal["running", "succeeded", "failed"] = "succeeded"
+            status: Literal[
+                "running",
+                "succeeded",
+                "failed",
+                "skipped",
+                "canceled",
+            ] = "succeeded"
             completed_at = response.created_at
         elif failure is not None:
             status = "failed"
@@ -1924,6 +1930,8 @@ def _admin_model_requests(
                 or response is not None
             ),
         )
+        if status == "failed" and failure_impact.display_status is not None:
+            status = failure_impact.display_status
         result.append(
             AdminV2ModelRequestResponse(
                 attempt_id=attempt_id,

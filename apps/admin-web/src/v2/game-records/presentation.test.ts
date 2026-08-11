@@ -193,6 +193,272 @@ describe("V2 game record presentation", () => {
     });
   });
 
+  it("uses skipped or canceled request status for failed actions without counting a phase failure", () => {
+    for (const requestStatus of ["skipped", "canceled"] as const) {
+      const actionId = `v2_action_${requestStatus}`;
+      const timeline = buildV2Timeline({
+        events: [
+          event(1, "action_opened", {
+            action_id: actionId,
+            context: {
+              action_type: "day_debate_speech",
+              phase_id: "day_1",
+              actor: { kind: "player", id: "player-1" },
+            },
+          }),
+          event(2, "action_failed", {
+            action_id: actionId,
+            failure_code: "model_prefetch_capacity_unavailable",
+          }),
+        ],
+        model_requests: [
+          {
+            action_id: actionId,
+            status: "failed",
+            counts_as_failure: true,
+          },
+          {
+            action_id: actionId,
+            status: requestStatus,
+            counts_as_failure: true,
+          },
+        ],
+        presentations: [],
+        voice_assets: [],
+        player_identities: identities,
+        player_states: [],
+        players_snapshot: [],
+      } as unknown as V2GameRecordDetail);
+
+      expect(timeline[0]?.status).toBe(requestStatus);
+      expect(groupV2Phases(timeline, "day_1")[0]).toMatchObject({
+        modelRequestCount: 2,
+        failureCount: 0,
+      });
+    }
+  });
+
+  it("marks a paused terminal model timeout as failed without an action_failed event", () => {
+    const actionId = "v2_action_paused_timeout";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          context: {
+            action_type: "day_debate_speech",
+            phase_id: "day_1",
+            actor: { kind: "player", id: "player-1" },
+          },
+        }),
+        event(2, "model_request_failed", {
+          action_id: actionId,
+          attempt_id: "v2_model_paused_timeout",
+          failure_code: "model_stream_idle_timeout",
+          terminal: true,
+        }),
+        event(3, "model_action_retry_exhausted", {
+          action_id: actionId,
+          attempt_id: "v2_model_paused_timeout",
+        }),
+        event(4, "model_action_paused", {
+          action_id: actionId,
+          attempt_id: "v2_model_paused_timeout",
+          failure_code: "model_stream_idle_timeout",
+        }),
+      ],
+      model_requests: [
+        {
+          action_id: actionId,
+          attempt_id: "v2_model_paused_timeout",
+          status: "failed",
+          terminal: true,
+          counts_as_failure: true,
+          completed_at: "2026-07-29T08:00:02Z",
+        },
+      ],
+      presentations: [],
+      voice_assets: [],
+      player_identities: identities,
+      player_states: [],
+      players_snapshot: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline[0]).toMatchObject({
+      status: "failed",
+      completedAt: "2026-07-29T08:00:04Z",
+    });
+    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(1);
+  });
+
+  it("keeps an intermediate failed attempt running until its scheduled retry starts", () => {
+    const actionId = "v2_action_retry_pending";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          context: {
+            action_type: "day_debate_speech",
+            phase_id: "day_1",
+            actor: { kind: "player", id: "player-1" },
+          },
+        }),
+        event(2, "model_request_failed", {
+          action_id: actionId,
+          attempt_id: "v2_model_retry_pending",
+          failure_code: "model_transport_failed",
+        }),
+        event(3, "model_retry_scheduled", {
+          action_id: actionId,
+          attempt_id: "v2_model_retry_pending",
+        }),
+      ],
+      model_requests: [
+        {
+          action_id: actionId,
+          attempt_id: "v2_model_retry_pending",
+          status: "failed",
+          terminal: null,
+          counts_as_failure: true,
+          completed_at: "2026-07-29T08:00:02Z",
+        },
+      ],
+      presentations: [],
+      voice_assets: [],
+      player_identities: identities,
+      player_states: [],
+      players_snapshot: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
+    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+  });
+
+  it("does not terminate an action for an explicitly nonterminal failed attempt", () => {
+    const actionId = "v2_action_nonterminal_failure";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          context: {
+            action_type: "day_debate_speech",
+            phase_id: "day_1",
+            actor: { kind: "player", id: "player-1" },
+          },
+        }),
+        event(2, "model_request_failed", {
+          action_id: actionId,
+          attempt_id: "v2_model_nonterminal_failure",
+          terminal: false,
+        }),
+      ],
+      model_requests: [
+        {
+          action_id: actionId,
+          attempt_id: "v2_model_nonterminal_failure",
+          status: "failed",
+          terminal: false,
+          counts_as_failure: false,
+          completed_at: "2026-07-29T08:00:02Z",
+        },
+      ],
+      presentations: [],
+      voice_assets: [],
+      player_identities: identities,
+      player_states: [],
+      players_snapshot: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
+    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+  });
+
+  it("returns a paused action to running after model_action_resumed", () => {
+    const actionId = "v2_action_resumed";
+    const timeline = buildV2Timeline({
+      events: [
+        event(1, "action_opened", {
+          action_id: actionId,
+          context: {
+            action_type: "day_debate_speech",
+            phase_id: "day_1",
+            actor: { kind: "player", id: "player-1" },
+          },
+        }),
+        event(2, "model_request_failed", {
+          action_id: actionId,
+          attempt_id: "v2_model_before_resume",
+          terminal: true,
+        }),
+        event(3, "model_action_paused", {
+          action_id: actionId,
+          attempt_id: "v2_model_before_resume",
+        }),
+        event(4, "model_action_retry_requested", { action_id: actionId }),
+        event(5, "model_action_resumed", { action_id: actionId }),
+      ],
+      model_requests: [
+        {
+          action_id: actionId,
+          attempt_id: "v2_model_before_resume",
+          status: "failed",
+          terminal: true,
+          counts_as_failure: true,
+          completed_at: "2026-07-29T08:00:02Z",
+        },
+      ],
+      presentations: [],
+      voice_assets: [],
+      player_identities: identities,
+      player_states: [],
+      players_snapshot: [],
+    } as unknown as V2GameRecordDetail);
+
+    expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
+    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+  });
+
+  it("lets the latest action_succeeded override historical failures and control results", () => {
+    for (const requestStatus of ["skipped", "canceled"] as const) {
+      const actionId = `v2_action_recovered_${requestStatus}`;
+      const timeline = buildV2Timeline({
+        events: [
+          event(1, "action_opened", {
+            action_id: actionId,
+            context: {
+              action_type: "day_debate_speech",
+              phase_id: "day_1",
+              actor: { kind: "player", id: "player-1" },
+            },
+          }),
+          event(2, "action_failed", { action_id: actionId }),
+          event(3, "model_action_resumed", { action_id: actionId }),
+          event(4, "action_succeeded", { action_id: actionId }),
+        ],
+        model_requests: [
+          {
+            action_id: actionId,
+            attempt_id: `v2_model_recovered_${requestStatus}`,
+            status: requestStatus,
+            terminal: true,
+            counts_as_failure: false,
+            completed_at: "2026-07-29T08:00:02Z",
+          },
+        ],
+        presentations: [],
+        voice_assets: [],
+        player_identities: identities,
+        player_states: [],
+        players_snapshot: [],
+      } as unknown as V2GameRecordDetail);
+
+      expect(timeline[0]).toMatchObject({
+        status: "succeeded",
+        completedAt: "2026-07-29T08:00:04Z",
+      });
+      expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+    }
+  });
+
   it("builds deterministic round digests from persisted settlement events", () => {
     const summaries = buildV2RoundSummaries(
       [

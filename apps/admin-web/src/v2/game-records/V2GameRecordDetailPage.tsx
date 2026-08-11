@@ -6,6 +6,7 @@ import {
   MinusCircleFilled,
   SearchOutlined,
   SoundOutlined,
+  StopFilled,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Alert from "antd/es/alert";
@@ -74,7 +75,13 @@ import {
 } from "@/v2/game-records/request-presentation";
 
 type CategoryFilter = "all" | "model" | "template" | "milestone";
-type StatusFilter = "all" | "running" | "succeeded" | "failed";
+type DisplayStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "canceled";
+type StatusFilter = "all" | DisplayStatus;
 const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
 const DEFAULT_RETRY_REASON = "模型链路已恢复，继续执行同一冻结动作";
 
@@ -438,7 +445,12 @@ function V2GameRecordWorkspace({
       ) {
         return false;
       }
-      if (statusFilter !== "all" && item.status !== statusFilter) return false;
+      if (
+        statusFilter !== "all" &&
+        timelineDisplayStatus(item) !== statusFilter
+      ) {
+        return false;
+      }
       if (categoryFilter === "model" && !item.modelRequest) return false;
       if (categoryFilter === "template" && !item.templateRender) return false;
       if (categoryFilter === "milestone" && item.kind !== "milestone") {
@@ -507,16 +519,14 @@ function V2GameRecordWorkspace({
           Date.parse(run.started_at),
       )
     : null;
-  const terminalFailedRequests = game.model_requests.filter(
-    (item) =>
-      item.status === "failed" &&
-      item.terminal !== false,
+  const terminalRequests = game.model_requests.filter(
+    (item) => item.terminal !== false,
   );
-  const failureCount = terminalFailedRequests.filter(
+  const failureCount = terminalRequests.filter(
     (item) => item.counts_as_failure,
   ).length;
-  const expectedControlFlowCount = terminalFailedRequests.filter(
-    (item) => !item.counts_as_failure,
+  const expectedControlFlowCount = terminalRequests.filter(
+    (item) => item.failure_impact === "expected_control_flow",
   ).length;
 
   return (
@@ -688,6 +698,8 @@ function V2GameRecordWorkspace({
             { label: "进行中", value: "running" },
             { label: "成功", value: "succeeded" },
             { label: "失败", value: "failed" },
+            { label: "已跳过", value: "skipped" },
+            { label: "已取消", value: "canceled" },
           ]}
           value={statusFilter}
         />
@@ -922,12 +934,15 @@ function ActionTimeline({
       },
       {
         dataIndex: "status",
-        render: (value: V2TimelineItem["status"]) => (
-          <span className={`v2-action-status is-${value}`}>
-            <StatusIcon status={value} />
-            {statusLabel(value)}
-          </span>
-        ),
+        render: (_value: V2TimelineItem["status"], item) => {
+          const status = timelineDisplayStatus(item);
+          return (
+            <span className={`v2-action-status is-${status}`}>
+              <StatusIcon status={status} />
+              {statusLabel(status)}
+            </span>
+          );
+        },
         title: "结果",
         width: 88,
       },
@@ -1104,9 +1119,18 @@ function RequestDetailsDrawer({
           <div className="v2-request-drawer-title">
             <Space size={8} wrap>
               <Typography.Text strong>{item.label}</Typography.Text>
-              <Tag color={statusColor(item.status)}>
-                {statusLabel(item.status)}
-              </Tag>
+              {(() => {
+                const status = timelineDisplayStatus(item);
+                return (
+                  <Tag
+                    className={`v2-status-tag is-${status}`}
+                    color={statusColor(status)}
+                    icon={<StatusIcon status={status} />}
+                  >
+                    {statusLabel(status)}
+                  </Tag>
+                );
+              })()}
             </Space>
             <Typography.Text
               className="v2-request-drawer-id"
@@ -1297,7 +1321,11 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
           {
             key: "status",
             label: "状态",
-            children: statusLabel(request?.status ?? item.status),
+            children: statusLabel(
+              request
+                ? modelRequestDisplayStatus(request)
+                : timelineDisplayStatus(item),
+            ),
           },
           {
             key: "attempts",
@@ -1306,7 +1334,7 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
               item.modelRequests.length > 1
                 ? `${item.modelRequests.length} 次（重试 ${
                     item.modelRequests.length - 1
-                  } 次后${item.status === "succeeded" ? "成功" : "仍失败"}）`
+                  } 次后${attemptOutcomeLabel(timelineDisplayStatus(item))}）`
                 : request
                   ? "1 次"
                   : "—",
@@ -1736,6 +1764,7 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
           <Typography.Text strong>模型请求尝试</Typography.Text>
           <ol>
             {item.modelRequests.map((attempt, index) => {
+              const attemptStatus = modelRequestDisplayStatus(attempt);
               const attemptMachineFormatProgress =
                 automaticMachineFormatProgressLabel(
                   item.modelRequests.slice(0, index + 1),
@@ -1749,9 +1778,13 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
               return (
                 <li key={attempt.attempt_id}>
                   <Space size={8} wrap>
-                    <Tag color={statusColor(attempt.status)}>
+                    <Tag
+                      className={`v2-status-tag is-${attemptStatus}`}
+                      color={statusColor(attemptStatus)}
+                      icon={<StatusIcon status={attemptStatus} />}
+                    >
                       第 {attempt.attempt_no} 次 · 周期 {attempt.retry_cycle} ·{" "}
-                      {statusLabel(attempt.status)}
+                      {statusLabel(attemptStatus)}
                     </Tag>
                     <Typography.Text copyable>
                       {attempt.attempt_id}
@@ -1891,7 +1924,27 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
           type="error"
         />
       ) : null}
-      {request?.failure_code ? (
+      {request?.failure_code &&
+      request.failure_impact === "expected_control_flow" ? (
+        <section
+          aria-label="流水线控制流"
+          className="v2-control-flow-notice"
+          role="note"
+        >
+          <MinusCircleFilled aria-hidden="true" />
+          <div>
+            <Typography.Text strong>
+              流水线控制流（不计入有效失败）
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {request.failure_category
+                ? `${request.failure_category} · ${request.failure_code}`
+                : request.failure_code}
+              {` · ${failureImpactLabel(request.failure_impact)}`}
+            </Typography.Text>
+          </div>
+        </section>
+      ) : request?.failure_code ? (
         <Alert
           description={
             `${
@@ -1901,14 +1954,8 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
             } · ${failureImpactLabel(request.failure_impact)}`
           }
           showIcon
-          title={
-            request.failure_impact === "expected_control_flow"
-              ? "流水线控制流（不计入有效失败）"
-              : (request.failure_kind ?? "模型请求失败")
-          }
-          type={
-            request.failure_impact === "expected_control_flow" ? "info" : "error"
-          }
+          title={request.failure_kind ?? "模型请求失败"}
+          type="error"
         />
       ) : null}
       {request?.repair_kind ? (
@@ -2103,14 +2150,45 @@ function RecordSection({
 function StatusIcon({
   status,
 }: {
-  status: "running" | "succeeded" | "failed" | "canceled";
+  status: DisplayStatus;
 }) {
   if (status === "failed") return <CloseCircleFilled aria-hidden="true" />;
-  if (status === "canceled") return <MinusCircleFilled aria-hidden="true" />;
+  if (status === "skipped") return <MinusCircleFilled aria-hidden="true" />;
+  if (status === "canceled") return <StopFilled aria-hidden="true" />;
   if (status === "running") {
     return <LoadingOutlined aria-hidden="true" spin />;
   }
   return <CheckCircleFilled aria-hidden="true" />;
+}
+
+function modelRequestDisplayStatus(
+  request: V2ModelRequestSummary,
+): DisplayStatus {
+  if (request.status === "canceled") return "canceled";
+  if (
+    request.status === "skipped" ||
+    (request.failure_impact === "expected_control_flow" &&
+      request.failure_code === "model_prefetch_capacity_unavailable")
+  ) {
+    return "skipped";
+  }
+  return request.status;
+}
+
+function timelineDisplayStatus(item: V2TimelineItem): DisplayStatus {
+  if (item.status !== "failed") return item.status;
+  const requestStatus = item.modelRequest
+    ? modelRequestDisplayStatus(item.modelRequest)
+    : null;
+  if (requestStatus === "skipped" || requestStatus === "canceled") {
+    return requestStatus;
+  }
+  return item.status;
+}
+
+function attemptOutcomeLabel(status: DisplayStatus) {
+  if (status === "failed") return "仍失败";
+  return statusLabel(status);
 }
 
 function audienceLabel(audience: string) {
@@ -2389,7 +2467,8 @@ function statusLabel(status: string) {
     running: "进行中",
     succeeded: "成功",
     failed: "失败",
-    canceled: "已中止",
+    skipped: "已跳过",
+    canceled: "已取消",
   };
   return labels[status] ?? status;
 }

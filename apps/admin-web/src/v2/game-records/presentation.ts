@@ -19,7 +19,7 @@ export type V2TimelineItem = {
   actorId: string;
   actorLabel: string;
   audience: string;
-  status: "running" | "succeeded" | "failed";
+  status: "running" | "succeeded" | "failed" | "skipped" | "canceled";
   startedAt: string;
   completedAt: string | null;
   durationMs: number | null;
@@ -456,11 +456,59 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     const eventAudience = actionEvents
       .map((item) => stringValue(item.payload.audience))
       .find((audience) => audience !== null);
-    const failed = actionEvents.find((item) => item.event_type === "action_failed");
-    const succeeded = actionEvents.find(
-      (item) => item.event_type === "action_succeeded",
-    );
-    const completedAt = (failed ?? succeeded)?.created_at ?? null;
+    const latestStateEvent = [...actionEvents].reverse().find((item) => {
+      if (
+        item.event_type === "action_succeeded" ||
+        item.event_type === "action_failed" ||
+        item.event_type === "model_action_paused" ||
+        item.event_type === "model_action_retry_requested" ||
+        item.event_type === "model_action_resumed" ||
+        item.event_type === "model_retry_scheduled"
+      ) {
+        return true;
+      }
+      if (
+        item.event_type !== "model_request_started" &&
+        item.event_type !== "model_response_received" &&
+        item.event_type !== "model_request_failed"
+      ) {
+        return false;
+      }
+      return (
+        request === null ||
+        stringValue(item.payload.attempt_id) === request.attempt_id
+      );
+    });
+    let status: V2TimelineItem["status"] = "running";
+    if (latestStateEvent?.event_type === "action_succeeded") {
+      status = "succeeded";
+    } else if (latestStateEvent?.event_type === "action_failed") {
+      status =
+        request?.status === "skipped" || request?.status === "canceled"
+          ? request.status
+          : "failed";
+    } else if (latestStateEvent?.event_type === "model_action_paused") {
+      status = "failed";
+    } else if (latestStateEvent?.event_type === "model_request_failed") {
+      if (request?.status === "skipped" || request?.status === "canceled") {
+        status = request.status;
+      } else if (
+        request?.terminal !== false &&
+        latestStateEvent.payload.terminal !== false
+      ) {
+        status = "failed";
+      }
+    } else if (
+      latestStateEvent === undefined &&
+      request?.status === "failed" &&
+      request.terminal !== false
+    ) {
+      status = "failed";
+    }
+    const completedAt =
+      status === "running"
+        ? null
+        : latestStateEvent?.created_at ?? request?.completed_at ?? null;
     const actionType = stringValue(context.action_type) ?? "unknown";
     const actorKind = stringValue(actor.kind) ?? request?.actor_kind ?? "system";
     const actorId = stringValue(actor.id) ?? request?.actor_id ?? "system";
@@ -480,11 +528,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
         request?.audience ??
         eventAudience ??
         "legacy_unknown",
-      status: failed
-        ? ("failed" as const)
-        : succeeded
-          ? ("succeeded" as const)
-          : ("running" as const),
+      status,
       startedAt: event.created_at,
       completedAt,
       durationMs: completedAt ? elapsedMs(event.created_at, completedAt) : null,

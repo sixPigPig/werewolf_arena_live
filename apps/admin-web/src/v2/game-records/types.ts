@@ -281,7 +281,7 @@ export type V2ModelRequestSummary = {
   prompt_template_version: number | null;
   model_view_selector_version: number | null;
   prompt_projection: V2PromptProjection | null;
-  status: "running" | "succeeded" | "failed";
+  status: "running" | "succeeded" | "failed" | "skipped" | "canceled";
   input_source: "persisted" | "reconstructed" | "unavailable";
   passive_observation_count: number;
   output_source: "persisted" | "legacy_inferred" | "unavailable";

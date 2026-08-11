@@ -885,12 +885,13 @@ def test_admin_model_request_derives_episodes_per_run() -> None:
     assert request.failure_episode_invariant_errors == []
 
 
-def test_admin_model_request_classifies_failure_impact_without_rewriting_status() -> None:
+def test_admin_model_request_normalizes_failure_status_by_impact() -> None:
     cases = (
         (
             "model_prefetch_capacity_unavailable",
             "admission_capacity",
             "provider_admission",
+            "skipped",
             "expected_control_flow",
             False,
         ),
@@ -898,6 +899,23 @@ def test_admin_model_request_classifies_failure_impact_without_rewriting_status(
             "pre_exile_pipeline_generation_canceled",
             "canceled",
             "pipeline_generation",
+            "canceled",
+            "expected_control_flow",
+            False,
+        ),
+        (
+            "pre_exile_pipeline_canceled",
+            "canceled",
+            "operator_interrupted",
+            "canceled",
+            "expected_control_flow",
+            False,
+        ),
+        (
+            "day_speech_prefetch_canceled",
+            "canceled",
+            "operator_interrupted",
+            "canceled",
             "expected_control_flow",
             False,
         ),
@@ -905,6 +923,7 @@ def test_admin_model_request_classifies_failure_impact_without_rewriting_status(
             "day_speech_prefetch_post_close_deadline",
             "timeout",
             "pipeline_generation",
+            "failed",
             "user_visible_degradation",
             True,
         ),
@@ -912,12 +931,20 @@ def test_admin_model_request_classifies_failure_impact_without_rewriting_status(
             "model_transport_failed",
             "transport",
             "stream",
+            "failed",
             "operational_failure",
             True,
         ),
     )
 
-    for failure_code, failure_category, failure_stage, impact, counts in cases:
+    for (
+        failure_code,
+        failure_category,
+        failure_stage,
+        expected_status,
+        impact,
+        counts,
+    ) in cases:
         events = [
             _action_opened(),
             _event(
@@ -948,7 +975,7 @@ def test_admin_model_request_classifies_failure_impact_without_rewriting_status(
 
         request = _admin_model_requests(events, [])[0]
 
-        assert request.status == "failed"
+        assert request.status == expected_status
         assert request.failure_code == failure_code
         assert request.failure_impact == impact
         assert request.counts_as_failure is counts
@@ -994,6 +1021,7 @@ def test_capacity_failure_with_provider_activity_counts_as_operational_failure()
 
     request = _admin_model_requests(events, [])[0]
 
+    assert request.status == "failed"
     assert request.failure_impact == "operational_failure"
     assert request.counts_as_failure is True
 
@@ -1009,3 +1037,4 @@ def test_failure_impact_uses_durable_technical_resolution_when_available() -> No
 
     assert impact.failure_impact == "user_visible_degradation"
     assert impact.counts_as_failure is True
+    assert impact.display_status == "failed"
