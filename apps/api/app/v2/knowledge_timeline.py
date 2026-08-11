@@ -11,6 +11,7 @@ from app.v2.models import V2GameRecordEvent, V2KnowledgeFact
 _KNOWLEDGE_EVENT_TYPES = frozenset(
     {
         "ability_activation_completed",
+        "ability_activation_technical_no_action",
         "private_knowledge_recorded",
         "hunter_response_resolved",
     }

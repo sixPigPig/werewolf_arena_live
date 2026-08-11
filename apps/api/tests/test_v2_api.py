@@ -1297,7 +1297,8 @@ class _TechnicalNightOutcomeActions:
         session_factory: sessionmaker[Session],
         repository: V2NightRepository,
         technical_ability_ids: set[str] | None = None,
-        wolf_technical_stage: Literal["sequential_final_vote", "tiebreak"] | None = None,
+        wolf_technical_stage: Literal["preference_probe", "sequential_final_vote", "tiebreak"]
+        | None = None,
         wolf_technical_actor_rank: int = 1,
         optional_tiebreak_no_attack: bool = False,
     ) -> None:
@@ -6101,6 +6102,117 @@ def test_guard_and_seer_technical_no_action_complete_without_effect_or_public_le
         "technical_no_action" not in json.dumps(message, ensure_ascii=False)
         for audience, message in broadcaster.messages
         if audience == "public"
+    )
+
+
+def test_technical_no_action_private_fact_projects_in_next_wolf_action(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_direct_first_night(
+        session_factory=session_factory,
+        game_id=identifiers["game_id"],
+        run_id=identifiers["run_id"],
+    )
+    repository = V2NightRepository(session_factory)
+    actions = _TechnicalNightOutcomeActions(
+        session_factory=session_factory,
+        repository=repository,
+        wolf_technical_stage="preference_probe",
+        wolf_technical_actor_rank=0,
+    )
+    engine = V2NightEngine(
+        repository=repository,
+        action_engine=actions,
+        day_engine=client.app.state.v2_live_runtime._day_engine,
+    )
+
+    async def scenario() -> tuple[Any, _WorkingNight]:
+        state = repository.start_night(identifiers["game_id"], audience="god_view")
+        working = _WorkingNight()
+        await engine._run_werewolves(state, _CollectingBroadcaster(), working)
+        return state, working
+
+    state, _working = asyncio.run(scenario())
+
+    with session_factory() as db:
+        technical_activation = db.scalar(
+            select(V2AbilityActivation).where(
+                V2AbilityActivation.game_id == identifiers["game_id"],
+                V2AbilityActivation.window_id == state.window_id,
+                V2AbilityActivation.decision["decision_status"].as_string()
+                == "technical_no_action",
+            )
+        )
+        assert technical_activation is not None
+        technical_event = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == identifiers["game_id"],
+                V2GameRecordEvent.event_type == "ability_activation_technical_no_action",
+                V2GameRecordEvent.payload["activation_id"].as_string()
+                == technical_activation.activation_id,
+            )
+        )
+        assert technical_event is not None
+
+    actor_id = technical_activation.actor_player_id
+    assert actor_id is not None
+    historical_fact = next(
+        fact
+        for fact in repository.player_knowledge(
+            game_id=identifiers["game_id"],
+            player_id=actor_id,
+        )
+        if fact["fact_type"] == "private_ability_action_not_taken"
+        and fact["source_activation_id"] == technical_activation.activation_id
+    )
+    assert historical_fact["knowledge_fact_id"] in technical_event.payload["knowledge_fact_ids"]
+    assert historical_fact["owner_scope"] == "player"
+    assert historical_fact["owner_id"] == actor_id
+    assert technical_event.payload["audience"] == "god_view"
+    assert {
+        key: historical_fact[key]
+        for key in (
+            "source_event_id",
+            "source_event_type",
+            "record_seq",
+            "known_at_seq",
+        )
+    } == {
+        "source_event_id": technical_event.event_id,
+        "source_event_type": "ability_activation_technical_no_action",
+        "record_seq": technical_event.record_seq,
+        "known_at_seq": technical_event.record_seq,
+    }
+
+    next_action_spec = next(
+        spec
+        for spec in actions.specs
+        if spec.actor_id == actor_id and spec.decision_contract.speech_mode == "required"
+    )
+    projected = project_model_action_context(
+        action_engine_module._action_context(
+            game_id=identifiers["game_id"],
+            action_id="next-wolf-sequential-final-vote",
+            spec=next_action_spec,
+        ),
+        players=next_action_spec.model_players,
+        model_context_contract=current_model_context_contract(),
+        action_record_seq=repository.latest_record_seq(identifiers["game_id"]),
+    )
+    projected_fact = next(
+        event
+        for event in _canonical_known_events(projected)["events"]
+        if event.get("event_ref") == historical_fact["knowledge_fact_id"]
+    )
+    assert projected_fact["kind"] == "private_ability_action_not_taken"
+    assert projected_fact["visibility"] == "actor_private"
+    assert projected_fact["owner_ref"] == projected["self"]["identity"]["player_id"]
+    assert projected_fact["known_at_seq"] == technical_event.record_seq
+    assert "technical_no_action" not in json.dumps(
+        repository.public_history(identifiers["game_id"]),
+        ensure_ascii=False,
     )
 
 
