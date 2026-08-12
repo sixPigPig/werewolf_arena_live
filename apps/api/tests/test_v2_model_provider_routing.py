@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_compaction import encode_known_events_v7
 from app.v2.model_context_contract import (
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
@@ -20,6 +20,7 @@ from app.v2.model_client import (
     V2QualityError,
     build_model_request_payload,
     model_failure_disposition,
+    request_payload_matches_model_context,
 )
 
 
@@ -96,7 +97,7 @@ def _compact_known_events(
     questions: list[dict[str, Any]] | None = None,
     relations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return encode_known_events_v6(
+    return encode_known_events_v7(
         {
             "schema_version": 5,
             "events": events or [],
@@ -122,7 +123,7 @@ def test_v11_prompt_prioritizes_raw_speech_and_marks_derived_indexes_inert() -> 
 
     assert "authority=judge_fact 是法官事实" in system_text
     assert "authority=player_claim_unverified 是玩家说法" in system_text
-    assert "authority=actor_memory 和 declared_reason 是主观历史" in system_text
+    assert "actor_memory/declared_reason 是可修正的主观历史" in system_text
     assert "player_statement.speech 是话语语义的唯一可追溯来源" in system_text
     assert "annotations、questions、relations 只是确定性启发式检索索引" in system_text
     assert "派生索引与原始 speech 冲突时，以原始 speech 为准" in system_text
@@ -133,6 +134,43 @@ def test_v11_prompt_prioritizes_raw_speech_and_marks_derived_indexes_inert() -> 
     assert "reply_opportunity=" not in system_text
     assert "speech_turn_skipped_technical" not in system_text
     assert "requested_fields" not in system_text
+
+
+def test_request_payload_binding_rejects_any_prompt_body_change() -> None:
+    context = _target_action_context()
+    parameters = {
+        "thinking": "disabled",
+        "reasoning_effort": None,
+        "max_tokens_mode": "manual",
+        "max_tokens": 512,
+    }
+    payload = build_model_request_payload(
+        context,
+        decision=True,
+        model_id="test-model",
+        parameters=parameters,
+    )
+
+    assert request_payload_matches_model_context(
+        payload,
+        model_context=context,
+        model_provider="agent_plan",
+        model_id="test-model",
+        parameters=parameters,
+        supports_thinking=False,
+    )
+
+    tampered = json.loads(json.dumps(payload))
+    tampered["input"][0]["content"][0]["text"] = "tampered system prompt"
+
+    assert not request_payload_matches_model_context(
+        tampered,
+        model_context=context,
+        model_provider="agent_plan",
+        model_id="test-model",
+        parameters=parameters,
+        supports_thinking=False,
+    )
 
 
 def test_v11_prompt_only_explains_derived_fields_that_are_present() -> None:

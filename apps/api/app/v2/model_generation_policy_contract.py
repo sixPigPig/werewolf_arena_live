@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-MODEL_GENERATION_POLICY_SCHEMA_VERSION = 3
+MODEL_GENERATION_POLICY_SCHEMA_VERSION = 4
 MODEL_GENERATION_POLICY_CLASSIFICATION_VERSION = 1
 MODEL_GENERATION_POLICY_ENFORCEMENT = "observe_only"
 MODEL_GENERATION_POLICY_REASONING_PARAMETER_MODE = "inherit_frozen_model_configuration"
@@ -25,6 +25,7 @@ _TOP_LEVEL_KEYS_V1 = frozenset(
 )
 _TOP_LEVEL_KEYS_V2 = frozenset({*_TOP_LEVEL_KEYS_V1, "execution"})
 _TOP_LEVEL_KEYS_V3 = _TOP_LEVEL_KEYS_V2
+_TOP_LEVEL_KEYS_V4 = _TOP_LEVEL_KEYS_V3
 _PROFILE_NAMES = frozenset(
     {
         "strategic_full",
@@ -53,6 +54,7 @@ _EXECUTION_KEYS_V2 = frozenset(
     }
 )
 _EXECUTION_KEYS_V3 = frozenset({*_EXECUTION_KEYS_V2, "required_target_exhaustion"})
+_EXECUTION_KEYS_V4 = _EXECUTION_KEYS_V3
 _REQUIRED_TARGET_EXHAUSTION = {
     "eligible_failure_modes": [
         "output_budget_exhausted",
@@ -136,7 +138,6 @@ class V2ResolvedModelGenerationPolicy:
     ]
     required_target_exhaustion: V2ResolvedRequiredTargetExhaustionPolicy | None
     private_round_memory_mode: Literal[
-        "reuse_previous_non_blocking",
         "blocking_generation",
         "disabled",
     ]
@@ -177,7 +178,7 @@ def current_model_generation_policy_contract() -> dict[str, Any]:
             "blocking_required_target_output_timeout_mode": "technical_outcome",
             "blocking_required_target_queue_wait_budget_mode": "wall_clock",
             "required_target_exhaustion": deepcopy(_REQUIRED_TARGET_EXHAUSTION),
-            "private_round_memory_mode": "reuse_previous_non_blocking",
+            "private_round_memory_mode": "blocking_generation",
         },
     }
 
@@ -206,13 +207,9 @@ def validate_model_generation_policy_contract(
     if type(contract) is not dict:
         _raise_unsupported()
     schema_version = contract.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
+    if type(schema_version) is not int or schema_version != 4:
         _raise_unsupported()
-    expected_keys = {
-        1: _TOP_LEVEL_KEYS_V1,
-        2: _TOP_LEVEL_KEYS_V2,
-        3: _TOP_LEVEL_KEYS_V3,
-    }[schema_version]
+    expected_keys = _TOP_LEVEL_KEYS_V4
     if set(contract) != expected_keys:
         _raise_unsupported()
     if not _is_exact_int(contract["classification_version"], expected=1):
@@ -248,52 +245,44 @@ def validate_model_generation_policy_contract(
     action_profiles = contract["action_profiles"]
     if not _strict_contract_equal(action_profiles, _ACTION_PROFILES):
         _raise_unsupported()
-    if schema_version in {2, 3}:
-        execution = contract["execution"]
-        expected_execution_keys = _EXECUTION_KEYS_V2 if schema_version == 2 else _EXECUTION_KEYS_V3
-        if type(execution) is not dict or set(execution) != expected_execution_keys:
-            _raise_unsupported()
-        if execution["automatic_retry_enforcement"] != "enforce":
-            _raise_unsupported()
-        for key in (
-            "output_budget_max_attempts",
-            "attempt_hard_timeout_max_attempts",
-            "transport_max_attempts",
-            "post_token_transport_max_attempts",
-        ):
-            if not _is_bounded_int(
-                execution[key],
-                minimum=1,
-                maximum=_MAX_TIMEOUT_ATTEMPTS,
-            ):
-                _raise_unsupported()
-        if execution["post_token_transport_max_attempts"] > execution["transport_max_attempts"]:
-            _raise_unsupported()
-        if execution["queue_wait_budget_mode"] != "wall_clock":
-            _raise_unsupported()
+    execution = contract["execution"]
+    if type(execution) is not dict or set(execution) != _EXECUTION_KEYS_V4:
+        _raise_unsupported()
+    if execution["automatic_retry_enforcement"] != "enforce":
+        _raise_unsupported()
+    for key in (
+        "output_budget_max_attempts",
+        "attempt_hard_timeout_max_attempts",
+        "transport_max_attempts",
+        "post_token_transport_max_attempts",
+    ):
         if not _is_bounded_int(
-            execution["action_wall_timeout_ms"],
+            execution[key],
             minimum=1,
-            maximum=_MAX_ACTION_WALL_TIMEOUT_MS,
+            maximum=_MAX_TIMEOUT_ATTEMPTS,
         ):
             _raise_unsupported()
-        if schema_version == 2:
-            if execution["blocking_required_target_output_timeout_mode"] != "legacy_behavior":
-                _raise_unsupported()
-            if execution["blocking_required_target_queue_wait_budget_mode"] != "active_only":
-                _raise_unsupported()
-        else:
-            if execution["blocking_required_target_output_timeout_mode"] != "technical_outcome":
-                _raise_unsupported()
-            if execution["blocking_required_target_queue_wait_budget_mode"] != "wall_clock":
-                _raise_unsupported()
-            if not _strict_contract_equal(
-                execution["required_target_exhaustion"],
-                _REQUIRED_TARGET_EXHAUSTION,
-            ):
-                _raise_unsupported()
-        if execution["private_round_memory_mode"] != "reuse_previous_non_blocking":
-            _raise_unsupported()
+    if execution["post_token_transport_max_attempts"] > execution["transport_max_attempts"]:
+        _raise_unsupported()
+    if execution["queue_wait_budget_mode"] != "wall_clock":
+        _raise_unsupported()
+    if not _is_bounded_int(
+        execution["action_wall_timeout_ms"],
+        minimum=1,
+        maximum=_MAX_ACTION_WALL_TIMEOUT_MS,
+    ):
+        _raise_unsupported()
+    if execution["blocking_required_target_output_timeout_mode"] != "technical_outcome":
+        _raise_unsupported()
+    if execution["blocking_required_target_queue_wait_budget_mode"] != "wall_clock":
+        _raise_unsupported()
+    if not _strict_contract_equal(
+        execution["required_target_exhaustion"],
+        _REQUIRED_TARGET_EXHAUSTION,
+    ):
+        _raise_unsupported()
+    if execution["private_round_memory_mode"] != "blocking_generation":
+        _raise_unsupported()
     return deepcopy(contract)
 
 

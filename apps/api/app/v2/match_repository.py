@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import hashlib
+import json
 import math
 from typing import Any, Literal
 from uuid import uuid4
@@ -17,13 +19,21 @@ from app.v2.knowledge_timeline import player_private_knowledge
 from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
 from app.v2.event_contract import canonical_event_payload
 from app.v2.model_context_contract import frozen_model_context_contract
+from app.v2.model_context_compaction import expand_known_events_v7
+from app.v2.model_context import (
+    V2ModelPlayerReference,
+    build_private_round_memory_action_context,
+    project_model_action_context_with_metadata,
+)
 from app.v2.model_generation_policy_contract import (
+    MODEL_GENERATION_POLICY_SCHEMA_VERSION,
     resolve_model_generation_policy_contract,
 )
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     frozen_player_model_configuration,
 )
+from app.v2.model_client import request_payload_matches_model_context
 from app.v2.pre_exile_pipeline_contract import (
     V2ResolvedPreExilePipelineContract,
     pre_exile_context_sha256,
@@ -115,6 +125,25 @@ class V2MatchSnapshot:
             if player.player_id == player_id:
                 return player
         raise V2RepositoryError(f"unknown V2 player {player_id}")
+
+
+@dataclass(frozen=True)
+class V2PrivateRoundMemoryCommit:
+    player_id: str
+    memory: str
+    commit_index: int
+    source_refs: tuple[str, ...]
+    source_refs_sha256: str
+    previous_snapshot_fact_id: str | None
+    action_id: str
+    model_response_record_seq: int
+    terminal_event_record_seq: int
+    provider_request_id: str
+    attempt_id: str
+    request_payload_sha256: str
+    projected_context_sha256: str
+    projected_known_event_refs: tuple[str, ...]
+    projected_known_events_sha256: str
 
 
 @dataclass(frozen=True)
@@ -533,13 +562,112 @@ class V2MatchRepository:
             predecessor_actor_id=frozen.predecessor_actor_id,
         )
 
-    def private_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
+    def private_knowledge(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        at_or_before_record_seq: int | None = None,
+    ) -> list[dict[str, Any]]:
         with self._session_factory() as db:
             return player_private_knowledge(
                 db,
                 game_id=game_id,
                 player_id=player_id,
+                at_or_before_record_seq=at_or_before_record_seq,
             )
+
+    def private_round_memory_batch_terminal_status(
+        self,
+        *,
+        game_id: str,
+        run_id: str,
+        phase_id: str,
+        phase_state: str,
+        round_no: int,
+        batch_id: str,
+        private_round_memory_mode: str,
+    ) -> Literal["completed", "failed"] | None:
+        """Return the durable terminal status for the current day-memory batch.
+
+        A successful batch can commit immediately before a worker loses ownership or
+        exits.  The phase transition is intentionally a later transaction, so the day
+        engine uses this marker to resume without regenerating the same memories.
+        """
+
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
+            _raise_if_stop_requested(db, game)
+            match = _match(db, game)
+            if (
+                game.current_run_id != run_id
+                or game.phase_id != phase_id
+                or game.phase_state != phase_state
+                or match.round_no != round_no
+                or not phase_id.startswith("day_")
+            ):
+                raise V2RepositoryError("private round memory batch phase changed")
+            terminal = _private_round_memory_batch_terminal_event(
+                db,
+                game_id=game_id,
+                run_id=run_id,
+                batch_id=batch_id,
+            )
+            if terminal is None:
+                return None
+            payload = terminal.payload if isinstance(terminal.payload, dict) else {}
+            if (
+                payload.get("round_no") != round_no
+                or payload.get("phase_id") != phase_id
+                or payload.get("phase_state") != phase_state
+                or payload.get("private_round_memory_mode") != private_round_memory_mode
+            ):
+                raise V2RepositoryError("private round memory batch terminal is inconsistent")
+            status = payload.get("public_summary_status")
+            if status not in {"completed", "failed"}:
+                raise V2RepositoryError("private round memory batch terminal status is invalid")
+            source_cutoff = _positive_int(payload.get("source_cutoff_record_seq"))
+            commit_order = payload.get("commit_order")
+            memories = payload.get("memories")
+            if (
+                source_cutoff is None
+                or source_cutoff >= terminal.record_seq
+                or not isinstance(commit_order, list)
+                or any(not isinstance(item, str) or not item for item in commit_order)
+                or len(commit_order) != len(set(commit_order))
+                or not isinstance(memories, list)
+            ):
+                raise V2RepositoryError("private round memory batch terminal is incomplete")
+            memory_by_owner = {
+                item.get("player_id"): item
+                for item in memories
+                if isinstance(item, dict) and isinstance(item.get("player_id"), str)
+            }
+            if set(memory_by_owner) != set(commit_order):
+                raise V2RepositoryError("private round memory batch terminal is incomplete")
+            fact_ids = {
+                item.get("knowledge_fact_id")
+                for item in memory_by_owner.values()
+                if item.get("status") in {"committed", "reused"}
+            }
+            if any(not isinstance(fact_id, str) or not fact_id for fact_id in fact_ids):
+                raise V2RepositoryError("private round memory batch terminal is incomplete")
+            durable_fact_ids = set(
+                db.scalars(
+                    select(V2KnowledgeFact.knowledge_fact_id).where(
+                        V2KnowledgeFact.game_id == game_id,
+                        V2KnowledgeFact.owner_scope == "player",
+                        V2KnowledgeFact.fact_type == "private_round_memory",
+                        V2KnowledgeFact.knowledge_fact_id.in_(fact_ids),
+                    )
+                )
+            )
+            if durable_fact_ids != fact_ids or any(
+                item.get("status") not in {"committed", "reused", "generation_failed"}
+                for item in memory_by_owner.values()
+            ):
+                raise V2RepositoryError("private round memory batch terminal is incomplete")
+            return status
 
     def record_private_action_decision(
         self,
@@ -763,92 +891,328 @@ class V2MatchRepository:
                     },
                 )
 
-    def record_private_round_memory(
+    def record_private_round_memories(
         self,
         *,
         game_id: str,
-        player_id: str,
+        run_id: str,
+        phase_id: str,
+        phase_state: str,
         round_no: int,
-        memory: str,
         batch_id: str,
-        commit_index: int,
-    ) -> tuple[str, bool]:
-        normalized_memory = memory.strip()
-        if not normalized_memory:
-            raise V2RepositoryError("private round memory cannot be empty")
+        source_cutoff_record_seq: int,
+        commits: tuple[V2PrivateRoundMemoryCommit, ...],
+        batch_completed_payload: dict[str, Any] | None = None,
+    ) -> list[tuple[str, bool]]:
+        commit_indexes = tuple(commit.commit_index for commit in commits)
+        if (
+            any(index <= 0 for index in commit_indexes)
+            or commit_indexes != tuple(sorted(set(commit_indexes)))
+        ):
+            raise V2RepositoryError("private round memory commit order is invalid")
+        if len({commit.player_id for commit in commits}) != len(commits):
+            raise V2RepositoryError("private round memory owners are duplicated")
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
-            if match.round_no != round_no or not game.phase_id.startswith("day_"):
+            if (
+                match.round_no != round_no
+                or not game.phase_id.startswith("day_")
+                or game.current_run_id != run_id
+                or game.phase_id != phase_id
+                or game.phase_state != phase_state
+            ):
                 raise V2RepositoryError("private round memory phase changed before commit")
-            player = db.get(V2PlayerState, (game_id, player_id))
-            if player is None or not player.alive:
-                raise V2RepositoryError("private round memory owner must be alive")
+            terminal = _private_round_memory_batch_terminal_event(
+                db,
+                game_id=game_id,
+                run_id=game.current_run_id,
+                batch_id=batch_id,
+            )
             existing_rows = list(
                 db.scalars(
                     select(V2KnowledgeFact).where(
                         V2KnowledgeFact.game_id == game_id,
                         V2KnowledgeFact.owner_scope == "player",
-                        V2KnowledgeFact.owner_id == player_id,
                         V2KnowledgeFact.fact_type == "private_round_memory",
                     )
                 )
             )
-            existing = next(
-                (row for row in existing_rows if (row.payload or {}).get("round_no") == round_no),
-                None,
-            )
-            if existing is not None:
+            if source_cutoff_record_seq <= 0 or source_cutoff_record_seq > game.last_record_seq:
+                raise V2RepositoryError("private round memory cutoff is invalid")
+            rows_by_owner: dict[str, list[V2KnowledgeFact]] = {}
+            for row in existing_rows:
+                rows_by_owner.setdefault(row.owner_id, []).append(row)
+            prepared: list[
+                tuple[
+                    V2PrivateRoundMemoryCommit,
+                    str,
+                    str,
+                    V2KnowledgeFact | None,
+                ]
+            ] = []
+            for commit in commits:
+                normalized_memory = commit.memory.strip()
+                if not normalized_memory:
+                    raise V2RepositoryError("private round memory cannot be empty")
+                player = db.get(V2PlayerState, (game_id, commit.player_id))
+                if player is None or not player.alive:
+                    raise V2RepositoryError("private round memory owner must be alive")
+                owner_rows = rows_by_owner.get(commit.player_id, [])
+                latest = max(owner_rows, key=_private_round_memory_order, default=None)
+                latest_id = latest.knowledge_fact_id if latest is not None else None
+                latest_payload = latest.payload if latest is not None else {}
+                latest_round = (
+                    _positive_int(latest_payload.get("round_no"))
+                    if isinstance(latest_payload, dict)
+                    else None
+                )
+                latest_cutoff = (
+                    _positive_int(latest_payload.get("source_cutoff_record_seq"))
+                    if isinstance(latest_payload, dict)
+                    else None
+                )
+                source_refs = list(commit.source_refs)
+                if (
+                    not source_refs
+                    or any(not isinstance(item, str) or not item for item in source_refs)
+                    or len(source_refs) != len(set(source_refs))
+                ):
+                    raise V2RepositoryError("private round memory source refs are invalid")
+                expected_hash = private_round_memory_source_refs_sha256(
+                    owner_id=commit.player_id,
+                    round_no=round_no,
+                    previous_snapshot_fact_id=commit.previous_snapshot_fact_id,
+                    source_cutoff_record_seq=source_cutoff_record_seq,
+                    source_refs=source_refs,
+                )
+                if commit.source_refs_sha256 != expected_hash:
+                    raise V2RepositoryError("private round memory source hash is invalid")
+                expected_source_refs = _private_round_memory_source_refs(
+                    db,
+                    game_id=game_id,
+                    owner_id=commit.player_id,
+                    source_cutoff_record_seq=source_cutoff_record_seq,
+                    previous_snapshot_fact_id=commit.previous_snapshot_fact_id,
+                )
+                if source_refs != expected_source_refs:
+                    raise V2RepositoryError("private round memory source refs do not match facts")
+                _validate_private_round_memory_model_lineage(
+                    db,
+                    game=game,
+                    commit=commit,
+                    batch_id=batch_id,
+                    phase_id=game.phase_id,
+                    phase_state=game.phase_state,
+                    round_no=round_no,
+                    source_cutoff_record_seq=source_cutoff_record_seq,
+                    normalized_memory=normalized_memory,
+                )
+                existing = next(
+                    (
+                        row
+                        for row in owner_rows
+                        if isinstance(row.payload, dict)
+                        and row.payload.get("round_no") == round_no
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    payload = existing.payload if isinstance(existing.payload, dict) else {}
+                    memory_sha256 = hashlib.sha256(normalized_memory.encode("utf-8")).hexdigest()
+                    if any(
+                        (
+                            payload.get("batch_id") != batch_id,
+                            payload.get("previous_snapshot_fact_id")
+                            != commit.previous_snapshot_fact_id,
+                            payload.get("source_cutoff_record_seq")
+                            != source_cutoff_record_seq,
+                            payload.get("source_refs") != source_refs,
+                            payload.get("source_refs_sha256") != commit.source_refs_sha256,
+                            payload.get("memory_sha256") != memory_sha256,
+                            payload.get("source_action_id") != commit.action_id,
+                            payload.get("source_model_response_record_seq")
+                            != commit.model_response_record_seq,
+                            payload.get("source_terminal_event_record_seq")
+                            != commit.terminal_event_record_seq,
+                            payload.get("provider_request_id") != commit.provider_request_id,
+                            payload.get("source_attempt_id") != commit.attempt_id,
+                            payload.get("source_request_payload_sha256")
+                            != commit.request_payload_sha256,
+                            payload.get("source_projected_context_sha256")
+                            != commit.projected_context_sha256,
+                            payload.get("projected_known_event_refs")
+                            != list(commit.projected_known_event_refs),
+                            payload.get("projected_known_events_sha256")
+                            != commit.projected_known_events_sha256,
+                        )
+                    ):
+                        raise V2RepositoryError("private round memory retry changed frozen input")
+                    prepared.append((commit, normalized_memory, memory_sha256, existing))
+                    continue
+                if latest_id != commit.previous_snapshot_fact_id:
+                    raise V2RepositoryError("private round memory predecessor changed before commit")
+                if latest_round is not None and latest_round >= round_no:
+                    raise V2RepositoryError("private round memory round is not monotonic")
+                if latest_cutoff is not None and source_cutoff_record_seq <= latest_cutoff:
+                    raise V2RepositoryError("private round memory cutoff is not monotonic")
+                prepared.append(
+                    (
+                        commit,
+                        normalized_memory,
+                        hashlib.sha256(normalized_memory.encode("utf-8")).hexdigest(),
+                        None,
+                    )
+                )
+
+            if terminal is not None:
+                if any(existing is None for _commit, _memory, _hash, existing in prepared):
+                    raise V2RepositoryError(
+                        "private round memory terminal exists without committed facts"
+                    )
+                results = [
+                    (existing.knowledge_fact_id, False)
+                    for _commit, _memory, _hash, existing in prepared
+                    if existing is not None
+                ]
+                terminal_payload = terminal.payload if isinstance(terminal.payload, dict) else {}
+                if terminal_payload.get("public_summary_status") != "completed":
+                    raise V2RepositoryError("private round memory batch already failed")
+                if batch_completed_payload is not None:
+                    expected_keys = (
+                        "round_no",
+                        "batch_id",
+                        "phase_id",
+                        "phase_state",
+                        "source_cutoff_record_seq",
+                        "public_summary_status",
+                        "commit_order",
+                        "private_round_memory_mode",
+                    )
+                    if any(
+                        terminal_payload.get(key) != batch_completed_payload.get(key)
+                        for key in expected_keys
+                    ):
+                        raise V2RepositoryError(
+                            "private round memory retry changed terminal input"
+                        )
+                    expected_failed = {
+                        item.get("player_id")
+                        for item in batch_completed_payload.get("memories", [])
+                        if isinstance(item, dict)
+                        and item.get("status") == "generation_failed"
+                    }
+                    terminal_by_owner = {
+                        item.get("player_id"): item
+                        for item in terminal_payload.get("memories", [])
+                        if isinstance(item, dict) and isinstance(item.get("player_id"), str)
+                    }
+                    terminal_failed = {
+                        player_id
+                        for player_id, item in terminal_by_owner.items()
+                        if item.get("status") == "generation_failed"
+                    }
+                    if expected_failed != terminal_failed or any(
+                        terminal_by_owner.get(commit.player_id, {}).get("knowledge_fact_id")
+                        != fact_id
+                        for commit, (fact_id, _created) in zip(
+                            commits, results, strict=True
+                        )
+                    ):
+                        raise V2RepositoryError(
+                            "private round memory retry changed terminal results"
+                        )
+                return results
+
+            results: list[tuple[str, bool]] = []
+            for commit, normalized_memory, memory_sha256, existing in prepared:
+                if existing is not None:
+                    results.append((existing.knowledge_fact_id, False))
+                    continue
+                fact_id = f"v2_fact_{uuid4().hex[:16]}"
+                source_refs = list(commit.source_refs)
+                payload = {
+                    "schema_version": 2,
+                    "owner": {"scope": "player", "id": commit.player_id},
+                    "round_no": round_no,
+                    "memory": normalized_memory,
+                    "epistemic_status": "actor_subjective_memory",
+                    "batch_id": batch_id,
+                    "previous_snapshot_fact_id": commit.previous_snapshot_fact_id,
+                    "supersedes_fact_id": commit.previous_snapshot_fact_id,
+                    "source_cutoff_record_seq": source_cutoff_record_seq,
+                    "source_refs": source_refs,
+                    "source_refs_sha256": commit.source_refs_sha256,
+                    "memory_sha256": memory_sha256,
+                    "source_action_id": commit.action_id,
+                    "source_model_response_record_seq": commit.model_response_record_seq,
+                    "source_terminal_event_record_seq": commit.terminal_event_record_seq,
+                    "provider_request_id": commit.provider_request_id,
+                    "source_attempt_id": commit.attempt_id,
+                    "source_request_payload_sha256": commit.request_payload_sha256,
+                    "source_projected_context_sha256": commit.projected_context_sha256,
+                    "projected_known_event_refs": list(commit.projected_known_event_refs),
+                    "projected_known_events_sha256": (
+                        commit.projected_known_events_sha256
+                    ),
+                }
+                db.add(
+                    V2KnowledgeFact(
+                        knowledge_fact_id=fact_id,
+                        game_id=game_id,
+                        source_activation_id=None,
+                        owner_scope="player",
+                        owner_id=commit.player_id,
+                        fact_type="private_round_memory",
+                        payload=payload,
+                    )
+                )
                 _append_event(
                     db,
                     game=game,
-                    event_type="private_round_memory_reused",
+                    event_type="private_knowledge_recorded",
                     audience="god_view",
                     payload={
-                        "knowledge_fact_id": existing.knowledge_fact_id,
-                        "owner_id": player_id,
+                        "knowledge_fact_id": fact_id,
+                        "owner_scope": "player",
+                        "owner_id": commit.player_id,
+                        "fact_type": "private_round_memory",
                         "round_no": round_no,
                         "batch_id": batch_id,
-                        "commit_index": commit_index,
+                        "commit_index": commit.commit_index,
+                        **payload,
                     },
                 )
-                return existing.knowledge_fact_id, False
-
-            fact_id = f"v2_fact_{uuid4().hex[:16]}"
-            db.add(
-                V2KnowledgeFact(
-                    knowledge_fact_id=fact_id,
-                    game_id=game_id,
-                    source_activation_id=None,
-                    owner_scope="player",
-                    owner_id=player_id,
-                    fact_type="private_round_memory",
-                    payload={
-                        "schema_version": 1,
-                        "round_no": round_no,
-                        "memory": normalized_memory,
-                        "epistemic_status": "actor_subjective_memory",
-                        "batch_id": batch_id,
-                    },
+                results.append((fact_id, True))
+            if batch_completed_payload is not None:
+                completed_payload = dict(batch_completed_payload)
+                status_by_owner = {
+                    str(item.get("player_id")): dict(item)
+                    for item in completed_payload.get("memories", [])
+                    if isinstance(item, dict) and isinstance(item.get("player_id"), str)
+                }
+                for commit, (fact_id, created) in zip(commits, results, strict=True):
+                    status_by_owner[commit.player_id] = {
+                        "player_id": commit.player_id,
+                        "status": "committed" if created else "reused",
+                        "knowledge_fact_id": fact_id,
+                    }
+                commit_order = completed_payload.get("commit_order")
+                if isinstance(commit_order, list):
+                    completed_payload["memories"] = [
+                        status_by_owner[player_id]
+                        for player_id in commit_order
+                        if isinstance(player_id, str) and player_id in status_by_owner
+                    ]
+                _append_event(
+                    db,
+                    game=game,
+                    event_type="day_private_memory_batch_completed",
+                    audience="god_view",
+                    payload=completed_payload,
                 )
-            )
-            _append_event(
-                db,
-                game=game,
-                event_type="private_knowledge_recorded",
-                audience="god_view",
-                payload={
-                    "knowledge_fact_id": fact_id,
-                    "owner_scope": "player",
-                    "owner_id": player_id,
-                    "fact_type": "private_round_memory",
-                    "round_no": round_no,
-                    "batch_id": batch_id,
-                    "commit_index": commit_index,
-                },
-            )
-            return fact_id, True
+            return results
 
     def append_event(
         self,
@@ -1844,10 +2208,23 @@ def _public_history(
         for row in presentations
     }
     if at_or_before_record_seq is not None:
+        closed_event_seqs = {
+            str(payload.get("presentation_id")): event.record_seq
+            for event in db.scalars(
+                select(V2GameRecordEvent).where(
+                    V2GameRecordEvent.game_id == game_id,
+                    V2GameRecordEvent.event_type.in_({"speech_closed", "presentation_closed"}),
+                    V2GameRecordEvent.record_seq <= at_or_before_record_seq,
+                )
+            )
+            for payload in (event.payload,)
+            if isinstance(payload, dict) and isinstance(payload.get("presentation_id"), str)
+        }
         presentations = [
             row
             for row in presentations
             if presentation_record_seq[row.presentation_id] <= at_or_before_record_seq
+            and row.presentation_id in closed_event_seqs
         ]
     action_types = _action_types_by_id(
         db,
@@ -2671,7 +3048,8 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_payload.get("failure_code") != vote.technical_reason
         or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
         or supporting_payload.get("target_player_id") is not None
-        or supporting_payload.get("model_generation_policy_schema_version") != 3
+        or supporting_payload.get("model_generation_policy_schema_version")
+        != MODEL_GENERATION_POLICY_SCHEMA_VERSION
     ):
         raise V2RepositoryError("day vote technical abstention lineage is invalid")
 
@@ -2722,6 +3100,416 @@ def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:
         raise V2GameCanceled("V2 game was canceled by an administrator")
 
 
+def _private_round_memory_batch_terminal_event(
+    db: Session,
+    *,
+    game_id: str,
+    run_id: str,
+    batch_id: str,
+) -> V2GameRecordEvent | None:
+    matching = [
+        event
+        for event in db.scalars(
+            select(V2GameRecordEvent)
+            .where(
+                V2GameRecordEvent.game_id == game_id,
+                V2GameRecordEvent.run_id == run_id,
+                V2GameRecordEvent.event_type == "day_private_memory_batch_completed",
+            )
+            .order_by(V2GameRecordEvent.record_seq)
+        )
+        if isinstance(event.payload, dict) and event.payload.get("batch_id") == batch_id
+    ]
+    if len(matching) > 1:
+        raise V2RepositoryError("private round memory batch has duplicate terminal events")
+    return matching[0] if matching else None
+
+
+def _private_round_memory_source_refs(
+    db: Session,
+    *,
+    game_id: str,
+    owner_id: str,
+    source_cutoff_record_seq: int,
+    previous_snapshot_fact_id: str | None,
+) -> list[str]:
+    public_history = _public_history(
+        db,
+        game_id,
+        at_or_before_record_seq=source_cutoff_record_seq,
+    )
+    private_facts = player_private_knowledge(
+        db,
+        game_id=game_id,
+        player_id=owner_id,
+        at_or_before_record_seq=source_cutoff_record_seq,
+    )
+    previous_cutoff = 0
+    if previous_snapshot_fact_id is not None:
+        previous = next(
+            (
+                item
+                for item in private_facts
+                if item.get("knowledge_fact_id") == previous_snapshot_fact_id
+                and item.get("fact_type") == "private_round_memory"
+            ),
+            None,
+        )
+        if previous is None:
+            raise V2RepositoryError("private round memory predecessor source is invalid")
+        payload = previous.get("payload") if isinstance(previous.get("payload"), dict) else {}
+        previous_cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0
+    elif any(item.get("fact_type") == "private_round_memory" for item in private_facts):
+        raise V2RepositoryError("private round memory predecessor source is missing")
+    public_refs = [
+        f"event:{item['source_event_id']}"
+        for item in public_history
+        if isinstance(item.get("source_event_id"), int)
+        and isinstance(item.get("record_seq"), int)
+        and item["record_seq"] > previous_cutoff
+    ]
+    private_refs = [
+        f"fact:{item['knowledge_fact_id']}"
+        for item in private_facts
+        if item.get("fact_type") != "private_round_memory"
+        and isinstance(item.get("knowledge_fact_id"), str)
+    ]
+    return [
+        *(
+            [f"fact:{previous_snapshot_fact_id}"]
+            if previous_snapshot_fact_id is not None
+            else []
+        ),
+        f"state:{source_cutoff_record_seq}",
+        *public_refs,
+        *private_refs,
+    ]
+
+
+def _validate_private_round_memory_model_lineage(
+    db: Session,
+    *,
+    game: V2GameRecord,
+    commit: V2PrivateRoundMemoryCommit,
+    batch_id: str,
+    phase_id: str,
+    phase_state: str,
+    round_no: int,
+    source_cutoff_record_seq: int,
+    normalized_memory: str,
+) -> None:
+    response = db.scalar(
+        select(V2GameRecordEvent).where(
+            V2GameRecordEvent.game_id == game.game_id,
+            V2GameRecordEvent.run_id == game.current_run_id,
+            V2GameRecordEvent.record_seq == commit.model_response_record_seq,
+            V2GameRecordEvent.event_type == "model_response_received",
+        )
+    )
+    terminal = db.scalar(
+        select(V2GameRecordEvent).where(
+            V2GameRecordEvent.game_id == game.game_id,
+            V2GameRecordEvent.run_id == game.current_run_id,
+            V2GameRecordEvent.record_seq == commit.terminal_event_record_seq,
+            V2GameRecordEvent.event_type == "action_succeeded",
+        )
+    )
+    opened_matches = [
+        event
+        for event in db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == game.current_run_id,
+                V2GameRecordEvent.event_type == "action_opened",
+            )
+        )
+        if isinstance(event.payload, dict)
+        and event.payload.get("action_id") == commit.action_id
+    ]
+    opened = opened_matches[0] if len(opened_matches) == 1 else None
+    response_payload = response.payload if response is not None else None
+    terminal_payload = terminal.payload if terminal is not None else None
+    opened_payload = opened.payload if opened is not None else None
+    context = opened_payload.get("context") if isinstance(opened_payload, dict) else None
+    context = (
+        {
+            key: value
+            for key, value in context.items()
+            if key not in {"audience", "audience_contract_version"}
+        }
+        if isinstance(context, dict)
+        else None
+    )
+    parsed_output = (
+        response_payload.get("parsed_output") if isinstance(response_payload, dict) else None
+    )
+    requests = list(
+        db.scalars(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == game.game_id,
+                V2GameRecordEvent.run_id == game.current_run_id,
+                V2GameRecordEvent.event_type == "model_request_started",
+            )
+        )
+    )
+    request_matches = [
+        event
+        for event in requests
+        if isinstance(event.payload, dict)
+        and event.payload.get("action_id") == commit.action_id
+        and event.payload.get("attempt_id") == commit.attempt_id
+    ]
+    request = request_matches[0] if len(request_matches) == 1 else None
+    request_payload = (
+        request.payload.get("request_payload")
+        if request is not None and isinstance(request.payload, dict)
+        else None
+    )
+    request_model_context = (
+        request.payload.get("model_context")
+        if request is not None and isinstance(request.payload, dict)
+        else None
+    )
+    replayed_model_context: dict[str, Any] | None = None
+    if isinstance(context, dict) and opened is not None:
+        try:
+            replayed_model_context = project_model_action_context_with_metadata(
+                context,
+                players=tuple(
+                    V2ModelPlayerReference(
+                        player_id=player.player_id,
+                        seat=player.seat,
+                        display_name=player.display_name,
+                    )
+                    for player in _players(db, game)
+                ),
+                model_context_contract=frozen_model_context_contract(game.rule_snapshot),
+                action_record_seq=opened.record_seq,
+                projection_at_seq=source_cutoff_record_seq,
+            ).context
+        except (TypeError, ValueError):
+            replayed_model_context = None
+    request_sha256 = (
+        hashlib.sha256(
+            json.dumps(
+                request_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if isinstance(request_payload, dict)
+        else None
+    )
+    projected_context_sha256 = (
+        hashlib.sha256(
+            json.dumps(
+                request_model_context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if isinstance(request_model_context, dict)
+        else None
+    )
+    expected_previous_cutoff = 0
+    expected_previous_snapshot: dict[str, Any] | None = None
+    expected_private_facts = player_private_knowledge(
+        db,
+        game_id=game.game_id,
+        player_id=commit.player_id,
+        at_or_before_record_seq=source_cutoff_record_seq,
+    )
+    if commit.previous_snapshot_fact_id is not None:
+        previous_rows = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == game.game_id,
+                    V2KnowledgeFact.owner_scope == "player",
+                    V2KnowledgeFact.owner_id == commit.player_id,
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                    V2KnowledgeFact.knowledge_fact_id == commit.previous_snapshot_fact_id,
+                )
+            )
+        )
+        if len(previous_rows) == 1:
+            previous_row = previous_rows[0]
+            previous_payload = (
+                previous_row.payload if isinstance(previous_row.payload, dict) else {}
+            )
+            expected_previous_cutoff = (
+                _positive_int(previous_payload.get("source_cutoff_record_seq")) or 0
+            )
+            expected_previous_snapshot = next(
+                (
+                    item
+                    for item in expected_private_facts
+                    if item.get("knowledge_fact_id") == commit.previous_snapshot_fact_id
+                ),
+                None,
+            )
+    match = _match(db, game)
+    expected_players = _players(db, game)
+    expected_owner = next(
+        (player for player in expected_players if player.player_id == commit.player_id),
+        None,
+    )
+    expected_context_facts = [dict(item) for item in expected_private_facts]
+    expected_public_history = [
+        dict(item)
+        for item in _public_history(
+            db,
+            game.game_id,
+            at_or_before_record_seq=source_cutoff_record_seq,
+        )
+        if isinstance(item.get("record_seq"), int)
+        and item["record_seq"] > expected_previous_cutoff
+    ]
+    expected_action_context = (
+        build_private_round_memory_action_context(
+            game_id=game.game_id,
+            action_id=commit.action_id,
+            phase_id=phase_id,
+            round_no=round_no,
+            batch_id=batch_id,
+            source_cutoff_record_seq=source_cutoff_record_seq,
+            player_id=expected_owner.player_id,
+            seat=expected_owner.seat,
+            role_key=expected_owner.role_key,
+            team=expected_owner.team,
+            persona=expected_owner.persona,
+            alive=expected_owner.alive,
+            sheriff_player_id=match.sheriff_player_id,
+            sheriff_badge_state=match.sheriff_badge_state,
+            rule=_match_snapshot(
+                db,
+                game=game,
+                match=match,
+                public_history=tuple(expected_public_history),
+                last_record_seq=source_cutoff_record_seq,
+            ).rule,
+            max_rounds=int(game.rule_snapshot.get("max_rounds") or 8),
+            player_state=expected_owner.state,
+            players=expected_players,
+            private_facts=expected_context_facts,
+            public_history=expected_public_history,
+            previous_memory_snapshot=expected_previous_snapshot,
+            previous_memory_fact_id=commit.previous_snapshot_fact_id,
+            previous_memory_source_cutoff_record_seq=(expected_previous_cutoff or None),
+            memory_source_refs=commit.source_refs,
+            memory_source_refs_sha256=commit.source_refs_sha256,
+        )
+        if expected_owner is not None
+        else None
+    )
+    context_source_refs = context.get("memory_source_refs") if isinstance(context, dict) else None
+    context_source_hash = (
+        context.get("memory_source_refs_sha256") if isinstance(context, dict) else None
+    )
+    context_previous_cutoff = (
+        context.get("previous_memory_source_cutoff_record_seq")
+        if isinstance(context, dict)
+        else None
+    )
+    request_known_events = (
+        request_model_context.get("known_events")
+        if isinstance(request_model_context, dict)
+        else None
+    )
+    try:
+        expanded_known_events = (
+            expand_known_events_v7(request_known_events)
+            if isinstance(request_known_events, dict)
+            else None
+        )
+    except Exception:
+        expanded_known_events = None
+    projected_event_refs = (
+        tuple(
+            str(item["event_ref"])
+            for item in expanded_known_events.get("events", [])
+            if isinstance(item, dict) and isinstance(item.get("event_ref"), str)
+        )
+        if isinstance(expanded_known_events, dict)
+        else None
+    )
+    projected_known_events_sha256 = (
+        hashlib.sha256(
+            json.dumps(
+                request_known_events,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if isinstance(request_known_events, dict)
+        else None
+    )
+    context_matches_frozen_db = (
+        isinstance(context, dict)
+        and isinstance(expected_action_context, dict)
+        and {
+            key: value
+            for key, value in context.items()
+            if key not in {"run_id", "action_record_seq"}
+        }
+        == expected_action_context
+        and context.get("run_id") == game.current_run_id
+        and context.get("action_record_seq") == opened.record_seq
+    )
+    if (
+        response is None
+        or terminal is None
+        or opened is None
+        or request is None
+        or not isinstance(response_payload, dict)
+        or not isinstance(terminal_payload, dict)
+        or not isinstance(context, dict)
+        or not isinstance(parsed_output, dict)
+        or response_payload.get("action_id") != commit.action_id
+        or response_payload.get("attempt_id") != commit.attempt_id
+        or terminal_payload.get("action_id") != commit.action_id
+        or terminal_payload.get("source_attempt_id") != commit.attempt_id
+        or terminal_payload.get("source_model_response_record_seq")
+        != commit.model_response_record_seq
+        or terminal_payload.get("provider_request_id") != commit.provider_request_id
+        or opened_payload.get("action_id") != commit.action_id
+        or context.get("action_type") != "private_round_memory"
+        or context.get("actor") != {"kind": "player", "id": commit.player_id}
+        or context.get("phase_id") != phase_id
+        or context.get("round_no") != round_no
+        or context.get("batch_id") != batch_id
+        or context.get("projection_at_seq") != source_cutoff_record_seq
+        or context.get("public_cutoff_record_seq") != source_cutoff_record_seq
+        or context.get("previous_memory_fact_id") != commit.previous_snapshot_fact_id
+        or context.get("previous_memory_snapshot") != expected_previous_snapshot
+        or context_previous_cutoff != (expected_previous_cutoff or None)
+        or context_source_refs != list(commit.source_refs)
+        or context_source_hash != commit.source_refs_sha256
+        or not context_matches_frozen_db
+        or response_payload.get("provider_request_id") != commit.provider_request_id
+        or request_sha256 != commit.request_payload_sha256
+        or expected_owner is None
+        or not request_payload_matches_model_context(
+            request_payload,
+            model_context=request_model_context,
+            model_provider=expected_owner.model_provider,
+            model_id=expected_owner.model_id,
+            parameters=expected_owner.model_parameters,
+            supports_thinking=expected_owner.model_supports_thinking,
+        )
+        or projected_context_sha256 != commit.projected_context_sha256
+        or replayed_model_context != request_model_context
+        or projected_event_refs != commit.projected_known_event_refs
+        or projected_known_events_sha256 != commit.projected_known_events_sha256
+        or str(parsed_output.get("speech") or "").strip()[:400].rstrip()
+        != normalized_memory
+        or not (opened.record_seq < request.record_seq < response.record_seq < terminal.record_seq)
+    ):
+        raise V2RepositoryError("private round memory model lineage is invalid")
+
+
 def _append_event(
     db: Session,
     *,
@@ -2743,6 +3531,42 @@ def _append_event(
         )
     )
     game.last_record_seq = next_seq
+
+
+def private_round_memory_source_refs_sha256(
+    *,
+    owner_id: str,
+    round_no: int,
+    previous_snapshot_fact_id: str | None,
+    source_cutoff_record_seq: int,
+    source_refs: list[str],
+) -> str:
+    encoded = json.dumps(
+        {
+            "owner_id": owner_id,
+            "round_no": round_no,
+            "previous_snapshot_fact_id": previous_snapshot_fact_id,
+            "source_cutoff_record_seq": source_cutoff_record_seq,
+            "source_refs": source_refs,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _private_round_memory_order(row: V2KnowledgeFact) -> tuple[int, int, str]:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    round_no = _positive_int(payload.get("round_no")) or 0
+    cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0
+    return (round_no, cutoff, row.knowledge_fact_id)
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
 
 
 def _round_no(phase_id: str) -> int:

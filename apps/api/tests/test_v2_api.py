@@ -43,6 +43,7 @@ from app.v2.live_runtime import (
     _GameChannel,
 )
 from app.v2 import match_repository as match_repository_module
+from app.v2 import model_client as model_client_module
 from app.v2 import model_context as model_context_module
 from app.v2.action_engine import (
     V2ActionFailure,
@@ -67,7 +68,12 @@ from app.v2.day_speech_pipeline_contract import (
 )
 from app.v2.execution import bind_v2_run_fence
 from app.v2.first_night_engine import V2NightEngine, _WorkingNight
-from app.v2.match_repository import V2DayVoteCommit, V2MatchRepository
+from app.v2.match_repository import (
+    V2DayVoteCommit,
+    V2MatchRepository,
+    V2PrivateRoundMemoryCommit,
+    private_round_memory_source_refs_sha256,
+)
 from app.v2.pre_exile_pipeline_contract import (
     pre_exile_pipeline_contract_summary,
 )
@@ -76,10 +82,11 @@ from app.v2.model_context import (
     V2ModelPlayerReference,
     V2ProjectedModelContext,
     project_model_action_context,
+    project_model_action_context_with_metadata,
 )
 from app.v2.model_context_compaction import (
-    encode_known_events_v6,
-    expand_known_events_v6,
+    encode_known_events_v7,
+    expand_known_events_v7,
 )
 from app.v2.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
@@ -166,7 +173,7 @@ def _private_known_facts(context: dict[str, Any]) -> list[dict[str, Any]]:
 def _canonical_known_events(context: dict[str, Any]) -> dict[str, Any]:
     known_events = context.get("known_events")
     assert isinstance(known_events, dict)
-    return expand_known_events_v6(known_events)
+    return expand_known_events_v7(known_events)
 
 
 def _model_decision_stage(context: dict[str, Any]) -> str | None:
@@ -1292,7 +1299,7 @@ class _TechnicalVoteOutcomeActions:
                         "target_exhaustion_failure_mode": self._failure_mode,
                         "technical_outcome": "technical_abstain",
                         "target_player_id": None,
-                        "model_generation_policy_schema_version": 3,
+                        "model_generation_policy_schema_version": 4,
                     },
                 )
                 supporting_event_record_seq = self._repository.snapshot(game_id).last_record_seq
@@ -1423,7 +1430,7 @@ class _TechnicalNightOutcomeActions:
                     "target_exhaustion_failure_mode": "output_budget_exhausted",
                     "technical_outcome": "technical_no_action",
                     "target_player_id": None,
-                    "model_generation_policy_schema_version": 3,
+                    "model_generation_policy_schema_version": 4,
                 },
             )
             self._repository.append_event(
@@ -1498,13 +1505,19 @@ class _ConcurrentPrivateMemoryActions:
     def __init__(
         self,
         *,
+        repository: V2MatchRepository,
         expected_players: int,
         failed_actor_ids: set[str] | None = None,
+        empty_actor_ids: set[str] | None = None,
         canceled_actor_id: str | None = None,
+        context_mutation: tuple[str, Any] | None = None,
     ) -> None:
+        self._repository = repository
         self._expected_players = expected_players
         self._failed_actor_ids = failed_actor_ids or set()
+        self._empty_actor_ids = empty_actor_ids or set()
         self._canceled_actor_id = canceled_actor_id
+        self._context_mutation = context_mutation
         self._started = 0
         self._in_flight = 0
         self._all_started = asyncio.Event()
@@ -1518,6 +1531,18 @@ class _ConcurrentPrivateMemoryActions:
         return
 
     async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision | None:
+        game_id = _kwargs.get("game_id")
+        assert isinstance(game_id, str)
+        result = await self.run_player_decision_result(game_id=game_id, spec=spec)
+        return result.decision if result is not None else None
+
+    async def run_player_decision_result(
+        self,
+        *,
+        game_id: str,
+        spec,
+        **_kwargs,
+    ) -> V2ActionResult | None:
         assert spec.action_type == "private_round_memory"
         assert spec.defer_presentation is True
         assert spec.isolated_failure is True
@@ -1535,12 +1560,150 @@ class _ConcurrentPrivateMemoryActions:
         self._in_flight -= 1
         if spec.actor_id in self._failed_actor_ids:
             return None
-        return V2ModelDecision(
+        decision = V2ModelDecision(
             target_player_id=None,
-            speech=f"我是{spec.actor_id}，这是我对第1轮的非公开记忆。",
+            speech=(
+                ""
+                if spec.actor_id in self._empty_actor_ids
+                else f"我是{spec.actor_id}，这是我的滚动非公开记忆。"
+            ),
             provider_request_id=f"provider-memory-{spec.actor_id}",
             first_token_ms=1,
             completed_ms=2,
+        )
+        if not decision.speech:
+            return V2ActionResult(decision=decision)
+        action_id = f"v2_action_test_memory_{spec.actor_id}"
+        attempt_id = f"v2_model_test_memory_{spec.actor_id}"
+        action_context = {
+            "schema_version": 1,
+            "action_id": action_id,
+            "action_type": spec.action_type,
+            "game_id": game_id,
+            "actor": {"kind": "player", "id": spec.actor_id},
+            "phase_id": spec.phase_id,
+            "objective": spec.objective,
+            "output_contract": action_engine_module._output_contract(spec),
+            "influence": {
+                "schema_version": 1,
+                "status": "disabled",
+                "captured_at": None,
+                "strength": 0,
+                "signals": [],
+            },
+            **spec.context,
+            "batch_id": spec.batch_id,
+            "projection_at_seq": spec.projection_at_seq,
+        }
+        if self._context_mutation is not None:
+            key, value = self._context_mutation
+            action_context[key] = value
+        state = self._repository.snapshot(game_id)
+        action_record_seq = state.last_record_seq + 1
+        action_context.update(
+            {
+                "run_id": state.run_id,
+                "action_record_seq": action_record_seq,
+            }
+        )
+        model_context = project_model_action_context_with_metadata(
+            action_context,
+            players=tuple(
+                V2ModelPlayerReference(
+                    player_id=player.player_id,
+                    seat=player.seat,
+                    display_name=player.display_name,
+                )
+                for player in state.players
+            ),
+            model_context_contract=state.model_context_contract,
+            action_record_seq=action_record_seq,
+            projection_at_seq=spec.projection_at_seq,
+        ).context
+        request_payload = model_client_module.build_model_request_payload(
+            model_context,
+            decision=True,
+            model_id=spec.model_id,
+            parameters=spec.model_parameters,
+            supports_thinking=spec.model_supports_thinking,
+        )
+        request_payload_sha256 = hashlib.sha256(
+            json.dumps(
+                request_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        projected_context_sha256 = hashlib.sha256(
+            json.dumps(
+                model_context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self._repository.append_event(
+            game_id=game_id,
+            event_type="action_opened",
+            audience="player_private",
+            payload={"action_id": action_id, "context": action_context},
+        )
+        self._repository.append_event(
+            game_id=game_id,
+            event_type="model_request_started",
+            audience="player_private",
+            payload={
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "request_payload": request_payload,
+                "model_context": model_context,
+            },
+        )
+        self._repository.append_event(
+            game_id=game_id,
+            event_type="model_response_received",
+            audience="player_private",
+            payload={
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "provider_request_id": decision.provider_request_id,
+                "parsed_output": {"speech": decision.speech},
+            },
+        )
+        response_record_seq = self._repository.snapshot(game_id).last_record_seq
+        self._repository.append_event(
+            game_id=game_id,
+            event_type="action_succeeded",
+            audience="player_private",
+            payload={
+                "action_id": action_id,
+                "source_attempt_id": attempt_id,
+                "source_model_response_record_seq": response_record_seq,
+                "provider_request_id": decision.provider_request_id,
+            },
+        )
+        terminal_record_seq = self._repository.snapshot(game_id).last_record_seq
+        return V2ActionResult(
+            action_id=action_id,
+            decision=decision,
+            model_response_record_seq=response_record_seq,
+            terminal_event_record_seq=terminal_record_seq,
+            model_attempt_id=attempt_id,
+            request_payload_sha256=request_payload_sha256,
+            projected_context_sha256=projected_context_sha256,
+            projected_known_event_refs=tuple(
+                str(item["event_ref"])
+                for item in expand_known_events_v7(model_context["known_events"])["events"]
+            ),
+            projected_known_events_sha256=hashlib.sha256(
+                json.dumps(
+                    model_context["known_events"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
         )
 
     async def run_judge_speech(self, *, spec, **_kwargs) -> bool:
@@ -1558,21 +1721,34 @@ class _SummaryOnlyPrivateMemoryActions:
         *,
         judge_result: bool = True,
         judge_error: BaseException | None = None,
+        expected_players: int = 6,
     ) -> None:
         self.judge_specs: list[Any] = []
         self.memory_calls = 0
         self.judge_result = judge_result
         self.judge_error = judge_error
+        self.expected_players = expected_players
+        self.memory_started = asyncio.Event()
 
     def check_cancellation(self, _game_id: str) -> None:
         return
 
-    async def run_player_decision(self, **_kwargs) -> V2ModelDecision | None:
+    async def run_player_decision(self, *, spec, **_kwargs) -> V2ModelDecision | None:
         self.memory_calls += 1
-        raise AssertionError("non-blocking private-memory policy must not start model actions")
+        if self.memory_calls == self.expected_players:
+            self.memory_started.set()
+        await asyncio.wait_for(self.memory_started.wait(), timeout=1)
+        return V2ModelDecision(
+            target_player_id=None,
+            speech=f"我是{spec.actor_id}，这是尚未提交的滚动记忆。",
+            provider_request_id=f"provider-memory-{spec.actor_id}",
+            first_token_ms=1,
+            completed_ms=2,
+        )
 
     async def run_judge_speech(self, *, spec, **_kwargs) -> bool:
         self.judge_specs.append(spec)
+        await asyncio.wait_for(self.memory_started.wait(), timeout=1)
         if self.judge_error is not None:
             raise self.judge_error
         return self.judge_result
@@ -1883,10 +2059,10 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
                 "ledger_schema_version": 5,
                 "model_view_schema_version": 5,
-                "model_view_selector_version": 2,
+                "model_view_selector_version": 3,
             },
             "model_generation_policy_contract": {
-                "schema_version": 3,
+                "schema_version": 4,
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
@@ -2259,7 +2435,7 @@ def test_schema3_vote_output_budget_applies_abstain_and_closes_failure_episode(
     assert failures[0].payload["automatic_retry_scheduled"] is False
     assert technical.payload["technical_outcome"] == "technical_abstain"
     assert technical.payload["target_player_id"] is None
-    assert technical.payload["model_generation_policy_schema_version"] == 3
+    assert technical.payload["model_generation_policy_schema_version"] == 4
     assert succeeded.payload["technical_outcome_record_seq"] == technical.record_seq
     assert technical.record_seq < succeeded.record_seq < committed.record_seq
     assert committed.payload["target_player_id"] is None
@@ -2730,10 +2906,10 @@ def test_profile_library_mode_requires_inner_rule_revision(v2_context) -> None:
     assert response.status_code == 422
 
 
-def test_new_game_freezes_v12_current_prompt_model_context_contract(v2_context) -> None:
+def test_new_game_freezes_v13_current_prompt_model_context_contract(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     request = _lobby_create_request()
-    request["title"] = "V12 契约冻结"
+    request["title"] = "V13 契约冻结"
     created = client.post("/api/v2/games", json=request)
     assert created.status_code == 201, created.text
 
@@ -2743,7 +2919,7 @@ def test_new_game_freezes_v12_current_prompt_model_context_contract(v2_context) 
         "known_events_schema_version": KNOWN_EVENTS_SCHEMA_VERSION,
         "ledger_schema_version": 5,
         "model_view_schema_version": 5,
-        "model_view_selector_version": 2,
+        "model_view_selector_version": 3,
     }
     with session_factory() as db:
         game = db.get(V2GameRecord, created.json()["game_id"])
@@ -2784,7 +2960,7 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
         )
         assert created_event is not None
     assert created_event.payload["model_generation_policy_contract"] == {
-        "schema_version": 3,
+        "schema_version": 4,
         "classification_version": 1,
         "enforcement": "observe_only",
     }
@@ -2811,7 +2987,7 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "reuse_previous_non_blocking",
+        "private_round_memory_mode": "blocking_generation",
     }
 
     repository = V2ActionRepository(session_factory, enforce_execution_fence=False)
@@ -2883,7 +3059,7 @@ def test_present_invalid_model_generation_policy_fails_closed_at_runtime_start_a
         frozen_rule = dict(game.rule_snapshot)
         frozen_rule["model_generation_policy_contract"] = {
             **current_model_generation_policy_contract(),
-            "schema_version": 4,
+            "schema_version": 3,
         }
         game.rule_snapshot = frozen_rule
     assert client.get(runtime_created["snapshot_url"]).status_code == 200
@@ -6653,7 +6829,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             event.payload["prompt_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
             and event.payload["model_context_schema_version"] == MODEL_CONTEXT_SCHEMA_VERSION
             and event.payload["prompt_template_version"] == PROMPT_TEMPLATE_VERSION
-            and event.payload["model_view_selector_version"] == 2
+            and event.payload["model_view_selector_version"] == 3
             and event.payload["prompt_projection"]["known_events_schema_version"]
             == KNOWN_EVENTS_SCHEMA_VERSION
             and "known_event_count" in event.payload["prompt_projection"]
@@ -6663,7 +6839,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and "known_event_record_seq_max" in event.payload["prompt_projection"]
             and event.payload["prompt_projection"]["ledger_schema_version"] == 5
             and event.payload["prompt_projection"]["model_view_schema_version"] == 5
-            and event.payload["prompt_projection"]["model_view_selector_version"] == 2
+            and event.payload["prompt_projection"]["model_view_selector_version"] == 3
             and "current_round_statement_count" in event.payload["prompt_projection"]
             and "none_detected_question_count" in event.payload["prompt_projection"]
             and "response_detected_question_count" in event.payload["prompt_projection"]
@@ -6675,7 +6851,7 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
             and "derivation_rejections" in event.payload["prompt_projection"]
             and "selection_budget_chars" not in event.payload["prompt_projection"]
             and "retained_event_refs" in event.payload["prompt_projection"]
-            and event.payload["prompt_projection"]["dropped_event_refs"] == []
+            and event.payload["prompt_projection"]["selector"]["version"] == 3
             and event.payload["prompt_projection"]["round_trip_verified"] is True
             and "canonical_serialized_char_count" in event.payload["prompt_projection"]
             and "compact_serialized_char_count" in event.payload["prompt_projection"]
@@ -7066,15 +7242,37 @@ def test_advanced_rule_runs_pre_dawn_election_private_abilities_and_terminal_cut
         for contexts in vote_context_batches.values():
             if not contexts:
                 continue
-            visible_vote_ids = [
-                tuple(
-                    item["event_ref"]
+            visible_vote_events = [
+                [
+                    item
                     for item in _canonical_known_events(context)["events"]
                     if item["kind"] in {"day_vote", "vote_result"}
-                )
+                ]
                 for context in contexts
             ]
-            assert len(set(visible_vote_ids)) == 1
+            # A completed public vote result remains identical for every voter.
+            # V13 may additionally retain each actor's own older vote as
+            # first-person history, so the complete retained vote-ref list no
+            # longer has to be identical across actors.
+            visible_result_ids = [
+                tuple(item["event_ref"] for item in events if item["kind"] == "vote_result")
+                for events in visible_vote_events
+            ]
+            assert len(set(visible_result_ids)) == 1
+            common_vote_refs = set.intersection(
+                *(
+                    {item["event_ref"] for item in events}
+                    for events in visible_vote_events
+                )
+            )
+            for context, events in zip(contexts, visible_vote_events, strict=True):
+                actor_ref = context["self"]["identity"]["player_id"]
+                assert all(item["known_at_seq"] < context["task"]["at_seq"] for item in events)
+                assert all(
+                    item["kind"] == "day_vote" and item.get("voter_ref") == actor_ref
+                    for item in events
+                    if item["event_ref"] not in common_vote_refs
+                )
 
         night_window = db.scalar(
             select(V2ActionWindow).where(
@@ -7560,7 +7758,25 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
     assert event_detail.json()["payload"]["request_payload"]
 
 
-def test_blocking_required_target_output_budget_uses_third_same_request_attempt(
+def test_historical_generation_policy_v2_is_rejected_before_model_calls(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    runtime = client.app.state.v2_live_runtime
+    model_client = client.app.state.v2_test_model_client
+    identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v2(session_factory, identifiers["game_id"])
+
+    with pytest.raises(
+        V2ClientProtocolError,
+        match="unsupported_model_generation_policy_contract",
+    ):
+        asyncio.run(runtime._channel(identifiers["game_id"]))
+
+    assert model_client.call_count == 0
+
+
+def _historical_blocking_required_target_output_budget_uses_third_same_request_attempt(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -7697,7 +7913,7 @@ def test_blocking_required_target_output_budget_uses_third_same_request_attempt(
         (3, 0.07, 80, "insufficient_action_budget"),
     ],
 )
-def test_blocking_output_budget_does_not_start_unfunded_or_policy_forbidden_third(
+def _historical_blocking_output_budget_does_not_start_unfunded_or_policy_forbidden_third(
     v2_context,
     max_attempts: int,
     output_delay: float,
@@ -7784,7 +8000,7 @@ def test_blocking_output_budget_does_not_start_unfunded_or_policy_forbidden_thir
                 break
 
 
-def test_third_output_budget_failure_pauses_and_operator_cycle_uses_new_episode(
+def _historical_third_output_budget_failure_pauses_and_operator_cycle_uses_new_episode(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -8208,6 +8424,7 @@ def test_model_output_enforcement_and_application_validation_are_audited(
         def __init__(self) -> None:
             self.events: list[dict[str, Any]] = []
             self.completed = False
+            self.record_seq = 100
 
         def claim_action(self, **values: Any) -> V2ActionClaim:
             return V2ActionClaim(
@@ -8224,8 +8441,10 @@ def test_model_output_enforcement_and_application_validation_are_audited(
         def check_cancellation(self, _game_id: str) -> None:
             return
 
-        def append_event(self, **values: Any) -> None:
+        def append_event(self, **values: Any) -> int:
             self.events.append(values)
+            self.record_seq += 1
+            return self.record_seq
 
         def model_binding_failure_streak(self, **_values: Any) -> int:
             return 0
@@ -8233,8 +8452,10 @@ def test_model_output_enforcement_and_application_validation_are_audited(
         def resolve_model_action_recovery(self, **_values: Any) -> None:
             return
 
-        def complete_silent_action(self, **_values: Any) -> None:
+        def complete_silent_action(self, **_values: Any) -> int:
             self.completed = True
+            self.record_seq += 1
+            return self.record_seq
 
         def fail_action(self, **values: Any) -> None:
             pytest.fail(f"unexpected action failure: {values}")
@@ -8257,7 +8478,7 @@ def test_model_output_enforcement_and_application_validation_are_audited(
         },
         "rules": {},
         "state": {"as_of_seq": 42, "current_round_no": 1},
-        "known_events": encode_known_events_v6(
+        "known_events": encode_known_events_v7(
             {
                 "schema_version": 5,
                 "events": [],
@@ -8918,7 +9139,7 @@ def test_v2_output_budget_speech_and_boolean_use_one_attempt_then_technical_outc
     assert episode.invariant_errors == ()
 
 
-def test_v1_output_budget_public_speech_preserves_two_attempt_legacy_recovery(
+def _historical_v1_output_budget_public_speech_preserves_two_attempt_legacy_recovery(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -9249,7 +9470,7 @@ def _freeze_model_generation_policy_v2(
         game.rule_snapshot = frozen_rule
 
 
-def test_schema2_vote_output_budget_family_caps_isolated_and_blocking_recovery(
+def _historical_schema2_vote_output_budget_family_caps_isolated_and_blocking_recovery(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -10648,7 +10869,6 @@ def _prepare_day_state(
     game_id: str,
     *,
     phase_state: str = "public_discussion_open",
-    legacy_generation_policy: bool = False,
 ) -> None:
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, game_id)
@@ -10665,17 +10885,205 @@ def _prepare_day_state(
                 "speech_rounds": 1,
             }
         )
-        if legacy_generation_policy:
-            generation_policy = current_model_generation_policy_contract()
-            generation_policy["schema_version"] = 1
-            generation_policy.pop("execution")
-            frozen_rule["model_generation_policy_contract"] = generation_policy
         game.rule_snapshot = {**frozen_rule, "rule_set": rule_set}
         game.phase_id = "day_1"
         game.phase_state = phase_state
         game.status = "ready"
         run.status = "ready"
         match.round_no = 1
+
+
+def _record_seed_private_memory(
+    *,
+    repository: V2MatchRepository,
+    state: Any,
+    player_id: str,
+    memory: str,
+) -> tuple[str, bool]:
+    batch_id = f"{state.game_id}:round_{state.round_no}:private_memories"
+    action_id = f"v2_action_seed_memory_{player_id}_{state.round_no}"
+    attempt_id = f"v2_model_seed_memory_{player_id}_{state.round_no}"
+    provider_request_id = f"provider-seed-memory-{player_id}-{state.round_no}"
+    public_refs = [
+        f"event:{item['source_event_id']}"
+        for item in state.public_history
+        if isinstance(item.get("source_event_id"), int)
+    ]
+    private_refs = [
+        f"fact:{item['knowledge_fact_id']}"
+        for item in repository.private_knowledge(
+            game_id=state.game_id,
+            player_id=player_id,
+            at_or_before_record_seq=state.last_record_seq,
+        )
+        if item.get("fact_type") != "private_round_memory"
+        and isinstance(item.get("knowledge_fact_id"), str)
+    ]
+    source_refs = [f"state:{state.last_record_seq}", *public_refs, *private_refs]
+    owner = state.player(player_id)
+    action_record_seq = state.last_record_seq + 1
+    source_hash = private_round_memory_source_refs_sha256(
+        owner_id=player_id,
+        round_no=state.round_no,
+        previous_snapshot_fact_id=None,
+        source_cutoff_record_seq=state.last_record_seq,
+        source_refs=source_refs,
+    )
+    action_context = model_context_module.build_private_round_memory_action_context(
+        game_id=state.game_id,
+        action_id=action_id,
+        phase_id=state.phase_id,
+        round_no=state.round_no,
+        batch_id=batch_id,
+        source_cutoff_record_seq=state.last_record_seq,
+        player_id=owner.player_id,
+        seat=owner.seat,
+        role_key=owner.role_key,
+        team=owner.team,
+        persona=owner.persona,
+        alive=owner.alive,
+        sheriff_player_id=state.sheriff_player_id,
+        sheriff_badge_state=state.sheriff_badge_state,
+        rule=state.rule,
+        max_rounds=state.max_rounds,
+        player_state=owner.state,
+        players=state.players,
+        private_facts=[],
+        public_history=state.public_history,
+        previous_memory_snapshot=None,
+        previous_memory_fact_id=None,
+        previous_memory_source_cutoff_record_seq=None,
+        memory_source_refs=source_refs,
+        memory_source_refs_sha256=source_hash,
+    )
+    action_context.update(
+        {"run_id": state.run_id, "action_record_seq": action_record_seq}
+    )
+    model_context = project_model_action_context_with_metadata(
+        action_context,
+        players=tuple(
+            V2ModelPlayerReference(
+                player_id=player.player_id,
+                seat=player.seat,
+                display_name=player.display_name,
+            )
+            for player in state.players
+        ),
+        model_context_contract=state.model_context_contract,
+        action_record_seq=action_record_seq,
+        projection_at_seq=state.last_record_seq,
+    ).context
+    request_payload = model_client_module.build_model_request_payload(
+        model_context,
+        decision=True,
+        model_id=owner.model_id,
+        parameters=owner.model_parameters,
+        supports_thinking=owner.model_supports_thinking,
+    )
+    request_payload_sha256 = hashlib.sha256(
+        json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    projected_context_sha256 = hashlib.sha256(
+        json.dumps(
+            model_context,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    repository.append_event(
+        game_id=state.game_id,
+        event_type="action_opened",
+        audience="player_private",
+        payload={
+            "action_id": action_id,
+            "context": action_context,
+        },
+    )
+    repository.append_event(
+        game_id=state.game_id,
+        event_type="model_request_started",
+        audience="player_private",
+        payload={
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "request_payload": request_payload,
+            "model_context": model_context,
+        },
+    )
+    repository.append_event(
+        game_id=state.game_id,
+        event_type="model_response_received",
+        audience="player_private",
+        payload={
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "provider_request_id": provider_request_id,
+            "parsed_output": {"speech": memory},
+        },
+    )
+    model_response_record_seq = repository.snapshot(state.game_id).last_record_seq
+    repository.append_event(
+        game_id=state.game_id,
+        event_type="action_succeeded",
+        audience="player_private",
+        payload={
+            "action_id": action_id,
+            "source_attempt_id": attempt_id,
+            "source_model_response_record_seq": model_response_record_seq,
+            "provider_request_id": provider_request_id,
+        },
+    )
+    terminal_event_record_seq = repository.snapshot(state.game_id).last_record_seq
+    return repository.record_private_round_memories(
+        game_id=state.game_id,
+        run_id=state.run_id,
+        phase_id=state.phase_id,
+        phase_state=state.phase_state,
+        round_no=state.round_no,
+        batch_id=batch_id,
+        source_cutoff_record_seq=state.last_record_seq,
+        commits=(
+            V2PrivateRoundMemoryCommit(
+                player_id=player_id,
+                memory=memory,
+                commit_index=1,
+                source_refs=tuple(source_refs),
+                source_refs_sha256=private_round_memory_source_refs_sha256(
+                    owner_id=player_id,
+                    round_no=state.round_no,
+                    previous_snapshot_fact_id=None,
+                    source_cutoff_record_seq=state.last_record_seq,
+                    source_refs=source_refs,
+                ),
+                previous_snapshot_fact_id=None,
+                action_id=action_id,
+                model_response_record_seq=model_response_record_seq,
+                terminal_event_record_seq=terminal_event_record_seq,
+                provider_request_id=provider_request_id,
+                attempt_id=attempt_id,
+                request_payload_sha256=request_payload_sha256,
+                projected_context_sha256=projected_context_sha256,
+                projected_known_event_refs=tuple(
+                    str(item["event_ref"])
+                    for item in expand_known_events_v7(model_context["known_events"])["events"]
+                ),
+                projected_known_events_sha256=hashlib.sha256(
+                    json.dumps(
+                        model_context["known_events"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            ),
+        ),
+    )[0]
 
 
 def test_private_action_decision_is_owner_only_and_never_public(v2_context) -> None:
@@ -10685,6 +11093,7 @@ def test_private_action_decision_is_owner_only_and_never_public(v2_context) -> N
     repository = V2MatchRepository(session_factory)
     state = repository.snapshot(created["game_id"])
     first, second = sorted(state.players, key=lambda player: player.seat)[:2]
+    frozen_cutoff = state.last_record_seq
 
     fact_id = repository.record_private_action_decision(
         game_id=created["game_id"],
@@ -10715,9 +11124,17 @@ def test_private_action_decision_is_owner_only_and_never_public(v2_context) -> N
         fact["payload"]["declared_reason"]["text"] not in json.dumps(item, ensure_ascii=False)
         for item in repository.snapshot(created["game_id"]).public_history
     )
+    assert all(
+        item["knowledge_fact_id"] != fact_id
+        for item in repository.private_knowledge(
+            game_id=created["game_id"],
+            player_id=first.player_id,
+            at_or_before_record_seq=frozen_cutoff,
+        )
+    )
 
 
-def test_new_policy_skips_private_memory_generation_without_blocking_night(
+def test_new_policy_generates_private_memory_before_advancing_night(
     v2_context,
 ) -> None:
     client, session_factory, _voice_root = v2_context
@@ -10729,7 +11146,10 @@ def test_new_policy_skips_private_memory_generation_without_blocking_night(
         (player for player in before.players if player.alive),
         key=lambda player: player.seat,
     )
-    actions = _SummaryOnlyPrivateMemoryActions()
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
     engine = V2DayEngine(
         repository=repository,
         action_engine=actions,  # type: ignore[arg-type]
@@ -10745,7 +11165,8 @@ def test_new_policy_skips_private_memory_generation_without_blocking_night(
     )
 
     assert transition.phase_id == "night_2"
-    assert actions.memory_calls == 0
+    assert len(actions.memory_specs) == len(players)
+    assert actions.max_in_flight == len(players)
     assert len(actions.judge_specs) == 1
     with session_factory() as db:
         facts = list(
@@ -10763,31 +11184,139 @@ def test_new_policy_skips_private_memory_generation_without_blocking_night(
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
-    assert facts == []
-    skipped = next(
-        event for event in events if event.event_type == "private_round_memory_generation_skipped"
-    )
-    assert skipped.payload == {
-        "audience": "god_view",
-        "audience_contract_version": 1,
-        "round_no": 1,
-        "batch_id": f"{created['game_id']}:round_1:private_memories",
-        "reason": "non_blocking_latency_policy",
-        "public_cutoff_record_seq": before.last_record_seq,
-        "player_ids": [player.player_id for player in players],
-    }
+    assert {fact.owner_id for fact in facts} == {player.player_id for player in players}
+    assert all(fact.payload["schema_version"] == 2 for fact in facts)
     completed = next(
         event for event in events if event.event_type == "day_private_memory_batch_completed"
     )
-    assert completed.payload["private_round_memory_mode"] == ("reuse_previous_non_blocking")
-    assert [item["status"] for item in completed.payload["memories"]] == [
-        "generation_skipped_non_blocking"
-    ] * len(players)
+    assert completed.payload.get("private_round_memory_mode", "blocking_generation") == (
+        "blocking_generation"
+    )
+    assert [item["status"] for item in completed.payload["memories"]] == ["committed"] * len(
+        players
+    )
     phase_changed = next(event for event in events if event.event_type == "game_phase_changed")
     assert completed.record_seq < phase_changed.record_seq
 
 
-def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> None:
+def test_private_memory_batch_rejects_self_consistent_context_tampering(
+    v2_context,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = [player for player in before.players if player.alive]
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+        context_mutation=("candidates", [{"player_id": "fabricated-player"}]),
+    )
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(
+        V2RepositoryError,
+        match="private round memory model lineage is invalid",
+    ):
+        asyncio.run(
+            engine._run_day_summary_and_private_memories(
+                state=before,
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            )
+        )
+
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+    assert facts == []
+
+
+@pytest.mark.parametrize("all_generations_fail", [False, True])
+def test_completed_private_memory_batch_resumes_without_regeneration(
+    v2_context,
+    all_generations_fail: bool,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    state = repository.snapshot(created["game_id"])
+    player_ids = {player.player_id for player in state.players if player.alive}
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(player_ids),
+        failed_actor_ids=player_ids if all_generations_fail else None,
+    )
+    engine = V2DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+    broadcaster = _CollectingBroadcaster()
+
+    assert asyncio.run(
+        engine._run_day_summary_and_private_memories(
+            state=state,
+            broadcaster=broadcaster,  # type: ignore[arg-type]
+        )
+    )
+    memory_call_count = len(actions.memory_specs)
+    judge_call_count = len(actions.judge_specs)
+    assert repository.snapshot(created["game_id"]).phase_id == "day_1"
+
+    transition = asyncio.run(
+        engine._close_day(
+            game_id=created["game_id"],
+            broadcaster=broadcaster,  # type: ignore[arg-type]
+            reason="test_completed_memory_batch_recovery",
+            summarize=True,
+        )
+    )
+
+    assert transition.phase_id == "night_2"
+    assert len(actions.memory_specs) == memory_call_count
+    assert len(actions.judge_specs) == judge_call_count
+    with session_factory() as db:
+        batch_events = list(
+            db.scalars(
+                select(V2GameRecordEvent)
+                .where(
+                    V2GameRecordEvent.game_id == created["game_id"],
+                    V2GameRecordEvent.event_type.in_(
+                        (
+                            "day_private_memory_batch_started",
+                            "day_private_memory_batch_completed",
+                        )
+                    ),
+                )
+                .order_by(V2GameRecordEvent.record_seq)
+            )
+        )
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+    assert [event.event_type for event in batch_events] == [
+        "day_private_memory_batch_started",
+        "day_private_memory_batch_completed",
+    ]
+    assert len(facts) == (0 if all_generations_fail else len(player_ids))
+
+
+def test_new_policy_replaces_previous_private_memory_for_owner(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
     _prepare_day_state(session_factory, created["game_id"])
@@ -10795,15 +11324,14 @@ def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> N
     first_round = repository.snapshot(created["game_id"])
     owner = min(first_round.players, key=lambda player: player.seat)
     memory_text = "上一轮我暂时怀疑2号，下一轮继续核对其票型。"
-    fact_id, created_fact = repository.record_private_round_memory(
-        game_id=created["game_id"],
+    fact_id, created_fact = _record_seed_private_memory(
+        repository=repository,
+        state=first_round,
         player_id=owner.player_id,
-        round_no=1,
         memory=memory_text,
-        batch_id=f"{created['game_id']}:round_1:private_memories",
-        commit_index=1,
     )
     assert created_fact is True
+    first_memory_cutoff = repository.snapshot(created["game_id"]).last_record_seq
 
     with session_factory.begin() as db:
         game = db.get(V2GameRecord, created["game_id"])
@@ -10816,7 +11344,15 @@ def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> N
         run.status = "ready"
         match.round_no = 2
 
-    actions = _SummaryOnlyPrivateMemoryActions()
+    second_round = repository.snapshot(created["game_id"])
+    players = sorted(
+        (player for player in second_round.players if player.alive),
+        key=lambda player: player.seat,
+    )
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
     engine = V2DayEngine(
         repository=repository,
         action_engine=actions,  # type: ignore[arg-type]
@@ -10831,7 +11367,10 @@ def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> N
     )
 
     assert transition.phase_id == "night_3"
-    assert actions.memory_calls == 0
+    owner_spec = next(spec for spec in actions.memory_specs if spec.actor_id == owner.player_id)
+    assert owner_spec.context["previous_memory_fact_id"] == fact_id
+    assert owner_spec.context["previous_memory_snapshot"]["payload"]["memory"] == memory_text
+    assert owner_spec.context["public_history"] == []
     with session_factory() as db:
         facts = list(
             db.scalars(
@@ -10841,15 +11380,102 @@ def test_new_policy_preserves_previous_private_memory_for_owner(v2_context) -> N
                 )
             )
         )
-    assert [fact.knowledge_fact_id for fact in facts] == [fact_id]
+    assert len(facts) == len(players) + 1
+    owner_facts = [fact for fact in facts if fact.owner_id == owner.player_id]
+    assert len(owner_facts) == 2
+    replacement = next(fact for fact in owner_facts if fact.knowledge_fact_id != fact_id)
+    assert replacement.payload["previous_snapshot_fact_id"] == fact_id
+    assert replacement.payload["supersedes_fact_id"] == fact_id
+    assert replacement.payload["schema_version"] == 2
+    assert len(replacement.payload["memory_sha256"]) == 64
+    assert len(replacement.payload["source_refs_sha256"]) == 64
     knowledge = repository.private_knowledge(
         game_id=created["game_id"],
         player_id=owner.player_id,
     )
-    memory = next(item for item in knowledge if item["knowledge_fact_id"] == fact_id)
+    memories = [item for item in knowledge if item["fact_type"] == "private_round_memory"]
+    assert len(memories) == 1
+    memory = memories[0]
+    assert memory["knowledge_fact_id"] == replacement.knowledge_fact_id
     assert memory["authority"] == "actor_memory"
-    assert memory["occurred_in"] == {"period": "day", "round_no": 1}
-    assert memory["payload"]["memory"] == memory_text
+    assert memory["occurred_in"] == {"period": "day", "round_no": 2}
+    frozen_memories = [
+        item
+        for item in repository.private_knowledge(
+            game_id=created["game_id"],
+            player_id=owner.player_id,
+            at_or_before_record_seq=first_memory_cutoff,
+        )
+        if item["fact_type"] == "private_round_memory"
+    ]
+    assert [item["knowledge_fact_id"] for item in frozen_memories] == [fact_id]
+
+
+def test_private_round_memory_batch_rejects_changed_frozen_phase_atomically(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    state = repository.snapshot(created["game_id"])
+    players = sorted(state.players, key=lambda player: player.seat)[:2]
+    source_refs = [f"state:{state.last_record_seq}"]
+    commits = tuple(
+        V2PrivateRoundMemoryCommit(
+            player_id=player.player_id,
+            memory=f"{player.seat}号的冻结滚动记忆。",
+            commit_index=index,
+            source_refs=tuple(source_refs),
+            source_refs_sha256=private_round_memory_source_refs_sha256(
+                owner_id=player.player_id,
+                round_no=state.round_no,
+                previous_snapshot_fact_id=None,
+                source_cutoff_record_seq=state.last_record_seq,
+                source_refs=source_refs,
+            ),
+            previous_snapshot_fact_id=None,
+            action_id=f"dummy-action-{index}",
+            model_response_record_seq=1,
+            terminal_event_record_seq=2,
+            provider_request_id=f"dummy-provider-{index}",
+            attempt_id=f"dummy-attempt-{index}",
+            request_payload_sha256="0" * 64,
+            projected_context_sha256="0" * 64,
+            projected_known_event_refs=(),
+            projected_known_events_sha256="0" * 64,
+        )
+        for index, player in enumerate(players, start=1)
+    )
+
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        assert game is not None
+        game.phase_state = "exile_resolution"
+
+    with pytest.raises(
+        V2RepositoryError,
+        match="private round memory phase changed before commit",
+    ):
+        repository.record_private_round_memories(
+            game_id=state.game_id,
+            run_id=state.run_id,
+            phase_id=state.phase_id,
+            phase_state=state.phase_state,
+            round_no=state.round_no,
+            batch_id=f"{state.game_id}:round_{state.round_no}:private_memories",
+            source_cutoff_record_seq=state.last_record_seq,
+            commits=commits,
+        )
+
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == state.game_id,
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+    assert facts == []
 
 
 def test_new_policy_summary_failure_does_not_skip_memory_or_advance_phase(
@@ -10882,8 +11508,16 @@ def test_new_policy_summary_failure_does_not_skip_memory_or_advance_phase(
         before.phase_state,
         before.round_no,
     )
-    assert actions.memory_calls == 0
+    assert actions.memory_calls == len(before.players)
     with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
         events = list(
             db.scalars(
                 select(V2GameRecordEvent)
@@ -10891,6 +11525,7 @@ def test_new_policy_summary_failure_does_not_skip_memory_or_advance_phase(
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
+    assert facts == []
     completed = next(
         event for event in events if event.event_type == "day_private_memory_batch_completed"
     )
@@ -10933,8 +11568,16 @@ def test_new_policy_summary_cancellation_is_recorded_and_propagated(v2_context) 
         before.phase_state,
         before.round_no,
     )
-    assert actions.memory_calls == 0
+    assert actions.memory_calls == len(before.players)
     with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
         events = list(
             db.scalars(
                 select(V2GameRecordEvent)
@@ -10942,10 +11585,13 @@ def test_new_policy_summary_cancellation_is_recorded_and_propagated(v2_context) 
                 .order_by(V2GameRecordEvent.record_seq)
             )
         )
+    assert facts == []
     canceled = next(
         event for event in events if event.event_type == "day_private_memory_batch_canceled"
     )
-    assert canceled.payload["private_round_memory_mode"] == ("reuse_previous_non_blocking")
+    assert canceled.payload.get("private_round_memory_mode", "blocking_generation") == (
+        "blocking_generation"
+    )
     assert all(
         event.event_type
         not in {
@@ -10965,7 +11611,6 @@ def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_or
     _prepare_day_state(
         session_factory,
         created["game_id"],
-        legacy_generation_policy=True,
     )
     repository = V2MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
@@ -10973,7 +11618,10 @@ def test_day_summary_and_private_memories_run_concurrently_and_commit_in_seat_or
         (player for player in before.players if player.alive),
         key=lambda player: player.seat,
     )
-    actions = _ConcurrentPrivateMemoryActions(expected_players=len(players))
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
     broadcaster = _CollectingBroadcaster()
     engine = V2DayEngine(
         repository=repository,
@@ -11067,13 +11715,13 @@ def test_private_round_memory_generation_failure_is_isolated(v2_context) -> None
     _prepare_day_state(
         session_factory,
         created["game_id"],
-        legacy_generation_policy=True,
     )
     repository = V2MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(before.players, key=lambda player: player.seat)
     failed_player = players[1]
     actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
         expected_players=len(players),
         failed_actor_ids={failed_player.player_id},
     )
@@ -11120,18 +11768,134 @@ def test_private_round_memory_generation_failure_is_isolated(v2_context) -> None
     )
 
 
+def test_private_round_memory_all_generation_failures_still_close_batch(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    state = repository.snapshot(created["game_id"])
+    player_ids = {player.player_id for player in state.players}
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(player_ids),
+        failed_actor_ids=player_ids,
+    )
+
+    transition = asyncio.run(
+        V2DayEngine(
+            repository=repository,
+            action_engine=actions,  # type: ignore[arg-type]
+        )._close_day(
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            reason="test_all_memory_generations_failed",
+            summarize=True,
+        )
+    )
+
+    assert transition.phase_id == "night_2"
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(V2KnowledgeFact).where(
+                    V2KnowledgeFact.game_id == created["game_id"],
+                    V2KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+        completed = db.scalar(
+            select(V2GameRecordEvent).where(
+                V2GameRecordEvent.game_id == created["game_id"],
+                V2GameRecordEvent.event_type == "day_private_memory_batch_completed",
+            )
+        )
+    assert facts == []
+    assert completed is not None
+    assert {item["player_id"] for item in completed.payload["memories"]} == player_ids
+    assert {item["status"] for item in completed.payload["memories"]} == {
+        "generation_failed"
+    }
+
+
+@pytest.mark.parametrize("failure_kind", ["none", "empty"])
+def test_private_round_memory_failure_keeps_latest_successful_snapshot(
+    v2_context,
+    failure_kind: str,
+) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    first_round = repository.snapshot(created["game_id"])
+    owner = min(first_round.players, key=lambda player: player.seat)
+    previous_id, _created = _record_seed_private_memory(
+        repository=repository,
+        state=first_round,
+        player_id=owner.player_id,
+        memory="我上一轮保留的主观判断。",
+    )
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        match = db.get(V2MatchState, created["game_id"])
+        assert game is not None and run is not None and match is not None
+        game.phase_id = "day_2"
+        game.phase_state = "public_discussion_open"
+        game.status = "ready"
+        run.status = "ready"
+        match.round_no = 2
+
+    state = repository.snapshot(created["game_id"])
+    players = sorted(state.players, key=lambda player: player.seat)
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+        failed_actor_ids={owner.player_id} if failure_kind == "none" else set(),
+        empty_actor_ids={owner.player_id} if failure_kind == "empty" else set(),
+    )
+    transition = asyncio.run(
+        V2DayEngine(repository=repository, action_engine=actions)._close_day(  # type: ignore[arg-type]
+            game_id=created["game_id"],
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            reason="test_failed_rolling_memory",
+            summarize=True,
+        )
+    )
+
+    assert transition.phase_id == "night_3"
+    memories = [
+        item
+        for item in repository.private_knowledge(
+            game_id=created["game_id"], player_id=owner.player_id
+        )
+        if item["fact_type"] == "private_round_memory"
+    ]
+    assert [item["knowledge_fact_id"] for item in memories] == [previous_id]
+    with session_factory() as db:
+        owner_fact_count = db.scalar(
+            select(func.count())
+            .select_from(V2KnowledgeFact)
+            .where(
+                V2KnowledgeFact.game_id == created["game_id"],
+                V2KnowledgeFact.owner_id == owner.player_id,
+                V2KnowledgeFact.fact_type == "private_round_memory",
+            )
+        )
+    assert owner_fact_count == 1
+
+
 def test_private_round_memory_batch_cancellation_commits_nothing(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
     _prepare_day_state(
         session_factory,
         created["game_id"],
-        legacy_generation_policy=True,
     )
     repository = V2MatchRepository(session_factory)
     state = repository.snapshot(created["game_id"])
     players = sorted(state.players, key=lambda player: player.seat)
     actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
         expected_players=len(players),
         canceled_actor_id=players[0].player_id,
     )
@@ -11165,6 +11929,57 @@ def test_private_round_memory_batch_cancellation_commits_nothing(v2_context) -> 
         )
     assert facts == []
     assert canceled is not None
+
+
+def test_private_round_memory_batch_cancellation_keeps_previous_snapshot(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"])
+    repository = V2MatchRepository(session_factory)
+    first_round = repository.snapshot(created["game_id"])
+    owner = min(first_round.players, key=lambda player: player.seat)
+    previous_id, _created = _record_seed_private_memory(
+        repository=repository,
+        state=first_round,
+        player_id=owner.player_id,
+        memory="取消前仍有效的主观记忆。",
+    )
+    with session_factory.begin() as db:
+        game = db.get(V2GameRecord, created["game_id"])
+        run = db.get(V2GameRun, created["run_id"])
+        match = db.get(V2MatchState, created["game_id"])
+        assert game is not None and run is not None and match is not None
+        game.phase_id = "day_2"
+        game.phase_state = "public_discussion_open"
+        game.status = "ready"
+        run.status = "ready"
+        match.round_no = 2
+
+    state = repository.snapshot(created["game_id"])
+    players = sorted(state.players, key=lambda player: player.seat)
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+        canceled_actor_id=owner.player_id,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            V2DayEngine(
+                repository=repository, action_engine=actions
+            )._run_day_summary_and_private_memories(  # type: ignore[arg-type]
+                state=state,
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            )
+        )
+
+    memories = [
+        item
+        for item in repository.private_knowledge(
+            game_id=created["game_id"], player_id=owner.player_id
+        )
+        if item["fact_type"] == "private_round_memory"
+    ]
+    assert [item["knowledge_fact_id"] for item in memories] == [previous_id]
 
 
 def test_self_explosion_batch_is_concurrent_and_resolves_one_wolf(v2_context) -> None:

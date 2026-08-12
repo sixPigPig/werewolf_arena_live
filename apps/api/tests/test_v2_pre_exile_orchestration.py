@@ -29,7 +29,7 @@ from app.v2.match_repository import (
 )
 from app.v2.model_client import V2ModelDecision, V2ModelError
 from app.v2.model_context import project_model_action_context
-from app.v2.model_context_compaction import expand_known_events_v6
+from app.v2.model_context_compaction import expand_known_events_v7
 from app.v2.model_context_contract import current_model_context_contract
 from app.v2.pre_exile_pipeline_contract import (
     freeze_pre_exile_pipeline_contract,
@@ -845,7 +845,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
         action_record_seq=500,
         projection_at_seq=None,
     )
-    known_events = expand_known_events_v6(projected["known_events"])["events"]
+    known_events = expand_known_events_v7(projected["known_events"])["events"]
     assert {
         event["event_ref"] for event in known_events if event.get("visibility") == "actor_private"
     } >= {"v2_fact_sealed_seat_1", "v2_fact_seat_1_false"}

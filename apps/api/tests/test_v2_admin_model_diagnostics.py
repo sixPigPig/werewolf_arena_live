@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import app.v2.router as v2_router
 from app.v2.model_failure_episode import stable_failure_episode_id
 from app.v2.model_failure_impact import classify_model_failure_impact
-from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_compaction import (
+    build_known_events_v7_compaction_metadata,
+    encode_known_events_v7,
+)
 from app.v2.model_context_contract import (
     CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
@@ -31,7 +34,21 @@ RETRY_ATTEMPT_ID = "v2_model_admin_diag_2"
 NOW = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
 
-def _current_prompt_projection() -> dict[str, int]:
+def _current_prompt_projection(
+    canonical: dict[str, object] | None = None,
+) -> dict[str, object]:
+    canonical = canonical or {
+        "schema_version": 5,
+        "events": [],
+        "questions": [],
+        "relations": [],
+    }
+    compact = encode_known_events_v7(canonical)
+    event_refs = [
+        event["event_ref"]
+        for event in canonical["events"]
+        if isinstance(event, dict) and isinstance(event.get("event_ref"), str)
+    ]
     return {
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
@@ -39,10 +56,24 @@ def _current_prompt_projection() -> dict[str, int]:
         "ledger_schema_version": CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
         "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
+        **build_known_events_v7_compaction_metadata(canonical, compact),
+        "emitted_event_count": len(event_refs),
+        "selector": {
+            "version": MODEL_VIEW_SELECTOR_VERSION,
+            "retained_count": len(event_refs),
+            "retained": [
+                {
+                    "event_ref": event_ref,
+                    "category": "test",
+                    "reason": "test_fixture",
+                }
+                for event_ref in event_refs
+            ],
+        },
     }
 
 
-def test_admin_expands_v12_known_events_on_the_backend_only() -> None:
+def test_admin_expands_v13_known_events_on_the_backend_only() -> None:
     canonical = {
         "schema_version": 5,
         "events": [
@@ -63,7 +94,7 @@ def test_admin_expands_v12_known_events_on_the_backend_only() -> None:
     context = {
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "known_events": encode_known_events_v6(canonical),
+        "known_events": encode_known_events_v7(canonical),
     }
     request_payload = {
         "input": [
@@ -82,9 +113,11 @@ def test_admin_expands_v12_known_events_on_the_backend_only() -> None:
 
     expanded, status = _admin_expanded_known_events(
         request_payload,
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
-        prompt_projection=_current_prompt_projection(),
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
+        prompt_projection=_current_prompt_projection(canonical),
     )
 
     assert status == "verified"
@@ -94,14 +127,26 @@ def test_admin_expands_v12_known_events_on_the_backend_only() -> None:
 def test_admin_never_guesses_unknown_or_malformed_known_events() -> None:
     assert _admin_expanded_known_events(
         {"messages": [{"role": "user", "content": "{}"}]},
+        prompt_schema_version=11,
         model_context_schema_version=11,
         prompt_template_version=4,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=None,
-    ) == (None, "not_applicable")
+    ) == (None, "invalid")
     assert _admin_expanded_known_events(
         {"messages": [{"role": "user", "content": "{}"}]},
+        prompt_schema_version=12,
+        model_context_schema_version=12,
+        prompt_template_version=5,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
+        prompt_projection=None,
+    ) == (None, "invalid")
+    assert _admin_expanded_known_events(
+        {"messages": [{"role": "user", "content": "{}"}]},
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=99,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=_current_prompt_projection(),
     ) == (None, "invalid")
     assert _admin_expanded_known_events(
@@ -113,14 +158,16 @@ def test_admin_never_guesses_unknown_or_malformed_known_events() -> None:
                         {
                             "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
                             "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-                            "known_events": {"schema_version": 6},
+                            "known_events": {"schema_version": 7},
                         }
                     ),
                 }
             ]
         },
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=_current_prompt_projection(),
     ) == (None, "invalid")
 
@@ -137,7 +184,7 @@ def test_admin_rejects_hybrid_outer_and_inner_prompt_contracts() -> None:
                         {
                             "model_context_schema_version": context_schema,
                             "prompt_template_version": context_prompt,
-                            "known_events": encode_known_events_v6(canonical),
+                            "known_events": encode_known_events_v7(canonical),
                         }
                     ),
                 }
@@ -146,14 +193,18 @@ def test_admin_rejects_hybrid_outer_and_inner_prompt_contracts() -> None:
 
     assert _admin_expanded_known_events(
         payload(context_schema=11, context_prompt=PROMPT_TEMPLATE_VERSION),
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=_current_prompt_projection(),
     ) == (None, "invalid")
     assert _admin_expanded_known_events(
         payload(context_schema=MODEL_CONTEXT_SCHEMA_VERSION, context_prompt=4),
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         prompt_template_version=PROMPT_TEMPLATE_VERSION,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=_current_prompt_projection(),
     ) == (None, "invalid")
     assert _admin_expanded_known_events(
@@ -161,11 +212,20 @@ def test_admin_rejects_hybrid_outer_and_inner_prompt_contracts() -> None:
             context_schema=MODEL_CONTEXT_SCHEMA_VERSION,
             context_prompt=PROMPT_TEMPLATE_VERSION,
         ),
+        prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
         prompt_template_version=4,
+        model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
         prompt_projection=_current_prompt_projection(),
     ) == (None, "invalid")
-    for key in _current_prompt_projection():
+    for key in (
+        "model_context_schema_version",
+        "prompt_template_version",
+        "known_events_schema_version",
+        "ledger_schema_version",
+        "model_view_schema_version",
+        "model_view_selector_version",
+    ):
         wrong_projection = _current_prompt_projection()
         wrong_projection[key] += 1
         assert _admin_expanded_known_events(
@@ -173,8 +233,10 @@ def test_admin_rejects_hybrid_outer_and_inner_prompt_contracts() -> None:
                 context_schema=MODEL_CONTEXT_SCHEMA_VERSION,
                 context_prompt=PROMPT_TEMPLATE_VERSION,
             ),
+            prompt_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
             model_context_schema_version=MODEL_CONTEXT_SCHEMA_VERSION,
             prompt_template_version=PROMPT_TEMPLATE_VERSION,
+            model_view_selector_version=MODEL_VIEW_SELECTOR_VERSION,
             prompt_projection=wrong_projection,
         ) == (None, "invalid")
 
@@ -184,7 +246,7 @@ def test_admin_expands_known_events_only_for_the_requested_detail(monkeypatch) -
     context = {
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "known_events": encode_known_events_v6(canonical),
+        "known_events": encode_known_events_v7(canonical),
     }
     request_payload = {
         "messages": [
@@ -206,15 +268,17 @@ def test_admin_expands_known_events_only_for_the_requested_detail(monkeypatch) -
                 "attempt_no": 1,
                 "retry_cycle": 1,
                 "audience": "private",
-                "request_kind": "speech",
-                "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
-                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "request_kind": "speech",
+                    "prompt_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+                    "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
+                    "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                    "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
                 "prompt_projection": _current_prompt_projection(),
                 "request_payload": request_payload,
             },
         ),
     ]
-    original_expand = v2_router.expand_known_events_v6
+    original_expand = v2_router.expand_known_events_v7
     calls = 0
 
     def counted_expand(value: dict[str, object]) -> dict[str, object]:
@@ -222,7 +286,7 @@ def test_admin_expands_known_events_only_for_the_requested_detail(monkeypatch) -
         calls += 1
         return original_expand(value)
 
-    monkeypatch.setattr(v2_router, "expand_known_events_v6", counted_expand)
+    monkeypatch.setattr(v2_router, "expand_known_events_v7", counted_expand)
 
     summary_rows = _admin_model_requests(events, [])
     assert calls == 0
@@ -247,7 +311,8 @@ def test_admin_does_not_reconstruct_missing_historical_or_unknown_payloads(
     monkeypatch.setattr(v2_router, "build_model_request_payload", reject_reconstruction)
 
     for schema_version, prompt_version, expected_status in (
-        (11, 4, "not_applicable"),
+        (11, 4, "invalid"),
+        (12, 5, "invalid"),
         (99, 99, "invalid"),
     ):
         events = [

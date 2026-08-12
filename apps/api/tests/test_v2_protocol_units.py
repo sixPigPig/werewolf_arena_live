@@ -60,7 +60,7 @@ from app.v2.model_failure_episode import (
     open_failure_episode_ids,
     stable_failure_episode_id,
 )
-from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_compaction import encode_known_events_v7
 from app.v2.model_context_contract import (
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
@@ -101,7 +101,7 @@ from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
 
 
 def _empty_v12_known_events() -> dict[str, Any]:
-    return encode_known_events_v6(
+    return encode_known_events_v7(
         {
             "schema_version": 5,
             "events": [],
@@ -742,9 +742,9 @@ def _model_generation_policy_v2() -> dict[str, Any]:
     return contract
 
 
-def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> None:
+def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> None:
     expected = {
-        "schema_version": 3,
+        "schema_version": 4,
         "classification_version": 1,
         "enforcement": "observe_only",
         "reasoning_parameter_mode": "inherit_frozen_model_configuration",
@@ -793,7 +793,7 @@ def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> No
                 "transport_mode": "retry_then_pause",
                 "machine_format_mode": "retry_then_pause",
             },
-            "private_round_memory_mode": "reuse_previous_non_blocking",
+            "private_round_memory_mode": "blocking_generation",
         },
     }
 
@@ -810,26 +810,11 @@ def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> No
     assert resolved == expected
     assert resolved is not frozen["model_generation_policy_contract"]
     assert is_supported_model_generation_policy_contract(resolved) is True
-    v2 = _model_generation_policy_v2()
-    assert is_supported_model_generation_policy_contract(v2) is True
-    v2_resolved = resolve_model_generation_action_policy(
-        v2,
-        action_type="exile_vote",
+    assert is_supported_model_generation_policy_contract(_model_generation_policy_v2()) is False
+    assert (
+        is_supported_model_generation_policy_contract(_legacy_model_generation_policy_v1())
+        is False
     )
-    assert v2_resolved.schema_version == 2
-    assert v2_resolved.blocking_required_target_output_timeout_mode == "legacy_behavior"
-    assert v2_resolved.blocking_required_target_queue_wait_budget_mode == "active_only"
-    assert v2_resolved.required_target_exhaustion is None
-    legacy = _legacy_model_generation_policy_v1()
-    assert is_supported_model_generation_policy_contract(legacy) is True
-    legacy_resolved = resolve_model_generation_action_policy(
-        legacy,
-        action_type="private_round_memory",
-    )
-    assert legacy_resolved.schema_version == 1
-    assert legacy_resolved.automatic_retry_enforcement == "legacy_behavior"
-    assert legacy_resolved.queue_wait_budget_mode == "active_only"
-    assert legacy_resolved.private_round_memory_mode == "blocking_generation"
     assert (
         project_public_rule_snapshot(
             {
@@ -845,7 +830,7 @@ def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> No
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value.update(schema_version=4),
+        lambda value: value.update(schema_version=5),
         lambda value: value.update(schema_version=3.0),
         lambda value: value.update(enforcement="enabled"),
         lambda value: value.update(extra=True),
@@ -861,7 +846,9 @@ def test_model_generation_policy_v3_is_frozen_and_v1_v2_remain_supported() -> No
         lambda value: value["execution"].update(
             blocking_required_target_output_timeout_mode="enforce"
         ),
-        lambda value: value["execution"].update(private_round_memory_mode="blocking_generation"),
+        lambda value: value["execution"].update(
+            private_round_memory_mode="reuse_previous_non_blocking"
+        ),
         lambda value: value["execution"]["required_target_exhaustion"].update(
             eligible_failure_modes=["output_budget_exhausted", "transport"]
         ),
@@ -936,7 +923,7 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     assert resolved.enforcement == "observe_only"
     assert resolved.profile == profile
     assert resolved.source == "explicit_action_profile"
-    assert resolved.schema_version == 3
+    assert resolved.schema_version == 4
     assert resolved.classification_version == 1
     assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
     assert resolved.reasoning_only_timeout_ms == (
@@ -964,7 +951,7 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     )
     assert resolved.required_target_exhaustion.transport_mode == "retry_then_pause"
     assert resolved.required_target_exhaustion.machine_format_mode == "retry_then_pause"
-    assert resolved.private_round_memory_mode == "reuse_previous_non_blocking"
+    assert resolved.private_round_memory_mode == "blocking_generation"
 
 
 @pytest.mark.parametrize(
@@ -1045,7 +1032,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "model_id": "glm-test",
         "action_type": "day_debate_speech",
         "model_generation_policy_contract_status": "supported",
-        "model_generation_policy_schema_version": 3,
+        "model_generation_policy_schema_version": 4,
         "model_generation_policy_classification_version": 1,
         "model_generation_policy_enforcement": "observe_only",
         "model_generation_policy_profile": "recoverable_public_speech",
@@ -1073,7 +1060,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "reuse_previous_non_blocking",
+        "private_round_memory_mode": "blocking_generation",
         "reasoning_only_elapsed_ms": 180_000,
         "shadow_would_timeout": True,
     }
@@ -1248,7 +1235,7 @@ def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> 
     )
 
 
-def test_generation_policy_v3_suppresses_repeated_expensive_failures() -> None:
+def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
     required_target_spec = _blocking_required_target_spec()
     spec = replace(
         required_target_spec,
@@ -1348,20 +1335,11 @@ def test_generation_policy_v3_suppresses_repeated_expensive_failures() -> None:
         )
         == 1
     )
-    v2_policy = resolve_model_generation_action_policy(
-        _model_generation_policy_v2(),
-        action_type=technical_target_spec.action_type,
-    )
-    assert (
-        _effective_model_attempt_limit(
-            spec=technical_target_spec,
-            exc=output_budget,
-            disposition=model_failure_disposition(output_budget),
-            policy=policy,
-            generation_policy=v2_policy,
+    with pytest.raises(V2ModelGenerationPolicyContractError):
+        resolve_model_generation_action_policy(
+            _model_generation_policy_v2(),
+            action_type=technical_target_spec.action_type,
         )
-        == 3
-    )
 
 
 @pytest.mark.parametrize(
@@ -1391,7 +1369,7 @@ def test_generation_policy_v3_suppresses_repeated_expensive_failures() -> None:
         ),
     ],
 )
-def test_v3_required_target_expensive_exhaustion_returns_typed_technical_outcome(
+def test_v4_required_target_expensive_exhaustion_returns_typed_technical_outcome(
     error: V2ModelError,
     expected_failure_mode: str,
 ) -> None:
@@ -1422,7 +1400,7 @@ def test_v3_required_target_expensive_exhaustion_returns_typed_technical_outcome
         V2QualityError("model_decision_invalid_json", raw_response="not-json"),
     ],
 )
-def test_v3_required_target_transport_format_and_soft_timeouts_do_not_technical_fallback(
+def test_v4_required_target_transport_format_and_soft_timeouts_do_not_technical_fallback(
     error: V2ModelError,
 ) -> None:
     spec = replace(
@@ -1444,15 +1422,11 @@ def test_v3_required_target_transport_format_and_soft_timeouts_do_not_technical_
     )
 
 
-def test_required_target_technical_outcome_requires_v3_and_explicit_spec_mode() -> None:
+def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() -> None:
     spec = _blocking_required_target_spec()
     error = V2ModelError("model_output_budget_exhausted")
-    v3_policy = resolve_model_generation_action_policy(
+    v4_policy = resolve_model_generation_action_policy(
         current_model_generation_policy_contract(),
-        action_type=spec.action_type,
-    )
-    v2_policy = resolve_model_generation_action_policy(
-        _model_generation_policy_v2(),
         action_type=spec.action_type,
     )
 
@@ -1460,18 +1434,15 @@ def test_required_target_technical_outcome_requires_v3_and_explicit_spec_mode() 
         _technical_target_exhaustion_outcome(
             spec=spec,
             exc=error,
-            generation_policy=v3_policy,
+            generation_policy=v4_policy,
         )
         is None
     )
-    assert (
-        _technical_target_exhaustion_outcome(
-            spec=replace(spec, target_exhaustion_outcome="technical_no_action"),
-            exc=error,
-            generation_policy=v2_policy,
+    with pytest.raises(V2ModelGenerationPolicyContractError):
+        resolve_model_generation_action_policy(
+            _model_generation_policy_v2(),
+            action_type=spec.action_type,
         )
-        is None
-    )
     with pytest.raises(
         ValueError,
         match="target exhaustion outcome requires a required target contract",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -14,7 +13,6 @@ import app.cli as cli
 from app.v2.model_client import V2ModelClient
 from app.v2.model_concurrency_canary import (
     DEFAULT_E1_CANARY_CORPUS_PATH,
-    E1_CANARY_ATTEMPTS_PER_CAP,
     E1CanaryAttemptObservation,
     E1CanaryBudgetLedger,
     E1CanaryCorpus,
@@ -28,51 +26,22 @@ from app.v2.model_concurrency_canary import (
 )
 
 
-CORPUS_SHA256 = "5049b7664ce5573956ef012a3116f35fde23c9891181fad6c89d430f3f3fc758"
-SCHEDULE_SHA256 = "2291a6571f3ebf5ddb11b1faa4f8b819b1de77f54bdea7a5bbfdcccebb11e140"
+CORPUS_SHA256 = "544587d04353c815561f044cf4cee4f060b8dda3d82fab976e3d602bd1f8390a"
+SCHEDULE_SHA256 = "34427b154767405e8e4c1820445ed5004f7a158abcd3243c2fcae560e28d5399"
 
 
-def test_fixed_corpus_is_current_seat_only_and_exactly_120_attempts() -> None:
-    corpus = load_e1_canary_corpus()
-
-    assert corpus.corpus_sha256 == CORPUS_SHA256
-    assert corpus.schedule_sha256 == SCHEDULE_SHA256
-    assert corpus.expected_attempt_count == E1_CANARY_ATTEMPTS_PER_CAP
-    assert len(corpus.attempts) == 120
-    assert corpus.wave_size == 12
-    assert {attempt.wave_index for attempt in corpus.attempts} == set(range(1, 11))
-    assert Counter(attempt.model_id for attempt in corpus.attempts) == {
-        "doubao-seed-evolving": 50,
-        "glm-5-2-260617": 55,
-        "minimax-m3": 15,
-    }
-    assert Counter(attempt.response_kind for attempt in corpus.attempts) == {
-        "boolean": 33,
-        "speech": 41,
-        "target": 46,
-    }
-    assert corpus.configured_output_tokens_per_cap == 778_240
-    assert all(attempt.provider == "agent_plan" for attempt in corpus.attempts)
-    assert all(
-        context.action_context["model_context_schema_version"] == 12
-        and context.action_context["prompt_template_version"] == 5
-        and context.action_context["known_events"]["schema_version"] == 6
-        and context.action_context["known_events"]["encoding"] == "lossless_refs_v1"
-        for context in corpus.contexts
-    )
-    assert all(context.canonical_known_events_char_count >= 7_000 for context in corpus.contexts)
-    assert all(
-        context.compact_known_events_char_count < context.canonical_known_events_char_count
-        for context in corpus.contexts
-    )
-    serialized_contexts = json.dumps(
-        [context.action_context for context in corpus.contexts],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    assert "v2_game_" not in serialized_contexts
-    assert "v2_run_" not in serialized_contexts
-    assert "system-player-" not in serialized_contexts
+def test_fixed_v12_corpus_fails_closed_under_current_v13_contract(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_E1_CANARY_CORPUS_PATH.read_text(encoding="utf-8"))
+    for context in raw["contexts"]:
+        context["action_context"]["model_context_schema_version"] = 12
+        context["action_context"]["prompt_template_version"] = 5
+    corpus_path = tmp_path / "seat_only_v12_workload_v1.json"
+    corpus_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(
+        E1CanaryContractError,
+        match="canary_corpus_model_context_contract_unsupported",
+    ):
+        load_e1_canary_corpus(corpus_path)
 
 
 def test_schedule_is_reproducible_and_report_does_not_embed_prompts() -> None:
@@ -669,7 +638,7 @@ def test_corpus_rejects_uuid_in_injected_allowed_target_ids(tmp_path: Path) -> N
         ),
     ),
 )
-def test_corpus_rejects_uuid_in_known_v12_player_ref_paths(
+def test_corpus_rejects_uuid_in_known_v13_player_ref_paths(
     tmp_path: Path,
     context_index: int,
     container_path: tuple[str, ...],
@@ -681,7 +650,7 @@ def test_corpus_rejects_uuid_in_known_v12_player_ref_paths(
     for component in container_path:
         target = target[component]
     target[field] = value
-    corpus_path = tmp_path / f"uuid-v12-ref-{context_index}-{field}.json"
+    corpus_path = tmp_path / f"uuid-v13-ref-{context_index}-{field}.json"
     corpus_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
 
     with pytest.raises(
@@ -693,7 +662,7 @@ def test_corpus_rejects_uuid_in_known_v12_player_ref_paths(
 
 def test_live_prerequisites_reject_valid_but_unpinned_corpus(tmp_path: Path) -> None:
     raw = json.loads(DEFAULT_E1_CANARY_CORPUS_PATH.read_text(encoding="utf-8"))
-    raw["corpus_id"] = "e1_agent_plan_seat_only_v12_unpinned_test"
+    raw["corpus_id"] = "e1_agent_plan_seat_only_v13_unpinned_test"
     corpus_path = tmp_path / "unpinned-corpus.json"
     corpus_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
     corpus = load_e1_canary_corpus(corpus_path)

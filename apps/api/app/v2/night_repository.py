@@ -14,6 +14,7 @@ from app.v2.ability_runtime import ability_snapshot_hash, resolve_first_night
 from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
 from app.v2.event_contract import canonical_event_payload
 from app.v2.knowledge_timeline import player_private_knowledge
+from app.v2.model_generation_policy_contract import MODEL_GENERATION_POLICY_SCHEMA_VERSION
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     frozen_player_model_configuration,
@@ -551,7 +552,8 @@ class V2NightRepository:
                 or supporting_payload.get("audience") != "god_view"
                 or supporting_payload.get("target_player_id") is not None
                 or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
-                or supporting_payload.get("model_generation_policy_schema_version") != 3
+                or supporting_payload.get("model_generation_policy_schema_version")
+                != MODEL_GENERATION_POLICY_SCHEMA_VERSION
             ):
                 raise V2RepositoryError("technical no-action supporting event does not match")
             action_succeeded_events = list(
@@ -1538,12 +1540,19 @@ class V2NightRepository:
             )
             return dict(row.state or {}) if row is not None else {}
 
-    def player_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
+    def player_knowledge(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        at_or_before_record_seq: int | None = None,
+    ) -> list[dict[str, Any]]:
         with self._session_factory() as db:
             return player_private_knowledge(
                 db,
                 game_id=game_id,
                 player_id=player_id,
+                at_or_before_record_seq=at_or_before_record_seq,
             )
 
     def record_player_knowledge(

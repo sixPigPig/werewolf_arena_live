@@ -55,18 +55,7 @@ export function extractV2ModelInputFactResult(
     request,
     prompt,
   );
-  const knownEvents = objectValue(prompt.known_events);
-  if (presentationKind === "v11_canonical" && knownEvents !== null) {
-    const canonicalEvents = arrayValue(knownEvents.events).filter(isRecord);
-    return {
-      facts: canonicalEvents.map((event, index) =>
-        publicEventFact(event, index),
-      ),
-      modelContextSchemaVersion,
-      status: "supported",
-    };
-  }
-  if (presentationKind === "v12_compact") {
+  if (presentationKind === "v13_memory") {
     const canonicalEvents = arrayValue(
       request.expanded_known_events?.events,
     ).filter(isRecord);

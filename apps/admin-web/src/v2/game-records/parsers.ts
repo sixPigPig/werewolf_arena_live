@@ -410,6 +410,10 @@ export function parseV2ModelRequestSummary(
             {
               modelContextSchemaVersion,
               modelViewSelectorVersion,
+              promptSchemaVersion:
+                record.prompt_schema_version === undefined
+                  ? null
+                  : nullableInteger(record.prompt_schema_version, 0),
               promptTemplateVersion,
             },
           ),
@@ -764,33 +768,24 @@ function parsePromptProjection(
   contract: {
     modelContextSchemaVersion: number | null;
     modelViewSelectorVersion: number | null;
+    promptSchemaVersion: number | null;
     promptTemplateVersion: number | null;
   },
 ): V2PromptProjection {
   const projection = object(value);
   const modelContextSchemaVersion = contract.modelContextSchemaVersion;
-  const v11Contract =
-    modelContextSchemaVersion === 11 &&
-    (contract.promptTemplateVersion === 3 ||
-      contract.promptTemplateVersion === 4) &&
-    contract.modelViewSelectorVersion === 2 &&
-    projection.model_context_schema_version === 11 &&
-    projection.prompt_template_version === contract.promptTemplateVersion &&
-    projection.known_events_schema_version === 5 &&
+  const v13Contract =
+    contract.promptSchemaVersion === 13 &&
+    modelContextSchemaVersion === 13 &&
+    contract.promptTemplateVersion === 6 &&
+    contract.modelViewSelectorVersion === 3 &&
+    projection.model_context_schema_version === 13 &&
+    projection.prompt_template_version === 6 &&
+    projection.known_events_schema_version === 7 &&
     projection.ledger_schema_version === 5 &&
     projection.model_view_schema_version === 5 &&
-    projection.model_view_selector_version === 2;
-  const v12Contract =
-    modelContextSchemaVersion === 12 &&
-    contract.promptTemplateVersion === 5 &&
-    contract.modelViewSelectorVersion === 2 &&
-    projection.model_context_schema_version === 12 &&
-    projection.prompt_template_version === 5 &&
-    projection.known_events_schema_version === 6 &&
-    projection.ledger_schema_version === 5 &&
-    projection.model_view_schema_version === 5 &&
-    projection.model_view_selector_version === 2;
-  if (!v11Contract && !v12Contract) {
+    projection.model_view_selector_version === 3;
+  if (!v13Contract) {
     return projection;
   }
   for (const key of [
@@ -856,37 +851,117 @@ function parsePromptProjection(
       }
     }
   }
-  if (modelContextSchemaVersion === 12) {
-    for (const key of [
-      "canonical_serialized_char_count",
-      "compact_serialized_char_count",
-      "verbatim_speech_count",
-      "verbatim_speech_chars",
-    ]) {
-      validateOptionalInteger(projection, key, 0);
-    }
-    validateOptionalInteger(
-      projection,
-      "compaction_saved_chars",
-      Number.MIN_SAFE_INTEGER,
-    );
-    if (projection.compaction_ratio !== undefined) {
-      finiteNumber(projection.compaction_ratio, 0);
-    }
-    for (const key of ["retained_event_refs", "dropped_event_refs"]) {
-      if (projection[key] !== undefined) {
-        array(projection[key]).forEach(text);
-      }
-    }
-    if (projection.canonical_sha256 !== undefined) {
-      const hash = text(projection.canonical_sha256);
-      if (!/^[0-9a-f]{64}$/u.test(hash)) throw invalid();
-    }
-    if (projection.round_trip_verified !== undefined) {
-      boolean(projection.round_trip_verified);
-    }
+  for (const key of [
+    "canonical_serialized_char_count",
+    "compact_serialized_char_count",
+    "verbatim_speech_count",
+    "verbatim_speech_chars",
+  ]) {
+    validateOptionalInteger(projection, key, 0);
+  }
+  validateOptionalInteger(
+    projection,
+    "compaction_saved_chars",
+    Number.MIN_SAFE_INTEGER,
+  );
+  if (projection.compaction_ratio !== undefined) {
+    finiteNumber(projection.compaction_ratio, 0);
+  }
+  if (projection.retained_event_refs !== undefined) {
+    array(projection.retained_event_refs).forEach(text);
+  }
+  if (projection.dropped_event_refs !== undefined) {
+    throw invalid();
+  }
+  if (projection.canonical_sha256 !== undefined) {
+    const hash = text(projection.canonical_sha256);
+    if (!/^[0-9a-f]{64}$/u.test(hash)) throw invalid();
+  }
+  if (projection.round_trip_verified !== undefined) {
+    boolean(projection.round_trip_verified);
+  }
+  if (
+    projection.lossless_scope !== undefined &&
+    projection.lossless_scope !== "selector_retained_projection"
+  ) {
+    throw invalid();
+  }
+  validateMemorySelector(projection.selector);
+  const retainedRefs = array(projection.retained_event_refs).map(text);
+  const selectorRetainedRefs = array(
+    object(projection.selector).retained,
+  ).map((entry) => text(object(entry).event_ref));
+  if (
+    new Set(retainedRefs).size !== retainedRefs.length ||
+    new Set(selectorRetainedRefs).size !== selectorRetainedRefs.length ||
+    retainedRefs.length !== selectorRetainedRefs.length ||
+    retainedRefs.some((ref) => !selectorRetainedRefs.includes(ref))
+  ) {
+    throw invalid();
   }
   return projection;
+}
+
+function validateMemorySelector(value: unknown) {
+  const selector = object(value);
+  if (selector.version !== 3) throw invalid();
+  const sourceCount = integer(selector.source_count, 0);
+  const retainedCount = integer(selector.retained_count, 0);
+  const omittedCount = integer(selector.omitted_count, 0);
+  const futureFilteredCount = integer(selector.future_filtered_count, 0);
+  const retained = array(selector.retained);
+  const omitted = array(selector.omitted);
+  const futureFiltered = array(selector.future_filtered);
+  for (const entryValue of [...retained, ...omitted]) {
+    const entry = object(entryValue);
+    text(entry.event_ref);
+    text(entry.category);
+    text(entry.reason);
+  }
+  for (const entryValue of futureFiltered) {
+    const entry = object(entryValue);
+    text(entry.event_ref);
+    text(entry.reason);
+  }
+  if (
+    retained.length !== retainedCount ||
+    omitted.length !== omittedCount ||
+    futureFiltered.length !== futureFilteredCount ||
+    retainedCount + omittedCount + futureFilteredCount !== sourceCount
+  ) {
+    throw invalid();
+  }
+  nullableText(selector.latest_actor_memory_ref);
+  nullableInteger(selector.latest_actor_memory_cutoff_seq, 1);
+  const memoryHash = nullableText(selector.latest_actor_memory_hash);
+  if (memoryHash !== null && !/^[0-9a-f]{64}$/u.test(memoryHash)) {
+    throw invalid();
+  }
+  const sourceTypeCounts = nonnegativeIntegerRecord(selector.source_type_counts);
+  const retainedTypeCounts = nonnegativeIntegerRecord(
+    selector.retained_type_counts,
+  );
+  const omittedTypeCounts = nonnegativeIntegerRecord(selector.omitted_type_counts);
+  if (
+    sumRecordValues(sourceTypeCounts) !== sourceCount ||
+    sumRecordValues(retainedTypeCounts) !== retainedCount ||
+    sumRecordValues(omittedTypeCounts) !== omittedCount
+  ) {
+    throw invalid();
+  }
+}
+
+function nonnegativeIntegerRecord(value: unknown): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(object(value)).map(([key, count]) => [
+      text(key),
+      integer(count, 0),
+    ]),
+  );
+}
+
+function sumRecordValues(value: Record<string, number>): number {
+  return Object.values(value).reduce((total, count) => total + count, 0);
 }
 
 function parseOutputEnforcement(value: unknown): V2OutputEnforcementAudit {

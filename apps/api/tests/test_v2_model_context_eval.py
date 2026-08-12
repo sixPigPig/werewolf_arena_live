@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.v2.model_client import build_model_request_payload
-from app.v2.model_context_compaction import expand_known_events_v6
+from app.v2.model_context_compaction import expand_known_events_v7
 from app.v2.model_context import (
     V2ModelPlayerReference,
     project_model_action_context_with_metadata,
@@ -67,7 +67,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
         action_record_seq=case["action_record_seq"],
     )
     context = projection.context
-    events = expand_known_events_v6(context["known_events"])["events"]
+    events = expand_known_events_v7(context["known_events"])["events"]
 
     assert [event["event_ref"] for event in events] == case["expect"]["event_refs"]
     assert [event["known_at_seq"] for event in events] == case["expect"]["event_sequences"]
@@ -100,7 +100,7 @@ def test_t01_private_action_and_public_speech_share_one_model_visible_clock() ->
     assert "history" not in system_text
 
 
-def test_t02_history_is_lossless_without_a_retention_budget() -> None:
+def test_t02_old_ordinary_history_is_projected_into_player_memory() -> None:
     case = _cases()["T02_lossless_history"]
     public_history = [
         {
@@ -146,20 +146,19 @@ def test_t02_history_is_lossless_without_a_retention_budget() -> None:
     metadata = projection.projection_metadata
 
     assert metadata["source_event_count"] == case["history_count"]
-    assert metadata["emitted_event_count"] == metadata["source_event_count"]
+    assert metadata["emitted_event_count"] < metadata["source_event_count"]
     assert metadata["future_filtered_event_count"] == 0
     assert metadata["budget_dropped_event_count"] == 0
     assert "selection_budget_chars" not in metadata
-    assert metadata["retained_event_refs"] == [
-        str(index) for index in range(1, case["history_count"] + 1)
-    ]
-    assert metadata["dropped_event_refs"] == []
+    selector = metadata["selector"]
+    assert selector["version"] == 3
+    assert selector["source_count"] == case["history_count"]
+    assert selector["retained_count"] + selector["omitted_count"] == selector["source_count"]
+    assert selector["omitted_count"] > 0
     assert metadata["round_trip_verified"] is True
     assert "retention_reasons" not in metadata
-    canonical_events = expand_known_events_v6(projection.context["known_events"])["events"]
-    assert [event["event_ref"] for event in canonical_events] == [
-        str(index) for index in range(1, case["history_count"] + 1)
-    ]
+    canonical_events = expand_known_events_v7(projection.context["known_events"])["events"]
+    assert len(canonical_events) == selector["retained_count"]
     assert all(
         "source_event_id" not in event and "timeline_index" not in event
         for event in canonical_events

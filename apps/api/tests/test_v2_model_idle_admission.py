@@ -13,7 +13,7 @@ from app.v2.model_client import (
     V2ModelProgress,
     V2ModelTarget,
 )
-from app.v2.model_context_compaction import encode_known_events_v6
+from app.v2.model_context_compaction import encode_known_events_v7
 from app.v2.model_context_contract import MODEL_CONTEXT_SCHEMA_VERSION, PROMPT_TEMPLATE_VERSION
 
 
@@ -22,7 +22,7 @@ def _action_context() -> dict[str, Any]:
         "model_context_schema_version": MODEL_CONTEXT_SCHEMA_VERSION,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "action_type": "day_debate_speech",
-        "known_events": encode_known_events_v6(
+        "known_events": encode_known_events_v7(
             {
                 "schema_version": 5,
                 "events": [],

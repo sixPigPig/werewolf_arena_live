@@ -37,6 +37,7 @@ from app.v2.model_client import (
 )
 from app.v2.model_failure_episode import stable_failure_episode_id
 from app.v2.model_generation_policy_contract import (
+    MODEL_GENERATION_POLICY_SCHEMA_VERSION,
     V2RequiredTargetExhaustionFailureMode,
     V2RequiredTargetTechnicalOutcome,
     V2ResolvedModelGenerationPolicy,
@@ -365,6 +366,11 @@ class V2ActionResult:
     technical_outcome: V2ActionTechnicalOutcome | None = None
     model_response_record_seq: int | None = None
     terminal_event_record_seq: int | None = None
+    model_attempt_id: str | None = None
+    request_payload_sha256: str | None = None
+    projected_context_sha256: str | None = None
+    projected_known_event_refs: tuple[str, ...] | None = None
+    projected_known_events_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for field_name, value in (
@@ -375,6 +381,28 @@ class V2ActionResult:
                 raise ValueError(f"{field_name} must be a positive integer")
             if value is not None and not self.action_id:
                 raise ValueError(f"{field_name} requires an action_id")
+        for field_name, value in (
+            ("model_attempt_id", self.model_attempt_id),
+            ("request_payload_sha256", self.request_payload_sha256),
+            ("projected_context_sha256", self.projected_context_sha256),
+            ("projected_known_events_sha256", self.projected_known_events_sha256),
+        ):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{field_name} must be a non-empty string")
+            if value is not None and not self.action_id:
+                raise ValueError(f"{field_name} requires an action_id")
+        if self.projected_known_event_refs is not None:
+            if (
+                any(
+                    not isinstance(item, str) or not item
+                    for item in self.projected_known_event_refs
+                )
+                or len(self.projected_known_event_refs)
+                != len(set(self.projected_known_event_refs))
+            ):
+                raise ValueError("projected_known_event_refs must be unique non-empty strings")
+            if not self.action_id:
+                raise ValueError("projected_known_event_refs requires an action_id")
         if self.failure is not None and not self.action_id:
             raise ValueError("failed action result requires an action_id")
         if self.technical_outcome is not None:
@@ -1147,6 +1175,10 @@ class V2ActionEngine:
         model_request_completed = False
         model_response_record_seq: int | None = None
         terminal_event_record_seq: int | None = None
+        request_payload_sha256: str | None = None
+        projected_context_sha256: str | None = None
+        projected_known_event_refs: tuple[str, ...] | None = None
+        projected_known_events_sha256: str | None = None
         model_failure_recorded = False
         active_failure_episode_id: str | None = None
         resolved_generation_policy: V2ResolvedModelGenerationPolicy | None = None
@@ -1245,6 +1277,32 @@ class V2ActionEngine:
                     projection_at_seq=spec.projection_at_seq,
                 )
                 model_context = projected_model_context.context
+                projected_context_sha256 = hashlib.sha256(
+                    json.dumps(
+                        model_context,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                projected_known_events = model_context.get("known_events")
+                if isinstance(projected_known_events, dict):
+                    projected_known_event_refs = tuple(
+                        str(item["event_ref"])
+                        for item in projected_model_context.observation_context.get(
+                            "known_events", {}
+                        ).get("events", [])
+                        if isinstance(item, dict)
+                        and isinstance(item.get("event_ref"), str)
+                    )
+                    projected_known_events_sha256 = hashlib.sha256(
+                        json.dumps(
+                            projected_known_events,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
                 observation_context = projected_model_context.observation_context
                 prompt_projection = model_prompt_metadata(
                     model_context,
@@ -1266,6 +1324,14 @@ class V2ActionEngine:
                     decision=decision,
                     target=model_target,
                 )
+                request_payload_sha256 = hashlib.sha256(
+                    json.dumps(
+                        request_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
                 configured_max_tokens = model_target.parameters["max_tokens"]
                 max_tokens_mode = model_target.parameters["max_tokens_mode"]
                 effective_max_tokens = request_payload.get(
@@ -1558,6 +1624,7 @@ class V2ActionEngine:
                                     "model_view_selector_version"
                                 ),
                                 "prompt_projection": prompt_projection,
+                                "model_context": model_context,
                                 "output_enforcement": output_enforcement,
                                 "request_payload": request_payload,
                                 **_model_generation_policy_audit_payload(
@@ -2534,11 +2601,18 @@ class V2ActionEngine:
                 sentence_ms = model_decision.completed_ms
             check_cancellation()
             if speech_text is None or spec.defer_presentation:
-                self._repository.complete_silent_action(
+                terminal_event_record_seq = self._repository.complete_silent_action(
                     claim=claim,
                     next_live_state=spec.success_live_state,
                     next_phase_state=spec.success_phase_state,
                     best_effort=spec.best_effort,
+                    source_attempt_id=model_attempt_id,
+                    source_model_response_record_seq=model_response_record_seq,
+                    provider_request_id=(
+                        model_decision.provider_request_id
+                        if model_decision is not None
+                        else None
+                    ),
                 )
                 if not spec.best_effort and not spec.defer_presentation:
                     await broadcaster.broadcast_json(
@@ -2554,6 +2628,11 @@ class V2ActionEngine:
                     decision=model_decision,
                     model_response_record_seq=model_response_record_seq,
                     terminal_event_record_seq=terminal_event_record_seq,
+                    model_attempt_id=model_attempt_id,
+                    request_payload_sha256=request_payload_sha256,
+                    projected_context_sha256=projected_context_sha256,
+                    projected_known_event_refs=projected_known_event_refs,
+                    projected_known_events_sha256=projected_known_events_sha256,
                 )
             presentation_id = f"v2_pres_{uuid4().hex[:16]}"
             speech_id = f"v2_speech_{uuid4().hex[:16]}"
@@ -2627,6 +2706,11 @@ class V2ActionEngine:
                     decision=model_decision,
                     model_response_record_seq=model_response_record_seq,
                     terminal_event_record_seq=terminal_event_record_seq,
+                    model_attempt_id=model_attempt_id,
+                    request_payload_sha256=request_payload_sha256,
+                    projected_context_sha256=projected_context_sha256,
+                    projected_known_event_refs=projected_known_event_refs,
+                    projected_known_events_sha256=projected_known_events_sha256,
                 )
             if identity.voice_asset_id is None:
                 raise V2RepositoryError("enabled TTS action has no voice asset")
@@ -2784,6 +2868,11 @@ class V2ActionEngine:
                 decision=model_decision,
                 model_response_record_seq=model_response_record_seq,
                 terminal_event_record_seq=terminal_event_record_seq,
+                model_attempt_id=model_attempt_id,
+                request_payload_sha256=request_payload_sha256,
+                projected_context_sha256=projected_context_sha256,
+                projected_known_event_refs=projected_known_event_refs,
+                projected_known_events_sha256=projected_known_events_sha256,
             )
         except asyncio.CancelledError as exc:
             if recorder is not None:
@@ -3478,7 +3567,7 @@ def _technical_target_exhaustion_outcome(
 ) -> tuple[V2RequiredTargetTechnicalOutcome, V2RequiredTargetExhaustionFailureMode] | None:
     target_policy = generation_policy.required_target_exhaustion
     if (
-        generation_policy.schema_version != 3
+        generation_policy.schema_version != MODEL_GENERATION_POLICY_SCHEMA_VERSION
         or generation_policy.blocking_required_target_output_timeout_mode != "technical_outcome"
         or target_policy is None
         or spec.target_exhaustion_outcome is None

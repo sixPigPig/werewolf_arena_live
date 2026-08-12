@@ -23,8 +23,8 @@ from app.v2.model_context import (
 )
 from app.v2.model_client import build_model_request_payload
 from app.v2.model_context_compaction import (
-    encode_known_events_v6,
-    expand_known_events_v6,
+    encode_known_events_v7,
+    expand_known_events_v7,
 )
 from app.v2.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
@@ -178,7 +178,7 @@ def _assert_contains(actual: dict[str, object], expected: dict[str, object]) -> 
 def _canonical_known_events(context: dict[str, object]) -> dict[str, object]:
     compact = context.get("known_events")
     assert isinstance(compact, dict)
-    return expand_known_events_v6(compact)
+    return expand_known_events_v7(compact)
 
 
 def _compact_known_events(
@@ -187,7 +187,7 @@ def _compact_known_events(
     questions: list[dict[str, object]] | None = None,
     relations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    return encode_known_events_v6(
+    return encode_known_events_v7(
         {
             "schema_version": 5,
             "events": events or [],
@@ -731,6 +731,236 @@ def test_private_round_memory_keeps_subjective_actor_authority() -> None:
     }
 
 
+def test_v13_selector_keeps_only_latest_actor_memory_with_snapshot_audit() -> None:
+    projection = project_model_action_context_with_metadata(
+        {
+            "round_no": 3,
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "private_authoritative_facts": [
+                {
+                    "knowledge_fact_id": "memory_old",
+                    "fact_type": "private_round_memory",
+                    "authority": "actor_memory",
+                    "payload": {
+                        "round_no": 1,
+                        "memory": "旧记忆",
+                        "source_cutoff_record_seq": 20,
+                        "memory_sha256": "1" * 64,
+                    },
+                    "record_seq": 21,
+                    "known_at_seq": 21,
+                },
+                {
+                    "knowledge_fact_id": "memory_latest",
+                    "fact_type": "private_round_memory",
+                    "authority": "actor_memory",
+                    "payload": {
+                        "round_no": 2,
+                        "memory": "最新记忆",
+                        "source_cutoff_record_seq": 40,
+                        "memory_sha256": "2" * 64,
+                    },
+                    "record_seq": 41,
+                    "known_at_seq": 41,
+                },
+                {
+                    "knowledge_fact_id": "seer_fact",
+                    "fact_type": "investigation_alignment",
+                    "authority": "judge_fact",
+                    "payload": {"night_no": 1, "alignment": "villagers"},
+                    "record_seq": 10,
+                    "known_at_seq": 10,
+                },
+            ],
+            "public_history": [],
+        },
+        players=PLAYERS,
+        action_record_seq=50,
+    )
+
+    events = _canonical_known_events(projection.context)["events"]
+    assert [event["event_ref"] for event in events] == ["seer_fact", "memory_latest"]
+    selector = projection.projection_metadata["selector"]
+    assert selector["latest_actor_memory_ref"] == "memory_latest"
+    assert selector["latest_actor_memory_cutoff_seq"] == 40
+    assert selector["latest_actor_memory_hash"] == "2" * 64
+    assert selector["source_count"] == 3
+    assert selector["retained_count"] == 2
+    assert selector["omitted_count"] == 1
+    assert selector["future_filtered_count"] == 0
+    assert selector["omitted"] == [
+        {
+            "event_ref": "memory_old",
+            "category": "actor_memory",
+            "reason": "superseded_actor_memory",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action_type", "memory_cutoff"),
+    [
+        ("ability_seer.investigate_decision", 10),
+        ("day_debate_speech", 10),
+        ("ability_seer.investigate_decision", None),
+    ],
+)
+def test_v13_selector_keeps_every_event_not_archived_by_latest_actor_memory(
+    action_type: str,
+    memory_cutoff: int | None,
+) -> None:
+    projection = project_model_action_context_with_metadata(
+        {
+            "round_no": 3,
+            "action_type": action_type,
+            **(
+                {"unarchived_memory_source_cutoff_record_seq": 0}
+                if memory_cutoff is None
+                else {}
+            ),
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "private_authoritative_facts": (
+                [
+                    {
+                        "knowledge_fact_id": "memory_round_1",
+                        "fact_type": "private_round_memory",
+                        "authority": "actor_memory",
+                        "payload": {
+                            "round_no": 1,
+                            "memory": "第一轮结束时形成的主观记忆。",
+                            "source_cutoff_record_seq": memory_cutoff,
+                            "memory_sha256": "3" * 64,
+                        },
+                        "record_seq": 11,
+                        "known_at_seq": 11,
+                    }
+                ]
+                if memory_cutoff is not None
+                else []
+            ),
+            "public_history": [
+                {
+                    "source_event_id": 8,
+                    "record_seq": 8,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "已经被记忆归档的旧发言。",
+                    },
+                },
+                {
+                    "source_event_id": 20,
+                    "record_seq": 20,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 2,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "上一轮记忆失败后尚未归档的普通发言。",
+                    },
+                },
+                {
+                    "source_event_id": 30,
+                    "record_seq": 30,
+                    "event_type": "day_vote_committed",
+                    "payload": {
+                        "round_no": 2,
+                        "action_type": "exile_vote",
+                        "voter_player_id": "system-player-07",
+                        "target_player_id": "system-player-09",
+                        "weight": 1.0,
+                    },
+                },
+            ],
+        },
+        players=PLAYERS,
+        action_record_seq=40,
+    )
+
+    events = _canonical_known_events(projection.context)["events"]
+    expected_refs = (
+        ["memory_round_1", "20", "30"]
+        if memory_cutoff is not None
+        else ["8", "20", "30"]
+    )
+    assert [event["event_ref"] for event in events] == expected_refs
+    retained_by_ref = {
+        item["event_ref"]: item for item in projection.projection_metadata["selector"]["retained"]
+    }
+    assert retained_by_ref["20"] == {
+        "event_ref": "20",
+        "category": "rolling_memory_increment",
+        "reason": "not_yet_archived_in_actor_memory",
+    }
+    assert retained_by_ref["30"]["category"] == "rolling_memory_increment"
+    expected_omitted = (
+        [
+            {
+                "event_ref": "8",
+                "category": "ordinary_history",
+                "reason": "old_non_salient_player_statement",
+            }
+        ]
+        if memory_cutoff is not None
+        else []
+    )
+    assert projection.projection_metadata["selector"]["omitted"] == expected_omitted
+
+
+def test_v13_selector_audits_future_events_separately_from_omissions() -> None:
+    projection = project_model_action_context_with_metadata(
+        {
+            "round_no": 2,
+            "public_history": [
+                {
+                    "source_event_id": 10,
+                    "record_seq": 10,
+                    "event_type": "day_speech_committed",
+                    "payload": {
+                        "round_no": 1,
+                        "player_id": "system-player-07",
+                        "speech": "旧轮普通发言。",
+                    },
+                },
+                {
+                    "source_event_id": 30,
+                    "record_seq": 30,
+                    "event_type": "day_speech_committed",
+                    "payload": {
+                        "round_no": 2,
+                        "player_id": "system-player-09",
+                        "speech": "未来发言。",
+                    },
+                },
+            ],
+        },
+        players=PLAYERS,
+        action_record_seq=40,
+        projection_at_seq=20,
+    )
+
+    selector = projection.projection_metadata["selector"]
+    assert selector["source_count"] == 2
+    assert selector["retained_count"] == 0
+    assert selector["omitted_count"] == 1
+    assert selector["future_filtered_count"] == 1
+    assert selector["future_filtered"] == [
+        {"event_ref": "30", "reason": "event_after_action_cutoff"}
+    ]
+
+
 def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> None:
     players = tuple(
         V2ModelPlayerReference(
@@ -1166,6 +1396,7 @@ def test_current_contract_is_supported_and_v11_is_history_only() -> None:
             "model_context_schema_version": 11,
             "prompt_template_version": prompt_version,
             "known_events_schema_version": 5,
+            "model_view_selector_version": 2,
         }
         assert is_historical_v11_model_context_contract(historical)
         assert not supports_model_context_contract({"model_context_contract": historical})
@@ -1777,12 +2008,18 @@ def test_v11_single_wolf_and_non_wolf_do_not_receive_teammate_events() -> None:
     )
 
 
-def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> None:
+def test_model_context_keeps_current_round_exact_and_omits_old_ordinary_speech() -> None:
     quiet_detail = "这段只是当时的语气和铺垫。" * 10
     projected = project_model_action_context(
         {
             "round_no": 3,
             "actor": {"kind": "player", "id": "system-player-01"},
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
             "candidates": [
                 {
                     "player_id": "system-player-09",
@@ -1852,22 +2089,14 @@ def test_model_context_keeps_every_round_exact_and_structured_by_reference() -> 
     )
 
     events = _canonical_known_events(projected)["events"]
-    assert {item["event_ref"] for item in events} == {
-        "101",
-        "102",
-        "103",
-        "104",
-        "105",
-    }
-    assert next(item for item in events if item["event_ref"] == "101")["speech"].endswith(
-        quiet_detail
-    )
+    assert {item["event_ref"] for item in events} == {"103", "104", "105"}
+    assert all(item["speech"].endswith(quiet_detail) for item in events)
     assert all("source_event_id" not in item for item in events)
     assert all("timeline_index" not in item for item in events)
     assert projected["known_events"]["annotations"] == []
 
 
-def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
+def test_model_context_projects_old_history_and_audits_omissions() -> None:
     public_history = [
         {
             "source_event_id": index,
@@ -1885,6 +2114,7 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     projection = project_model_action_context_with_metadata(
         {
             "action_type": "day_debate_speech",
+            "round_no": 7,
             "public_history": public_history,
             "output_contract": {
                 "kind": "speech",
@@ -1899,32 +2129,34 @@ def test_model_context_keeps_history_lossless_and_deduplicated() -> None:
     metadata = projection.projection_metadata
     assert metadata["ledger_statement_count"] == 40
     assert metadata["source_event_count"] == 40
-    assert metadata["emitted_event_count"] == 40
+    assert metadata["emitted_event_count"] < 40
     assert metadata["future_filtered_event_count"] == 0
     assert metadata["budget_dropped_event_count"] == 0
     assert "selection_budget_chars" not in metadata
-    assert metadata["retained_event_refs"] == [str(index) for index in range(1, 41)]
-    assert metadata["dropped_event_refs"] == []
+    selector = metadata["selector"]
+    assert selector["version"] == 3
+    assert selector["source_count"] == 40
+    assert selector["retained_count"] == metadata["emitted_event_count"]
+    assert selector["retained_count"] + selector["omitted_count"] == 40
+    assert selector["omitted_count"] > 0
     assert metadata["round_trip_verified"] is True
-    assert metadata["canonical_serialized_char_count"] > metadata[
-        "compact_serialized_char_count"
-    ]
+    assert metadata["canonical_serialized_char_count"] > metadata["compact_serialized_char_count"]
     assert metadata["compaction_saved_chars"] > 0
     assert len(metadata["canonical_sha256"]) == 64
     assert "retention_reasons" not in metadata
     assert all("speech_truncated" not in item for item in events)
     assert all(len(item["speech"]) > 1_800 for item in events)
-    assert [item["event_ref"] for item in events] == [str(index) for index in range(1, 41)]
+    assert [item["event_ref"] for item in events] == ["36", "37", "38", "39", "40"]
     assert (
         model_prompt_metadata(
             projected,
             projection_metadata=metadata,
         )["serialized_char_count"]
-        > 70_000
+        < 20_000
     )
 
 
-def test_model_context_uses_every_presented_public_player_speech_without_duplicates() -> None:
+def test_model_context_uses_current_presented_speech_without_duplicates() -> None:
     projected = project_model_action_context(
         {
             "round_no": 2,
@@ -1979,12 +2211,8 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
     )
 
     events = _canonical_known_events(projected)["events"]
-    assert [statement["event_ref"] for statement in events] == [
-        "11",
-        "20",
-        "21",
-    ]
-    assert events[2]["speech"] == "我昨夜验了2号，2号是金水。"
+    assert [statement["event_ref"] for statement in events] == ["20", "21"]
+    assert events[1]["speech"] == "我昨夜验了2号，2号是金水。"
     transfer = next(event for event in events if event["kind"] == "sheriff_badge_transferred")
     assert transfer["event_ref"] == "20"
     assert transfer["authority"] == "judge_fact"
@@ -1993,11 +2221,130 @@ def test_model_context_uses_every_presented_public_player_speech_without_duplica
         "player_id": "seat_2",
         "from_player_id": "seat_1",
     }
-    assert events[0]["speech"] == "第一天我怀疑4号。"
     assert "这条事件副本不应重复进入上下文" not in json.dumps(
         projected,
         ensure_ascii=False,
     )
+
+
+def test_v13_selector_keeps_cross_round_first_party_claim_and_last_words() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 2,
+            "public_rule_contract": build_public_rule_contract(
+                rule={
+                    "player_count": 3,
+                    "roles": [
+                        {"role": "预言家", "count": 1, "team": "villagers"},
+                        {"role": "村民", "count": 2, "team": "villagers"},
+                    ],
+                },
+                max_rounds=4,
+            ),
+            "public_history": [
+                {
+                    "source_event_id": 10,
+                    "record_seq": 10,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "sheriff_campaign_speech",
+                        "player_id": "system-player-07",
+                        "speech": "1号是预言家，昨晚验4号是好人。",
+                    },
+                },
+                {
+                    "source_event_id": 20,
+                    "record_seq": 20,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "exile_last_words",
+                        "player_id": "system-player-09",
+                        "speech": "这是我的遗言，请记住。",
+                    },
+                },
+                {
+                    "source_event_id": 30,
+                    "record_seq": 30,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "旧轮普通重复发言。",
+                    },
+                },
+            ],
+        },
+        players=PLAYERS,
+    )
+
+    events = _canonical_known_events(projected)["events"]
+    assert [event["event_ref"] for event in events] == ["10", "20"]
+    assert events[0]["authority"] == "player_claim_unverified"
+    assert events[1]["stage"] == "exile_last_words"
+
+
+def test_v13_selector_keeps_old_speech_that_names_actor_or_candidate() -> None:
+    projected = project_model_action_context(
+        {
+            "round_no": 3,
+            "actor": {"kind": "player", "id": "system-player-01"},
+            "self_identity": {
+                "player_id": "system-player-01",
+                "seat": 2,
+                "role_key": "villager",
+                "team": "villagers",
+            },
+            "candidates": [
+                {
+                    "player_id": "system-player-09",
+                    "seat": 4,
+                    "display_name": "唐梨",
+                }
+            ],
+            "public_history": [
+                {
+                    "source_event_id": 10,
+                    "record_seq": 10,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "我点名2号回答这个矛盾。",
+                    },
+                },
+                {
+                    "source_event_id": 20,
+                    "record_seq": 20,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "我认为4号今天应当进入候选。",
+                    },
+                },
+                {
+                    "source_event_id": 30,
+                    "record_seq": 30,
+                    "event_type": "public_player_speech_presented",
+                    "payload": {
+                        "round_no": 1,
+                        "stage": "day_debate_speech",
+                        "player_id": "system-player-07",
+                        "speech": "这句没有涉及当前玩家或候选。",
+                    },
+                },
+            ],
+        },
+        players=PLAYERS,
+    )
+
+    events = _canonical_known_events(projected)["events"]
+    assert [event["event_ref"] for event in events] == ["10", "20"]
 
 
 def test_model_context_preserves_first_party_claim_time_before_later_paraphrases() -> None:
@@ -2420,20 +2767,22 @@ def test_v12_player_prompt_explains_information_authority_and_time() -> None:
 
     assert "authority=judge_fact 是法官事实" in system_text
     assert "authority=player_claim_unverified 是玩家说法" in system_text
-    assert "authority=actor_memory 和 declared_reason 是主观历史" in system_text
+    assert "actor_memory/declared_reason 是可修正的主观历史" in system_text
     assert "annotations、questions、relations 只是确定性启发式检索索引" in system_text
-    assert "known_events 使用 lossless_refs_v1 无损编码" in system_text
-    assert "scope_ref 和 occurred_in_ref 必须从对应 catalog 展开" in system_text
+    assert "known_events 是玩家工作记忆" in system_text
+    assert "可省略旧轮普通发言/逐票" in system_text
+    assert "lossless_refs_v1 对入选事件无损" in system_text
+    assert "scope_ref 和 occurred_in_ref 按 catalog 展开" in system_text
     assert "defaults.scope_ref_by_kind 和 defaults.occurred_in_ref_by_kind" in system_text
-    assert "事件显式 ref 优先，occurred_in_ref=null 表示没有 occurred_in" in system_text
+    assert "显式 ref 优先，occurred_in_ref=null 表示无 occurred_in" in system_text
     assert "省略 record_seq 表示它等于 known_at_seq" in system_text
     assert "record_seq=null 表示源记录序号未知" in system_text
     assert "不能用 known_at_seq 代替" in system_text
-    assert "顶层 annotations 通过 source_event_ref" in system_text
+    assert "annotations 通过 source_event_ref/source_annotation_index" in system_text
     assert "known_at_seq/record_seq 表示获知和记录顺序" in system_text
     assert "occurred_in 表示事件实际发生阶段" in system_text
     assert "公布更晚不代表发生更晚" in system_text
-    assert "策略、身份伪装和表达由你自主决定" in system_text
+    assert "策略与表达由你决定" in system_text
     assert "不得使用未提供的私密信息" in system_text
     assert "public_timeline" not in system_text
     assert "history" not in system_text
@@ -2519,7 +2868,7 @@ def test_v12_prompt_explains_compact_question_response_semantics() -> None:
     assert "尚未轮到发言，不表示拒绝回应" in system_text
     assert "prior_relevant_event_refs 是提问前的相关说明" in system_text
     assert "因技术故障未能发言，不得解读为拒绝回应或策略性沉默" in system_text
-    assert "策略、身份伪装和表达由你自主决定" in system_text
+    assert "策略与表达由你决定" in system_text
     assert len(system_text) < 1_700
 
 

@@ -11,6 +11,7 @@ from typing import Any
 
 KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION = 5
 KNOWN_EVENTS_COMPACT_SCHEMA_VERSION = 6
+KNOWN_EVENTS_CURRENT_SCHEMA_VERSION = 7
 KNOWN_EVENTS_COMPACT_ENCODING = "lossless_refs_v1"
 
 _COMPACT_BASE_DEFAULTS = {
@@ -187,6 +188,20 @@ def encode_known_events_v6(canonical_v5: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def encode_known_events_v7(canonical_v5: dict[str, Any]) -> dict[str, Any]:
+    """Losslessly encode the selector-retained canonical Known Events V5 set.
+
+    V7 deliberately does not claim that the database history was retained in
+    full. Selection happens before this function and is audited separately in
+    ``prompt_projection.selector``. Within that retained projection, the V7
+    byte/field round-trip remains lossless.
+    """
+
+    compact = encode_known_events_v6(canonical_v5)
+    compact["schema_version"] = KNOWN_EVENTS_CURRENT_SCHEMA_VERSION
+    return compact
+
+
 def expand_known_events_v6(compact_v6: dict[str, Any]) -> dict[str, Any]:
     """Expand a Known Events V6 object into its complete canonical V5 form."""
 
@@ -308,6 +323,18 @@ def expand_known_events_v6(compact_v6: dict[str, Any]) -> dict[str, Any]:
     return _validated_canonical_v5(canonical)
 
 
+def expand_known_events_v7(compact_v7: dict[str, Any]) -> dict[str, Any]:
+    """Expand a V7 retained projection into canonical Known Events V5."""
+
+    if not isinstance(compact_v7, dict):
+        _fail("known_events_v7_shape")
+    compact_v6 = deepcopy(compact_v7)
+    if compact_v6.get("schema_version") != KNOWN_EVENTS_CURRENT_SCHEMA_VERSION:
+        _fail("unsupported_known_events_compact_schema_version")
+    compact_v6["schema_version"] = KNOWN_EVENTS_COMPACT_SCHEMA_VERSION
+    return expand_known_events_v6(compact_v6)
+
+
 def canonical_known_events_v5_sha256(canonical_v5: dict[str, Any]) -> str:
     """Hash the complete canonical V5 object with the frozen JSON algorithm."""
 
@@ -349,6 +376,43 @@ def build_known_events_v6_compaction_metadata(
         "dropped_event_refs": [],
         "canonical_sha256": canonical_known_events_v5_sha256(canonical),
         "round_trip_verified": True,
+    }
+
+
+def build_known_events_v7_compaction_metadata(
+    canonical_v5: dict[str, Any],
+    compact_v7: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Audit the lossless encoding of the selector-retained event projection."""
+
+    canonical = _validated_canonical_v5(canonical_v5)
+    compact = encode_known_events_v7(canonical) if compact_v7 is None else deepcopy(compact_v7)
+    expanded = expand_known_events_v7(compact)
+    if expanded != canonical:
+        _fail("known_events_v7_round_trip_mismatch")
+    _validate_speech_round_trip(canonical, expanded)
+
+    canonical_text = _canonical_json_text(canonical)
+    compact_text = _canonical_json_text(compact)
+    canonical_char_count = len(canonical_text)
+    compact_char_count = len(compact_text)
+    event_refs = [str(event["event_ref"]) for event in canonical["events"]]
+    speeches = [
+        event["speech"] for event in canonical["events"] if isinstance(event.get("speech"), str)
+    ]
+    return {
+        "canonical_serialized_char_count": canonical_char_count,
+        "compact_serialized_char_count": compact_char_count,
+        "compaction_saved_chars": canonical_char_count - compact_char_count,
+        "compaction_ratio": (
+            compact_char_count / canonical_char_count if canonical_char_count else 1.0
+        ),
+        "verbatim_speech_count": len(speeches),
+        "verbatim_speech_chars": sum(len(speech) for speech in speeches),
+        "retained_event_refs": event_refs,
+        "canonical_sha256": canonical_known_events_v5_sha256(canonical),
+        "round_trip_verified": True,
+        "lossless_scope": "selector_retained_projection",
     }
 
 

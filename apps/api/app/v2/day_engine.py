@@ -29,12 +29,16 @@ from app.v2.match_repository import (
     V2MatchPlayer,
     V2MatchRepository,
     V2MatchSnapshot,
+    V2PrivateRoundMemoryCommit,
+    private_round_memory_source_refs_sha256,
 )
 from app.v2.model_context import (
     V2ModelPlayerReference,
     build_actor_information,
+    build_private_round_memory_source_context,
     build_public_match_state,
     build_public_rule_contract,
+    private_round_memory_objective,
     private_authoritative_facts,
 )
 from app.v2.model_context_contract import is_supported_model_context_contract
@@ -3728,6 +3732,17 @@ class V2DayEngine:
         )
         memory_mode = memory_policy.private_round_memory_mode
         batch_id = f"{state.game_id}:round_{state.round_no}:private_memories"
+        terminal_status = self._repository.private_round_memory_batch_terminal_status(
+            game_id=state.game_id,
+            run_id=state.run_id,
+            phase_id=state.phase_id,
+            phase_state=state.phase_state,
+            round_no=state.round_no,
+            batch_id=batch_id,
+            private_round_memory_mode=memory_mode,
+        )
+        if terminal_status is not None:
+            return terminal_status == "completed"
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_private_memory_batch_started",
@@ -3735,6 +3750,8 @@ class V2DayEngine:
             payload={
                 "round_no": state.round_no,
                 "batch_id": batch_id,
+                "phase_id": state.phase_id,
+                "phase_state": state.phase_state,
                 "public_cutoff_record_seq": state.last_record_seq,
                 "player_ids": [player.player_id for player in players],
                 "commit_order": [player.player_id for player in players],
@@ -3742,83 +3759,29 @@ class V2DayEngine:
             },
         )
 
-        if memory_mode == "reuse_previous_non_blocking":
-            try:
-                summary_completed = await self._judge(
-                    state=state,
-                    broadcaster=broadcaster,
-                    action_type="judge_day_summary",
-                    objective=f"播报第{state.round_no}天流程结束并即将入夜",
-                    success_phase_state=state.phase_state,
-                    context={},
-                )
-            except BaseException:
-                try:
-                    self._repository.append_event(
-                        game_id=state.game_id,
-                        event_type="day_private_memory_batch_canceled",
-                        audience="god_view",
-                        payload={
-                            "round_no": state.round_no,
-                            "batch_id": batch_id,
-                            "private_round_memory_mode": memory_mode,
-                        },
-                    )
-                except Exception:
-                    logger.exception(
-                        "Live V2 could not persist non-blocking private memory batch cancellation"
-                    )
-                raise
-            if not summary_completed:
-                self._repository.append_event(
-                    game_id=state.game_id,
-                    event_type="day_private_memory_batch_completed",
-                    audience="god_view",
-                    payload={
-                        "round_no": state.round_no,
-                        "batch_id": batch_id,
-                        "public_summary_status": "failed",
-                        "private_round_memory_mode": memory_mode,
-                        "memories": [],
-                        "commit_order": [player.player_id for player in players],
-                    },
-                )
-                return False
-            skipped = [
-                {
-                    "player_id": player.player_id,
-                    "status": "generation_skipped_non_blocking",
-                }
-                for player in players
-            ]
-            self._repository.append_event(
-                game_id=state.game_id,
-                event_type="private_round_memory_generation_skipped",
-                audience="god_view",
-                payload={
-                    "round_no": state.round_no,
-                    "batch_id": batch_id,
-                    "reason": "non_blocking_latency_policy",
-                    "public_cutoff_record_seq": state.last_record_seq,
-                    "player_ids": [player.player_id for player in players],
-                },
-            )
-            self._repository.append_event(
-                game_id=state.game_id,
-                event_type="day_private_memory_batch_completed",
-                audience="god_view",
-                payload={
-                    "round_no": state.round_no,
-                    "batch_id": batch_id,
-                    "public_summary_status": "completed",
-                    "private_round_memory_mode": memory_mode,
-                    "memories": skipped,
-                    "commit_order": [player.player_id for player in players],
-                },
-            )
-            return True
-
         request_started = {player.player_id: asyncio.Event() for player in players}
+        memory_sources = {
+            player.player_id: self._rolling_private_memory_sources(
+                state=state,
+                player=player,
+            )
+            for player in players
+        }
+        memory_states = {
+            player.player_id: self._rolling_private_memory_state(
+                state=state,
+                previous_source_cutoff_record_seq=memory_sources[player.player_id][
+                    "previous_source_cutoff_record_seq"
+                ],
+            )
+            for player in players
+        }
+        memory_private_facts = {
+            player.player_id: [
+                dict(item) for item in memory_sources[player.player_id]["private_facts"]
+            ]
+            for player in players
+        }
         memory_tasks = {
             player.player_id: asyncio.create_task(
                 self._generate_private_round_memory(
@@ -3827,6 +3790,9 @@ class V2DayEngine:
                     broadcaster=broadcaster,
                     batch_id=batch_id,
                     request_started=request_started[player.player_id],
+                    sources=memory_sources[player.player_id],
+                    memory_state=memory_states[player.player_id],
+                    frozen_private_facts=memory_private_facts[player.player_id],
                 )
             )
             for player in players
@@ -3863,6 +3829,7 @@ class V2DayEngine:
                     payload={
                         "round_no": state.round_no,
                         "batch_id": batch_id,
+                        "private_round_memory_mode": memory_mode,
                     },
                 )
             except Exception:
@@ -3877,7 +3844,11 @@ class V2DayEngine:
                 payload={
                     "round_no": state.round_no,
                     "batch_id": batch_id,
+                    "phase_id": state.phase_id,
+                    "phase_state": state.phase_state,
+                    "source_cutoff_record_seq": state.last_record_seq,
                     "public_summary_status": "failed",
+                    "private_round_memory_mode": memory_mode,
                     "memories": [],
                     "commit_order": [player.player_id for player in players],
                 },
@@ -3885,8 +3856,10 @@ class V2DayEngine:
             return False
 
         committed: list[dict[str, Any]] = []
+        pending_commits: list[V2PrivateRoundMemoryCommit] = []
         for commit_index, player in enumerate(players, start=1):
-            decision = memory_tasks[player.player_id].result()
+            action_result = memory_tasks[player.player_id].result()
+            decision = action_result.decision if action_result is not None else None
             memory = decision.speech.strip() if decision is not None and decision.speech else ""
             if not memory:
                 committed.append(
@@ -3896,6 +3869,18 @@ class V2DayEngine:
                     }
                 )
                 continue
+            if (
+                action_result is None
+                or not action_result.action_id
+                or action_result.model_response_record_seq is None
+                or action_result.terminal_event_record_seq is None
+                or action_result.model_attempt_id is None
+                or action_result.request_payload_sha256 is None
+                or action_result.projected_context_sha256 is None
+                or action_result.projected_known_event_refs is None
+                or action_result.projected_known_events_sha256 is None
+            ):
+                raise V2DayRuntimeError("private_round_memory_lineage_missing")
             normalized_memory = memory[:_PRIVATE_ROUND_MEMORY_MAX_CHARS].rstrip()
             if normalized_memory != memory:
                 self._repository.append_event(
@@ -3912,14 +3897,64 @@ class V2DayEngine:
                         "normalized_chars": len(normalized_memory),
                     },
                 )
-            fact_id, created = self._repository.record_private_round_memory(
-                game_id=state.game_id,
-                player_id=player.player_id,
-                round_no=state.round_no,
-                memory=normalized_memory,
-                batch_id=batch_id,
-                commit_index=commit_index,
+            pending_commits.append(
+                V2PrivateRoundMemoryCommit(
+                    player_id=player.player_id,
+                    memory=normalized_memory,
+                    commit_index=commit_index,
+                    source_refs=tuple(memory_sources[player.player_id]["source_refs"]),
+                    source_refs_sha256=memory_sources[player.player_id]["source_refs_sha256"],
+                    previous_snapshot_fact_id=memory_sources[player.player_id][
+                        "previous_snapshot_fact_id"
+                    ],
+                    action_id=action_result.action_id,
+                    model_response_record_seq=action_result.model_response_record_seq,
+                    terminal_event_record_seq=action_result.terminal_event_record_seq,
+                    provider_request_id=decision.provider_request_id,
+                    attempt_id=action_result.model_attempt_id,
+                    request_payload_sha256=action_result.request_payload_sha256,
+                    projected_context_sha256=action_result.projected_context_sha256,
+                    projected_known_event_refs=(action_result.projected_known_event_refs),
+                    projected_known_events_sha256=(
+                        action_result.projected_known_events_sha256
+                    ),
+                )
             )
+
+        completed_payload = {
+            "round_no": state.round_no,
+            "batch_id": batch_id,
+            "phase_id": state.phase_id,
+            "phase_state": state.phase_state,
+            "source_cutoff_record_seq": state.last_record_seq,
+            "public_summary_status": "completed",
+            "memories": [
+                *[item for item in committed if item["status"] == "generation_failed"],
+            ],
+            "commit_order": [player.player_id for player in players],
+            "private_round_memory_mode": memory_mode,
+        }
+        commit_results = self._repository.record_private_round_memories(
+            game_id=state.game_id,
+            run_id=state.run_id,
+            phase_id=state.phase_id,
+            phase_state=state.phase_state,
+            round_no=state.round_no,
+            batch_id=batch_id,
+            source_cutoff_record_seq=state.last_record_seq,
+            commits=tuple(pending_commits),
+            batch_completed_payload=completed_payload,
+        )
+        result_by_player = {
+            commit.player_id: result
+            for commit, result in zip(pending_commits, commit_results, strict=True)
+        }
+        committed = [item for item in committed if item["status"] == "generation_failed"]
+        for player in players:
+            result = result_by_player.get(player.player_id)
+            if result is None:
+                continue
+            fact_id, created = result
             committed.append(
                 {
                     "player_id": player.player_id,
@@ -3928,18 +3963,6 @@ class V2DayEngine:
                 }
             )
 
-        self._repository.append_event(
-            game_id=state.game_id,
-            event_type="day_private_memory_batch_completed",
-            audience="god_view",
-            payload={
-                "round_no": state.round_no,
-                "batch_id": batch_id,
-                "public_summary_status": "completed",
-                "memories": committed,
-                "commit_order": [player.player_id for player in players],
-            },
-        )
         return True
 
     async def _generate_private_round_memory(
@@ -3950,18 +3973,47 @@ class V2DayEngine:
         broadcaster: V2BroadcastPort,
         batch_id: str,
         request_started: asyncio.Event,
-    ) -> V2ModelDecision | None:
+        sources: dict[str, Any],
+        memory_state: V2MatchSnapshot,
+        frozen_private_facts: list[dict[str, Any]],
+    ) -> V2ActionResult | None:
         request_started.set()
+        canonical_source_context = build_private_round_memory_source_context(
+            round_no=state.round_no,
+            batch_id=batch_id,
+            source_cutoff_record_seq=state.last_record_seq,
+            player_id=player.player_id,
+            seat=player.seat,
+            role_key=player.role_key,
+            team=player.team,
+            persona=player.persona,
+            alive=player.alive,
+            sheriff_player_id=state.sheriff_player_id,
+            sheriff_badge_state=state.sheriff_badge_state,
+            rule=memory_state.rule,
+            max_rounds=memory_state.max_rounds,
+            player_state=player.state,
+            players=memory_state.players,
+            private_facts=[
+                item
+                for item in frozen_private_facts
+                if item.get("fact_type") != "living_werewolf_teammates"
+            ],
+            public_history=memory_state.public_history,
+            previous_memory_snapshot=sources["previous_snapshot"],
+            previous_memory_fact_id=sources["previous_snapshot_fact_id"],
+            previous_memory_source_cutoff_record_seq=sources[
+                "previous_source_cutoff_record_seq"
+            ],
+            memory_source_refs=sources["source_refs"],
+            memory_source_refs_sha256=sources["source_refs_sha256"],
+        )
         return await self._player_action(
             game_id=state.game_id,
             player=player,
             broadcaster=broadcaster,
             action_type="private_round_memory",
-            objective=(
-                f"生成仅供你本人后续决策使用的第{state.round_no}轮私有记忆。"
-                "概括本轮关键公开事实、你已知的私人事实、主要判断和下一轮待验证事项；"
-                "不得编造未知身份或结果，使用第一人称并保持精简。"
-            ),
+            objective=private_round_memory_objective(state.round_no),
             candidates=[],
             target_optional=None,
             output_kind="private_round_memory",
@@ -3973,16 +4025,114 @@ class V2DayEngine:
             ),
             audience="player_private",
             extra_context={
-                "private_memory_batch_id": batch_id,
-                "public_cutoff_record_seq": state.last_record_seq,
-                "memory_round_no": state.round_no,
-                "memory_visibility": "actor_only",
+                key: canonical_source_context[key]
+                for key in (
+                    "private_memory_batch_id",
+                    "public_cutoff_record_seq",
+                    "memory_round_no",
+                    "memory_visibility",
+                    "rolling_memory_schema_version",
+                    "previous_memory_snapshot",
+                    "previous_memory_fact_id",
+                    "previous_memory_source_cutoff_record_seq",
+                    "memory_source_refs",
+                    "memory_source_refs_sha256",
+                )
             },
-            frozen_state=state,
+            frozen_state=memory_state,
+            frozen_private_facts=frozen_private_facts,
+            projection_at_seq=state.last_record_seq,
             defer_presentation=True,
             isolated_failure=True,
             allow_failure=True,
             batch_id=batch_id,
+            return_result=True,
+        )
+
+    def _rolling_private_memory_sources(
+        self,
+        *,
+        state: V2MatchSnapshot,
+        player: V2MatchPlayer,
+    ) -> dict[str, Any]:
+        private_facts = self._repository.private_knowledge(
+            game_id=state.game_id,
+            player_id=player.player_id,
+            at_or_before_record_seq=state.last_record_seq,
+        )
+        previous = next(
+            (item for item in private_facts if item.get("fact_type") == "private_round_memory"),
+            None,
+        )
+        previous_payload = (
+            previous.get("payload")
+            if isinstance(previous, dict) and isinstance(previous.get("payload"), dict)
+            else {}
+        )
+        previous_fact_id = (
+            previous.get("knowledge_fact_id") if isinstance(previous, dict) else None
+        )
+        previous_fact_id = previous_fact_id if isinstance(previous_fact_id, str) else None
+        previous_cutoff = previous_payload.get("source_cutoff_record_seq")
+        previous_cutoff = (
+            previous_cutoff
+            if isinstance(previous_cutoff, int)
+            and not isinstance(previous_cutoff, bool)
+            and previous_cutoff > 0
+            else 0
+        )
+        public_refs = [
+            f"event:{item['source_event_id']}"
+            for item in state.public_history
+            if isinstance(item.get("source_event_id"), int)
+            and isinstance(item.get("record_seq"), int)
+            and item["record_seq"] > previous_cutoff
+        ]
+        private_refs = [
+            f"fact:{item['knowledge_fact_id']}"
+            for item in private_facts
+            if item.get("fact_type") != "private_round_memory"
+            and isinstance(item.get("knowledge_fact_id"), str)
+        ]
+        source_refs = [
+            *([f"fact:{previous_fact_id}"] if previous_fact_id is not None else []),
+            f"state:{state.last_record_seq}",
+            *public_refs,
+            *private_refs,
+        ]
+        source_refs_sha256 = private_round_memory_source_refs_sha256(
+            owner_id=player.player_id,
+            round_no=state.round_no,
+            previous_snapshot_fact_id=previous_fact_id,
+            source_cutoff_record_seq=state.last_record_seq,
+            source_refs=source_refs,
+        )
+        return {
+            "previous_snapshot": dict(previous) if isinstance(previous, dict) else None,
+            "previous_snapshot_fact_id": previous_fact_id,
+            "previous_source_cutoff_record_seq": previous_cutoff or None,
+            "source_refs": source_refs,
+            "source_refs_sha256": source_refs_sha256,
+            "private_facts": private_facts,
+        }
+
+    @staticmethod
+    def _rolling_private_memory_state(
+        *,
+        state: V2MatchSnapshot,
+        previous_source_cutoff_record_seq: int | None,
+    ) -> V2MatchSnapshot:
+        cutoff = previous_source_cutoff_record_seq or 0
+        return V2MatchSnapshot(
+            **{
+                **state.__dict__,
+                "public_history": tuple(
+                    item
+                    for item in state.public_history
+                    if isinstance(item.get("record_seq"), int)
+                    and item["record_seq"] > cutoff
+                ),
+            }
         )
 
     async def _judge(
@@ -4069,6 +4219,7 @@ class V2DayEngine:
             else self._repository.private_knowledge(
                 game_id=game_id,
                 player_id=player.player_id,
+                at_or_before_record_seq=state.last_record_seq,
             )
         )
         if player.role_key == "werewolf":
@@ -4085,6 +4236,17 @@ class V2DayEngine:
                     ],
                 },
             ]
+        has_actor_memory = any(
+            isinstance(item, dict) and item.get("fact_type") == "private_round_memory"
+            for item in private_facts
+        )
+        memory_gap_context = (
+            {"unarchived_memory_source_cutoff_record_seq": 0}
+            if action_type != "private_round_memory"
+            and state.round_no > 1
+            and not has_actor_memory
+            else {}
+        )
         resolved_contract = decision_contract or (
             V2DecisionContract(
                 kind="speech",
@@ -4170,6 +4332,7 @@ class V2DayEngine:
                     rule=state.rule,
                     max_rounds=state.max_rounds,
                 ),
+                **memory_gap_context,
                 **(extra_context or {}),
             },
             defer_presentation=defer_presentation,

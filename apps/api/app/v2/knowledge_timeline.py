@@ -24,6 +24,7 @@ def player_private_knowledge(
     *,
     game_id: str,
     player_id: str,
+    at_or_before_record_seq: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = list(
         db.scalars(
@@ -39,28 +40,6 @@ def player_private_knowledge(
     )
     if not rows:
         return []
-
-    provisional_fact_ids = {
-        row.knowledge_fact_id for row in rows if _is_pre_exile_provisional_fact(row)
-    }
-    if provisional_fact_ids:
-        committed_fact_ids = set(
-            db.scalars(
-                select(V2PreExileResult.private_fact_id).where(
-                    V2PreExileResult.private_fact_id.in_(provisional_fact_ids),
-                    V2PreExileResult.result_kind == "self_explosion",
-                    V2PreExileResult.state == "committed",
-                )
-            )
-        )
-        rows = [
-            row
-            for row in rows
-            if row.knowledge_fact_id not in provisional_fact_ids
-            or row.knowledge_fact_id in committed_fact_ids
-        ]
-        if not rows:
-            return []
 
     events = list(
         db.scalars(
@@ -88,11 +67,62 @@ def player_private_knowledge(
         if isinstance(fact_id, str):
             event_by_fact_id[fact_id] = event
 
-    projected: list[dict[str, Any]] = []
-    for row in rows:
+    def event_for_row(row: V2KnowledgeFact) -> V2GameRecordEvent | None:
         event = event_by_fact_id.get(row.knowledge_fact_id)
         if event is None and row.source_activation_id is not None:
             event = event_by_activation_id.get(row.source_activation_id)
+        return event
+
+    if at_or_before_record_seq is not None:
+        visible_rows: list[V2KnowledgeFact] = []
+        for row in rows:
+            event = event_for_row(row)
+            if event is not None and event.record_seq <= at_or_before_record_seq:
+                visible_rows.append(row)
+        rows = visible_rows
+        if not rows:
+            return []
+
+    # Rolling actor memories are append-only durable audit facts, but only the
+    # latest snapshot visible at this read cutoff participates in runtime. This
+    # ordering matters: a concurrently-created future snapshot must not hide
+    # the last snapshot that was valid at the frozen action cutoff.
+    latest_memory = max(
+        (row for row in rows if row.fact_type == "private_round_memory"),
+        key=_private_round_memory_order,
+        default=None,
+    )
+    rows = [
+        row
+        for row in rows
+        if row.fact_type != "private_round_memory" or row is latest_memory
+    ]
+
+    provisional_fact_ids = {
+        row.knowledge_fact_id for row in rows if _is_pre_exile_provisional_fact(row)
+    }
+    if provisional_fact_ids:
+        committed_fact_ids = set(
+            db.scalars(
+                select(V2PreExileResult.private_fact_id).where(
+                    V2PreExileResult.private_fact_id.in_(provisional_fact_ids),
+                    V2PreExileResult.result_kind == "self_explosion",
+                    V2PreExileResult.state == "committed",
+                )
+            )
+        )
+        rows = [
+            row
+            for row in rows
+            if row.knowledge_fact_id not in provisional_fact_ids
+            or row.knowledge_fact_id in committed_fact_ids
+        ]
+        if not rows:
+            return []
+
+    projected: list[dict[str, Any]] = []
+    for row in rows:
+        event = event_for_row(row)
         if _is_pre_exile_provisional_fact(row) and (
             event is None or event.event_type != "pre_exile_private_fact_committed"
         ):
@@ -136,6 +166,13 @@ def _is_pre_exile_provisional_fact(row: V2KnowledgeFact) -> bool:
         and isinstance(context.get("pipeline_id"), str)
         and context.get("visibility_mode") == "pre_exile_provisional_until_atomic_arbiter"
     )
+
+
+def _private_round_memory_order(row: V2KnowledgeFact) -> tuple[int, int, str]:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    round_no = _positive_int(payload.get("round_no")) or 0
+    cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0
+    return (round_no, cutoff, row.knowledge_fact_id)
 
 
 def _occurred_in(fact_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:

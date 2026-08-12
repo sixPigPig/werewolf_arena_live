@@ -1038,7 +1038,7 @@ def test_recovery_adoption_rejects_technical_fact_forged_after_terminal(
                 "failure_code": "model_action_wall_timeout",
                 "target_exhaustion_failure_mode": "action_wall_timeout",
                 "target_player_id": None,
-                "model_generation_policy_schema_version": 3,
+                "model_generation_policy_schema_version": 4,
             },
         )
     assert actual_technical_seq == forged_technical_seq

@@ -76,8 +76,10 @@ class _Repository:
     def resolve_model_action_recovery(self, **_values: Any) -> None:
         return
 
-    def complete_silent_action(self, **_values: Any) -> None:
+    def complete_silent_action(self, **_values: Any) -> int:
         self.completed_silently = True
+        self._record_seq += 1
+        return self._record_seq
 
     def open_presentation(self, **values: Any) -> V2PresentationIdentity:
         claim = values["claim"]
@@ -269,7 +271,7 @@ def test_generation_result_carries_exact_model_response_record_seq(tmp_path: Pat
         if event["event_type"] == "model_response_received"
     )
     assert result.model_response_record_seq == response_seq
-    assert result.terminal_event_record_seq is None
+    assert result.terminal_event_record_seq == repository._record_seq
     assert response["payload"]["application_validation_result"] == "accepted"
     assert repository.completed_silently is True
     assert model_client.admission_modes == ["idle_only"]

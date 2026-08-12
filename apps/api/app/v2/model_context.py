@@ -11,9 +11,9 @@ from app.v2.discourse_model_view import build_discourse_model_view
 from app.v2.model_context_compaction import (
     KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
     V2ModelContextCompactionError,
-    build_known_events_v6_compaction_metadata,
-    encode_known_events_v6,
-    expand_known_events_v6,
+    build_known_events_v7_compaction_metadata,
+    encode_known_events_v7,
+    expand_known_events_v7,
 )
 from app.v2.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
@@ -24,6 +24,7 @@ from app.v2.model_context_contract import (
     PUBLIC_TIMELINE_SCHEMA_VERSION,
     is_supported_model_context_contract,
 )
+from app.v2.model_context_selector import select_known_events_v13
 from app.v2.win_conditions import (
     build_public_win_condition_contract,
 )
@@ -100,7 +101,7 @@ def project_model_action_context_with_metadata(
     contract = model_context_contract
     if not is_supported_model_context_contract(contract):
         raise ValueError("unsupported_model_context_contract")
-    return _project_v12_model_action_context_with_metadata(
+    return _project_v13_model_action_context_with_metadata(
         context,
         players=players,
         projection_at_seq=resolved_projection_at_seq,
@@ -111,7 +112,7 @@ def project_model_action_context_with_metadata(
     )
 
 
-def _project_v12_model_action_context_with_metadata(
+def _project_v13_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
     players: tuple[V2ModelPlayerReference, ...],
@@ -201,22 +202,20 @@ def _project_v12_model_action_context_with_metadata(
         if not isinstance(fact, dict)
         or fact.get("fact_type") not in {"werewolf_teammates", "living_werewolf_teammates"}
     ]
-    source_event_count = len(public_events) + sum(
-        isinstance(fact, dict) for fact in teammate_facts_removed
-    )
-    selected_events = _known_events(
+    future_filtered_events: list[dict[str, Any]] = []
+    visible_events = _known_events(
         public_events=public_events,
         statements=visible_statements,
         private_facts=teammate_facts_removed,
         task_at_seq=task_at_seq,
         current_round_no=current_round_no,
         schema_version=KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
+        future_events_out=future_filtered_events,
     )
     is_werewolf = identity.get("role_key") == "werewolf"
     configured_werewolf_count = hard_rules.get("werewolf_count")
     if is_werewolf and isinstance(configured_werewolf_count, int) and configured_werewolf_count > 1:
-        source_event_count += 1
-        selected_events.append(
+        visible_events.append(
             _canonical_living_werewolf_teammates_event(
                 teammate_refs=teammate_refs,
                 task_at_seq=task_at_seq,
@@ -225,12 +224,43 @@ def _project_v12_model_action_context_with_metadata(
                 owner_ref=actor_ref,
             )
         )
-        selected_events.sort(key=_known_event_sort_key)
+        visible_events.sort(key=_known_event_sort_key)
 
     _attach_v11_first_party_claim_annotations(
-        selected_events,
+        visible_events,
         model_view=model_view,
     )
+    latest_actor_memory_cutoffs = [
+        cutoff
+        for fact in teammate_facts_removed
+        for payload in (fact.get("payload"),)
+        if isinstance(fact, dict)
+        and fact.get("fact_type") == "private_round_memory"
+        and isinstance(payload, dict)
+        for cutoff in (_positive_int(payload.get("source_cutoff_record_seq")),)
+        if cutoff is not None
+    ]
+    rolling_memory_cutoff_seq = max(latest_actor_memory_cutoffs, default=None)
+    if source.get("unarchived_memory_source_cutoff_record_seq") == 0:
+        # Runtime explicitly marks a missing first snapshot. This is distinct
+        # from historical/diagnostic payloads that merely predate actor memory.
+        rolling_memory_cutoff_seq = 0
+    if source.get("action_type") == "private_round_memory":
+        # The first snapshot has no predecessor. A zero cutoff intentionally
+        # makes every visible durable event part of that initial memory input.
+        rolling_memory_cutoff_seq = (
+            _positive_int(source.get("previous_memory_source_cutoff_record_seq")) or 0
+        )
+    selection = select_known_events_v13(
+        visible_events,
+        actor_ref=actor_ref,
+        current_round_no=current_round_no,
+        candidate_refs=candidate_refs,
+        model_view=model_view,
+        rolling_memory_cutoff_seq=rolling_memory_cutoff_seq,
+        future_filtered=future_filtered_events,
+    )
+    selected_events = selection.events
     questions, relations = _v11_discourse_projection(
         model_view,
         selected_events=selected_events,
@@ -286,7 +316,7 @@ def _project_v12_model_action_context_with_metadata(
         _canonical_known_events=canonical_known_events,
     )
     try:
-        compact_known_events = encode_known_events_v6(canonical_known_events)
+        compact_known_events = encode_known_events_v7(canonical_known_events)
     except V2ModelContextCompactionError as exc:
         raise V2ModelContextProjectionInvariantError(exc.code) from exc
     if compact_known_events.get("schema_version") != known_events_schema_version:
@@ -298,13 +328,12 @@ def _project_v12_model_action_context_with_metadata(
             source.get("output_contract") if isinstance(source.get("output_contract"), dict) else {}
         ),
     )
-    projection_metadata = _v12_projection_metadata(
+    projection_metadata = _v13_projection_metadata(
         ledger=ledger,
         model_view_metadata=model_view_metadata,
         projected_context=projected_context,
         selected_events=selected_events,
-        source_event_count=source_event_count,
-        future_filtered_event_count=max(0, source_event_count - len(selected_events)),
+        selector_audit=selection.audit,
         questions=questions,
         relations=relations,
         current_round_no=current_round_no,
@@ -366,7 +395,7 @@ def validate_projected_model_context(
         ):
             fail("known_events_schema_version")
         try:
-            known_events = expand_known_events_v6(compact_known_events)
+            known_events = expand_known_events_v7(compact_known_events)
         except V2ModelContextCompactionError as exc:
             fail(exc.code)
 
@@ -841,6 +870,7 @@ def _known_events(
     task_at_seq: int | None,
     current_round_no: int,
     schema_version: int,
+    future_events_out: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     speech_by_ref = {
         str(item.get("source_event_id")): item.get("speech")
@@ -851,6 +881,15 @@ def _known_events(
     for index, source_event in enumerate(public_events, start=1):
         record_seq = _positive_int(source_event.get("record_seq"))
         if task_at_seq is not None and record_seq is not None and record_seq > task_at_seq:
+            if future_events_out is not None:
+                future_events_out.append(
+                    {
+                        "event_ref": str(
+                            source_event.get("source_event_id") or f"public_event_{index}"
+                        ),
+                        "kind": str(source_event.get("kind") or "unknown"),
+                    }
+                )
             continue
         item = dict(source_event)
         statement_ref = item.pop("statement_ref", None)
@@ -881,6 +920,15 @@ def _known_events(
         if known_at_seq is None and not historical:
             known_at_seq = task_at_seq
         if task_at_seq is not None and known_at_seq is not None and known_at_seq > task_at_seq:
+            if future_events_out is not None:
+                future_events_out.append(
+                    {
+                        "event_ref": (
+                            fact_id if isinstance(fact_id, str) else f"current_private_fact_{index}"
+                        ),
+                        "kind": str(fact.get("fact_type") or "private_judge_fact"),
+                    }
+                )
             continue
         payload = fact.get("payload")
         payload = dict(payload) if isinstance(payload, dict) else payload
@@ -1261,14 +1309,13 @@ def _private_fact_occurrence(payload: Any, *, current_round_no: int) -> dict[str
     return {"period": "current_action", "round_no": current_round_no}
 
 
-def _v12_projection_metadata(
+def _v13_projection_metadata(
     *,
     ledger: dict[str, Any],
     model_view_metadata: dict[str, Any],
     projected_context: dict[str, Any],
     selected_events: list[dict[str, Any]],
-    source_event_count: int,
-    future_filtered_event_count: int,
+    selector_audit: dict[str, Any],
     questions: list[dict[str, Any]],
     relations: list[dict[str, Any]],
     current_round_no: int,
@@ -1354,10 +1401,12 @@ def _v12_projection_metadata(
         "ledger_claim_count": len(ledger_claims),
         "ledger_question_count": len(ledger_questions),
         "ledger_relation_count": len(ledger_relations),
-        "source_event_count": source_event_count,
+        "source_event_count": selector_audit["source_count"],
         "emitted_event_count": len(selected_events),
-        "future_filtered_event_count": future_filtered_event_count,
+        "future_filtered_event_count": selector_audit["future_filtered_count"],
+        "selector_omitted_event_count": selector_audit["omitted_count"],
         "budget_dropped_event_count": 0,
+        "selector": selector_audit,
         "known_event_record_seq_min": min(selected_sequences, default=None),
         "known_event_record_seq_max": max(selected_sequences, default=None),
         "source_claim_candidate_count": source_claim_count,
@@ -1399,7 +1448,7 @@ def _v12_projection_metadata(
         "derivation_rejections": derivation_rejections,
     }
     metadata.update(
-        build_known_events_v6_compaction_metadata(
+        build_known_events_v7_compaction_metadata(
             canonical_known_events,
             compact_known_events,
         )
@@ -1459,7 +1508,7 @@ def model_prompt_metadata(
     if compact_known_events.get("schema_version") != KNOWN_EVENTS_SCHEMA_VERSION:
         raise ValueError("unsupported_known_events_schema_version")
     try:
-        known_events = expand_known_events_v6(compact_known_events)
+        known_events = expand_known_events_v7(compact_known_events)
     except V2ModelContextCompactionError as exc:
         raise ValueError("unsupported_known_events_schema_version") from exc
     events = known_events.get("events")
@@ -2033,6 +2082,201 @@ def build_public_match_state(
         "eliminated_player_count": len(eliminated_player_ids),
         "eliminated_player_ids": eliminated_player_ids,
         "identity_information_included": False,
+    }
+
+
+def build_private_round_memory_action_context(
+    *,
+    game_id: str,
+    action_id: str,
+    phase_id: str,
+    round_no: int,
+    batch_id: str,
+    source_cutoff_record_seq: int,
+    player_id: str,
+    seat: int,
+    role_key: str,
+    team: str,
+    persona: dict[str, Any],
+    alive: bool,
+    sheriff_player_id: str | None,
+    sheriff_badge_state: str,
+    rule: dict[str, Any],
+    max_rounds: int,
+    player_state: dict[str, Any] | None,
+    players: Iterable[Any],
+    private_facts: Iterable[dict[str, Any]],
+    public_history: Iterable[dict[str, Any]],
+    previous_memory_snapshot: dict[str, Any] | None,
+    previous_memory_fact_id: str | None,
+    previous_memory_source_cutoff_record_seq: int | None,
+    memory_source_refs: Iterable[str],
+    memory_source_refs_sha256: str,
+) -> dict[str, Any]:
+    """Build the exact durable context for one rolling private-memory action."""
+
+    objective = private_round_memory_objective(round_no)
+    return {
+        "schema_version": 1,
+        "action_id": action_id,
+        "action_type": "private_round_memory",
+        "game_id": game_id,
+        "phase_id": phase_id,
+        "actor": {"kind": "player", "id": player_id},
+        "objective": objective,
+        "output_contract": private_round_memory_output_contract(),
+        "influence": {
+            "schema_version": 1,
+            "status": "disabled",
+            "captured_at": None,
+            "strength": 0,
+            "signals": [],
+        },
+        **build_private_round_memory_source_context(
+            round_no=round_no,
+            batch_id=batch_id,
+            source_cutoff_record_seq=source_cutoff_record_seq,
+            player_id=player_id,
+            seat=seat,
+            role_key=role_key,
+            team=team,
+            persona=persona,
+            alive=alive,
+            sheriff_player_id=sheriff_player_id,
+            sheriff_badge_state=sheriff_badge_state,
+            rule=rule,
+            max_rounds=max_rounds,
+            player_state=player_state,
+            players=players,
+            private_facts=private_facts,
+            public_history=public_history,
+            previous_memory_snapshot=previous_memory_snapshot,
+            previous_memory_fact_id=previous_memory_fact_id,
+            previous_memory_source_cutoff_record_seq=(
+                previous_memory_source_cutoff_record_seq
+            ),
+            memory_source_refs=memory_source_refs,
+            memory_source_refs_sha256=memory_source_refs_sha256,
+        ),
+    }
+
+
+def build_private_round_memory_source_context(
+    *,
+    round_no: int,
+    batch_id: str,
+    source_cutoff_record_seq: int,
+    player_id: str,
+    seat: int,
+    role_key: str,
+    team: str,
+    persona: dict[str, Any],
+    alive: bool,
+    sheriff_player_id: str | None,
+    sheriff_badge_state: str,
+    rule: dict[str, Any],
+    max_rounds: int,
+    player_state: dict[str, Any] | None,
+    players: Iterable[Any],
+    private_facts: Iterable[dict[str, Any]],
+    public_history: Iterable[dict[str, Any]],
+    previous_memory_snapshot: dict[str, Any] | None,
+    previous_memory_fact_id: str | None,
+    previous_memory_source_cutoff_record_seq: int | None,
+    memory_source_refs: Iterable[str],
+    memory_source_refs_sha256: str,
+) -> dict[str, Any]:
+    facts = [dict(item) for item in private_facts]
+    player_list = tuple(players)
+    if normalize_role_key(role_key) == "werewolf":
+        facts.append(
+            {
+                "fact_type": "living_werewolf_teammates",
+                "payload": [
+                    str(player.player_id)
+                    for player in player_list
+                    if bool(player.alive)
+                    and normalize_role_key(player.role_key) == "werewolf"
+                    and str(player.player_id) != player_id
+                ],
+            }
+        )
+    return {
+        "round_no": round_no,
+        **build_actor_information(
+            player_id=player_id,
+            seat=seat,
+            role_key=role_key,
+            team=team,
+            persona=persona,
+            alive=alive,
+            sheriff_player_id=sheriff_player_id,
+            sheriff_badge_state=sheriff_badge_state,
+            rule=rule,
+            player_state=player_state,
+            private_facts=facts,
+            current_action_type="private_round_memory",
+        ),
+        "private_authoritative_facts": private_authoritative_facts(
+            facts,
+            owner_scope="player",
+            owner_id=player_id,
+        ),
+        "public_match_state": build_public_match_state(
+            round_no=round_no,
+            players=player_list,
+        ),
+        "candidates": [],
+        "public_history": [dict(item) for item in public_history],
+        "sheriff_player_id": sheriff_player_id,
+        "public_rule_contract": build_public_rule_contract(
+            rule=rule,
+            max_rounds=max_rounds,
+        ),
+        "private_memory_batch_id": batch_id,
+        "public_cutoff_record_seq": source_cutoff_record_seq,
+        "memory_round_no": round_no,
+        "memory_visibility": "actor_only",
+        "rolling_memory_schema_version": 2,
+        "previous_memory_snapshot": (
+            dict(previous_memory_snapshot)
+            if isinstance(previous_memory_snapshot, dict)
+            else None
+        ),
+        "previous_memory_fact_id": previous_memory_fact_id,
+        "previous_memory_source_cutoff_record_seq": (
+            previous_memory_source_cutoff_record_seq
+        ),
+        "memory_source_refs": list(memory_source_refs),
+        "memory_source_refs_sha256": memory_source_refs_sha256,
+        "batch_id": batch_id,
+        "projection_at_seq": source_cutoff_record_seq,
+    }
+
+
+def private_round_memory_objective(round_no: int) -> str:
+    return (
+        f"生成仅供你本人后续决策使用的第{round_no}轮滚动私有记忆快照。"
+        "用上一份主观记忆、本轮新增事件和当前硬事实更新整份记忆；"
+        "输出会完整替换运行时上一快照，不要只总结本轮。"
+        "保留仍重要的主要判断和下一轮待验证事项，删除已过时内容；"
+        "不得编造未知身份或结果，使用第一人称并保持精简。"
+    )
+
+
+def private_round_memory_output_contract() -> dict[str, Any]:
+    return {
+        "kind": "speech",
+        "presentation_kind": "private_round_memory",
+        "language": "zh-CN",
+        "speech": {
+            "type": "string",
+            "mode": "required",
+            "min_length": 1,
+            "max_chars": 400,
+            "max_sentences": 4,
+        },
+        "required_fields": ["speech"],
     }
 
 

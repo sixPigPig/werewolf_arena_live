@@ -3,19 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 
-MODEL_CONTEXT_SCHEMA_VERSION = 12
-PROMPT_TEMPLATE_VERSION = 5
-# Runtime support is deliberately exact. V11 prompt versions remain readable
-# history, but a V11 snapshot must never resume under the V12 encoder/prompt.
+MODEL_CONTEXT_SCHEMA_VERSION = 13
+PROMPT_TEMPLATE_VERSION = 6
+# Runtime support is deliberately exact. Historical contracts may remain
+# readable for diagnostics, but no older snapshot may resume under V13.
 LEGACY_PROMPT_TEMPLATE_VERSIONS: frozenset[int] = frozenset()
 SUPPORTED_PROMPT_TEMPLATE_VERSIONS = frozenset({PROMPT_TEMPLATE_VERSION})
 MODEL_PROMPT_SCHEMA_VERSION = MODEL_CONTEXT_SCHEMA_VERSION
-KNOWN_EVENTS_SCHEMA_VERSION = 6
+KNOWN_EVENTS_SCHEMA_VERSION = 7
 PUBLIC_TIMELINE_SCHEMA_VERSION = 1
 DISCOURSE_LEDGER_SCHEMA_VERSION = 5
 CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION = DISCOURSE_LEDGER_SCHEMA_VERSION
 DISCOURSE_MODEL_VIEW_SCHEMA_VERSION = 5
-MODEL_VIEW_SELECTOR_VERSION = 2
+MODEL_VIEW_SELECTOR_VERSION = 3
 
 _CONTRACT_KEY = "model_context_contract"
 
@@ -89,7 +89,7 @@ def is_historical_v11_model_context_contract(
         "known_events_schema_version": HISTORICAL_V11_KNOWN_EVENTS_SCHEMA_VERSION,
         "ledger_schema_version": CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
         "model_view_schema_version": DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
-        "model_view_selector_version": MODEL_VIEW_SELECTOR_VERSION,
+        "model_view_selector_version": 2,
     }
     for key, value in expected.items():
         actual = contract.get(key)

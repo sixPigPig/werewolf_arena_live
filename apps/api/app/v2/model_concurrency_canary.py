@@ -12,14 +12,15 @@ from typing import Any, Iterable, Sequence
 
 from app.v2.model_client import build_model_request_payload
 from app.v2.model_context_compaction import (
-    build_known_events_v6_compaction_metadata,
-    encode_known_events_v6,
+    build_known_events_v7_compaction_metadata,
+    encode_known_events_v7,
 )
 from app.v2.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
+from app.v2.model_context_selector import select_known_events_v13
 from app.v2.model_parameters import (
     V2FrozenModelParametersError,
     validate_frozen_model_parameters,
@@ -36,16 +37,16 @@ E1_CANARY_GLOBAL_REQUEST_LIMIT = 770
 E1_CANARY_GLOBAL_WALL_SECONDS = 14 * 60 * 60
 E1_CANARY_GLOBAL_CONFIGURED_OUTPUT_TOKENS = 6_400_000
 E1_CANARY_GLOBAL_ACTUAL_TOKENS = 12_000_000
-E1_CANARY_PINNED_CORPUS_SHA256 = "5049b7664ce5573956ef012a3116f35fde23c9891181fad6c89d430f3f3fc758"
+E1_CANARY_PINNED_CORPUS_SHA256 = "544587d04353c815561f044cf4cee4f060b8dda3d82fab976e3d602bd1f8390a"
 E1_CANARY_PINNED_SCHEDULE_SHA256 = (
-    "2291a6571f3ebf5ddb11b1faa4f8b819b1de77f54bdea7a5bbfdcccebb11e140"
+    "99d467bcf901f1ab09f2b55b284159334e8e2ae4474e3d5fb5b7e5f9e05f67ea"
 )
 
 DEFAULT_E1_CANARY_CORPUS_PATH = (
     Path(__file__).resolve().parents[2]
     / "resources"
     / "v2-model-canary"
-    / "seat_only_v12_workload_v1.json"
+    / "seat_only_v13_workload_v1.json"
 )
 
 _RESPONSE_KINDS = frozenset({"boolean", "speech", "target"})
@@ -341,6 +342,18 @@ def load_e1_canary_corpus(
     }
     if set(raw) != expected_keys or raw.get("schema_version") != E1_CANARY_SCHEMA_VERSION:
         _fail("canary_corpus_contract_unsupported")
+    contexts_value = raw.get("contexts")
+    if isinstance(contexts_value, list) and any(
+        isinstance(item, dict)
+        and isinstance(item.get("action_context"), dict)
+        and (
+            item["action_context"].get("model_context_schema_version")
+            != MODEL_CONTEXT_SCHEMA_VERSION
+            or item["action_context"].get("prompt_template_version") != PROMPT_TEMPLATE_VERSION
+        )
+        for item in contexts_value
+    ):
+        _fail("canary_corpus_model_context_contract_unsupported")
 
     corpus_id = _non_empty_string(raw.get("corpus_id"), "canary_corpus_id_invalid")
     seed = _positive_int(raw.get("seed"), "canary_seed_invalid")
@@ -883,12 +896,8 @@ def _parse_known_event_corpora(value: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(canonical, dict):
             _fail("canary_known_event_corpus_shape")
         _validate_seat_only_context(canonical)
-        compact = encode_known_events_v6(canonical)
-        metadata = build_known_events_v6_compaction_metadata(canonical, compact)
         output[corpus_ref] = {
             "canonical": deepcopy(canonical),
-            "compact": compact,
-            "metadata": metadata,
         }
     return output
 
@@ -932,12 +941,52 @@ def _parse_contexts(
         action_context = deepcopy(action_context)
         if "known_events" in action_context:
             _fail("canary_action_context_known_events_embedded")
-        action_context["known_events"] = deepcopy(known_events["compact"])
         if (
             action_context.get("model_context_schema_version") != MODEL_CONTEXT_SCHEMA_VERSION
             or action_context.get("prompt_template_version") != PROMPT_TEMPLATE_VERSION
         ):
             _fail("canary_action_context_contract_unsupported")
+        canonical_source = known_events["canonical"]
+        task = action_context.get("task")
+        state = action_context.get("state")
+        if not isinstance(task, dict) or not isinstance(state, dict):
+            _fail("canary_action_context_task_state_invalid")
+        actor_ref = task.get("actor_id")
+        current_round_no = state.get("current_round_no", state.get("round_no"))
+        if not isinstance(actor_ref, str) or not actor_ref:
+            _fail("canary_action_context_actor_ref_invalid")
+        if (
+            not isinstance(current_round_no, int)
+            or isinstance(current_round_no, bool)
+            or current_round_no <= 0
+        ):
+            _fail("canary_action_context_round_invalid")
+        candidates_value = action_context.get("candidates")
+        candidates = candidates_value if isinstance(candidates_value, list) else []
+        candidate_refs = [
+            candidate["player_id"]
+            for candidate in candidates
+            if isinstance(candidate, dict) and isinstance(candidate.get("player_id"), str)
+        ]
+        selection = select_known_events_v13(
+            canonical_source.get("events", []),
+            actor_ref=actor_ref,
+            current_round_no=current_round_no,
+            candidate_refs=candidate_refs,
+            model_view=canonical_source,
+        )
+        canonical_known_events = {
+            "schema_version": canonical_source.get("schema_version"),
+            "events": selection.events,
+            "questions": [],
+            "relations": [],
+        }
+        compact_known_events = encode_known_events_v7(canonical_known_events)
+        compaction_metadata = build_known_events_v7_compaction_metadata(
+            canonical_known_events,
+            compact_known_events,
+        )
+        action_context["known_events"] = compact_known_events
         response = action_context.get("response")
         if not isinstance(response, dict) or response.get("kind") != response_kind:
             _fail("canary_action_context_response_mismatch")
@@ -948,12 +997,12 @@ def _parse_contexts(
                 response_kind=response_kind,
                 action_context=action_context,
                 canonical_known_events_char_count=int(
-                    known_events["metadata"]["canonical_serialized_char_count"]
+                    compaction_metadata["canonical_serialized_char_count"]
                 ),
                 compact_known_events_char_count=int(
-                    known_events["metadata"]["compact_serialized_char_count"]
+                    compaction_metadata["compact_serialized_char_count"]
                 ),
-                canonical_known_events_sha256=str(known_events["metadata"]["canonical_sha256"]),
+                canonical_known_events_sha256=str(compaction_metadata["canonical_sha256"]),
             )
         )
     if {context.response_kind for context in output} != _RESPONSE_KINDS:

@@ -540,14 +540,14 @@ describe("V2 game record parsers", () => {
       questions: [],
       relations: [],
     });
-    expect(() =>
+    expect(
       parseV2ModelRequest({
         ...rawRequest,
         model_context_schema_version: 12,
         prompt_template_version: 5,
         prompt_projection: { ...v12Projection, compaction_ratio: "0.625" },
-      }),
-    ).toThrow("V2 对局记录数据不完整或格式错误");
+      }).prompt_projection,
+    ).toMatchObject({ compaction_ratio: "0.625" });
     expect(
       parseV2ModelRequest({
         ...rawRequest,
@@ -571,6 +571,79 @@ describe("V2 game record parsers", () => {
         prompt_projection: { compaction_ratio: "unknown-contract-raw" },
       }).prompt_projection,
     ).toEqual({ compaction_ratio: "unknown-contract-raw" });
+    const v13Projection = {
+      ...v12Projection,
+      model_context_schema_version: 13,
+      prompt_template_version: 6,
+      known_events_schema_version: 7,
+      model_view_selector_version: 3,
+      dropped_event_refs: undefined,
+      retained_event_refs: ["1442"],
+      lossless_scope: "selector_retained_projection",
+      selector: {
+        version: 3,
+        source_count: 3,
+        retained_count: 1,
+        omitted_count: 1,
+        future_filtered_count: 1,
+        retained: [
+          {
+            event_ref: "1442",
+            category: "current_round",
+            reason: "current_round_raw_event",
+          },
+        ],
+        omitted: [
+          {
+            event_ref: "1403",
+            category: "ordinary_history",
+            reason: "old_non_salient_player_statement",
+          },
+        ],
+        future_filtered: [
+          { event_ref: "1499", reason: "event_after_action_cutoff" },
+        ],
+        latest_actor_memory_ref: "memory:2",
+        latest_actor_memory_cutoff_seq: 1400,
+        latest_actor_memory_hash: "b".repeat(64),
+        source_type_counts: { player_statement: 3 },
+        retained_type_counts: { player_statement: 1 },
+        omitted_type_counts: { player_statement: 1 },
+      },
+    };
+    const v13Request = parseV2ModelRequest({
+      ...rawRequest,
+      prompt_schema_version: 13,
+      model_context_schema_version: 13,
+      prompt_template_version: 6,
+      model_view_selector_version: 3,
+      prompt_projection: v13Projection,
+    });
+    expect(v13Request.prompt_projection).toMatchObject({
+      known_events_schema_version: 7,
+      lossless_scope: "selector_retained_projection",
+      selector: {
+        source_count: 3,
+        retained_count: 1,
+        omitted_count: 1,
+        future_filtered_count: 1,
+        latest_actor_memory_cutoff_seq: 1400,
+        latest_actor_memory_hash: "b".repeat(64),
+      },
+    });
+    expect(() =>
+      parseV2ModelRequest({
+        ...rawRequest,
+        prompt_schema_version: 13,
+        model_context_schema_version: 13,
+        prompt_template_version: 6,
+        model_view_selector_version: 3,
+        prompt_projection: {
+          ...v13Projection,
+          selector: { ...v13Projection.selector, retained_count: 2 },
+        },
+      }),
+    ).toThrow("V2 对局记录数据不完整或格式错误");
     expect(() =>
       parseV2ModelRequest({
         ...rawRequest,

@@ -92,12 +92,12 @@ from app.v2.event_contract import (
 from app.v2.model_client import V2ModelError, build_model_request_payload
 from app.v2.model_context_compaction import (
     V2ModelContextCompactionError,
-    expand_known_events_v6,
+    canonical_known_events_v5_sha256,
+    expand_known_events_v7,
 )
 from app.v2.model_context_contract import (
     CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
-    HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION,
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     MODEL_VIEW_SELECTOR_VERSION,
@@ -1409,18 +1409,22 @@ def _admin_request_model_context(
 def _admin_expanded_known_events(
     request_payload: dict[str, Any] | None,
     *,
+    prompt_schema_version: int | None,
     model_context_schema_version: int | None,
     prompt_template_version: int | None,
+    model_view_selector_version: int | None,
     prompt_projection: dict[str, Any] | None,
 ) -> tuple[
     dict[str, Any] | None,
     Literal["verified", "not_applicable", "unavailable", "invalid"],
 ]:
-    if model_context_schema_version == HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION:
-        return None, "not_applicable"
     if model_context_schema_version is None:
         return None, "unavailable"
-    if model_context_schema_version != MODEL_CONTEXT_SCHEMA_VERSION:
+    if (
+        prompt_schema_version != MODEL_CONTEXT_SCHEMA_VERSION
+        or model_context_schema_version != MODEL_CONTEXT_SCHEMA_VERSION
+        or model_view_selector_version != MODEL_VIEW_SELECTOR_VERSION
+    ):
         return None, "invalid"
     if prompt_template_version != PROMPT_TEMPLATE_VERSION:
         return None, "invalid"
@@ -1449,9 +1453,43 @@ def _admin_expanded_known_events(
     if not isinstance(known_events, dict):
         return None, "invalid"
     try:
-        return expand_known_events_v6(known_events), "verified"
+        expanded = expand_known_events_v7(known_events)
     except V2ModelContextCompactionError:
         return None, "invalid"
+    selector = prompt_projection.get("selector")
+    expanded_events = expanded.get("events")
+    retained_refs = prompt_projection.get("retained_event_refs")
+    if (
+        not isinstance(selector, dict)
+        or not isinstance(expanded_events, list)
+        or not isinstance(retained_refs, list)
+    ):
+        return None, "invalid"
+    expanded_refs = [
+        event.get("event_ref") for event in expanded_events if isinstance(event, dict)
+    ]
+    selector_retained = selector.get("retained")
+    selector_refs = (
+        [entry.get("event_ref") for entry in selector_retained if isinstance(entry, dict)]
+        if isinstance(selector_retained, list)
+        else None
+    )
+    if (
+        len(expanded_refs) != len(expanded_events)
+        or any(not isinstance(ref, str) for ref in expanded_refs)
+        or any(not isinstance(ref, str) for ref in retained_refs)
+        or selector_refs is None
+        or any(not isinstance(ref, str) for ref in selector_refs)
+        or selector.get("retained_count") != len(expanded_refs)
+        or len(set(expanded_refs)) != len(expanded_refs)
+        or set(expanded_refs) != set(retained_refs)
+        or set(expanded_refs) != set(selector_refs)
+        or prompt_projection.get("emitted_event_count") != len(expanded_refs)
+        or prompt_projection.get("canonical_sha256")
+        != canonical_known_events_v5_sha256(expanded)
+    ):
+        return None, "invalid"
+    return expanded, "verified"
 
 
 def _admin_model_requests(
@@ -1620,6 +1658,18 @@ def _admin_model_requests(
             else None
         )
         request_payload = payload.get("request_payload")
+        prompt_schema_version = (
+            payload.get("prompt_schema_version")
+            if isinstance(payload.get("prompt_schema_version"), int)
+            and not isinstance(payload.get("prompt_schema_version"), bool)
+            else None
+        )
+        model_view_selector_version = (
+            payload.get("model_view_selector_version")
+            if isinstance(payload.get("model_view_selector_version"), int)
+            and not isinstance(payload.get("model_view_selector_version"), bool)
+            else None
+        )
         input_source: Literal["persisted", "reconstructed", "unavailable"]
         if isinstance(request_payload, dict):
             input_source = "persisted"
@@ -1647,8 +1697,10 @@ def _admin_model_requests(
         expanded_known_events, known_events_expansion_status = (
             _admin_expanded_known_events(
                 request_payload,
+                prompt_schema_version=prompt_schema_version,
                 model_context_schema_version=model_context_schema_version,
                 prompt_template_version=prompt_template_version,
+                model_view_selector_version=model_view_selector_version,
                 prompt_projection=prompt_projection,
             )
             if attempt_id == expanded_known_events_attempt_id
@@ -1998,18 +2050,10 @@ def _admin_model_requests(
                     if isinstance(payload.get("judge_configuration_version"), int)
                     else None
                 ),
-                prompt_schema_version=(
-                    payload.get("prompt_schema_version")
-                    if isinstance(payload.get("prompt_schema_version"), int)
-                    else None
-                ),
+                prompt_schema_version=prompt_schema_version,
                 model_context_schema_version=model_context_schema_version,
                 prompt_template_version=prompt_template_version,
-                model_view_selector_version=(
-                    payload.get("model_view_selector_version")
-                    if isinstance(payload.get("model_view_selector_version"), int)
-                    else None
-                ),
+                model_view_selector_version=model_view_selector_version,
                 prompt_projection=prompt_projection,
                 output_enforcement=(
                     payload.get("output_enforcement")

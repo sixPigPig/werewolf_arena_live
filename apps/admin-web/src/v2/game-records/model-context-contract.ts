@@ -1,8 +1,7 @@
 import type { V2ModelRequest } from "@/v2/game-records/types";
 
 export type V2ModelContextPresentationKind =
-  | "v11_canonical"
-  | "v12_compact"
+  | "v13_memory"
   | "unsupported";
 
 export type V2ModelContextContractEnvelope = Pick<
@@ -11,6 +10,7 @@ export type V2ModelContextContractEnvelope = Pick<
   | "known_events_expansion_status"
   | "model_context_schema_version"
   | "model_view_selector_version"
+  | "prompt_schema_version"
   | "prompt_projection"
   | "prompt_template_version"
   | "request_payload"
@@ -26,42 +26,28 @@ export function classifyV2ModelContextContract(
   const knownEvents = isRecord(promptContext?.known_events)
     ? promptContext.known_events
     : null;
-  const commonTupleMatches =
+  if (
     projection !== null &&
-    numericField(projection, "ledger_schema_version") === 5 &&
-    numericField(projection, "model_view_schema_version") === 5 &&
-    numericField(projection, "model_view_selector_version") === 2 &&
-    request.model_view_selector_version === 2;
-  if (
-    commonTupleMatches &&
-    request.model_context_schema_version === 11 &&
-    (request.prompt_template_version === 3 ||
-      request.prompt_template_version === 4) &&
-    numericField(projection, "model_context_schema_version") === 11 &&
-    numericField(projection, "prompt_template_version") ===
-      request.prompt_template_version &&
-    numericField(projection, "known_events_schema_version") === 5 &&
-    promptContext?.model_context_schema_version === 11 &&
-    promptContext.prompt_template_version === request.prompt_template_version &&
-    isCanonicalKnownEventsV5(knownEvents)
-  ) {
-    return "v11_canonical";
-  }
-  if (
-    commonTupleMatches &&
-    request.model_context_schema_version === 12 &&
-    request.prompt_template_version === 5 &&
+    request.prompt_schema_version === 13 &&
+    request.model_context_schema_version === 13 &&
+    request.prompt_template_version === 6 &&
+    request.model_view_selector_version === 3 &&
     request.known_events_expansion_status === "verified" &&
     isCanonicalKnownEventsV5(request.expanded_known_events) &&
-    numericField(projection, "model_context_schema_version") === 12 &&
-    numericField(projection, "prompt_template_version") === 5 &&
-    numericField(projection, "known_events_schema_version") === 6 &&
-    promptContext?.model_context_schema_version === 12 &&
-    promptContext.prompt_template_version === 5 &&
-    knownEvents?.schema_version === 6 &&
+    numericField(projection, "model_context_schema_version") === 13 &&
+    numericField(projection, "prompt_template_version") === 6 &&
+    numericField(projection, "known_events_schema_version") === 7 &&
+    numericField(projection, "ledger_schema_version") === 5 &&
+    numericField(projection, "model_view_schema_version") === 5 &&
+    numericField(projection, "model_view_selector_version") === 3 &&
+    isRecord(projection.selector) &&
+    projection.selector.version === 3 &&
+    promptContext?.model_context_schema_version === 13 &&
+    promptContext.prompt_template_version === 6 &&
+    knownEvents?.schema_version === 7 &&
     knownEvents.encoding === "lossless_refs_v1"
   ) {
-    return "v12_compact";
+    return "v13_memory";
   }
   return "unsupported";
 }

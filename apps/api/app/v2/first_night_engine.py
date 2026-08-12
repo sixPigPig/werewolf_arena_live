@@ -1973,6 +1973,15 @@ class V2NightEngine:
             game_id=state.game_id,
             player_id=player.player_id,
         )
+        has_actor_memory = any(
+            isinstance(item, dict) and item.get("fact_type") == "private_round_memory"
+            for item in historical_private_facts
+        )
+        memory_gap_context = (
+            {"unarchived_memory_source_cutoff_record_seq": 0}
+            if state.round_no > 1 and not has_actor_memory
+            else {}
+        )
         current_action_knowledge = {
             fact_type: payload
             for fact_type, payload in knowledge.items()
@@ -2081,6 +2090,7 @@ class V2NightEngine:
                     if batch is not None
                     else self._repository.public_history(state.game_id)
                 ),
+                **memory_gap_context,
                 **(
                     {
                         "night_parallel_batch_id": batch.batch_id,

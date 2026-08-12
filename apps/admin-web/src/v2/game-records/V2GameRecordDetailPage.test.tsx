@@ -759,6 +759,87 @@ const v12Detail = {
   ],
 };
 
+const v13KnownEvents = {
+  ...v12KnownEvents,
+  schema_version: 7,
+};
+
+const v13Detail = {
+  ...v12Detail,
+  title: "V13 真人记忆投影审计验收",
+  model_requests: [
+    {
+      ...v12Detail.model_requests[0],
+      prompt_schema_version: 13,
+      model_context_schema_version: 13,
+      prompt_template_version: 6,
+      model_view_selector_version: 3,
+      prompt_projection: {
+        ...v12Detail.model_requests[0].prompt_projection,
+        model_context_schema_version: 13,
+        prompt_template_version: 6,
+        known_events_schema_version: 7,
+        model_view_selector_version: 3,
+        dropped_event_refs: undefined,
+        lossless_scope: "selector_retained_projection",
+        selector: {
+          version: 3,
+          source_count: 4,
+          retained_count: 2,
+          omitted_count: 1,
+          future_filtered_count: 1,
+          retained: [
+            {
+              event_ref: "1403",
+              category: "current_round",
+              reason: "current_round_raw_event",
+            },
+            {
+              event_ref: "1442",
+              category: "current_round",
+              reason: "current_round_raw_event",
+            },
+          ],
+          omitted: [
+            {
+              event_ref: "1200",
+              category: "ordinary_history",
+              reason: "old_non_salient_player_statement",
+            },
+          ],
+          future_filtered: [
+            { event_ref: "1499", reason: "event_after_action_cutoff" },
+          ],
+          latest_actor_memory_ref: "memory:seat_7:2",
+          latest_actor_memory_cutoff_seq: 1398,
+          latest_actor_memory_hash: "c".repeat(64),
+          source_type_counts: { player_statement: 4 },
+          retained_type_counts: { player_statement: 2 },
+          omitted_type_counts: { player_statement: 1 },
+        },
+      },
+      request_payload: {
+        ...v12Detail.model_requests[0].request_payload,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `请执行这个实时动作：${JSON.stringify({
+                  model_context_schema_version: 13,
+                  prompt_template_version: 6,
+                  known_events: v13KnownEvents,
+                })}`,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+};
+
 const privateInformationDetail = {
   ...detail,
   title: "私有信息归属验收",
@@ -1878,7 +1959,7 @@ describe("V2 game record detail workspace", () => {
     );
   });
 
-  it("separates V11 source events, derived indexes, rejections and output enforcement", async () => {
+  it("renders V11 through unsupported raw JSON", async () => {
     stubRecordFetch(v11Detail);
     const user = userEvent.setup();
     renderPage();
@@ -1891,72 +1972,29 @@ describe("V2 game record detail workspace", () => {
     );
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
-    expect(within(inputPanel).getByText("V11 历史合同（只读）")).toBeVisible();
-    const audit = within(inputPanel).getByRole("region", {
-      name: "V11 上下文投影审计",
-    });
-
-    expect(within(audit).getByText("审计字段完整")).toBeVisible();
-    expect(within(audit).getByText("源 2")).toBeVisible();
-    expect(within(audit).getAllByText("可见 2")).not.toHaveLength(0);
-    expect(within(audit).getByText("候选 2")).toBeVisible();
-    expect(within(audit).getByText("拒绝 1")).toBeVisible();
-    expect(within(audit).getByText("容量 0")).toBeVisible();
-    await user.click(
-      within(audit).getByRole("button", {
-        name: /查看被拒绝的派生项（1 项）/,
-      }),
-    );
-    await waitFor(() => expect(within(audit).getByText("402")).toBeVisible());
-    expect(within(audit).getByText("验人声明")).toBeVisible();
-    expect(within(audit).getByText("missing_required_fields")).toBeVisible();
-    expect(within(audit).getByText("target_ref")).toBeVisible();
-    expect(within(audit).getByText("claimed_result")).toBeVisible();
-
-    await user.click(
-      within(inputPanel).getByRole("button", {
-        name: /查看模型实际可见的源事件（2 个）/,
-      }),
-    );
-    await waitFor(() =>
-      expect(
-        within(inputPanel).getByText(
-          "12号原始发言：7号你解释一下昨天为什么投5号。",
-        ),
-      ).toBeVisible(),
-    );
-    await user.click(
-      within(inputPanel).getByRole("button", {
-        name: /查看通过校验的派生索引（3 项）/,
-      }),
-    );
-    await waitFor(() =>
-      expect(within(inputPanel).getByText("阵营声明")).toBeVisible(),
-    );
-    expect(within(inputPanel).getByText("检测到回应")).toBeVisible();
-    expect(within(inputPanel).getByText("对提问的回应")).toBeVisible();
+    expect(
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getByText(/V11 模型上下文合同不受支持/),
+    ).toBeVisible();
+    expect(
+      within(inputPanel).getByLabelText("历史模型输入原始 JSON"),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
-    const enforcement = within(outputPanel).getByRole("region", {
-      name: "Provider 输出约束审计",
-    });
-    expect(within(enforcement).getByText("严格 JSON Schema")).toBeVisible();
     expect(
-      within(enforcement).getByText("提示词 + 应用层校验"),
+      within(outputPanel).getByText(/V11 模型上下文合同不受支持/),
     ).toBeVisible();
     expect(
-      within(enforcement).getByText("未使用 Provider 严格 Schema"),
+      within(outputPanel).getByLabelText("历史模型输出原始 JSON"),
     ).toBeVisible();
-    expect(within(enforcement).getByText("无机械修复")).toBeVisible();
-    expect(within(enforcement).getByText("已接受")).toBeVisible();
-    expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
-    expect(within(outputPanel).getByText("seat_5")).toBeVisible();
   },
     45_000,
   );
 
-  it("renders V12 lossless compaction separately from V11 and unknown contracts", async () => {
+  it("renders V12 through unsupported raw JSON", async () => {
     stubRecordFetch(v12Detail);
     const user = userEvent.setup();
     renderPage();
@@ -1969,78 +2007,73 @@ describe("V2 game record detail workspace", () => {
     );
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
-    const audit = within(inputPanel).getByRole("region", {
-      name: "V12 无损压缩审计",
-    });
-
-    expect(within(audit).getByText("审计字段完整")).toBeVisible();
-    expect(within(audit).getByText("V6")).toBeVisible();
-    expect(within(audit).getByText("lossless_refs_v1")).toBeVisible();
-    expect(within(audit).getByText(/已验证 V5 · 2 个事件/)).toBeVisible();
-    expect(within(audit).getByText("2,000 → 1,200")).toBeVisible();
-    expect(within(audit).getByText("800")).toBeVisible();
-    expect(within(audit).getByText("0.6000（60.00%）")).toBeVisible();
-    expect(within(audit).getByText("2 条 / 43 字符")).toBeVisible();
-    expect(within(audit).getByText("通过")).toBeVisible();
-    expect(within(audit).getByText("2 / 0")).toBeVisible();
-    expect(within(audit).getByText("b".repeat(64))).toBeVisible();
     expect(
-      within(inputPanel).queryByRole("region", {
-        name: "V11 上下文投影审计",
-      }),
-    ).not.toBeInTheDocument();
-
-    await user.click(
-      within(audit).getByRole("button", {
-        name: /查看 V6 默认规则与可读目录/,
-      }),
-    );
-    await waitFor(() =>
-      expect(within(audit).getByText("V6 默认还原规则")).toBeVisible(),
-    );
-    expect(within(audit).getByText("作用域目录（scope_catalog）")).toBeVisible();
-    expect(
-      within(audit).getByText("发生阶段目录（occurrence_catalog）"),
-    ).toBeVisible();
-
-    expect(
-      within(inputPanel).getByText("动作发生前已知事件（V12 无损压缩载荷）"),
+      within(inputPanel).getByText("历史或未知合同仅提供通用 JSON"),
     ).toBeVisible();
     expect(
-      within(inputPanel).getAllByText("scope 1 / occurrence 0"),
-    ).toHaveLength(2);
-    expect(
-      within(inputPanel).getByText("事件 2 / 注解 1 / 提问 1 / 关系 1"),
+      within(inputPanel).getByText(/V12 模型上下文合同不受支持/),
     ).toBeVisible();
-    await user.click(
-      within(inputPanel).getByRole("button", {
-        name: /查看全局顺序的 Compact 事件（2 个）/,
-      }),
-    );
-    await waitFor(() =>
-      expect(
-        within(inputPanel).getByText(
-          "12号原始发言：7号你解释一下昨天为什么投5号。",
-        ),
-      ).toBeVisible(),
-    );
-    await user.click(
-      within(inputPanel).getByRole("button", {
-        name: /查看顶层注解及来源索引（1 项）/,
-      }),
-    );
-    await waitFor(() =>
-      expect(within(inputPanel).getByText("claim_1403_1_team_claim")).toBeVisible(),
-    );
+    expect(
+      within(inputPanel).getByLabelText("历史模型输入原始 JSON"),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
     expect(
-      within(outputPanel).getByRole("region", {
-        name: "Provider 输出约束审计",
+      within(outputPanel).getByText(/V12 模型上下文合同不受支持/),
+    ).toBeVisible();
+    expect(
+      within(outputPanel).getByLabelText("历史模型输出原始 JSON"),
+    ).toBeVisible();
+  });
+
+  it("renders V13 selector, actor memory, and retained-set encoding as separate audits", async () => {
+    stubRecordFetch(v13Detail);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "V13 真人记忆投影审计验收",
       }),
     ).toBeVisible();
-    expect(within(outputPanel).getByText("程序采用结果")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "查看 法官 开场播报" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "模型输入" }));
+    const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
+    const audit = within(inputPanel).getByRole("region", {
+      name: "V13 真人记忆投影审计",
+    });
+
+    expect(within(audit).getByText("源 4")).toBeVisible();
+    expect(within(audit).getByText("保留 2")).toBeVisible();
+    expect(within(audit).getByText("选择器省略 1")).toBeVisible();
+    expect(within(audit).getByText("未来过滤 1")).toBeVisible();
+    expect(within(audit).getByText("memory:seat_7:2")).toBeVisible();
+    expect(within(audit).getByText("#1398")).toBeVisible();
+    expect(within(audit).getByText("c".repeat(64))).toBeVisible();
+    expect(
+      within(audit).getByRole("region", {
+        name: "V7 入选集无损编码审计",
+      }),
+    ).toBeVisible();
+    expect(within(audit).getByText("selector_retained_projection")).toBeVisible();
+
+    await user.click(
+      within(audit).getByRole("button", {
+        name: /查看选择分类与原因（4 项）/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(audit).getByText("old_non_salient_player_statement"),
+      ).toBeVisible(),
+    );
+    expect(within(audit).getByText("event_after_action_cutoff")).toBeVisible();
+    expect(
+      within(inputPanel).getByText("动作发生前已知事件（V13 真人记忆入选载荷）"),
+    ).toBeVisible();
   });
 
   it("falls back to unsupported raw JSON for a backend-rejected V12 hybrid", async () => {
@@ -2082,7 +2115,7 @@ describe("V2 game record detail workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows missing V11 audit fields as unknown instead of guessing", async () => {
+  it("keeps incomplete V11 audit fields inside unsupported raw JSON", async () => {
     stubRecordFetch({
       ...v11Detail,
       title: "V11 缺失审计字段验收",
@@ -2117,14 +2150,17 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("tab", { name: "模型输入" }));
     const inputPanel = screen.getByRole("tabpanel", { name: "模型输入" });
     expect(
-      within(inputPanel).getByText("V11 投影审计信息缺失"),
+      within(inputPanel).getByText(/V11 模型上下文合同不受支持/),
     ).toBeVisible();
-    expect(within(inputPanel).getAllByText(/未知/).length).toBeGreaterThan(0);
+    expect(
+      within(inputPanel).getByLabelText("历史模型输入原始 JSON"),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
-    expect(within(outputPanel).getByText("输出审计信息不完整")).toBeVisible();
-    expect(within(outputPanel).getAllByText(/未知/).length).toBeGreaterThan(0);
+    expect(
+      within(outputPanel).getByText(/V11 模型上下文合同不受支持/),
+    ).toBeVisible();
   });
 
   it("does not present a rejected V11 response as the adopted result", async () => {
@@ -2152,16 +2188,15 @@ describe("V2 game record detail workspace", () => {
     await user.click(screen.getByRole("tab", { name: "模型输出" }));
     const outputPanel = screen.getByRole("tabpanel", { name: "模型输出" });
 
-    expect(within(outputPanel).getByText("已拒绝")).toBeVisible();
     expect(
-      within(outputPanel).getByText(
-        "应用层校验已拒绝该输出，没有最终采用结果",
-      ),
+      within(outputPanel).getByText(/V11 模型上下文合同不受支持/),
     ).toBeVisible();
     expect(
       within(outputPanel).queryByText("程序采用结果"),
     ).not.toBeInTheDocument();
-    expect(within(outputPanel).getByText("查看模型原始返回")).toBeVisible();
+    expect(
+      within(outputPanel).getByLabelText("历史模型输出原始 JSON"),
+    ).toBeVisible();
   });
 
   it("renders historical persisted input as generic raw JSON", async () => {

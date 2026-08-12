@@ -966,7 +966,10 @@ class V2ActionRepository:
         best_effort: bool = False,
         failure_episode_id: str | None = None,
         technical_outcome_record_seq: int | None = None,
-    ) -> None:
+        source_attempt_id: str | None = None,
+        source_model_response_record_seq: int | None = None,
+        provider_request_id: str | None = None,
+    ) -> int:
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
@@ -990,7 +993,7 @@ class V2ActionRepository:
                 game.status = next_live_state
                 game.phase_state = next_phase_state
                 _run(db, claim.run_id).status = next_live_state
-            _append_event(
+            completed = _append_event(
                 db,
                 game=game,
                 run_id=claim.run_id,
@@ -1003,6 +1006,17 @@ class V2ActionRepository:
                     "phase_id": claim.phase_id,
                     **(
                         {
+                            "source_attempt_id": source_attempt_id,
+                            "source_model_response_record_seq": (
+                                source_model_response_record_seq
+                            ),
+                            "provider_request_id": provider_request_id,
+                        }
+                        if source_attempt_id is not None
+                        else {}
+                    ),
+                    **(
+                        {
                             "failure_episode_id": failure_episode_id,
                             "technical_outcome_record_seq": technical_outcome_record_seq,
                         }
@@ -1011,6 +1025,7 @@ class V2ActionRepository:
                     ),
                 },
             )
+            return completed.record_seq
 
     def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
         with self._session_factory.begin() as db:

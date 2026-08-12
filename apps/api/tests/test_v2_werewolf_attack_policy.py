@@ -633,7 +633,13 @@ class _FakeRepository:
         self.knowledge.append(allowed_knowledge)
         return ((f"fact-{activation.occurrence}",), "hash")
 
-    def player_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
+    def player_knowledge(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        at_or_before_record_seq: int | None = None,
+    ) -> list[dict[str, Any]]:
         return []
 
     def public_history(self, game_id: str) -> list[dict[str, Any]]:
@@ -659,6 +665,49 @@ class _FakeActions:
     async def present_player_decision(self, **kwargs: Any) -> bool:
         self.presented.append(kwargs["decision"])
         return True
+
+
+def test_round_two_night_action_marks_missing_first_actor_memory_as_unarchived() -> None:
+    wolf = _player("wolf-1", 1, "werewolf")
+    target = _player("good-2", 2, "villager")
+    state = _state(
+        players=(wolf, target),
+        policy={
+            "resolution": "plurality_rotating_tiebreak",
+            "allow_no_attack": False,
+            "allow_wolf_target": False,
+        },
+        round_no=2,
+    )
+    repository = _FakeRepository()
+    actions = _FakeActions([_decision(target.player_id, "今晚选择2号。")])
+    engine = V2NightEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        day_engine=SimpleNamespace(),
+    )
+    activation = repository.open_activation(
+        state=state,
+        ability_id="werewolf.attack",
+        actor_player_id=wolf.player_id,
+        occurrence=1,
+        audience="god_view",
+    )
+
+    asyncio.run(
+        engine._player_decision(
+            state=state,
+            broadcaster=_FakeBroadcaster(),  # type: ignore[arg-type]
+            activation=activation,
+            player=wolf,
+            candidates=[target],
+            objective="提交本夜袭击选择。",
+            knowledge={},
+            optional=False,
+        )
+    )
+
+    assert actions.specs[0].context["unarchived_memory_source_cutoff_record_seq"] == 0
 
 
 class _ConcurrentPreferenceActions:

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_id": "e1_agent_plan_seat_only_v12_v1",
+  "corpus_id": "e1_agent_plan_seat_only_v13_v1",
   "seed": 20260810,
   "wave_size": 12,
   "expected_attempt_count": 120,
@@ -357,8 +357,8 @@
       "response_kind": "boolean",
       "known_events_ref": "synthetic_two_day_public_history",
       "action_context": {
-        "model_context_schema_version": 12,
-        "prompt_template_version": 5,
+        "model_context_schema_version": 13,
+        "prompt_template_version": 6,
         "task": {
           "type": "werewolf_self_explosion",
           "at_seq": 25,
@@ -395,8 +395,8 @@
       "response_kind": "speech",
       "known_events_ref": "synthetic_two_day_public_history",
       "action_context": {
-        "model_context_schema_version": 12,
-        "prompt_template_version": 5,
+        "model_context_schema_version": 13,
+        "prompt_template_version": 6,
         "task": {
           "type": "day_debate_speech",
           "at_seq": 25,
@@ -427,8 +427,8 @@
       "response_kind": "target",
       "known_events_ref": "synthetic_two_day_public_history",
       "action_context": {
-        "model_context_schema_version": 12,
-        "prompt_template_version": 5,
+        "model_context_schema_version": 13,
+        "prompt_template_version": 6,
         "task": {
           "type": "exile_vote",
           "at_seq": 25,

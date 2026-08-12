@@ -134,6 +134,34 @@ export type V2DerivationRejection = Record<string, unknown> & {
   missing_fields?: string[];
 };
 
+export type V2MemorySelectorAuditEntry = {
+  event_ref: string;
+  category: string;
+  reason: string;
+};
+
+export type V2MemorySelectorFutureFilteredEntry = {
+  event_ref: string;
+  reason: string;
+};
+
+export type V2MemorySelectorAudit = {
+  version: 3;
+  source_count: number;
+  retained_count: number;
+  omitted_count: number;
+  future_filtered_count: number;
+  retained: V2MemorySelectorAuditEntry[];
+  omitted: V2MemorySelectorAuditEntry[];
+  future_filtered: V2MemorySelectorFutureFilteredEntry[];
+  latest_actor_memory_ref: string | null;
+  latest_actor_memory_cutoff_seq: number | null;
+  latest_actor_memory_hash: string | null;
+  source_type_counts: Record<string, number>;
+  retained_type_counts: Record<string, number>;
+  omitted_type_counts: Record<string, number>;
+};
+
 export type V2PromptProjection = Record<string, unknown> & {
   model_context_schema_version?: number | null;
   prompt_template_version?: number | null;
@@ -179,9 +207,10 @@ export type V2PromptProjection = Record<string, unknown> & {
   verbatim_speech_count?: number;
   verbatim_speech_chars?: number;
   retained_event_refs?: string[];
-  dropped_event_refs?: string[];
   canonical_sha256?: string;
   round_trip_verified?: boolean;
+  lossless_scope?: "selector_retained_projection";
+  selector?: V2MemorySelectorAudit;
 };
 
 export type V2OutputEnforcementAudit = {

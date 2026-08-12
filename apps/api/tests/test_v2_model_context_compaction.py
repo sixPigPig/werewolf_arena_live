@@ -13,7 +13,9 @@ from app.v2.model_context_compaction import (
     build_known_events_v6_compaction_metadata,
     canonical_known_events_v5_sha256,
     encode_known_events_v6,
+    encode_known_events_v7,
     expand_known_events_v6,
+    expand_known_events_v7,
 )
 
 
@@ -21,6 +23,16 @@ _F29_SANITIZED_FIXTURE = (
     Path(__file__).parent / "fixtures" / "v2_f29_known_events_v5_sanitized.json"
 )
 _F29_SANITIZED_CANONICAL_SHA256 = "5aa6f7584d8654eb8d94b1035d4213cc4b767d5da2e6b83763b2a67c2b38419a"
+
+
+def test_known_events_v7_is_lossless_for_selector_retained_projection() -> None:
+    canonical = _canonical_known_events_v5()
+
+    compact = encode_known_events_v7(canonical)
+
+    assert compact["schema_version"] == 7
+    assert compact["encoding"] == "lossless_refs_v1"
+    assert expand_known_events_v7(compact) == canonical
 
 
 def _canonical_known_events_v5() -> dict[str, object]:

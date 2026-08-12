@@ -26,6 +26,7 @@ import {
 import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
 import type {
   V2GameRecordEvent,
+  V2MemorySelectorAudit,
   V2ModelRequest,
   V2PromptProjection,
 } from "@/v2/game-records/types";
@@ -131,6 +132,19 @@ const fieldLabels: Record<string, string> = {
   known_events_schema_version: "已知事件版本",
   model_view_selector_version: "模型视图选择器版本",
   known_events: "动作发生前已知事件",
+  selector: "真人记忆选择审计",
+  source_count: "全源事件数",
+  retained_count: "选择器保留数",
+  omitted_count: "选择器省略数",
+  future_filtered_count: "未来事件过滤数",
+  category: "选择分类",
+  latest_actor_memory_ref: "最近角色记忆引用",
+  latest_actor_memory_cutoff_seq: "最近角色记忆截止序号",
+  latest_actor_memory_hash: "最近角色记忆 SHA-256",
+  source_type_counts: "全源类型计数",
+  retained_type_counts: "保留类型计数",
+  omitted_type_counts: "省略类型计数",
+  lossless_scope: "无损声明范围",
   known_at_seq: "获知时记录序号",
   known_event_count: "模型已选事件数",
   known_event_total_count: "完整已知事件数",
@@ -179,7 +193,7 @@ const fieldLabels: Record<string, string> = {
   derivation_rejections: "派生项拒绝明细",
   derivation: "派生校验",
   missing_fields: "缺失字段",
-  reason: "拒绝原因",
+  reason: "原因",
   requested_fields: "请求字段",
   response_status: "回应检测状态",
   source_authority: "源内容权威性",
@@ -374,14 +388,6 @@ export function ReadableModelInput({
           type="warning"
         />
       ) : null}
-      {presentationKind === "v11_canonical" ? (
-        <Alert
-          description="仅按持久化请求中的 Canonical Known Events V5 展示；Admin 不把它改写成 V12，也不推断缺失字段。"
-          showIcon
-          title="V11 历史合同（只读）"
-          type="info"
-        />
-      ) : null}
       <Descriptions
         column={2}
         items={[
@@ -492,16 +498,12 @@ export function ReadableModelInput({
         ]}
         size="small"
       />
-      {presentationKind === "v12_compact" ? (
-        <V12CompactionAudit
-          expandedKnownEvents={request.expanded_known_events}
-          expansionStatus={request.known_events_expansion_status}
-          knownEvents={knownEventsValue}
-          projection={request.prompt_projection}
-        />
-      ) : (
-        <V11ProjectionAudit projection={request.prompt_projection} />
-      )}
+      <V13MemoryAudit
+        expandedKnownEvents={request.expanded_known_events}
+        expansionStatus={request.known_events_expansion_status}
+        knownEvents={knownEventsValue}
+        projection={request.prompt_projection}
+      />
       {knownEvents && request.prompt_projection && hasSectionCharCounts ? (
         <Collapse
           items={[
@@ -930,163 +932,7 @@ function usageConsistencyLabel(
   return "无法判断（unavailable）";
 }
 
-const v11ProjectionAuditFields = [
-  "source_event_count",
-  "emitted_event_count",
-  "future_filtered_event_count",
-  "source_claim_candidate_count",
-  "emitted_claim_count",
-  "out_of_scope_claim_count",
-  "rejected_claim_count",
-  "source_question_count",
-  "current_scope_question_count",
-  "emitted_question_count",
-  "out_of_scope_question_count",
-  "invalid_question_count",
-  "source_relation_count",
-  "emitted_relation_count",
-  "invalid_relation_count",
-  "budget_dropped_event_count",
-] as const;
-
-function V11ProjectionAudit({
-  projection,
-}: {
-  projection: V2PromptProjection | null;
-}) {
-  const missingFields = v11ProjectionAuditFields.filter(
-    (key) => numericField(projection, key) === null,
-  );
-  const hasRejectionDetails =
-    projection !== null &&
-    Object.prototype.hasOwnProperty.call(projection, "derivation_rejections");
-  const rejections = Array.isArray(projection?.derivation_rejections)
-    ? projection.derivation_rejections
-    : null;
-
-  return (
-    <section aria-label="V11 上下文投影审计">
-      <Flex align="center" justify="space-between" wrap>
-        <Typography.Text strong>V11 上下文投影审计</Typography.Text>
-        <Tag color={missingFields.length || !hasRejectionDetails ? "warning" : "success"}>
-          {missingFields.length || !hasRejectionDetails
-            ? "审计字段不完整"
-            : "审计字段完整"}
-        </Tag>
-      </Flex>
-      {missingFields.length || !hasRejectionDetails ? (
-        <Alert
-          description="未记录项统一显示为未知；Admin 不从模型输入反推过滤、拒绝或容量丢弃数量。"
-          showIcon
-          title="V11 投影审计信息缺失"
-          type="warning"
-        />
-      ) : null}
-      <Descriptions
-        column={2}
-        items={[
-          {
-            key: "events",
-            label: "源事件 → 模型可见事件",
-            children: auditFlow(projection, [
-              ["源", "source_event_count"],
-              ["可见", "emitted_event_count"],
-            ]),
-          },
-          {
-            key: "event-filters",
-            label: "事件过滤",
-            children: auditFlow(projection, [
-              ["未来", "future_filtered_event_count"],
-              ["容量", "budget_dropped_event_count"],
-            ]),
-          },
-          {
-            key: "claims",
-            label: "派生声明",
-            children: auditFlow(projection, [
-              ["候选", "source_claim_candidate_count"],
-              ["可见", "emitted_claim_count"],
-              ["作用域外", "out_of_scope_claim_count"],
-              ["拒绝", "rejected_claim_count"],
-            ]),
-          },
-          {
-            key: "questions",
-            label: "派生提问",
-            children: auditFlow(projection, [
-              ["源", "source_question_count"],
-              ["当前作用域", "current_scope_question_count"],
-              ["可见", "emitted_question_count"],
-            ]),
-          },
-          {
-            key: "question-filters",
-            label: "提问过滤",
-            children: auditFlow(projection, [
-              ["作用域外", "out_of_scope_question_count"],
-              ["无效", "invalid_question_count"],
-            ]),
-          },
-          {
-            key: "relations",
-            label: "派生回应关系",
-            children: auditFlow(projection, [
-              ["源", "source_relation_count"],
-              ["可见", "emitted_relation_count"],
-              ["无效", "invalid_relation_count"],
-            ]),
-          },
-        ]}
-        size="small"
-      />
-      {rejections === null ? (
-        <Typography.Text type="secondary">
-          派生项拒绝明细：未知（未记录）
-        </Typography.Text>
-      ) : rejections.length === 0 ? (
-        <Typography.Text type="secondary">派生项拒绝明细：无</Typography.Text>
-      ) : (
-        <Collapse
-          items={[
-            {
-              children: (
-                <div className="v2-readable-list">
-                  {rejections.map((rejection, index) => (
-                    <div
-                      className="v2-readable-list-item"
-                      key={`${rejection.source_event_ref}-${rejection.kind}-${index}`}
-                    >
-                      <ReadableValue value={rejection} />
-                    </div>
-                  ))}
-                </div>
-              ),
-              key: "derivation-rejections",
-              label: `查看被拒绝的派生项（${rejections.length} 项）`,
-            },
-          ]}
-          size="small"
-        />
-      )}
-    </section>
-  );
-}
-
-const v12CompactionAuditFields = [
-  "canonical_serialized_char_count",
-  "compact_serialized_char_count",
-  "compaction_saved_chars",
-  "compaction_ratio",
-  "verbatim_speech_count",
-  "verbatim_speech_chars",
-  "retained_event_refs",
-  "dropped_event_refs",
-  "canonical_sha256",
-  "round_trip_verified",
-] as const;
-
-function V12CompactionAudit({
+function V13MemoryAudit({
   expandedKnownEvents,
   expansionStatus,
   knownEvents,
@@ -1097,7 +943,173 @@ function V12CompactionAudit({
   knownEvents: Record<string, unknown> | null;
   projection: V2PromptProjection | null;
 }) {
-  const missingFields = v12CompactionAuditFields.filter(
+  const selector = projection?.selector ?? null;
+
+  return (
+    <section aria-label="V13 真人记忆投影审计">
+      <Flex align="center" justify="space-between" wrap>
+        <Typography.Text strong>V13 真人记忆投影审计</Typography.Text>
+        <Tag color={selector ? "success" : "warning"}>
+          {selector ? "选择审计完整" : "选择审计缺失"}
+        </Tag>
+      </Flex>
+      {!selector ? (
+        <Alert
+          description="Admin 不从 Compact 载荷反推全源候选、选择原因或最近记忆；缺少 selector 时只能按原始 JSON 审计。"
+          showIcon
+          title="V13 选择器审计信息缺失"
+          type="warning"
+        />
+      ) : null}
+      <Descriptions
+        column={2}
+        items={[
+          {
+            key: "selector-flow",
+            label: "全源 → 本次模型输入",
+            children: selector ? (
+              <Space size={[6, 6]} wrap>
+                <Tag>源 {selector.source_count}</Tag>
+                <Tag color="success">保留 {selector.retained_count}</Tag>
+                <Tag color="warning">选择器省略 {selector.omitted_count}</Tag>
+                <Tag>未来过滤 {selector.future_filtered_count}</Tag>
+              </Space>
+            ) : (
+              "未知"
+            ),
+          },
+          {
+            key: "selector-version",
+            label: "真人记忆选择器",
+            children: selector ? `V${selector.version}` : "未知",
+          },
+          {
+            key: "latest-memory-ref",
+            label: "最近角色记忆引用",
+            children: selector?.latest_actor_memory_ref ?? "无",
+          },
+          {
+            key: "latest-memory-cutoff",
+            label: "最近角色记忆截止序号",
+            children:
+              selector?.latest_actor_memory_cutoff_seq === null ||
+              selector?.latest_actor_memory_cutoff_seq === undefined
+                ? "无"
+                : `#${selector.latest_actor_memory_cutoff_seq}`,
+          },
+          {
+            key: "latest-memory-hash",
+            label: "最近角色记忆 SHA-256",
+            span: 2,
+            children: selector?.latest_actor_memory_hash ?? "无",
+          },
+        ]}
+        size="small"
+      />
+      {selector ? (
+        <Collapse
+          items={[
+            {
+              children: (
+                <div className="v2-readable-groups">
+                  <SelectorAuditEntries
+                    entries={selector.retained}
+                    emptyDescription="本次没有保留事件"
+                    label="保留（retained）"
+                  />
+                  <SelectorAuditEntries
+                    entries={selector.omitted}
+                    emptyDescription="本次没有被选择器省略的事件"
+                    label="选择器省略（selector_omitted）"
+                  />
+                  <SelectorAuditEntries
+                    entries={selector.future_filtered}
+                    emptyDescription="本次没有未来事件"
+                    label="未来过滤（future_filtered）"
+                  />
+                </div>
+              ),
+              key: "v13-selector-decisions",
+              label: `查看选择分类与原因（${selector.source_count} 项）`,
+            },
+            {
+              children: (
+                <div className="v2-readable-groups">
+                  <ReadableGroup
+                    label="全源类型计数"
+                    value={selector.source_type_counts}
+                  />
+                  <ReadableGroup
+                    label="保留类型计数"
+                    value={selector.retained_type_counts}
+                  />
+                  <ReadableGroup
+                    label="省略类型计数"
+                    value={selector.omitted_type_counts}
+                  />
+                </div>
+              ),
+              key: "v13-selector-type-counts",
+              label: "查看来源类型计数",
+            },
+          ]}
+          size="small"
+        />
+      ) : null}
+      <V7CompactionAudit
+        expandedKnownEvents={expandedKnownEvents}
+        expansionStatus={expansionStatus}
+        knownEvents={knownEvents}
+        projection={projection}
+      />
+    </section>
+  );
+}
+
+function SelectorAuditEntries({
+  emptyDescription,
+  entries,
+  label,
+}: {
+  emptyDescription: string;
+  entries: Array<
+    V2MemorySelectorAudit["retained"][number] | { event_ref: string; reason: string }
+  >;
+  label: string;
+}) {
+  return (
+    <ReadableGroup
+      label={`${label}（${entries.length}）`}
+      value={entries.length ? entries : emptyDescription}
+    />
+  );
+}
+
+const v7CompactionAuditFields = [
+  "canonical_serialized_char_count",
+  "compact_serialized_char_count",
+  "compaction_saved_chars",
+  "compaction_ratio",
+  "verbatim_speech_count",
+  "verbatim_speech_chars",
+  "retained_event_refs",
+  "canonical_sha256",
+  "round_trip_verified",
+  "lossless_scope",
+] as const;
+
+function V7CompactionAudit({
+  expandedKnownEvents,
+  expansionStatus,
+  knownEvents,
+  projection,
+}: {
+  expandedKnownEvents: Record<string, unknown> | null;
+  expansionStatus: V2ModelRequest["known_events_expansion_status"];
+  knownEvents: Record<string, unknown> | null;
+  projection: V2PromptProjection | null;
+}) {
+  const missingFields = v7CompactionAuditFields.filter(
     (key) =>
       projection === null ||
       !Object.prototype.hasOwnProperty.call(projection, key),
@@ -1106,7 +1118,7 @@ function V12CompactionAudit({
   const encoding =
     typeof knownEvents?.encoding === "string" ? knownEvents.encoding : null;
   const compactContractSupported =
-    schemaVersion === 6 && encoding === "lossless_refs_v1";
+    schemaVersion === 7 && encoding === "lossless_refs_v1";
   const scopeCatalog = isRecord(knownEvents?.scope_catalog)
     ? knownEvents.scope_catalog
     : null;
@@ -1133,11 +1145,6 @@ function V12CompactionAudit({
         (value): value is string => typeof value === "string",
       )
     : null;
-  const droppedRefs = Array.isArray(projection?.dropped_event_refs)
-    ? projection.dropped_event_refs.filter(
-        (value): value is string => typeof value === "string",
-      )
-    : null;
   const canonicalHash =
     typeof projection?.canonical_sha256 === "string"
       ? projection.canonical_sha256
@@ -1146,13 +1153,17 @@ function V12CompactionAudit({
     typeof projection?.round_trip_verified === "boolean"
       ? projection.round_trip_verified
       : null;
+  const losslessScope =
+    projection?.lossless_scope === "selector_retained_projection"
+      ? projection.lossless_scope
+      : null;
   const auditComplete =
     compactContractSupported && missingFields.length === 0;
 
   return (
-    <section aria-label="V12 无损压缩审计">
+    <section aria-label="V7 入选集无损编码审计">
       <Flex align="center" justify="space-between" wrap>
-        <Typography.Text strong>V12 无损压缩审计</Typography.Text>
+        <Typography.Text strong>V7 入选集无损编码审计</Typography.Text>
         <Tag color={auditComplete ? "success" : "warning"}>
           {auditComplete ? "审计字段完整" : "审计字段不完整"}
         </Tag>
@@ -1161,7 +1172,7 @@ function V12CompactionAudit({
         <Alert
           description="未记录项统一显示为未知；Admin 不根据请求体反推 Canonical 长度、压缩收益、事件保留或回环校验结果。"
           showIcon
-          title="V12 压缩审计信息缺失"
+          title="V7 编码审计信息缺失"
           type="warning"
         />
       ) : null}
@@ -1169,7 +1180,7 @@ function V12CompactionAudit({
         <Alert
           description="持久化审计明确记录 round_trip_verified=false；该请求仍按原始 JSON 展示，不能视为通过无损校验。"
           showIcon
-          title="V12 无损回环校验失败"
+          title="V7 入选集无损回环校验失败"
           type="error"
         />
       ) : null}
@@ -1181,7 +1192,7 @@ function V12CompactionAudit({
             label: "Known Events 压缩合同",
             children: (
               <Space size={6} wrap>
-                <Tag color={schemaVersion === 6 ? "blue" : "warning"}>
+                <Tag color={schemaVersion === 7 ? "blue" : "warning"}>
                   {schemaVersion === null ? "版本未知" : `V${schemaVersion}`}
                 </Tag>
                 <Typography.Text>
@@ -1259,8 +1270,13 @@ function V12CompactionAudit({
           },
           {
             key: "event-refs",
-            label: "保留 / 丢弃事件引用",
-            children: `${retainedRefs?.length ?? "未知"} / ${droppedRefs?.length ?? "未知"}`,
+            label: "入选后编码引用",
+            children: `${retainedRefs?.length ?? "未知"}`,
+          },
+          {
+            key: "lossless-scope",
+            label: "无损声明范围",
+            children: losslessScope ?? "未知",
           },
           {
             key: "canonical-hash",
@@ -1276,7 +1292,7 @@ function V12CompactionAudit({
             children: (
               <div className="v2-readable-groups">
                 <ReadableGroup
-                  label="V6 默认还原规则"
+                  label="V7 默认还原规则"
                   value={defaults ?? "未记录"}
                 />
                 <ReadableGroup
@@ -1289,24 +1305,20 @@ function V12CompactionAudit({
                 />
               </div>
             ),
-            key: "v12-compaction-contract",
-            label: "查看 V6 默认规则与可读目录",
+            key: "v7-compaction-contract",
+            label: "查看 V7 默认规则与可读目录",
           },
           {
             children: (
               <div className="v2-readable-groups">
                 <ReadableGroup
-                  label="保留事件引用"
+                  label="入选后由编码保留的引用"
                   value={retainedRefs ?? "未记录"}
-                />
-                <ReadableGroup
-                  label="丢弃事件引用"
-                  value={droppedRefs ?? "未记录"}
                 />
               </div>
             ),
-            key: "v12-event-refs",
-            label: "查看保留与丢弃事件引用",
+            key: "v7-event-refs",
+            label: "查看编码层引用（不含选择器省略）",
           },
         ]}
         size="small"
@@ -1317,29 +1329,6 @@ function V12CompactionAudit({
 
 function auditNumber(value: number | null) {
   return value === null ? "未知" : value.toLocaleString("zh-CN");
-}
-
-function auditFlow(
-  projection: V2PromptProjection | null,
-  fields: Array<
-    readonly [
-      string,
-      (typeof v11ProjectionAuditFields)[number],
-    ]
-  >,
-) {
-  return (
-    <Space size={[6, 6]} wrap>
-      {fields.map(([label, key]) => {
-        const value = numericField(projection, key);
-        return (
-          <Tag color={value === null ? "default" : undefined} key={key}>
-            {label} {value === null ? "未知" : value}
-          </Tag>
-        );
-      })}
-    </Space>
-  );
 }
 
 function OutputEnforcementAudit({
@@ -1734,8 +1723,8 @@ function KnownEventsGroup({
 }: {
   value: Record<string, unknown>;
 }) {
-  if (integerNumber(value.schema_version) === 6) {
-    return <V12KnownEventsGroup value={value} />;
+  if (integerNumber(value.schema_version) === 7) {
+    return <V13KnownEventsGroup value={value} />;
   }
   const events = Array.isArray(value.events) ? value.events : [];
   const claims = events.flatMap((event) =>
@@ -1795,7 +1784,7 @@ function KnownEventsGroup({
   );
 }
 
-function V12KnownEventsGroup({
+function V13KnownEventsGroup({
   value,
 }: {
   value: Record<string, unknown>;
@@ -1814,7 +1803,7 @@ function V12KnownEventsGroup({
   return (
     <section className="v2-readable-group">
       <Typography.Text className="v2-readable-group-title" strong>
-        动作发生前已知事件（V12 无损压缩载荷）
+        动作发生前已知事件（V13 真人记忆入选载荷）
       </Typography.Text>
       <Descriptions
         column={2}
@@ -1822,7 +1811,7 @@ function V12KnownEventsGroup({
           {
             key: "schema",
             label: "Compact Schema",
-            children: "V6",
+            children: "V7",
           },
           {
             key: "encoding",
@@ -1861,8 +1850,8 @@ function V12KnownEventsGroup({
             ) : (
               <Empty description="当前动作没有压缩事件" />
             ),
-            key: "v12-compact-events",
-            label: `查看全局顺序的 Compact 事件（${events.length} 个）`,
+            key: "v13-compact-events",
+            label: `查看选择器入选并编码的事件（${events.length} 个）`,
           },
           {
             children: annotations.length ? (
@@ -1870,13 +1859,13 @@ function V12KnownEventsGroup({
             ) : (
               <Empty description="当前载荷没有顶层注解" />
             ),
-            key: "v12-annotations",
+            key: "v13-annotations",
             label: `查看顶层注解及来源索引（${annotations.length} 项）`,
           },
           {
             children: (
               <div className="v2-readable-groups">
-                <ReadableGroup label="V6 默认还原规则" value={defaults} />
+                <ReadableGroup label="V7 默认还原规则" value={defaults} />
                 <ReadableGroup label="作用域目录" value={scopeCatalog} />
                 <ReadableGroup
                   label="发生阶段目录"
@@ -1884,7 +1873,7 @@ function V12KnownEventsGroup({
                 />
               </div>
             ),
-            key: "v12-catalogs",
+            key: "v13-catalogs",
             label: "查看默认规则与可读目录",
           },
           {
@@ -1900,7 +1889,7 @@ function V12KnownEventsGroup({
                 />
               </div>
             ),
-            key: "v12-derived-indexes",
+            key: "v13-derived-indexes",
             label: `查看原序派生索引（${questions.length + relations.length} 项）`,
           },
         ]}
