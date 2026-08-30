@@ -987,7 +987,15 @@ class ActionRepository:
                 expected_status = "awaiting_observation" if best_effort else "generating"
                 if game.status != expected_status:
                     raise RepositoryError(f"cannot complete silent action from {game.status}")
-            if game.phase_id != claim.phase_id:
+            if game.phase_id != claim.phase_id and not (
+                claim.non_blocking
+                and claim.phase_id.startswith("day_")
+                and (
+                    game.phase_id.startswith("night_")
+                    or game.phase_id.startswith("day_")
+                    or game.phase_state == "game_completed"
+                )
+            ):
                 raise RepositoryError("action phase changed before completion")
             if not best_effort and not claim.non_blocking:
                 game.status = next_live_state

@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any, Literal
 
 import pytest
@@ -56,6 +57,7 @@ from app.match.action_engine import (
 from app.match.day_engine import (
     DayEngine,
     DayRuntimeError,
+    _BackgroundPrivateMemoryJob,
     _EXILE_PK_SPEECH_OBJECTIVE,
     _PUBLIC_SPEECH_MAX_CHARS,
     _SHERIFF_PK_SPEECH_OBJECTIVE,
@@ -108,6 +110,7 @@ from app.match.model_failure_episode import (
 )
 from app.match.model_generation_policy_contract import (
     current_model_generation_policy_contract,
+    v4_model_generation_policy_contract,
 )
 from app.match.night_repository import NightRepository
 from app.match.models import (
@@ -1524,6 +1527,9 @@ class _ConcurrentPrivateMemoryActions:
         self.judge_overlapped = False
         self.memory_specs: list[Any] = []
         self.judge_specs: list[Any] = []
+        self._after_release = asyncio.Event()
+        self._after_release.set()
+        self._after_release_by_actor: dict[str, asyncio.Event] = {}
 
     def check_cancellation(self, _game_id: str) -> None:
         return
@@ -1555,6 +1561,10 @@ class _ConcurrentPrivateMemoryActions:
         if spec.actor_id == self._canceled_actor_id:
             raise asyncio.CancelledError
         await asyncio.wait_for(self._release.wait(), timeout=1)
+        await asyncio.wait_for(self._after_release.wait(), timeout=2)
+        actor_hold = self._after_release_by_actor.get(spec.actor_id)
+        if actor_hold is not None:
+            await asyncio.wait_for(actor_hold.wait(), timeout=2)
         self._in_flight -= 1
         if spec.actor_id in self._failed_actor_ids:
             return None
@@ -2060,7 +2070,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "model_view_selector_version": 3,
             },
             "model_generation_policy_contract": {
-                "schema_version": 4,
+                "schema_version": 5,
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
@@ -2958,7 +2968,7 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
         )
         assert created_event is not None
     assert created_event.payload["model_generation_policy_contract"] == {
-        "schema_version": 4,
+        "schema_version": 5,
         "classification_version": 1,
         "enforcement": "observe_only",
     }
@@ -2985,7 +2995,7 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "blocking_generation",
+        "private_round_memory_mode": "background_generation",
     }
 
     repository = ActionRepository(session_factory, enforce_execution_fence=False)
@@ -10865,6 +10875,7 @@ def _prepare_day_state(
     game_id: str,
     *,
     phase_state: str = "public_discussion_open",
+    generation_policy: Literal["v4", "current"] = "v4",
 ) -> None:
     with session_factory.begin() as db:
         game = db.get(GameRecord, game_id)
@@ -10881,6 +10892,10 @@ def _prepare_day_state(
                 "speech_rounds": 1,
             }
         )
+        if generation_policy == "v4":
+            frozen_rule["model_generation_policy_contract"] = (
+                v4_model_generation_policy_contract()
+            )
         game.rule_snapshot = {**frozen_rule, "rule_set": rule_set}
         game.phase_id = "day_1"
         game.phase_state = phase_state
@@ -11193,6 +11208,350 @@ def test_new_policy_generates_private_memory_before_advancing_night(
     )
     phase_changed = next(event for event in events if event.event_type == "game_phase_changed")
     assert completed.record_seq < phase_changed.record_seq
+
+
+def _close_day_and_join_background(
+    engine: DayEngine,
+    *,
+    game_id: str,
+    reason: str,
+    summarize: bool = True,
+):
+    async def _run():
+        transition = await engine._close_day(
+            game_id=game_id,
+            broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+            reason=reason,
+            summarize=summarize,
+        )
+        await engine.join_background_private_memory_jobs(
+            game_id=game_id,
+            timeout=5.0,
+            cancel=False,
+        )
+        return transition
+
+    return asyncio.run(_run())
+
+
+def test_background_memory_does_not_block_night_phase_change(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = sorted(
+        (player for player in before.players if player.alive),
+        key=lambda player: player.seat,
+    )
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
+    actions._after_release = asyncio.Event()
+    engine = DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    async def _run():
+        close_task = asyncio.create_task(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_background_memory_does_not_block_night",
+                summarize=True,
+            )
+        )
+        for _ in range(50):
+            if repository.snapshot(created["game_id"]).phase_id.startswith("night_"):
+                break
+            await asyncio.sleep(0.02)
+        mid = repository.snapshot(created["game_id"])
+        assert mid.phase_id == "night_2"
+        with session_factory() as db:
+            facts = list(
+                db.scalars(
+                    select(KnowledgeFact).where(
+                        KnowledgeFact.game_id == created["game_id"],
+                        KnowledgeFact.fact_type == "private_round_memory",
+                    )
+                )
+            )
+        assert facts == []
+        actions._after_release.set()
+        transition = await close_task
+        await engine.join_background_private_memory_jobs(
+            game_id=created["game_id"],
+            timeout=5.0,
+            cancel=False,
+        )
+        return transition
+
+    transition = asyncio.run(_run())
+    assert transition.phase_id == "night_2"
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(KnowledgeFact).where(
+                    KnowledgeFact.game_id == created["game_id"],
+                    KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+        events = list(
+            db.scalars(
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == created["game_id"])
+                .order_by(GameRecordEvent.record_seq)
+            )
+        )
+    assert {fact.owner_id for fact in facts} == {player.player_id for player in players}
+    completed = next(
+        event for event in events if event.event_type == "day_private_memory_batch_completed"
+    )
+    phase_changed = next(event for event in events if event.event_type == "game_phase_changed")
+    assert completed.payload["private_round_memory_mode"] == "background_generation"
+    assert completed.record_seq > phase_changed.record_seq
+    committed = [
+        event for event in events if event.event_type == "private_round_memory_committed"
+    ]
+    assert len(committed) == len(players)
+
+
+def test_background_memory_allows_commit_after_finish_day(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = [player for player in before.players if player.alive]
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
+    engine = DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+    transition = _close_day_and_join_background(
+        engine,
+        game_id=created["game_id"],
+        reason="test_background_commit_after_night",
+    )
+    assert transition.phase_id == "night_2"
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(KnowledgeFact).where(
+                    KnowledgeFact.game_id == created["game_id"],
+                    KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+    assert {fact.owner_id for fact in facts} == {player.player_id for player in players}
+
+
+def test_background_memory_commit_when_owner_died_after_cutoff(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = sorted(
+        (player for player in before.players if player.alive),
+        key=lambda player: player.seat,
+    )
+    victim = players[0]
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
+    actions._after_release = asyncio.Event()
+    engine = DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    async def _run():
+        close_task = asyncio.create_task(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_background_commit_after_death",
+                summarize=True,
+            )
+        )
+        for _ in range(50):
+            if repository.snapshot(created["game_id"]).phase_id.startswith("night_"):
+                break
+            await asyncio.sleep(0.02)
+        with session_factory.begin() as db:
+            row = db.get(PlayerState, (created["game_id"], victim.player_id))
+            assert row is not None
+            row.alive = False
+            row.death_cause = "werewolf"
+        actions._after_release.set()
+        await close_task
+        await engine.join_background_private_memory_jobs(
+            game_id=created["game_id"],
+            timeout=5.0,
+            cancel=False,
+        )
+
+    asyncio.run(_run())
+    knowledge = repository.private_knowledge(
+        game_id=created["game_id"],
+        player_id=victim.player_id,
+    )
+    assert any(item["fact_type"] == "private_round_memory" for item in knowledge)
+
+
+def test_background_memory_judge_failure_still_blocks_night(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    actions = _SummaryOnlyPrivateMemoryActions(judge_result=False)
+    engine = DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DayRuntimeError, match="day_summary_failed"):
+        asyncio.run(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_background_summary_failure",
+                summarize=True,
+            )
+        )
+
+    after = repository.snapshot(created["game_id"])
+    assert (after.phase_id, after.phase_state, after.round_no) == (
+        before.phase_id,
+        before.phase_state,
+        before.round_no,
+    )
+    with session_factory() as db:
+        facts = list(
+            db.scalars(
+                select(KnowledgeFact).where(
+                    KnowledgeFact.game_id == created["game_id"],
+                    KnowledgeFact.fact_type == "private_round_memory",
+                )
+            )
+        )
+        events = list(
+            db.scalars(
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == created["game_id"])
+                .order_by(GameRecordEvent.record_seq)
+            )
+        )
+    assert facts == []
+    completed = next(
+        event for event in events if event.event_type == "day_private_memory_batch_completed"
+    )
+    assert completed.payload["public_summary_status"] == "failed"
+    assert all(event.event_type != "game_phase_changed" for event in events)
+
+
+def test_next_day_waits_only_own_memory(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    before = repository.snapshot(created["game_id"])
+    players = sorted(
+        (player for player in before.players if player.alive),
+        key=lambda player: player.seat,
+    )
+    first, second = players[0], players[1]
+    actions = _ConcurrentPrivateMemoryActions(
+        repository=repository,
+        expected_players=len(players),
+    )
+    actions._after_release = asyncio.Event()
+    second_hold = asyncio.Event()
+    actions._after_release_by_actor[second.player_id] = second_hold
+    engine = DayEngine(
+        repository=repository,
+        action_engine=actions,  # type: ignore[arg-type]
+    )
+
+    async def _run():
+        close_task = asyncio.create_task(
+            engine._close_day(
+                game_id=created["game_id"],
+                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+                reason="test_wait_only_own_memory",
+                summarize=True,
+            )
+        )
+        for _ in range(50):
+            if repository.snapshot(created["game_id"]).phase_id.startswith("night_"):
+                break
+            await asyncio.sleep(0.02)
+        actions._after_release.set()
+        job = next(iter(engine._background_memory_jobs.values()))
+        await asyncio.wait_for(job.player_done[first.player_id].wait(), timeout=2)
+        assert job.player_done[second.player_id].is_set() is False
+        await engine._await_player_previous_round_memory(
+            game_id=created["game_id"],
+            player_id=first.player_id,
+            previous_round_no=1,
+        )
+        second_hold.set()
+        await close_task
+        await engine.join_background_private_memory_jobs(
+            game_id=created["game_id"],
+            timeout=5.0,
+            cancel=False,
+        )
+
+    asyncio.run(_run())
+
+
+def test_next_day_wait_expired_uses_previous_snapshot(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+    created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    repository = MatchRepository(session_factory)
+    engine = DayEngine(
+        repository=repository,
+        action_engine=_SummaryOnlyPrivateMemoryActions(),  # type: ignore[arg-type]
+    )
+    owner_id = repository.snapshot(created["game_id"]).players[0].player_id
+    job = _BackgroundPrivateMemoryJob(
+        game_id=created["game_id"],
+        batch_id=f"{created['game_id']}:round_1:private_memories",
+        round_no=1,
+        started_at=time.monotonic() - 10,
+        timeout_ms=1,
+        player_done={owner_id: asyncio.Event()},
+    )
+    engine._background_memory_jobs[job.batch_id] = job
+    asyncio.run(
+        engine._await_player_previous_round_memory(
+            game_id=created["game_id"],
+            player_id=owner_id,
+            previous_round_no=1,
+        )
+    )
+    with session_factory() as db:
+        expired = list(
+            db.scalars(
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == created["game_id"],
+                    GameRecordEvent.event_type == "private_round_memory_wait_expired",
+                )
+            )
+        )
+    assert len(expired) == 1
+    assert expired[0].payload["owner_id"] == owner_id
 
 
 def test_private_memory_batch_rejects_self_consistent_context_tampering(

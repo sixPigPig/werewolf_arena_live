@@ -338,14 +338,25 @@ def test_model_catalog_auto_refreshes_deepseek_and_syncs_agent_plan(
     ]
     agent_pro = next(item for item in agent_models if item["model_id"] == "agent-pro")
     assert not agent_pro["enabled"]
-    assert agent_pro["supports_thinking"] is False
+    assert agent_pro["supports_thinking"] is True
+    assert agent_pro["reasoning_policy"] == {
+        "thinking_options": ["enabled", "disabled"],
+        "default_thinking": "enabled",
+        "thinking_locked": False,
+        "reasoning_effort_options": ["high", "max"],
+        "default_reasoning_effort": "high",
+        "max_tokens_by_effort": {"high": 8_192, "max": 16_384},
+        "default_max_tokens": 8_192,
+        "disabled_max_tokens": 512,
+        "sampling_parameters_allowed_when_thinking": True,
+    }
     assert agent_pro["parameters"] == {
-        "thinking": "disabled",
-        "reasoning_effort": None,
+        "thinking": "enabled",
+        "reasoning_effort": "high",
         "temperature": None,
         "top_p": None,
         "max_tokens_mode": "auto",
-        "max_tokens": 512,
+        "max_tokens": 8_192,
         "frequency_penalty": None,
         "presence_penalty": None,
     }
@@ -726,19 +737,84 @@ def test_catalog_uses_explicit_thinking_defaults(
         for item in response.json()["models"]
     }
     assert parameters[("agent_plan", "agent-fast")] == {
-        "thinking": "disabled",
-        "reasoning_effort": None,
+        "thinking": "enabled",
+        "reasoning_effort": "high",
         "temperature": None,
         "top_p": None,
         "max_tokens_mode": "auto",
-        "max_tokens": 512,
+        "max_tokens": 8_192,
         "frequency_penalty": None,
         "presence_penalty": None,
     }
+    agent_fast = next(
+        item
+        for item in response.json()["models"]
+        if item["provider"] == "agent_plan" and item["model_id"] == "agent-fast"
+    )
+    assert agent_fast["supports_thinking"] is True
+    assert agent_fast["reasoning_policy"]["thinking_options"] == [
+        "enabled",
+        "disabled",
+    ]
+    assert agent_fast["reasoning_policy"]["thinking_locked"] is False
+    assert agent_fast["reasoning_policy"]["reasoning_effort_options"] == [
+        "high",
+        "max",
+    ]
+    assert agent_fast["reasoning_policy"]["default_reasoning_effort"] == "high"
     assert parameters[("deepseek", "deepseek-v4-flash")]["thinking"] == "enabled"
     assert parameters[("deepseek", "deepseek-v4-flash")]["reasoning_effort"] == "high"
     assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens_mode"] == "auto"
     assert parameters[("deepseek", "deepseek-v4-flash")]["max_tokens"] == 8_192
+
+
+def test_unverified_model_follows_glm_effort_contract(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    client.get("/api/v1/admin/models")
+
+    rejected = client.patch(
+        "/api/v1/admin/models/agent_plan/agent-fast",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "is_default": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
+        },
+    )
+    assert rejected.status_code == 422
+    assert "reasoning_effort is required" in rejected.text
+
+    response = client.patch(
+        "/api/v1/admin/models/agent_plan/agent-fast",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "enabled": True,
+            "is_default": True,
+            "parameters": {
+                "thinking": "enabled",
+                "reasoning_effort": "max",
+                "max_tokens_mode": "auto",
+                "max_tokens": 16_384,
+            },
+        },
+    )
+
+    assert response.status_code == 204, response.text
+    listed = client.get("/api/v1/admin/models")
+    agent_fast = next(
+        item
+        for item in listed.json()["models"]
+        if item["provider"] == "agent_plan" and item["model_id"] == "agent-fast"
+    )
+    assert agent_fast["parameters"]["thinking"] == "enabled"
+    assert agent_fast["parameters"]["reasoning_effort"] == "max"
+    assert agent_fast["parameters"]["max_tokens"] == 16_384
 
 
 @pytest.mark.parametrize(
@@ -831,16 +907,76 @@ def test_reasoning_policy_is_model_specific(
     assert parameters["reasoning_effort"] == expected_default_effort
 
 
-def test_unverified_legacy_model_does_not_inherit_provider_effort_options() -> None:
+def test_catalog_repairs_unverified_enabled_thinking_without_effort(
+    model_admin_client,
+) -> None:
+    client, session_factory = model_admin_client
+    with session_factory() as db:
+        db.add(
+            ModelConfigurationRecord(
+                provider="agent_plan",
+                model_id="agent-fast",
+                source_model_id="agent-fast",
+                display_name="agent-fast",
+                available=True,
+                enabled=True,
+                is_default=True,
+                supports_thinking=True,
+                parameter_values={
+                    "thinking": "enabled",
+                    "reasoning_effort": None,
+                    "max_tokens_mode": "auto",
+                    "max_tokens": 512,
+                },
+                source_details={"bootstrap": "environment"},
+            )
+        )
+        db.commit()
+
+    _login(client)
+    listed = client.get("/api/v1/admin/models")
+    assert listed.status_code == 200, listed.text
+    agent_fast = next(
+        item
+        for item in listed.json()["models"]
+        if item["provider"] == "agent_plan" and item["model_id"] == "agent-fast"
+    )
+    assert agent_fast["parameters"]["thinking"] == "enabled"
+    assert agent_fast["parameters"]["reasoning_effort"] == "high"
+    assert agent_fast["parameters"]["max_tokens"] == 8_192
+
+
+def test_unverified_legacy_model_uses_glm_reasoning_contract() -> None:
     policy = reasoning_policy_for_model(
         "agent_plan",
         "kimi-k2.6",
         supports_thinking=True,
     )
+    glm_policy = reasoning_policy_for_model(
+        "agent_plan",
+        "glm-5-2-260617",
+        supports_thinking=True,
+    )
+
+    assert policy == glm_policy
+    assert policy.thinking_options == ("enabled", "disabled")
+    assert policy.thinking_locked is False
+    assert policy.default_thinking == "enabled"
+    assert policy.reasoning_effort_options == ("high", "max")
+    assert policy.default_reasoning_effort == "high"
+    assert policy.max_tokens_by_effort == {"high": 8_192, "max": 16_384}
+
+
+def test_unverified_legacy_model_stays_non_thinking_when_capability_is_absent() -> None:
+    policy = reasoning_policy_for_model(
+        "agent_plan",
+        "kimi-k2.6",
+        supports_thinking=False,
+    )
 
     assert policy.thinking_options == ("disabled",)
+    assert policy.thinking_locked is True
     assert policy.reasoning_effort_options == ()
-    assert policy.default_max_tokens == 512
 
 
 def test_code_preview_remains_non_thinking_when_discovery_misreports_support() -> None:

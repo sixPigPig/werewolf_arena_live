@@ -359,9 +359,32 @@ describe("model management flow", () => {
     });
   });
 
+  it("uses the GLM Thinking and effort contract for an unverified model", async () => {
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    const model = (await screen.findAllByText("ep-example"))[0].closest("details");
+    expect(model).not.toBeNull();
+    await user.click(within(model!).getAllByText("ep-example")[0]);
+
+    const thinking = within(model!).getByLabelText("Thinking");
+    const reasoningEffort = within(model!).getByLabelText("Reasoning effort");
+    const maxTokens = within(model!).getByLabelText("最大输出 tokens");
+    expect(thinking).not.toBeDisabled();
+    expectAntdSelectLabel(thinking, "开启");
+    expect(reasoningEffort).not.toBeDisabled();
+    expectAntdSelectLabel(reasoningEffort, "high");
+    expect(maxTokens).toHaveValue("8192");
+    await selectAntdOption(user, reasoningEffort, "max");
+    expect(maxTokens).toHaveValue("16384");
+    await selectAntdOption(user, thinking, "关闭");
+    expect(reasoningEffort).toBeDisabled();
+    expect(maxTokens).toHaveValue("512");
+  });
+
   it("can restore auto mode when Thinking and effort are locked", async () => {
     const lockedModel = catalog.models.find(
-      (model) => model.model_id === "ep-example",
+      (model) => model.model_id === "doubao-seed-2-0-code-preview-260215",
     );
     expect(lockedModel).toBeDefined();
     lockedModel!.parameters.max_tokens = 999;
@@ -369,9 +392,13 @@ describe("model management flow", () => {
     const user = userEvent.setup();
     renderModelsPage();
 
-    const model = (await screen.findAllByText("ep-example"))[0].closest("details");
+    const model = (
+      await screen.findAllByText("doubao-seed-2-0-code-preview-260215")
+    )[0].closest("details");
     expect(model).not.toBeNull();
-    await user.click(within(model!).getAllByText("ep-example")[0]);
+    await user.click(
+      within(model!).getAllByText("doubao-seed-2-0-code-preview-260215")[0],
+    );
 
     const thinking = within(model!).getByLabelText("Thinking");
     const maxTokens = within(model!).getByLabelText("最大输出 tokens");

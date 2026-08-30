@@ -99,7 +99,6 @@ _MINIMAX_M3_POLICY = ReasoningPolicy(
     sampling_parameters_allowed_when_thinking=True,
 )
 
-
 def max_output_tokens_limit(provider: str, model_id: str) -> int:
     if provider in {"agent_plan", "ark"} and "glm-5-2" in model_id.lower():
         return GLM_5_2_MAX_OUTPUT_TOKENS
@@ -114,9 +113,9 @@ def reasoning_policy_for_model(
 ) -> ReasoningPolicy:
     """Return the verified policy for one concrete model.
 
-    Provider discovery may advertise generic Thinking support, but it is not
-    enough to invent effort levels. Unknown and legacy model families therefore
-    remain non-thinking until a verified model-level policy is added here.
+    Unknown and legacy families inherit the GLM-5.2 Thinking/effort contract
+    until a verified family policy is added. Frozen snapshots that still
+    advertise no Thinking stay on the non-thinking contract.
     """
 
     normalized = model_id.strip().lower()
@@ -132,7 +131,9 @@ def reasoning_policy_for_model(
         return _MINIMAX_M3_POLICY
     if "doubao-" in normalized:
         return _DOUBAO_POLICY
-    del provider, supports_thinking
+    del provider
+    if supports_thinking:
+        return _GLM_5_2_POLICY
     return _NON_THINKING_POLICY
 
 

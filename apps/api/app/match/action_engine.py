@@ -37,7 +37,7 @@ from app.match.model_client import (
 )
 from app.match.model_failure_episode import stable_failure_episode_id
 from app.match.model_generation_policy_contract import (
-    MODEL_GENERATION_POLICY_SCHEMA_VERSION,
+    MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS,
     RequiredTargetExhaustionFailureMode,
     RequiredTargetTechnicalOutcome,
     ResolvedModelGenerationPolicy,
@@ -3567,7 +3567,7 @@ def _technical_target_exhaustion_outcome(
 ) -> tuple[RequiredTargetTechnicalOutcome, RequiredTargetExhaustionFailureMode] | None:
     target_policy = generation_policy.required_target_exhaustion
     if (
-        generation_policy.schema_version != MODEL_GENERATION_POLICY_SCHEMA_VERSION
+        generation_policy.schema_version not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
         or generation_policy.blocking_required_target_output_timeout_mode != "technical_outcome"
         or target_policy is None
         or spec.target_exhaustion_outcome is None

@@ -460,21 +460,58 @@ def bootstrap_environment_catalog(db: Session) -> None:
                 if record.is_default:
                     has_default = 1
             elif (record.source_details or {}).get("bootstrap") == "environment":
-                policy = reasoning_policy_for_model(
-                    provider_name,
-                    model_id,
-                    supports_thinking=bootstrap_supports_thinking,
-                )
-                record.supports_thinking = "enabled" in policy.thinking_options
-                record.parameter_values = normalize_model_parameters(
-                    provider_name,
-                    model_id,
-                    record.parameter_values,
-                    supports_thinking=record.supports_thinking,
-                    limit=_max_output_tokens_limit(provider_name, model_id),
-                    enforce_auto_max_tokens=True,
-                )
-                record.updated_at = now
+                _align_record_thinking_capability(record, now=now)
+    _align_catalog_thinking_capabilities(db, now=now)
+
+
+def _align_catalog_thinking_capabilities(db: Session, *, now: datetime) -> None:
+    for record in db.scalars(select(ModelConfigurationRecord)):
+        if record.provider not in {"agent_plan", "ark", "deepseek"}:
+            continue
+        if _is_unsupported_catalog_model(record.provider, record.model_id):
+            continue
+        _align_record_thinking_capability(record, now=now)
+
+
+def _align_record_thinking_capability(
+    record: ModelConfigurationRecord,
+    *,
+    now: datetime,
+) -> None:
+    policy = reasoning_policy_for_model(
+        record.provider,
+        record.model_id,
+        supports_thinking=True,
+    )
+    supports_thinking = "enabled" in policy.thinking_options
+    limit = _max_output_tokens_limit(
+        record.provider,  # type: ignore[arg-type]
+        record.model_id,
+    )
+    try:
+        parameter_values = normalize_model_parameters(
+            record.provider,
+            record.model_id,
+            record.parameter_values,
+            supports_thinking=supports_thinking,
+            limit=limit,
+            enforce_auto_max_tokens=True,
+        )
+    except ValueError:
+        parameter_values = default_parameter_values(
+            record.provider,
+            record.model_id,
+            supports_thinking=supports_thinking,
+            limit=limit,
+        )
+    if (
+        record.supports_thinking == supports_thinking
+        and record.parameter_values == parameter_values
+    ):
+        return
+    record.supports_thinking = supports_thinking
+    record.parameter_values = parameter_values
+    record.updated_at = now
 
 
 def _sync_discovered_models(
@@ -717,21 +754,11 @@ def _bootstrap_supports_thinking(
     provider: ModelProviderName,
     model_id: str,
 ) -> bool:
-    normalized = model_id.lower()
-    if "doubao-seed-2-0-code-preview" in normalized:
-        return False
-    if provider == "deepseek":
-        return normalized.startswith("deepseek-v4")
-    return any(
-        family in normalized
-        for family in (
-            "doubao-",
-            "glm-5-2",
-            "deepseek-v4",
-            "kimi-k3",
-            "minimax-m3",
-        )
-    )
+    return "enabled" in reasoning_policy_for_model(
+        provider,
+        model_id,
+        supports_thinking=True,
+    ).thinking_options
 
 
 def _max_output_tokens_limit(

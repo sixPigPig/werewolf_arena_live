@@ -4,10 +4,11 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+import time
 from typing import Any, Literal
 
 from app.match.action_engine import (
@@ -63,6 +64,21 @@ from app.match.repository import (
 
 
 logger = logging.getLogger(__name__)
+
+_BACKGROUND_MEMORY_JOIN_SECONDS = 1.0
+
+
+@dataclass
+class _BackgroundPrivateMemoryJob:
+    game_id: str
+    batch_id: str
+    round_no: int
+    started_at: float
+    timeout_ms: int
+    player_done: dict[str, asyncio.Event]
+    task: asyncio.Task[None] | None = None
+    memories: list[dict[str, Any]] = field(default_factory=list)
+    commit_phase_ids: list[str] = field(default_factory=list)
 
 _SUPPORTED_DAY_ACTIONS = {
     "sheriff_run",
@@ -294,6 +310,45 @@ class DayEngine:
         self._actions = action_engine
         self._day_speech_pipeline = day_speech_pipeline_repository
         self._pre_exile_pipeline = pre_exile_pipeline_repository
+        self._background_memory_jobs: dict[str, _BackgroundPrivateMemoryJob] = {}
+
+    async def join_background_private_memory_jobs(
+        self,
+        *,
+        game_id: str | None = None,
+        timeout: float | None = _BACKGROUND_MEMORY_JOIN_SECONDS,
+        cancel: bool = False,
+    ) -> None:
+        jobs = [
+            job
+            for job in list(self._background_memory_jobs.values())
+            if game_id is None or job.game_id == game_id
+        ]
+        tasks = [job.task for job in jobs if job.task is not None]
+        if cancel:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+        if not tasks:
+            for job in jobs:
+                self._background_memory_jobs.pop(job.batch_id, None)
+            return
+        try:
+            if timeout is None:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            else:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=timeout,
+                )
+        except asyncio.TimeoutError:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for job in jobs:
+            if job.task is None or job.task.done():
+                self._background_memory_jobs.pop(job.batch_id, None)
 
     async def resolve_pending_death_aftermath(
         self,
@@ -3688,7 +3743,15 @@ class DayEngine:
             ):
                 raise DayRuntimeError("day_summary_failed")
         self._actions.check_cancellation(game_id)
-        transition = self._repository.finish_day(game_id=game_id, reason=reason)
+        try:
+            transition = self._repository.finish_day(game_id=game_id, reason=reason)
+        except BaseException:
+            await self.join_background_private_memory_jobs(
+                game_id=game_id,
+                timeout=_BACKGROUND_MEMORY_JOIN_SECONDS,
+                cancel=True,
+            )
+            raise
         await broadcaster.broadcast_json(game_phase_changed(transition))
         current = self._repository.snapshot(game_id)
         await self._broadcast_match_state(current, broadcaster)
@@ -3743,20 +3806,36 @@ class DayEngine:
         )
         if terminal_status is not None:
             return terminal_status == "completed"
+        if batch_id in self._background_memory_jobs:
+            return True
+        started_payload: dict[str, Any] = {
+            "round_no": state.round_no,
+            "batch_id": batch_id,
+            "phase_id": state.phase_id,
+            "phase_state": state.phase_state,
+            "public_cutoff_record_seq": state.last_record_seq,
+            "player_ids": [player.player_id for player in players],
+            "commit_order": [player.player_id for player in players],
+            "private_round_memory_mode": memory_mode,
+        }
+        if memory_mode == "background_generation":
+            started_payload.update(
+                {
+                    "origin_phase_id": state.phase_id,
+                    "origin_phase_state": state.phase_state,
+                    "source_cutoff_record_seq": state.last_record_seq,
+                    "origin_sheriff_player_id": state.sheriff_player_id,
+                    "origin_sheriff_badge_state": state.sheriff_badge_state,
+                    "origin_player_states": {
+                        player.player_id: dict(player.state) for player in state.players
+                    },
+                }
+            )
         self._repository.append_event(
             game_id=state.game_id,
             event_type="day_private_memory_batch_started",
             audience="god_view",
-            payload={
-                "round_no": state.round_no,
-                "batch_id": batch_id,
-                "phase_id": state.phase_id,
-                "phase_state": state.phase_state,
-                "public_cutoff_record_seq": state.last_record_seq,
-                "player_ids": [player.player_id for player in players],
-                "commit_order": [player.player_id for player in players],
-                "private_round_memory_mode": memory_mode,
-            },
+            payload=started_payload,
         )
 
         request_started = {player.player_id: asyncio.Event() for player in players}
@@ -3811,7 +3890,10 @@ class DayEngine:
                     context={},
                 )
             )
-            await asyncio.gather(judge_task, *memory_tasks.values())
+            if memory_mode == "background_generation":
+                await judge_task
+            else:
+                await asyncio.gather(judge_task, *memory_tasks.values())
         except BaseException:
             for task in [*memory_tasks.values(), *([judge_task] if judge_task is not None else [])]:
                 if not task.done():
@@ -3837,6 +3919,10 @@ class DayEngine:
             raise
 
         if judge_task is None or not judge_task.result():
+            for task in memory_tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*memory_tasks.values(), return_exceptions=True)
             self._repository.append_event(
                 game_id=state.game_id,
                 event_type="day_private_memory_batch_completed",
@@ -3854,6 +3940,30 @@ class DayEngine:
                 },
             )
             return False
+
+        if memory_mode == "background_generation":
+            timeout_ms = memory_policy.reasoning_only_timeout_ms or 240_000
+            job = _BackgroundPrivateMemoryJob(
+                game_id=state.game_id,
+                batch_id=batch_id,
+                round_no=state.round_no,
+                started_at=time.monotonic(),
+                timeout_ms=timeout_ms,
+                player_done={player.player_id: asyncio.Event() for player in players},
+            )
+            job.task = asyncio.create_task(
+                self._finalize_background_private_memories(
+                    state=state,
+                    players=players,
+                    batch_id=batch_id,
+                    memory_mode=memory_mode,
+                    memory_tasks=memory_tasks,
+                    memory_sources=memory_sources,
+                    job=job,
+                )
+            )
+            self._background_memory_jobs[batch_id] = job
+            return True
 
         committed: list[dict[str, Any]] = []
         pending_commits: list[PrivateRoundMemoryCommit] = []
@@ -3964,6 +4074,258 @@ class DayEngine:
             )
 
         return True
+
+    async def _finalize_background_private_memories(
+        self,
+        *,
+        state: MatchSnapshot,
+        players: tuple[MatchPlayer, ...],
+        batch_id: str,
+        memory_mode: str,
+        memory_tasks: dict[str, asyncio.Task[ActionResult | None]],
+        memory_sources: dict[str, dict[str, Any]],
+        job: _BackgroundPrivateMemoryJob,
+    ) -> None:
+        truncated_by: str | None = None
+        try:
+            pending = dict(memory_tasks)
+            player_by_id = {player.player_id: player for player in players}
+            while pending:
+                done, _ = await asyncio.wait(
+                    pending.values(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                finished_ids = [
+                    player_id for player_id, task in list(pending.items()) if task in done
+                ]
+                for player_id in finished_ids:
+                    task = pending.pop(player_id)
+                    player = player_by_id[player_id]
+                    try:
+                        action_result = task.result()
+                    except asyncio.CancelledError:
+                        job.memories.append(
+                            {"player_id": player_id, "status": "generation_failed"}
+                        )
+                        job.player_done[player_id].set()
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Live V2 background private memory failed",
+                            extra={"game_id": state.game_id, "player_id": player_id},
+                        )
+                        job.memories.append(
+                            {"player_id": player_id, "status": "generation_failed"}
+                        )
+                        job.player_done[player_id].set()
+                        continue
+                    self._commit_background_private_memory_result(
+                        state=state,
+                        player=player,
+                        batch_id=batch_id,
+                        action_result=action_result,
+                        sources=memory_sources[player_id],
+                        commit_index=players.index(player) + 1,
+                        job=job,
+                    )
+                    job.player_done[player_id].set()
+            current = self._repository.snapshot(state.game_id)
+            if current.phase_state == "game_completed":
+                truncated_by = "game_completed"
+            memories = list(job.memories)
+            remembered_ids = {
+                str(item.get("player_id"))
+                for item in memories
+                if isinstance(item.get("player_id"), str)
+            }
+            for player in players:
+                if player.player_id not in remembered_ids:
+                    memories.append(
+                        {"player_id": player.player_id, "status": "generation_failed"}
+                    )
+            self._repository.complete_private_round_memory_batch(
+                game_id=state.game_id,
+                batch_completed_payload={
+                    "round_no": state.round_no,
+                    "batch_id": batch_id,
+                    "phase_id": state.phase_id,
+                    "phase_state": state.phase_state,
+                    "source_cutoff_record_seq": state.last_record_seq,
+                    "public_summary_status": "completed",
+                    "private_round_memory_mode": memory_mode,
+                    "memories": memories,
+                    "commit_order": [player.player_id for player in players],
+                    "commit_phase_ids": list(dict.fromkeys(job.commit_phase_ids)),
+                    **({"truncated_by": truncated_by} if truncated_by is not None else {}),
+                },
+            )
+        except asyncio.CancelledError:
+            for task in memory_tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*memory_tasks.values(), return_exceptions=True)
+            try:
+                self._repository.append_event(
+                    game_id=state.game_id,
+                    event_type="day_private_memory_batch_canceled",
+                    audience="god_view",
+                    payload={
+                        "round_no": state.round_no,
+                        "batch_id": batch_id,
+                        "private_round_memory_mode": memory_mode,
+                        "truncated_by": truncated_by or "canceled",
+                    },
+                )
+            except Exception:
+                logger.exception("Live V2 could not persist background memory cancellation")
+            raise
+        except Exception:
+            logger.exception(
+                "Live V2 background private memory batch failed",
+                extra={"game_id": state.game_id, "batch_id": batch_id},
+            )
+        finally:
+            for event in job.player_done.values():
+                event.set()
+
+    def _commit_background_private_memory_result(
+        self,
+        *,
+        state: MatchSnapshot,
+        player: MatchPlayer,
+        batch_id: str,
+        action_result: ActionResult | None,
+        sources: dict[str, Any],
+        commit_index: int,
+        job: _BackgroundPrivateMemoryJob,
+    ) -> None:
+        decision = action_result.decision if action_result is not None else None
+        memory = decision.speech.strip() if decision is not None and decision.speech else ""
+        if not memory:
+            job.memories.append({"player_id": player.player_id, "status": "generation_failed"})
+            return
+        if (
+            action_result is None
+            or not action_result.action_id
+            or action_result.model_response_record_seq is None
+            or action_result.terminal_event_record_seq is None
+            or action_result.model_attempt_id is None
+            or action_result.request_payload_sha256 is None
+            or action_result.projected_context_sha256 is None
+            or action_result.projected_known_event_refs is None
+            or action_result.projected_known_events_sha256 is None
+        ):
+            job.memories.append({"player_id": player.player_id, "status": "generation_failed"})
+            return
+        normalized_memory = memory[:_PRIVATE_ROUND_MEMORY_MAX_CHARS].rstrip()
+        if normalized_memory != memory:
+            self._repository.append_event(
+                game_id=state.game_id,
+                event_type="private_round_memory_normalized",
+                audience="god_view",
+                payload={
+                    "round_no": state.round_no,
+                    "batch_id": batch_id,
+                    "owner_id": player.player_id,
+                    "reason": "max_chars",
+                    "max_chars": _PRIVATE_ROUND_MEMORY_MAX_CHARS,
+                    "original_chars": len(memory),
+                    "normalized_chars": len(normalized_memory),
+                },
+            )
+        commit = PrivateRoundMemoryCommit(
+            player_id=player.player_id,
+            memory=normalized_memory,
+            commit_index=commit_index,
+            source_refs=tuple(sources["source_refs"]),
+            source_refs_sha256=sources["source_refs_sha256"],
+            previous_snapshot_fact_id=sources["previous_snapshot_fact_id"],
+            action_id=action_result.action_id,
+            model_response_record_seq=action_result.model_response_record_seq,
+            terminal_event_record_seq=action_result.terminal_event_record_seq,
+            provider_request_id=decision.provider_request_id,
+            attempt_id=action_result.model_attempt_id,
+            request_payload_sha256=action_result.request_payload_sha256,
+            projected_context_sha256=action_result.projected_context_sha256,
+            projected_known_event_refs=action_result.projected_known_event_refs,
+            projected_known_events_sha256=action_result.projected_known_events_sha256,
+        )
+        try:
+            fact_id, created = self._repository.record_private_round_memory(
+                game_id=state.game_id,
+                run_id=state.run_id,
+                phase_id=state.phase_id,
+                phase_state=state.phase_state,
+                round_no=state.round_no,
+                batch_id=batch_id,
+                source_cutoff_record_seq=state.last_record_seq,
+                commit=commit,
+            )
+        except Exception:
+            logger.exception(
+                "Live V2 could not commit background private memory",
+                extra={"game_id": state.game_id, "player_id": player.player_id},
+            )
+            job.memories.append({"player_id": player.player_id, "status": "generation_failed"})
+            return
+        current = self._repository.snapshot(state.game_id)
+        job.commit_phase_ids.append(current.phase_id)
+        job.memories.append(
+            {
+                "player_id": player.player_id,
+                "status": "committed" if created else "reused",
+                "knowledge_fact_id": fact_id,
+            }
+        )
+
+    async def _await_player_previous_round_memory(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        previous_round_no: int,
+    ) -> None:
+        if previous_round_no < 1:
+            return
+        job = next(
+            (
+                item
+                for item in self._background_memory_jobs.values()
+                if item.game_id == game_id and item.round_no == previous_round_no
+            ),
+            None,
+        )
+        if job is None:
+            return
+        event = job.player_done.get(player_id)
+        if event is None or event.is_set():
+            return
+        remaining = (job.timeout_ms / 1000) - (time.monotonic() - job.started_at)
+        if remaining <= 0:
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="private_round_memory_wait_expired",
+                audience="god_view",
+                payload={
+                    "owner_id": player_id,
+                    "round_no": previous_round_no,
+                    "batch_id": job.batch_id,
+                },
+            )
+            return
+        try:
+            await asyncio.wait_for(event.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            self._repository.append_event(
+                game_id=game_id,
+                event_type="private_round_memory_wait_expired",
+                audience="god_view",
+                payload={
+                    "owner_id": player_id,
+                    "round_no": previous_round_no,
+                    "batch_id": job.batch_id,
+                },
+            )
 
     async def _generate_private_round_memory(
         self,
@@ -4206,6 +4568,13 @@ class DayEngine:
         return_result: bool = False,
     ) -> ModelDecision | ActionResult | None:
         self._actions.check_cancellation(game_id)
+        if action_type != "private_round_memory":
+            wait_state = frozen_state or self._repository.snapshot(game_id)
+            await self._await_player_previous_round_memory(
+                game_id=game_id,
+                player_id=player.player_id,
+                previous_round_no=wait_state.round_no - 1,
+            )
         state = frozen_state or self._repository.snapshot(game_id)
         if projection_at_seq is not None and (
             frozen_state is None or projection_at_seq != frozen_state.last_record_seq

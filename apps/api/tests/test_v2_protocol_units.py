@@ -72,6 +72,7 @@ from app.match.model_generation_policy_contract import (
     is_supported_model_generation_policy_contract,
     resolve_model_generation_action_policy,
     resolve_model_generation_policy_contract,
+    v4_model_generation_policy_contract,
 )
 from app.match.live_runtime import _audience_targets
 from app.match.protocol import LiveProtocolError, audio_frame, day_progress
@@ -743,9 +744,9 @@ def _model_generation_policy_v2() -> dict[str, Any]:
     return contract
 
 
-def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> None:
+def test_model_generation_policy_v5_emits_background_generation() -> None:
     expected = {
-        "schema_version": 4,
+        "schema_version": 5,
         "classification_version": 1,
         "enforcement": "observe_only",
         "reasoning_parameter_mode": "inherit_frozen_model_configuration",
@@ -794,7 +795,7 @@ def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> N
                 "transport_mode": "retry_then_pause",
                 "machine_format_mode": "retry_then_pause",
             },
-            "private_round_memory_mode": "blocking_generation",
+            "private_round_memory_mode": "background_generation",
         },
     }
 
@@ -828,10 +829,31 @@ def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> N
     )
 
 
+def test_v5_emits_background_generation_and_v4_fixture_still_resolves() -> None:
+    v4 = v4_model_generation_policy_contract()
+    assert v4["schema_version"] == 4
+    assert v4["execution"]["private_round_memory_mode"] == "blocking_generation"
+    assert is_supported_model_generation_policy_contract(v4) is True
+    assert resolve_model_generation_policy_contract(
+        {"model_generation_policy_contract": v4}
+    ) == v4
+    current = current_model_generation_policy_contract()
+    assert current["schema_version"] == 5
+    assert current["execution"]["private_round_memory_mode"] == "background_generation"
+    v4_blocking_on_v5 = dict(current)
+    v4_blocking_on_v5["execution"] = dict(current["execution"])
+    v4_blocking_on_v5["execution"]["private_round_memory_mode"] = "blocking_generation"
+    assert is_supported_model_generation_policy_contract(v4_blocking_on_v5) is False
+    v5_on_v4 = dict(v4)
+    v5_on_v4["execution"] = dict(v4["execution"])
+    v5_on_v4["execution"]["private_round_memory_mode"] = "background_generation"
+    assert is_supported_model_generation_policy_contract(v5_on_v4) is False
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value.update(schema_version=5),
+        lambda value: value.update(schema_version=6),
         lambda value: value.update(schema_version=3.0),
         lambda value: value.update(enforcement="enabled"),
         lambda value: value.update(extra=True),
@@ -924,7 +946,7 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     assert resolved.enforcement == "observe_only"
     assert resolved.profile == profile
     assert resolved.source == "explicit_action_profile"
-    assert resolved.schema_version == 4
+    assert resolved.schema_version == 5
     assert resolved.classification_version == 1
     assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
     assert resolved.reasoning_only_timeout_ms == (
@@ -952,7 +974,7 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     )
     assert resolved.required_target_exhaustion.transport_mode == "retry_then_pause"
     assert resolved.required_target_exhaustion.machine_format_mode == "retry_then_pause"
-    assert resolved.private_round_memory_mode == "blocking_generation"
+    assert resolved.private_round_memory_mode == "background_generation"
 
 
 @pytest.mark.parametrize(
@@ -1033,7 +1055,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "model_id": "glm-test",
         "action_type": "day_debate_speech",
         "model_generation_policy_contract_status": "supported",
-        "model_generation_policy_schema_version": 4,
+        "model_generation_policy_schema_version": 5,
         "model_generation_policy_classification_version": 1,
         "model_generation_policy_enforcement": "observe_only",
         "model_generation_policy_profile": "recoverable_public_speech",
@@ -1061,7 +1083,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "blocking_generation",
+        "private_round_memory_mode": "background_generation",
         "reasoning_only_elapsed_ms": 180_000,
         "shadow_would_timeout": True,
     }

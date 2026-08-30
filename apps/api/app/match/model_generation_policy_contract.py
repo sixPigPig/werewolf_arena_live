@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-MODEL_GENERATION_POLICY_SCHEMA_VERSION = 4
+MODEL_GENERATION_POLICY_SCHEMA_VERSION = 5
+MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS = frozenset({4, 5})
 MODEL_GENERATION_POLICY_CLASSIFICATION_VERSION = 1
 MODEL_GENERATION_POLICY_ENFORCEMENT = "observe_only"
 MODEL_GENERATION_POLICY_REASONING_PARAMETER_MODE = "inherit_frozen_model_configuration"
@@ -26,6 +27,7 @@ _TOP_LEVEL_KEYS_V1 = frozenset(
 _TOP_LEVEL_KEYS_V2 = frozenset({*_TOP_LEVEL_KEYS_V1, "execution"})
 _TOP_LEVEL_KEYS_V3 = _TOP_LEVEL_KEYS_V2
 _TOP_LEVEL_KEYS_V4 = _TOP_LEVEL_KEYS_V3
+_TOP_LEVEL_KEYS_V5 = _TOP_LEVEL_KEYS_V4
 _PROFILE_NAMES = frozenset(
     {
         "strategic_full",
@@ -55,6 +57,11 @@ _EXECUTION_KEYS_V2 = frozenset(
 )
 _EXECUTION_KEYS_V3 = frozenset({*_EXECUTION_KEYS_V2, "required_target_exhaustion"})
 _EXECUTION_KEYS_V4 = _EXECUTION_KEYS_V3
+_EXECUTION_KEYS_V5 = _EXECUTION_KEYS_V4
+_PRIVATE_ROUND_MEMORY_MODE_BY_SCHEMA = {
+    4: "blocking_generation",
+    5: "background_generation",
+}
 _REQUIRED_TARGET_EXHAUSTION = {
     "eligible_failure_modes": [
         "output_budget_exhausted",
@@ -139,6 +146,7 @@ class ResolvedModelGenerationPolicy:
     required_target_exhaustion: ResolvedRequiredTargetExhaustionPolicy | None
     private_round_memory_mode: Literal[
         "blocking_generation",
+        "background_generation",
         "disabled",
     ]
 
@@ -178,9 +186,18 @@ def current_model_generation_policy_contract() -> dict[str, Any]:
             "blocking_required_target_output_timeout_mode": "technical_outcome",
             "blocking_required_target_queue_wait_budget_mode": "wall_clock",
             "required_target_exhaustion": deepcopy(_REQUIRED_TARGET_EXHAUSTION),
-            "private_round_memory_mode": "blocking_generation",
+            "private_round_memory_mode": "background_generation",
         },
     }
+
+
+def v4_model_generation_policy_contract() -> dict[str, Any]:
+    """Return the frozen V4 contract still accepted for in-flight games."""
+
+    contract = current_model_generation_policy_contract()
+    contract["schema_version"] = 4
+    contract["execution"]["private_round_memory_mode"] = "blocking_generation"
+    return contract
 
 
 def freeze_model_generation_policy_contract(
@@ -207,9 +224,12 @@ def validate_model_generation_policy_contract(
     if type(contract) is not dict:
         _raise_unsupported()
     schema_version = contract.get("schema_version")
-    if type(schema_version) is not int or schema_version != 4:
+    if (
+        type(schema_version) is not int
+        or schema_version not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
+    ):
         _raise_unsupported()
-    expected_keys = _TOP_LEVEL_KEYS_V4
+    expected_keys = _TOP_LEVEL_KEYS_V5 if schema_version == 5 else _TOP_LEVEL_KEYS_V4
     if set(contract) != expected_keys:
         _raise_unsupported()
     if not _is_exact_int(contract["classification_version"], expected=1):
@@ -246,7 +266,8 @@ def validate_model_generation_policy_contract(
     if not _strict_contract_equal(action_profiles, _ACTION_PROFILES):
         _raise_unsupported()
     execution = contract["execution"]
-    if type(execution) is not dict or set(execution) != _EXECUTION_KEYS_V4:
+    expected_execution_keys = _EXECUTION_KEYS_V5 if schema_version == 5 else _EXECUTION_KEYS_V4
+    if type(execution) is not dict or set(execution) != expected_execution_keys:
         _raise_unsupported()
     if execution["automatic_retry_enforcement"] != "enforce":
         _raise_unsupported()
@@ -281,7 +302,7 @@ def validate_model_generation_policy_contract(
         _REQUIRED_TARGET_EXHAUSTION,
     ):
         _raise_unsupported()
-    if execution["private_round_memory_mode"] != "blocking_generation":
+    if execution["private_round_memory_mode"] != _PRIVATE_ROUND_MEMORY_MODE_BY_SCHEMA[schema_version]:
         _raise_unsupported()
     return deepcopy(contract)
 

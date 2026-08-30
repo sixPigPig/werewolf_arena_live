@@ -14,7 +14,9 @@ from app.match.ability_runtime import ability_snapshot_hash, resolve_first_night
 from app.match.execution import RunFenceRejected, require_run_fence
 from app.match.event_contract import canonical_event_payload
 from app.match.knowledge_timeline import player_private_knowledge
-from app.match.model_generation_policy_contract import MODEL_GENERATION_POLICY_SCHEMA_VERSION
+from app.match.model_generation_policy_contract import (
+    MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS,
+)
 from app.match.model_parameters import (
     FrozenModelParametersError,
     frozen_player_model_configuration,
@@ -553,7 +555,7 @@ class NightRepository:
                 or supporting_payload.get("target_player_id") is not None
                 or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
                 or supporting_payload.get("model_generation_policy_schema_version")
-                != MODEL_GENERATION_POLICY_SCHEMA_VERSION
+                not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
             ):
                 raise RepositoryError("technical no-action supporting event does not match")
             action_succeeded_events = list(

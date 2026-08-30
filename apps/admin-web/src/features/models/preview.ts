@@ -12,7 +12,7 @@ export const previewModelCatalog: AdminModelCatalog = {
       label: "火山方舟 Agent Plan",
       refresh_mode: "manual",
       status: "ok",
-      model_count: 2,
+      model_count: 3,
       last_synced_at: "2026-07-15T11:56:00+08:00",
       docs_url: "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01",
       error: null,
@@ -42,6 +42,12 @@ export const previewModelCatalog: AdminModelCatalog = {
     previewModel("ark", "ep-example", true, false),
     previewModel("agent_plan", "doubao-seed-2-0-lite-260215", true, true),
     previewModel("agent_plan", "glm-5-2-260617", true, false),
+    previewModel(
+      "agent_plan",
+      "doubao-seed-2-0-code-preview-260215",
+      false,
+      false,
+    ),
     previewModel("deepseek", "deepseek-v4-flash", true, false),
     previewModel("deepseek", "deepseek-v4-pro", false, false),
   ],
@@ -53,13 +59,16 @@ function previewModel(
   enabled: boolean,
   isDefault: boolean,
 ): AdminModel {
+  const usesCodePreviewPolicy = modelId.includes("doubao-seed-2-0-code-preview");
   const usesHighMaxPolicy =
     provider === "deepseek" ||
     modelId.includes("glm-5-2") ||
-    modelId.includes("deepseek-v4");
-  const usesDoubaoPolicy = modelId.startsWith("doubao-");
-  const supportsThinking = usesHighMaxPolicy || usesDoubaoPolicy;
-  const parameters = supportsThinking
+    modelId.includes("deepseek-v4") ||
+    (!usesCodePreviewPolicy && !modelId.startsWith("doubao-"));
+  const usesDoubaoPolicy = modelId.startsWith("doubao-") && !usesCodePreviewPolicy;
+  const usesVerifiedThinkingPolicy = usesHighMaxPolicy || usesDoubaoPolicy;
+  const supportsThinking = !usesCodePreviewPolicy;
+  const parameters = usesVerifiedThinkingPolicy
     ? {
         thinking: "enabled" as const,
         reasoning_effort: usesHighMaxPolicy ? "high" : "low",
@@ -109,17 +118,29 @@ function previewModel(
           disabled_max_tokens: 512,
           sampling_parameters_allowed_when_thinking: true,
         }
-      : {
-          thinking_options: ["disabled"],
-          default_thinking: "disabled",
-          thinking_locked: true,
-          reasoning_effort_options: [],
-          default_reasoning_effort: null,
-          max_tokens_by_effort: {},
-          default_max_tokens: 512,
-          disabled_max_tokens: 512,
-          sampling_parameters_allowed_when_thinking: true,
-        };
+      : usesCodePreviewPolicy
+        ? {
+            thinking_options: ["disabled"],
+            default_thinking: "disabled",
+            thinking_locked: true,
+            reasoning_effort_options: [],
+            default_reasoning_effort: null,
+            max_tokens_by_effort: {},
+            default_max_tokens: 512,
+            disabled_max_tokens: 512,
+            sampling_parameters_allowed_when_thinking: true,
+          }
+        : {
+            thinking_options: ["enabled", "disabled"],
+            default_thinking: "enabled",
+            thinking_locked: false,
+            reasoning_effort_options: ["high", "max"],
+            default_reasoning_effort: "high",
+            max_tokens_by_effort: { high: 8_192, max: 16_384 },
+            default_max_tokens: 8_192,
+            disabled_max_tokens: 512,
+            sampling_parameters_allowed_when_thinking: true,
+          };
   return {
     provider,
     model_id: modelId,

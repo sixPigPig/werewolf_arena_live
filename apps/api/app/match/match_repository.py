@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -26,7 +26,7 @@ from app.match.model_context import (
     project_model_action_context_with_metadata,
 )
 from app.match.model_generation_policy_contract import (
-    MODEL_GENERATION_POLICY_SCHEMA_VERSION,
+    MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS,
     resolve_model_generation_policy_contract,
 )
 from app.match.model_parameters import (
@@ -903,6 +903,8 @@ class MatchRepository:
         source_cutoff_record_seq: int,
         commits: tuple[PrivateRoundMemoryCommit, ...],
         batch_completed_payload: dict[str, Any] | None = None,
+        allow_phase_advance: bool = False,
+        emit_committed_events: bool = False,
     ) -> list[tuple[str, bool]]:
         commit_indexes = tuple(commit.commit_index for commit in commits)
         if (
@@ -916,7 +918,27 @@ class MatchRepository:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
-            if (
+            started = _private_round_memory_batch_started_event(
+                db,
+                game_id=game_id,
+                run_id=run_id,
+                batch_id=batch_id,
+            )
+            started_payload = started.payload if started is not None and isinstance(started.payload, dict) else {}
+            if allow_phase_advance:
+                if (
+                    started is None
+                    or game.current_run_id != run_id
+                    or started_payload.get("round_no") != round_no
+                    or started_payload.get("batch_id") != batch_id
+                    or not _background_private_memory_commit_phase_allowed(
+                        game=game,
+                        started_payload=started_payload,
+                        memory_round_no=round_no,
+                    )
+                ):
+                    raise RepositoryError("private round memory phase changed before commit")
+            elif (
                 match.round_no != round_no
                 or not game.phase_id.startswith("day_")
                 or game.current_run_id != run_id
@@ -957,7 +979,15 @@ class MatchRepository:
                 if not normalized_memory:
                     raise RepositoryError("private round memory cannot be empty")
                 player = db.get(PlayerState, (game_id, commit.player_id))
-                if player is None or not player.alive:
+                if allow_phase_advance:
+                    owner_ids = started_payload.get("player_ids")
+                    if (
+                        not isinstance(owner_ids, list)
+                        or commit.player_id not in owner_ids
+                        or player is None
+                    ):
+                        raise RepositoryError("private round memory owner was not alive at cutoff")
+                elif player is None or not player.alive:
                     raise RepositoryError("private round memory owner must be alive")
                 owner_rows = rows_by_owner.get(commit.player_id, [])
                 latest = max(owner_rows, key=_private_round_memory_order, default=None)
@@ -998,16 +1028,48 @@ class MatchRepository:
                 )
                 if source_refs != expected_source_refs:
                     raise RepositoryError("private round memory source refs do not match facts")
+                origin_phase_id = str(
+                    started_payload.get("origin_phase_id")
+                    or started_payload.get("phase_id")
+                    or game.phase_id
+                )
+                origin_phase_state = str(
+                    started_payload.get("origin_phase_state")
+                    or started_payload.get("phase_state")
+                    or game.phase_state
+                )
+                if allow_phase_advance and "origin_sheriff_player_id" in started_payload:
+                    origin_sheriff_player_id = started_payload.get("origin_sheriff_player_id")
+                    if origin_sheriff_player_id is not None and not isinstance(
+                        origin_sheriff_player_id, str
+                    ):
+                        raise RepositoryError("private round memory origin sheriff is invalid")
+                else:
+                    origin_sheriff_player_id = match.sheriff_player_id
+                if allow_phase_advance and isinstance(
+                    started_payload.get("origin_sheriff_badge_state"), str
+                ):
+                    origin_sheriff_badge_state = started_payload["origin_sheriff_badge_state"]
+                else:
+                    origin_sheriff_badge_state = match.sheriff_badge_state
+                origin_players = _players_for_private_memory_lineage(
+                    db,
+                    game,
+                    started_payload=started_payload if allow_phase_advance else None,
+                )
                 _validate_private_round_memory_model_lineage(
                     db,
                     game=game,
                     commit=commit,
                     batch_id=batch_id,
-                    phase_id=game.phase_id,
-                    phase_state=game.phase_state,
+                    phase_id=origin_phase_id if allow_phase_advance else game.phase_id,
+                    phase_state=origin_phase_state if allow_phase_advance else game.phase_state,
                     round_no=round_no,
                     source_cutoff_record_seq=source_cutoff_record_seq,
                     normalized_memory=normalized_memory,
+                    sheriff_player_id=origin_sheriff_player_id,
+                    sheriff_badge_state=origin_sheriff_badge_state,
+                    players=origin_players,
                 )
                 existing = next(
                     (
@@ -1129,62 +1191,80 @@ class MatchRepository:
             for commit, normalized_memory, memory_sha256, existing in prepared:
                 if existing is not None:
                     results.append((existing.knowledge_fact_id, False))
-                    continue
-                fact_id = f"v2_fact_{uuid4().hex[:16]}"
-                source_refs = list(commit.source_refs)
-                payload = {
-                    "schema_version": 2,
-                    "owner": {"scope": "player", "id": commit.player_id},
-                    "round_no": round_no,
-                    "memory": normalized_memory,
-                    "epistemic_status": "actor_subjective_memory",
-                    "batch_id": batch_id,
-                    "previous_snapshot_fact_id": commit.previous_snapshot_fact_id,
-                    "supersedes_fact_id": commit.previous_snapshot_fact_id,
-                    "source_cutoff_record_seq": source_cutoff_record_seq,
-                    "source_refs": source_refs,
-                    "source_refs_sha256": commit.source_refs_sha256,
-                    "memory_sha256": memory_sha256,
-                    "source_action_id": commit.action_id,
-                    "source_model_response_record_seq": commit.model_response_record_seq,
-                    "source_terminal_event_record_seq": commit.terminal_event_record_seq,
-                    "provider_request_id": commit.provider_request_id,
-                    "source_attempt_id": commit.attempt_id,
-                    "source_request_payload_sha256": commit.request_payload_sha256,
-                    "source_projected_context_sha256": commit.projected_context_sha256,
-                    "projected_known_event_refs": list(commit.projected_known_event_refs),
-                    "projected_known_events_sha256": (
-                        commit.projected_known_events_sha256
-                    ),
-                }
-                db.add(
-                    KnowledgeFact(
-                        knowledge_fact_id=fact_id,
-                        game_id=game_id,
-                        source_activation_id=None,
-                        owner_scope="player",
-                        owner_id=commit.player_id,
-                        fact_type="private_round_memory",
-                        payload=payload,
-                    )
-                )
-                _append_event(
-                    db,
-                    game=game,
-                    event_type="private_knowledge_recorded",
-                    audience="god_view",
-                    payload={
-                        "knowledge_fact_id": fact_id,
-                        "owner_scope": "player",
-                        "owner_id": commit.player_id,
-                        "fact_type": "private_round_memory",
+                    fact_id = existing.knowledge_fact_id
+                    created = False
+                else:
+                    fact_id = f"v2_fact_{uuid4().hex[:16]}"
+                    source_refs = list(commit.source_refs)
+                    payload = {
+                        "schema_version": 2,
+                        "owner": {"scope": "player", "id": commit.player_id},
                         "round_no": round_no,
+                        "memory": normalized_memory,
+                        "epistemic_status": "actor_subjective_memory",
                         "batch_id": batch_id,
-                        "commit_index": commit.commit_index,
-                        **payload,
-                    },
-                )
-                results.append((fact_id, True))
+                        "previous_snapshot_fact_id": commit.previous_snapshot_fact_id,
+                        "supersedes_fact_id": commit.previous_snapshot_fact_id,
+                        "source_cutoff_record_seq": source_cutoff_record_seq,
+                        "source_refs": source_refs,
+                        "source_refs_sha256": commit.source_refs_sha256,
+                        "memory_sha256": memory_sha256,
+                        "source_action_id": commit.action_id,
+                        "source_model_response_record_seq": commit.model_response_record_seq,
+                        "source_terminal_event_record_seq": commit.terminal_event_record_seq,
+                        "provider_request_id": commit.provider_request_id,
+                        "source_attempt_id": commit.attempt_id,
+                        "source_request_payload_sha256": commit.request_payload_sha256,
+                        "source_projected_context_sha256": commit.projected_context_sha256,
+                        "projected_known_event_refs": list(commit.projected_known_event_refs),
+                        "projected_known_events_sha256": (
+                            commit.projected_known_events_sha256
+                        ),
+                    }
+                    db.add(
+                        KnowledgeFact(
+                            knowledge_fact_id=fact_id,
+                            game_id=game_id,
+                            source_activation_id=None,
+                            owner_scope="player",
+                            owner_id=commit.player_id,
+                            fact_type="private_round_memory",
+                            payload=payload,
+                        )
+                    )
+                    _append_event(
+                        db,
+                        game=game,
+                        event_type="private_knowledge_recorded",
+                        audience="god_view",
+                        payload={
+                            "knowledge_fact_id": fact_id,
+                            "owner_scope": "player",
+                            "owner_id": commit.player_id,
+                            "fact_type": "private_round_memory",
+                            "round_no": round_no,
+                            "batch_id": batch_id,
+                            "commit_index": commit.commit_index,
+                            **payload,
+                        },
+                    )
+                    results.append((fact_id, True))
+                    created = True
+                if emit_committed_events:
+                    _append_event(
+                        db,
+                        game=game,
+                        event_type="private_round_memory_committed",
+                        audience="god_view",
+                        payload={
+                            "owner_id": commit.player_id,
+                            "round_no": round_no,
+                            "batch_id": batch_id,
+                            "knowledge_fact_id": fact_id,
+                            "phase_id_at_commit": game.phase_id,
+                            "status": "committed" if created else "reused",
+                        },
+                    )
             if batch_completed_payload is not None:
                 completed_payload = dict(batch_completed_payload)
                 status_by_owner = {
@@ -1213,6 +1293,63 @@ class MatchRepository:
                     payload=completed_payload,
                 )
             return results
+
+    def record_private_round_memory(
+        self,
+        *,
+        game_id: str,
+        run_id: str,
+        phase_id: str,
+        phase_state: str,
+        round_no: int,
+        batch_id: str,
+        source_cutoff_record_seq: int,
+        commit: PrivateRoundMemoryCommit,
+    ) -> tuple[str, bool]:
+        results = self.record_private_round_memories(
+            game_id=game_id,
+            run_id=run_id,
+            phase_id=phase_id,
+            phase_state=phase_state,
+            round_no=round_no,
+            batch_id=batch_id,
+            source_cutoff_record_seq=source_cutoff_record_seq,
+            commits=(commit,),
+            allow_phase_advance=True,
+            emit_committed_events=True,
+        )
+        return results[0]
+
+    def complete_private_round_memory_batch(
+        self,
+        *,
+        game_id: str,
+        batch_completed_payload: dict[str, Any],
+    ) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
+            _raise_if_stop_requested(db, game)
+            batch_id = batch_completed_payload.get("batch_id")
+            if not isinstance(batch_id, str) or not batch_id:
+                raise RepositoryError("private round memory batch id is invalid")
+            terminal = _private_round_memory_batch_terminal_event(
+                db,
+                game_id=game_id,
+                run_id=game.current_run_id,
+                batch_id=batch_id,
+            )
+            if terminal is not None:
+                return
+            payload = dict(batch_completed_payload)
+            if "commit_phase_ids" not in payload:
+                payload["commit_phase_ids"] = [game.phase_id]
+            _append_event(
+                db,
+                game=game,
+                event_type="day_private_memory_batch_completed",
+                audience="god_view",
+                payload=payload,
+            )
 
     def append_event(
         self,
@@ -3049,7 +3186,7 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
         or supporting_payload.get("target_player_id") is not None
         or supporting_payload.get("model_generation_policy_schema_version")
-        != MODEL_GENERATION_POLICY_SCHEMA_VERSION
+        not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
 
@@ -3125,6 +3262,75 @@ def _private_round_memory_batch_terminal_event(
     return matching[0] if matching else None
 
 
+def _private_round_memory_batch_started_event(
+    db: Session,
+    *,
+    game_id: str,
+    run_id: str,
+    batch_id: str,
+) -> GameRecordEvent | None:
+    matching = [
+        event
+        for event in db.scalars(
+            select(GameRecordEvent)
+            .where(
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.run_id == run_id,
+                GameRecordEvent.event_type == "day_private_memory_batch_started",
+            )
+            .order_by(GameRecordEvent.record_seq)
+        )
+        if isinstance(event.payload, dict) and event.payload.get("batch_id") == batch_id
+    ]
+    if not matching:
+        return None
+    return matching[-1]
+
+
+def _background_private_memory_commit_phase_allowed(
+    *,
+    game: GameRecord,
+    started_payload: dict[str, Any],
+    memory_round_no: int,
+) -> bool:
+    origin_phase_id = started_payload.get("origin_phase_id") or started_payload.get("phase_id")
+    if not isinstance(origin_phase_id, str) or not origin_phase_id:
+        return False
+    if game.phase_id == origin_phase_id:
+        return True
+    if game.phase_id == f"night_{memory_round_no + 1}":
+        return True
+    if game.phase_id == f"day_{memory_round_no + 1}":
+        return True
+    return game.phase_state == "game_completed"
+
+
+def _players_for_private_memory_lineage(
+    db: Session,
+    game: GameRecord,
+    *,
+    started_payload: dict[str, Any] | None,
+) -> tuple[MatchPlayer, ...]:
+    players = _players(db, game)
+    if started_payload is None:
+        return players
+    owner_ids = started_payload.get("player_ids")
+    alive_ids = {item for item in owner_ids if isinstance(item, str)} if isinstance(owner_ids, list) else None
+    origin_states = started_payload.get("origin_player_states")
+    origin_states = origin_states if isinstance(origin_states, dict) else {}
+    rebuilt: list[MatchPlayer] = []
+    for player in players:
+        next_state = origin_states.get(player.player_id)
+        rebuilt.append(
+            replace(
+                player,
+                alive=player.player_id in alive_ids if alive_ids is not None else player.alive,
+                state=dict(next_state) if isinstance(next_state, dict) else player.state,
+            )
+        )
+    return tuple(rebuilt)
+
+
 def _private_round_memory_source_refs(
     db: Session,
     *,
@@ -3197,6 +3403,9 @@ def _validate_private_round_memory_model_lineage(
     round_no: int,
     source_cutoff_record_seq: int,
     normalized_memory: str,
+    sheriff_player_id: str | None,
+    sheriff_badge_state: str,
+    players: tuple[MatchPlayer, ...],
 ) -> None:
     response = db.scalar(
         select(GameRecordEvent).where(
@@ -3350,7 +3559,7 @@ def _validate_private_round_memory_model_lineage(
                 None,
             )
     match = _match(db, game)
-    expected_players = _players(db, game)
+    expected_players = players
     expected_owner = next(
         (player for player in expected_players if player.player_id == commit.player_id),
         None,
@@ -3380,8 +3589,8 @@ def _validate_private_round_memory_model_lineage(
             team=expected_owner.team,
             persona=expected_owner.persona,
             alive=expected_owner.alive,
-            sheriff_player_id=match.sheriff_player_id,
-            sheriff_badge_state=match.sheriff_badge_state,
+            sheriff_player_id=sheriff_player_id,
+            sheriff_badge_state=sheriff_badge_state,
             rule=_match_snapshot(
                 db,
                 game=game,

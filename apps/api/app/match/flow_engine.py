@@ -53,6 +53,12 @@ class LiveFlowEngine:
                     reason="operator_interrupted",
                 )
             )
+        finally:
+            await self._day.join_background_private_memory_jobs(
+                game_id=game_id,
+                timeout=1.0,
+                cancel=True,
+            )
 
     async def _run_active(
         self,
