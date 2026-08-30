@@ -8,10 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.db.session import get_db
-from app.werewolf.voice_materializer import LIVE_VOICE_MATERIALIZER_WORKER_TYPE
-from app.werewolf.worker_telemetry import runtime_worker_is_alive
 
 
 router = APIRouter()
@@ -42,11 +39,6 @@ def read_readiness(
         current_revisions = set(
             db.execute(text("SELECT version_num FROM alembic_version")).scalars()
         )
-        materializer_alive = not settings.ark_tts_enabled or runtime_worker_is_alive(
-            db,
-            worker_type=LIVE_VOICE_MATERIALIZER_WORKER_TYPE,
-            max_age_seconds=settings.live_voice_materializer_probe_max_age_seconds,
-        )
     except SQLAlchemyError:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
@@ -62,21 +54,10 @@ def read_readiness(
             "checks": {"database": "ok", "migrations": "outdated"},
         }
 
-    if not materializer_alive:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {
-            "status": "not_ready",
-            "checks": {
-                "database": "ok",
-                "migrations": "ok",
-                "live_voice_materializer": "unavailable",
-            },
-        }
-
-    checks = {"database": "ok", "migrations": "ok"}
-    if settings.ark_tts_enabled:
-        checks["live_voice_materializer"] = "ok"
-    return {"status": "ready", "checks": checks}
+    return {
+        "status": "ready",
+        "checks": {"database": "ok", "migrations": "ok"},
+    }
 
 
 @lru_cache

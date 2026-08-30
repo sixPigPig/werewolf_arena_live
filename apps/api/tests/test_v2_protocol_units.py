@@ -12,14 +12,14 @@ import wave
 
 import pytest
 
-from app.v2 import tts_client as v2_tts
-from app.v2.action_engine import (
-    V2ActionFailure,
-    V2ActionResult,
-    V2ActionTechnicalOutcome,
-    V2DecisionContract,
-    V2ModelRetryPolicy,
-    V2SpeechSpec,
+from app.match import tts_client as v2_tts
+from app.match.action_engine import (
+    ActionFailure,
+    ActionResult,
+    ActionTechnicalOutcome,
+    DecisionContract,
+    ModelRetryPolicy,
+    SpeechSpec,
     _action_model_parameters,
     _constrain_model_speech,
     _effective_model_attempt_limit,
@@ -31,20 +31,20 @@ from app.v2.action_engine import (
     _technical_target_exhaustion_outcome,
     _validate_model_target_decision,
 )
-from app.v2.director_projection import project_director_scene
-from app.v2.day_speech_pipeline_contract import current_day_speech_pipeline_contract
-from app.v2.god_view_access import (
+from app.match.director_projection import project_director_scene
+from app.match.day_speech_pipeline_contract import current_day_speech_pipeline_contract
+from app.match.god_view_access import (
     issue_god_view_access_token,
     verify_god_view_access_token,
 )
-from app.v2.god_view_projection import (
-    V2GodViewProjectionError,
+from app.match.god_view_projection import (
+    GodViewProjectionError,
     project_god_view_player_identities,
 )
-from app.v2.model_client import (
-    V2ModelDecision,
-    V2ModelError,
-    V2QualityError,
+from app.match.model_client import (
+    ModelDecision,
+    ModelError,
+    QualityError,
     _decision_model_input,
     _decision_object,
     _decision_repair_kind,
@@ -55,35 +55,35 @@ from app.v2.model_client import (
     _next_with_cancellation,
     model_failure_disposition,
 )
-from app.v2.model_failure_episode import (
+from app.match.model_failure_episode import (
     derive_failure_episodes,
     open_failure_episode_ids,
     stable_failure_episode_id,
 )
-from app.v2.model_context_compaction import encode_known_events_v7
-from app.v2.model_context_contract import (
+from app.match.model_context_compaction import encode_known_events_v7
+from app.match.model_context_contract import (
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.model_generation_policy_contract import (
-    V2ModelGenerationPolicyContractError,
+from app.match.model_generation_policy_contract import (
+    ModelGenerationPolicyContractError,
     current_model_generation_policy_contract,
     freeze_model_generation_policy_contract,
     is_supported_model_generation_policy_contract,
     resolve_model_generation_action_policy,
     resolve_model_generation_policy_contract,
 )
-from app.v2.live_runtime import _audience_targets
-from app.v2.protocol import V2LiveProtocolError, audio_frame, day_progress
-from app.v2.public_projection import (
-    V2PublicProjectionError,
+from app.match.live_runtime import _audience_targets
+from app.match.protocol import LiveProtocolError, audio_frame, day_progress
+from app.match.public_projection import (
+    PublicProjectionError,
     project_public_player_seats,
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
-from app.v2.repository import V2GameCanceled, V2PresentationIdentity
-from app.v2.role_assignment import V2RoleAssignmentError, assign_private_roles
-from app.v2.tts_client import (
+from app.match.repository import GameCanceled, PresentationIdentity
+from app.match.role_assignment import RoleAssignmentError, assign_private_roles
+from app.match.tts_client import (
     _AUDIO_SERVER,
     _CONNECTION_STARTED,
     _FULL_SERVER,
@@ -91,13 +91,14 @@ from app.v2.tts_client import (
     _START_SESSION,
     _TASK_REQUEST,
     _WITH_EVENT,
-    V2TtsClient,
+    TtsClient,
     _TtsFrame,
     _decode_frame,
     _encode_event,
     _receive,
+    build_tts_session_request,
 )
-from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
+from app.match.voice_recorder import VoiceRecorder, VoiceRecordingError
 
 
 def _empty_v12_known_events() -> dict[str, Any]:
@@ -718,7 +719,7 @@ def test_v2_failure_episode_reports_terminal_conflict_without_guessing_priority(
 
 
 def test_v2_model_retry_policy_uses_extended_timeouts_by_default() -> None:
-    policy = V2ModelRetryPolicy()
+    policy = ModelRetryPolicy()
 
     assert policy.max_attempts == 3
     assert policy.attempt_total_seconds == 180.0
@@ -866,7 +867,7 @@ def test_model_generation_policy_present_unknown_or_malformed_fails_closed(
 
     assert is_supported_model_generation_policy_contract(contract) is False
     with pytest.raises(
-        V2ModelGenerationPolicyContractError,
+        ModelGenerationPolicyContractError,
         match="unsupported_model_generation_policy_contract",
     ):
         resolve_model_generation_policy_contract({"model_generation_policy_contract": contract})
@@ -882,7 +883,7 @@ def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold
     changed["profiles"]["isolated_auxiliary"]["reasoning_only_timeout_ms"] = 255_000
     changed["profiles"]["recoverable_public_speech"]["timeout_max_attempts"] = 2
     monkeypatch.setattr(
-        "app.v2.model_generation_policy_contract.current_model_generation_policy_contract",
+        "app.match.model_generation_policy_contract.current_model_generation_policy_contract",
         lambda: changed,
     )
 
@@ -1102,8 +1103,8 @@ def test_generation_policy_audit_preserves_explicit_elapsed_and_legacy_null_shad
     assert audit["shadow_would_timeout"] is None
 
 
-def _blocking_required_target_spec() -> V2SpeechSpec:
-    return V2SpeechSpec(
+def _blocking_required_target_spec() -> SpeechSpec:
+    return SpeechSpec(
         action_type="ability_werewolf.attack_decision",
         phase_id="night_1",
         required_phase_state="werewolf_action_open",
@@ -1113,7 +1114,7 @@ def _blocking_required_target_spec() -> V2SpeechSpec:
         actor_kind="player",
         actor_id="player-wolf",
         allowed_target_ids=("player-1", "player-2"),
-        decision_contract=V2DecisionContract(
+        decision_contract=DecisionContract(
             kind="target",
             target_mode="required",
             speech_mode="required",
@@ -1134,7 +1135,7 @@ def test_blocking_required_target_predicate_uses_frozen_contract_not_action_name
         _is_blocking_required_target(
             replace(
                 eligible,
-                decision_contract=V2DecisionContract(kind="speech"),
+                decision_contract=DecisionContract(kind="speech"),
             )
         )
         is False
@@ -1143,7 +1144,7 @@ def test_blocking_required_target_predicate_uses_frozen_contract_not_action_name
         _is_blocking_required_target(
             replace(
                 eligible,
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="boolean",
                     boolean_field="withdraw",
                 ),
@@ -1155,7 +1156,7 @@ def test_blocking_required_target_predicate_uses_frozen_contract_not_action_name
         _is_blocking_required_target(
             replace(
                 eligible,
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="target",
                     target_mode="optional",
                 ),
@@ -1167,8 +1168,8 @@ def test_blocking_required_target_predicate_uses_frozen_contract_not_action_name
 
 def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> None:
     eligible = _blocking_required_target_spec()
-    policy = V2ModelRetryPolicy(max_attempts=3)
-    exhausted = V2ModelError("model_output_budget_exhausted")
+    policy = ModelRetryPolicy(max_attempts=3)
+    exhausted = ModelError("model_output_budget_exhausted")
     disposition = model_failure_disposition(exhausted)
 
     assert disposition.category == "output_budget"
@@ -1191,8 +1192,8 @@ def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> 
         == 2
     )
     for ineligible_contract in (
-        V2DecisionContract(kind="speech"),
-        V2DecisionContract(kind="boolean", boolean_field="withdraw"),
+        DecisionContract(kind="speech"),
+        DecisionContract(kind="boolean", boolean_field="withdraw"),
     ):
         assert (
             _effective_model_attempt_limit(
@@ -1213,7 +1214,7 @@ def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> 
         == 2
     )
 
-    timeout = V2ModelError("model_attempt_hard_timeout")
+    timeout = ModelError("model_attempt_hard_timeout")
     assert (
         _effective_model_attempt_limit(
             spec=eligible,
@@ -1223,7 +1224,7 @@ def test_effective_model_attempt_limit_only_expands_eligible_output_budget() -> 
         )
         == 2
     )
-    transport = V2ModelError("model_transport_failed")
+    transport = ModelError("model_transport_failed")
     assert (
         _effective_model_attempt_limit(
             spec=eligible,
@@ -1239,16 +1240,16 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
     required_target_spec = _blocking_required_target_spec()
     spec = replace(
         required_target_spec,
-        decision_contract=V2DecisionContract(kind="speech"),
+        decision_contract=DecisionContract(kind="speech"),
         allowed_target_ids=None,
     )
-    policy = V2ModelRetryPolicy(max_attempts=3)
+    policy = ModelRetryPolicy(max_attempts=3)
     generation_policy = resolve_model_generation_action_policy(
         current_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
-    output_budget = V2ModelError("model_output_budget_exhausted", retryable=True)
+    output_budget = ModelError("model_output_budget_exhausted", retryable=True)
     assert (
         _effective_model_attempt_limit(
             spec=spec,
@@ -1259,7 +1260,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
         )
         == 1
     )
-    hard_timeout = V2ModelError(
+    hard_timeout = ModelError(
         "model_attempt_hard_timeout",
         retryable=True,
         timeout_scope="attempt_hard",
@@ -1274,7 +1275,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
         )
         == 1
     )
-    pre_token_transport = V2ModelError("model_transport_failed", retryable=True)
+    pre_token_transport = ModelError("model_transport_failed", retryable=True)
     assert (
         _effective_model_attempt_limit(
             spec=spec,
@@ -1285,7 +1286,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
         )
         == 2
     )
-    post_token_transport = V2ModelError(
+    post_token_transport = ModelError(
         "model_transport_failed",
         retryable=True,
         first_token_seen=True,
@@ -1300,7 +1301,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
         )
         == 1
     )
-    non_retryable_transport = V2ModelError("model_transport_failed", retryable=False)
+    non_retryable_transport = ModelError("model_transport_failed", retryable=False)
     assert (
         _effective_model_attempt_limit(
             spec=spec,
@@ -1335,7 +1336,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
         )
         == 1
     )
-    with pytest.raises(V2ModelGenerationPolicyContractError):
+    with pytest.raises(ModelGenerationPolicyContractError):
         resolve_model_generation_action_policy(
             _model_generation_policy_v2(),
             action_type=technical_target_spec.action_type,
@@ -1345,23 +1346,23 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
 @pytest.mark.parametrize(
     ("error", "expected_failure_mode"),
     [
-        (V2ModelError("model_output_budget_exhausted"), "output_budget_exhausted"),
+        (ModelError("model_output_budget_exhausted"), "output_budget_exhausted"),
         (
-            V2ModelError(
+            ModelError(
                 "model_attempt_hard_timeout",
                 timeout_scope="attempt_hard",
             ),
             "attempt_hard_timeout",
         ),
         (
-            V2ModelError(
+            ModelError(
                 "model_total_timeout",
                 timeout_scope="action_budget",
             ),
             "action_wall_timeout",
         ),
         (
-            V2ModelError(
+            ModelError(
                 "model_total_timeout",
                 failure_stage="action_budget",
             ),
@@ -1370,7 +1371,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
     ],
 )
 def test_v4_required_target_expensive_exhaustion_returns_typed_technical_outcome(
-    error: V2ModelError,
+    error: ModelError,
     expected_failure_mode: str,
 ) -> None:
     spec = replace(
@@ -1393,15 +1394,15 @@ def test_v4_required_target_expensive_exhaustion_returns_typed_technical_outcome
 @pytest.mark.parametrize(
     "error",
     [
-        V2ModelError("model_first_token_timeout", timeout_scope="first_token"),
-        V2ModelError("model_stream_idle_timeout", timeout_scope="stream_idle"),
-        V2ModelError("model_total_timeout", timeout_scope="attempt_budget"),
-        V2ModelError("model_transport_failed"),
-        V2QualityError("model_decision_invalid_json", raw_response="not-json"),
+        ModelError("model_first_token_timeout", timeout_scope="first_token"),
+        ModelError("model_stream_idle_timeout", timeout_scope="stream_idle"),
+        ModelError("model_total_timeout", timeout_scope="attempt_budget"),
+        ModelError("model_transport_failed"),
+        QualityError("model_decision_invalid_json", raw_response="not-json"),
     ],
 )
 def test_v4_required_target_transport_format_and_soft_timeouts_do_not_technical_fallback(
-    error: V2ModelError,
+    error: ModelError,
 ) -> None:
     spec = replace(
         _blocking_required_target_spec(),
@@ -1424,7 +1425,7 @@ def test_v4_required_target_transport_format_and_soft_timeouts_do_not_technical_
 
 def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() -> None:
     spec = _blocking_required_target_spec()
-    error = V2ModelError("model_output_budget_exhausted")
+    error = ModelError("model_output_budget_exhausted")
     v4_policy = resolve_model_generation_action_policy(
         current_model_generation_policy_contract(),
         action_type=spec.action_type,
@@ -1438,7 +1439,7 @@ def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() 
         )
         is None
     )
-    with pytest.raises(V2ModelGenerationPolicyContractError):
+    with pytest.raises(ModelGenerationPolicyContractError):
         resolve_model_generation_action_policy(
             _model_generation_policy_v2(),
             action_type=spec.action_type,
@@ -1449,7 +1450,7 @@ def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() 
     ):
         replace(
             spec,
-            decision_contract=V2DecisionContract(
+            decision_contract=DecisionContract(
                 kind="target",
                 target_mode="optional",
             ),
@@ -1461,12 +1462,12 @@ def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() 
 def test_third_output_budget_window_fails_closed_for_invalid_elapsed(
     elapsed_ms: int | None,
 ) -> None:
-    policy = V2ModelRetryPolicy(
+    policy = ModelRetryPolicy(
         max_attempts=3,
         attempt_total_seconds=180,
         action_total_seconds=300,
     )
-    exhausted = V2ModelError(
+    exhausted = ModelError(
         "model_output_budget_exhausted",
         elapsed_ms=elapsed_ms,
     )
@@ -1484,12 +1485,12 @@ def test_third_output_budget_window_fails_closed_for_invalid_elapsed(
 
 
 def test_only_second_cycle_output_budget_failure_requires_observed_third_window() -> None:
-    policy = V2ModelRetryPolicy(
+    policy = ModelRetryPolicy(
         max_attempts=3,
         attempt_total_seconds=180,
         action_total_seconds=300,
     )
-    exhausted = V2ModelError(
+    exhausted = ModelError(
         "model_output_budget_exhausted",
         elapsed_ms=42_500,
     )
@@ -1531,16 +1532,16 @@ def test_only_second_cycle_output_budget_failure_requires_observed_third_window(
 @pytest.mark.parametrize(
     ("error", "category", "max_attempts", "pausable"),
     [
-        (V2ModelError("model_empty_stream"), "transport", 3, True),
-        (V2ModelError("model_first_token_timeout"), "timeout", 2, True),
+        (ModelError("model_empty_stream"), "transport", 3, True),
+        (ModelError("model_first_token_timeout"), "timeout", 2, True),
         (
-            V2QualityError("model_decision_invalid_json", raw_response="not-json"),
+            QualityError("model_decision_invalid_json", raw_response="not-json"),
             "machine_format",
             2,
             True,
         ),
         (
-            V2QualityError(
+            QualityError(
                 "model_decision_ambiguous_multiple_objects",
                 raw_response='{"target_player_id":"seat_1"}{"target_player_id":"seat_2"}',
             ),
@@ -1549,7 +1550,7 @@ def test_only_second_cycle_output_budget_failure_requires_observed_third_window(
             True,
         ),
         (
-            V2ModelError("model_provider_credentials_missing"),
+            ModelError("model_provider_credentials_missing"),
             "provider_configuration",
             1,
             False,
@@ -1557,7 +1558,7 @@ def test_only_second_cycle_output_budget_failure_requires_observed_third_window(
     ],
 )
 def test_v2_model_failure_disposition_is_explicit(
-    error: V2ModelError,
+    error: ModelError,
     category: str,
     max_attempts: int,
     pausable: bool,
@@ -1570,7 +1571,7 @@ def test_v2_model_failure_disposition_is_explicit(
 
 
 def test_v2_required_target_validation_preserves_returned_stream_diagnostics() -> None:
-    decision = V2ModelDecision(
+    decision = ModelDecision(
         target_player_id=None,
         speech=None,
         provider_request_id="provider-required-target",
@@ -1594,7 +1595,7 @@ def test_v2_required_target_validation_preserves_returned_stream_diagnostics() -
         usage_consistency="exact",
         reasoning_only_elapsed_ms=61,
     )
-    spec = V2SpeechSpec(
+    spec = SpeechSpec(
         action_type="exile_vote",
         phase_id="day_1",
         required_phase_state="exile_vote_open",
@@ -1603,7 +1604,7 @@ def test_v2_required_target_validation_preserves_returned_stream_diagnostics() -
         success_phase_state="exile_vote_closed",
         actor_kind="player",
         actor_id="player-1",
-        decision_contract=V2DecisionContract(
+        decision_contract=DecisionContract(
             kind="target",
             speech_mode="forbidden",
             target_mode="required",
@@ -1611,7 +1612,7 @@ def test_v2_required_target_validation_preserves_returned_stream_diagnostics() -
         allowed_target_ids=("player-2",),
     )
 
-    with pytest.raises(V2QualityError) as captured:
+    with pytest.raises(QualityError) as captured:
         _validate_model_target_decision(decision, spec=spec)
     _enrich_model_error_from_decision(captured.value, decision)
 
@@ -1678,7 +1679,7 @@ def test_v2_decision_parser_rejects_distinct_valid_json_objects(second: str) -> 
     }
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_ambiguous_multiple_objects",
     ):
         _decision_fields(raw, contract)
@@ -1703,7 +1704,7 @@ def test_v2_decision_parser_does_not_repair_unsafe_duplicate_shapes(raw: str) ->
         "speech": {"mode": "forbidden"},
     }
 
-    with pytest.raises(V2QualityError):
+    with pytest.raises(QualityError):
         _decision_fields(raw, contract)
 
 
@@ -1724,12 +1725,12 @@ def test_v2_speech_contract_does_not_fragment_recover_unsafe_json_documents(
         "speech": {"mode": "required"},
     }
 
-    with pytest.raises(V2QualityError, match="model_decision_invalid_json_document"):
+    with pytest.raises(QualityError, match="model_decision_invalid_json_document"):
         _decision_fields(raw, contract)
 
 
-def _identity() -> V2PresentationIdentity:
-    return V2PresentationIdentity(
+def _identity() -> PresentationIdentity:
+    return PresentationIdentity(
         game_id="v2_game_0000000000000001",
         run_id="v2_run_0000000000000001",
         action_id="v2_action_0000000000000001",
@@ -1789,7 +1790,7 @@ def test_v2_tts_sends_documented_explicit_dialect_in_additions(
     monkeypatch.setattr(v2_tts, "_send_event", send_event)
     monkeypatch.setattr(v2_tts, "_expect_event", expect_event)
     monkeypatch.setattr(v2_tts, "_receive", receive)
-    client = V2TtsClient(
+    client = TtsClient(
         enabled=True,
         api_key="key",
         resource_id="seed-tts-2.0",
@@ -1815,6 +1816,55 @@ def test_v2_tts_sends_documented_explicit_dialect_in_additions(
     assert audio == [b"pcm"]
     start_session = next(payload for event, payload in sent if event == _START_SESSION)
     assert json.loads(start_session["req_params"]["additions"]) == {"explicit_dialect": "dongbei"}
+
+
+def test_v2_tts_session_request_uses_live_v2_uid_and_disables_subtitles() -> None:
+    request = build_tts_session_request(
+        speaker="zh_female_vv_uranus_bigtts",
+        sample_rate=24000,
+    )
+
+    assert request["user"]["uid"] == "werewolf-arena-live-v2"
+    assert request["event"] == _START_SESSION
+    assert request["namespace"] == "BidirectionalTTS"
+    assert request["req_params"]["audio_params"] == {
+        "enable_subtitle": False,
+        "format": "pcm",
+        "sample_rate": 24000,
+    }
+    assert "additions" not in request["req_params"]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "explicit_dialect"),
+    [
+        ("sichuan", "sichuan"),
+        ("shaanxi", "shaanxi"),
+        ("northeast", "dongbei"),
+    ],
+)
+def test_v2_tts_session_request_maps_documented_explicit_dialect(
+    dialect: str,
+    explicit_dialect: str,
+) -> None:
+    request = build_tts_session_request(
+        speaker="zh_female_vv_uranus_bigtts",
+        sample_rate=24000,
+        dialect=dialect,
+    )
+
+    assert json.loads(request["req_params"]["additions"]) == {
+        "explicit_dialect": explicit_dialect,
+    }
+
+
+def test_v2_tts_session_request_rejects_unknown_explicit_dialect() -> None:
+    with pytest.raises(ValueError, match="Unsupported Volcengine TTS dialect"):
+        build_tts_session_request(
+            speaker="zh_female_vv_uranus_bigtts",
+            sample_rate=24000,
+            dialect="cantonese",
+        )
 
 
 def test_directed_audience_merges_public_and_private_stage_events_only() -> None:
@@ -1871,7 +1921,7 @@ def test_director_scene_projection_exposes_context_without_raw_action_data() -> 
 def test_speech_validation_only_requires_non_empty_text() -> None:
     speech = "“先听我说完。然后我们再决定！”\n#这是自然发言的一部分"
     assert _required_speech(f"  {speech}  ", error_code="invalid") == speech
-    with pytest.raises(V2QualityError, match="invalid"):
+    with pytest.raises(QualityError, match="invalid"):
         _required_speech("  \n  ", error_code="invalid")
 
 
@@ -1941,12 +1991,12 @@ def test_decision_fields_keep_only_fundamental_failures() -> None:
         None,
         None,
     )
-    with pytest.raises(V2QualityError, match="model_decision_invalid_target"):
+    with pytest.raises(QualityError, match="model_decision_invalid_target"):
         _decision_fields(
             '{"target_player_id":3,"speech":"我投三号。"}',
             _target_contract(),
         )
-    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+    with pytest.raises(QualityError, match="model_decision_invalid_speech"):
         _decision_fields(
             '{"target_player_id":null,"speech":"  "}',
             _target_contract(),
@@ -2099,7 +2149,7 @@ def test_decision_fields_rejects_response_wrapper_contract_echo(
     }
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, contract)
@@ -2123,7 +2173,7 @@ def test_decision_fields_rejects_unsafe_response_wrapper_shapes(raw: str) -> Non
     }
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, contract)
@@ -2140,7 +2190,7 @@ def test_decision_fields_rejects_long_truncated_response_wrapper_without_fragmen
     }
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, contract)
@@ -2165,7 +2215,7 @@ def test_decision_fields_rejects_compatibility_response_wrapper_without_fragment
     }
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, contract)
@@ -2193,7 +2243,7 @@ def test_decision_fields_rejects_nested_truncated_fragments_for_all_contract_kin
     contract: dict[str, Any],
 ) -> None:
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, contract)
@@ -2201,14 +2251,14 @@ def test_decision_fields_rejects_nested_truncated_fragments_for_all_contract_kin
 
 def test_machine_format_failure_result_requires_complete_lineage() -> None:
     with pytest.raises(ValueError, match="machine-format failure lineage is required"):
-        V2ActionFailure(
+        ActionFailure(
             code="model_decision_invalid_json",
             category="machine_format",
             terminal_attempt_id="v2_model_terminal",
             machine_format_failure_count=2,
         )
 
-    failure = V2ActionFailure(
+    failure = ActionFailure(
         code="model_decision_invalid_json",
         category="machine_format",
         terminal_attempt_id="v2_model_terminal",
@@ -2217,19 +2267,19 @@ def test_machine_format_failure_result_requires_complete_lineage() -> None:
         last_machine_format_failure_code="model_decision_invalid_json",
     )
     with pytest.raises(ValueError, match="failed action result requires an action_id"):
-        V2ActionResult(failure=failure)
+        ActionResult(failure=failure)
 
 
 def test_output_budget_failure_result_requires_independent_lineage() -> None:
     with pytest.raises(ValueError, match="output-budget failure lineage is required"):
-        V2ActionFailure(
+        ActionFailure(
             code="model_output_budget_exhausted",
             category="output_budget",
             terminal_attempt_id="v2_model_terminal",
             output_budget_failure_count=2,
         )
 
-    failure = V2ActionFailure(
+    failure = ActionFailure(
         code="model_output_budget_exhausted",
         category="output_budget",
         terminal_attempt_id="v2_model_terminal",
@@ -2239,13 +2289,13 @@ def test_output_budget_failure_result_requires_independent_lineage() -> None:
     )
     assert failure.machine_format_failure_count == 0
 
-    technical_outcome = V2ActionTechnicalOutcome(
+    technical_outcome = ActionTechnicalOutcome(
         kind="technical_abstain",
         failure_mode="output_budget_exhausted",
         failure=failure,
         supporting_event_record_seq=42,
     )
-    result = V2ActionResult(
+    result = ActionResult(
         action_id="v2_action_terminal",
         technical_outcome=technical_outcome,
     )
@@ -2255,12 +2305,12 @@ def test_output_budget_failure_result_requires_independent_lineage() -> None:
     assert result.technical_outcome.failure.failure_episode_id == failure.failure_episode_id
 
     with pytest.raises(ValueError, match="technical outcome result requires an action_id"):
-        V2ActionResult(technical_outcome=technical_outcome)
+        ActionResult(technical_outcome=technical_outcome)
     with pytest.raises(
         ValueError,
         match="technical outcome result cannot carry a decision or failure",
     ):
-        V2ActionResult(
+        ActionResult(
             action_id="v2_action_terminal",
             failure=failure,
             technical_outcome=technical_outcome,
@@ -2268,7 +2318,7 @@ def test_output_budget_failure_result_requires_independent_lineage() -> None:
 
 
 def test_technical_outcome_failure_mode_requires_matching_failure_category() -> None:
-    failure = V2ActionFailure(
+    failure = ActionFailure(
         code="model_transport_failed",
         category="transport",
         terminal_attempt_id="v2_model_terminal",
@@ -2278,7 +2328,7 @@ def test_technical_outcome_failure_mode_requires_matching_failure_category() -> 
         ValueError,
         match="technical outcome failure category does not match its mode",
     ):
-        V2ActionTechnicalOutcome(
+        ActionTechnicalOutcome(
             kind="technical_no_action",
             failure_mode="attempt_hard_timeout",
             failure=failure,
@@ -2343,7 +2393,7 @@ def test_historical_v11_decision_prompt_fails_closed() -> None:
         "player_reference_format": "seat_N",
     }
 
-    with pytest.raises(V2ModelError, match="model_prompt_template_unsupported"):
+    with pytest.raises(ModelError, match="model_prompt_template_unsupported"):
         _decision_model_input(context)
 
 
@@ -2428,7 +2478,7 @@ def test_decision_fields_rejects_structured_context_as_broadcast_speech(
     raw: str,
 ) -> None:
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_structured_speech_leak",
     ):
         _decision_fields(raw, {"kind": "speech", "speech": {"mode": "required"}})
@@ -2450,9 +2500,9 @@ def test_boolean_decisions_use_semantic_field_and_speech_policy() -> None:
         '{"withdraw":"true","speech":"9号选择退水。"}',
         '{"withdraw":null,"speech":"9号选择退水。"}',
     ):
-        with pytest.raises(V2QualityError, match="model_decision_invalid_boolean"):
+        with pytest.raises(QualityError, match="model_decision_invalid_boolean"):
             _decision_fields(raw, withdraw_contract)
-    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+    with pytest.raises(QualityError, match="model_decision_invalid_speech"):
         _decision_fields(
             '{"withdraw":true,"speech":"  "}',
             withdraw_contract,
@@ -2513,7 +2563,7 @@ def test_required_if_true_allows_silent_false_but_requires_true_speech() -> None
         '{"explode":false,"speech":"我暂时不自爆。"}',
         contract,
     ) == (None, None, "explode", False)
-    with pytest.raises(V2QualityError, match="model_decision_invalid_speech"):
+    with pytest.raises(QualityError, match="model_decision_invalid_speech"):
         _decision_fields('{"explode":true}', contract)
     assert _decision_fields(
         '{"explode":true,"speech":"我选择自爆！"}',
@@ -2573,7 +2623,7 @@ def test_model_speech_instructions_include_hard_contract_limits() -> None:
 
 def test_boolean_actions_keep_configured_thinking() -> None:
     parameters, source = _action_model_parameters(
-        V2SpeechSpec(
+        SpeechSpec(
             action_type="werewolf_self_explosion",
             phase_id="day_1",
             required_phase_state="public_discussion_open",
@@ -2581,7 +2631,7 @@ def test_boolean_actions_keep_configured_thinking() -> None:
             success_live_state="ready",
             success_phase_state="public_discussion_open",
             model_parameters={"thinking": "enabled", "max_tokens": 16384},
-            decision_contract=V2DecisionContract(
+            decision_contract=DecisionContract(
                 kind="boolean",
                 boolean_field="explode",
                 speech_mode="forbidden",
@@ -2595,7 +2645,7 @@ def test_boolean_actions_keep_configured_thinking() -> None:
 
 def test_non_boolean_actions_keep_configured_thinking() -> None:
     parameters, source = _action_model_parameters(
-        V2SpeechSpec(
+        SpeechSpec(
             action_type="day_debate_speech",
             phase_id="day_1",
             required_phase_state="public_discussion_open",
@@ -2633,7 +2683,7 @@ def test_sse_parser_rejects_malformed_provider_events() -> None:
         "type": "response.output_text.delta",
         "delta": "欢迎",
     }
-    with pytest.raises(V2ModelError, match="model_invalid_sse"):
+    with pytest.raises(ModelError, match="model_invalid_sse"):
         _sse_data("data: {")
 
 
@@ -2643,9 +2693,9 @@ def test_model_stream_wait_checks_durable_cancellation() -> None:
         yield "data: [DONE]"
 
     def check_cancellation() -> None:
-        raise V2GameCanceled("operator stop")
+        raise GameCanceled("operator stop")
 
-    with pytest.raises(V2GameCanceled):
+    with pytest.raises(GameCanceled):
         asyncio.run(
             _next_with_cancellation(
                 delayed_lines().__aiter__(),
@@ -2662,9 +2712,9 @@ def test_tts_receive_wait_checks_durable_cancellation() -> None:
             return b""
 
     def check_cancellation() -> None:
-        raise V2GameCanceled("operator stop")
+        raise GameCanceled("operator stop")
 
-    with pytest.raises(V2GameCanceled):
+    with pytest.raises(GameCanceled):
         asyncio.run(
             _receive(
                 DelayedWebSocket(),
@@ -2709,14 +2759,14 @@ def test_public_player_projection_is_ordered_and_fail_closed() -> None:
             "alive": True,
         },
     ]
-    with pytest.raises(V2PublicProjectionError, match="duplicate player seat"):
+    with pytest.raises(PublicProjectionError, match="duplicate player seat"):
         project_public_player_seats(
             [
                 {"seat": 1, "profile_id": "profile-1"},
                 {"seat": 1, "profile_id": "profile-2"},
             ]
         )
-    with pytest.raises(V2PublicProjectionError, match="duplicate public player id"):
+    with pytest.raises(PublicProjectionError, match="duplicate public player id"):
         project_public_player_seats(
             [
                 {"seat": 1, "profile_id": "profile-1"},
@@ -2762,7 +2812,7 @@ def test_public_rule_projection_excludes_internal_rule_fields() -> None:
         "exile_last_words_enabled": True,
         "first_night_last_words_enabled": True,
     }
-    with pytest.raises(V2PublicProjectionError, match="does not match"):
+    with pytest.raises(PublicProjectionError, match="does not match"):
         project_public_rule_snapshot(
             {
                 "max_rounds": 8,
@@ -2816,7 +2866,7 @@ def test_private_role_assignment_is_deterministic_and_public_status_is_sealed() 
         "state": "unavailable",
         "assigned_count": 0,
     }
-    with pytest.raises(V2RoleAssignmentError, match="does not match"):
+    with pytest.raises(RoleAssignmentError, match="does not match"):
         assign_private_roles(
             players_snapshot=players,
             rule_snapshot={"rule_set": {"roles": [{"role": "村民", "count": 1}]}},
@@ -2867,7 +2917,7 @@ def test_god_view_access_and_projection_are_separate_and_fail_closed() -> None:
             "death_cause": None,
         }
     ]
-    with pytest.raises(V2GodViewProjectionError, match="does not match"):
+    with pytest.raises(GodViewProjectionError, match="does not match"):
         project_god_view_player_identities(
             players_snapshot=[{"seat": 1, "profile_id": "profile-1"}],
             assignments=[
@@ -2902,7 +2952,7 @@ def test_live_audio_frame_binds_pcm_to_one_presentation() -> None:
     assert header["chunk_index"] == 2
     assert header["start_sample"] == 4
     assert packet[6 + header_size :] == pcm
-    with pytest.raises(V2LiveProtocolError, match="sample_count"):
+    with pytest.raises(LiveProtocolError, match="sample_count"):
         audio_frame(
             _identity(),
             chunk_index=0,
@@ -2914,7 +2964,7 @@ def test_live_audio_frame_binds_pcm_to_one_presentation() -> None:
 
 
 def test_voice_recorder_atomically_saves_exact_pcm(tmp_path: Path) -> None:
-    recorder = V2VoiceRecorder(
+    recorder = VoiceRecorder(
         root=tmp_path,
         storage_key="game/voice.wav",
         sample_rate=24000,
@@ -2938,7 +2988,7 @@ def test_voice_recorder_atomically_saves_exact_pcm(tmp_path: Path) -> None:
 
 
 def test_voice_recorder_abort_leaves_no_partial_asset(tmp_path: Path) -> None:
-    recorder = V2VoiceRecorder(
+    recorder = VoiceRecorder(
         root=tmp_path,
         storage_key="game/voice.wav",
         sample_rate=24000,
@@ -2947,12 +2997,12 @@ def test_voice_recorder_abort_leaves_no_partial_asset(tmp_path: Path) -> None:
     recorder.abort()
     assert not (tmp_path / "game/voice.wav").exists()
     assert not (tmp_path / "game/voice.wav.writing").exists()
-    with pytest.raises(V2VoiceRecordingError, match="closed"):
+    with pytest.raises(VoiceRecordingError, match="closed"):
         recorder.append(b"\x01\x00")
 
 
 def test_voice_recorder_discards_only_an_uncommitted_finalized_asset(tmp_path: Path) -> None:
-    recorder = V2VoiceRecorder(
+    recorder = VoiceRecorder(
         root=tmp_path,
         storage_key="game/uncommitted.wav",
         sample_rate=24000,
@@ -2992,7 +3042,7 @@ def test_public_day_progress_rejects_invalid_or_partial_counts(
     completed_count: int | None,
     total_count: int | None,
 ) -> None:
-    with pytest.raises(V2LiveProtocolError):
+    with pytest.raises(LiveProtocolError):
         day_progress(
             game_id="v2_game_test",
             run_id="v2_run_test",

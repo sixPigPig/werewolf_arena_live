@@ -21,7 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
-class V2GameRecord(Base):
+class GameRecord(Base):
     __tablename__ = "v2_game_records"
 
     game_id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -80,7 +80,7 @@ class V2GameRecord(Base):
     )
 
 
-class V2MatchState(Base):
+class MatchState(Base):
     __tablename__ = "v2_match_states"
 
     game_id: Mapped[str] = mapped_column(
@@ -116,7 +116,7 @@ class V2MatchState(Base):
     )
 
 
-class V2GameRun(Base):
+class GameRun(Base):
     __tablename__ = "v2_game_runs"
     __table_args__ = (
         UniqueConstraint("game_id", "attempt_no", name="uq_v2_game_runs_game_attempt"),
@@ -169,7 +169,7 @@ class V2GameRun(Base):
     )
 
 
-class V2GameControlRequest(Base):
+class GameControlRequest(Base):
     __tablename__ = "v2_game_control_requests"
     __table_args__ = (
         Index(
@@ -207,7 +207,7 @@ class V2GameControlRequest(Base):
     )
 
 
-class V2ModelActionRecovery(Base):
+class ModelActionRecovery(Base):
     __tablename__ = "v2_model_action_recoveries"
     __table_args__ = (
         Index("ix_v2_model_action_recoveries_game_state", "game_id", "state"),
@@ -261,7 +261,7 @@ class V2ModelActionRecovery(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2GodViewAccessGrant(Base):
+class GodViewAccessGrant(Base):
     __tablename__ = "v2_god_view_access_grants"
 
     game_id: Mapped[str] = mapped_column(
@@ -277,7 +277,7 @@ class V2GodViewAccessGrant(Base):
     )
 
 
-class V2RoleAssignmentBatch(Base):
+class RoleAssignmentBatch(Base):
     __tablename__ = "v2_role_assignment_batches"
 
     assignment_id: Mapped[str] = mapped_column(String(48), primary_key=True)
@@ -297,7 +297,7 @@ class V2RoleAssignmentBatch(Base):
     )
 
 
-class V2RoleAssignment(Base):
+class RoleAssignment(Base):
     __tablename__ = "v2_role_assignments"
     __table_args__ = (
         UniqueConstraint("game_id", "player_id", name="uq_v2_role_assignments_player"),
@@ -326,7 +326,7 @@ class V2RoleAssignment(Base):
     )
 
 
-class V2GameRecordEvent(Base):
+class GameRecordEvent(Base):
     __tablename__ = "v2_game_record_events"
     __table_args__ = (
         UniqueConstraint("game_id", "record_seq", name="uq_v2_game_events_record_seq"),
@@ -361,7 +361,7 @@ class V2GameRecordEvent(Base):
     )
 
 
-class V2LivePresentation(Base):
+class LivePresentation(Base):
     __tablename__ = "v2_live_presentations"
     __table_args__ = (
         UniqueConstraint("presentation_id", name="uq_v2_presentations_id"),
@@ -417,7 +417,7 @@ class V2LivePresentation(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2DaySpeechSlot(Base):
+class DaySpeechSlot(Base):
     __tablename__ = "v2_day_speech_slots"
     __table_args__ = (
         UniqueConstraint(
@@ -534,7 +534,7 @@ class V2DaySpeechSlot(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class V2PreExilePipeline(Base):
+class PreExilePipeline(Base):
     __tablename__ = "v2_pre_exile_pipelines"
     __table_args__ = (
         UniqueConstraint(
@@ -618,7 +618,7 @@ class V2PreExilePipeline(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class V2PreExileResult(Base):
+class PreExileResult(Base):
     __tablename__ = "v2_pre_exile_results"
     __table_args__ = (
         UniqueConstraint(
@@ -705,7 +705,7 @@ class V2PreExileResult(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class V2VoiceAsset(Base):
+class VoiceAsset(Base):
     __tablename__ = "v2_voice_assets"
     __table_args__ = (
         UniqueConstraint(
@@ -752,7 +752,7 @@ class V2VoiceAsset(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2PlayerState(Base):
+class PlayerState(Base):
     __tablename__ = "v2_player_states"
 
     game_id: Mapped[str] = mapped_column(
@@ -774,7 +774,7 @@ class V2PlayerState(Base):
     )
 
 
-class V2ActionWindow(Base):
+class ActionWindow(Base):
     __tablename__ = "v2_action_windows"
     __table_args__ = (
         UniqueConstraint("game_id", "window_seq", name="uq_v2_action_windows_game_seq"),
@@ -805,7 +805,7 @@ class V2ActionWindow(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2AbilityInstance(Base):
+class AbilityInstance(Base):
     __tablename__ = "v2_ability_instances"
     __table_args__ = (
         UniqueConstraint("game_id", "ability_id", "owner_id", name="uq_v2_ability_instances_owner"),
@@ -829,7 +829,7 @@ class V2AbilityInstance(Base):
     )
 
 
-class V2AbilityActivation(Base):
+class AbilityActivation(Base):
     __tablename__ = "v2_ability_activations"
     __table_args__ = (
         UniqueConstraint(
@@ -881,7 +881,7 @@ class V2AbilityActivation(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2EffectIntent(Base):
+class EffectIntent(Base):
     __tablename__ = "v2_effect_intents"
 
     effect_intent_id: Mapped[str] = mapped_column(String(48), primary_key=True)
@@ -914,7 +914,7 @@ class V2EffectIntent(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class V2KnowledgeFact(Base):
+class KnowledgeFact(Base):
     __tablename__ = "v2_knowledge_facts"
 
     knowledge_fact_id: Mapped[str] = mapped_column(String(48), primary_key=True)

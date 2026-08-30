@@ -13,9 +13,9 @@ import {
   type RouteObject,
 } from "react-router-dom";
 
-import V2GameRecordDetailPage from "@/v2/game-records/V2GameRecordDetailPage";
-import { liveRefreshInterval } from "@/v2/game-records/live-refresh";
-import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
+import GameRecordDetailPage from "@/match/game-records/GameRecordDetailPage";
+import { liveRefreshInterval } from "@/match/game-records/live-refresh";
+import { gameRecordKeys } from "@/match/game-records/query-keys";
 
 vi.mock("@/features/auth/session-context", () => ({
   useAdminSession: () => ({ session: null }),
@@ -1433,7 +1433,7 @@ function renderPage() {
   const routes: RouteObject[] = [
     {
       path: "/v2/operations/games/:gameId",
-      element: <V2GameRecordDetailPage />,
+      element: <GameRecordDetailPage />,
     },
     {
       path: "/v2/operations/games",
@@ -2360,7 +2360,7 @@ describe("V2 game record detail workspace", () => {
     ).toBeVisible();
     expect(
       queryClient.getQueriesData({
-        queryKey: v2GameRecordKeys.detail(gameId),
+        queryKey: gameRecordKeys.detail(gameId),
       }).length,
     ).toBeGreaterThan(0);
 
@@ -2369,7 +2369,7 @@ describe("V2 game record detail workspace", () => {
     await waitFor(() =>
       expect(
         queryClient.getQueriesData({
-          queryKey: v2GameRecordKeys.detail(gameId),
+          queryKey: gameRecordKeys.detail(gameId),
         }),
       ).toHaveLength(0),
     );

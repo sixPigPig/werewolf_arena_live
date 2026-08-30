@@ -4,14 +4,14 @@ from datetime import UTC, datetime, timedelta
 import json
 from types import SimpleNamespace
 
-import app.v2.router as v2_router
-from app.v2.model_failure_episode import stable_failure_episode_id
-from app.v2.model_failure_impact import classify_model_failure_impact
-from app.v2.model_context_compaction import (
+import app.match.router as v2_router
+from app.match.model_failure_episode import stable_failure_episode_id
+from app.match.model_failure_impact import classify_model_failure_impact
+from app.match.model_context_compaction import (
     build_known_events_v7_compaction_metadata,
     encode_known_events_v7,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
     KNOWN_EVENTS_SCHEMA_VERSION,
@@ -19,7 +19,7 @@ from app.v2.model_context_contract import (
     MODEL_VIEW_SELECTOR_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.router import (
+from app.match.router import (
     _admin_event_summary,
     _admin_expanded_known_events,
     _admin_model_requests,

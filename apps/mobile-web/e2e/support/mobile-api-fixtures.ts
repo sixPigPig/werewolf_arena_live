@@ -1,9 +1,11 @@
 import type { Page } from "@playwright/test";
 import type {
-  CreateGameRunRequest,
+  LineupPreviewRequest,
   PublicPlayerProfile,
   RuleSetSummary,
 } from "@werewolf-arena/game-client";
+
+import type { GameCreateRequest } from "../../src/match/contracts";
 
 export const mobileRuleSets: RuleSetSummary[] = [
   {
@@ -75,7 +77,38 @@ export async function installMobileApiFixtures(
   );
   const profiles = options.profiles ?? mobileProfiles;
   const ruleSets = options.ruleSets ?? mobileRuleSets;
-  const createRequests: CreateGameRunRequest[] = [];
+  const createRequests: GameCreateRequest[] = [];
+
+  await page.route("**/api/v2/games", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.fulfill({
+        status: 404,
+        json: { detail: `Unhandled fixture: ${new URL(request.url()).pathname}` },
+      });
+      return;
+    }
+    const body = request.postDataJSON() as GameCreateRequest;
+    createRequests.push(body);
+    await route.fulfill({
+      json: {
+        game_id: "v2_game_0123456789abcdef",
+        run_id: "v2_run_0123456789abcdef",
+        status: "waiting_to_start",
+        audio_mode: body.audio_mode,
+        snapshot_url: "/api/v2/live/games/v2_game_0123456789abcdef/snapshot",
+        websocket_url: "/api/v2/live/games/v2_game_0123456789abcdef/ws",
+        director_snapshot_url:
+          "/api/v2/director/games/v2_game_0123456789abcdef/snapshot",
+        director_websocket_url: "/api/v2/director/games/v2_game_0123456789abcdef/ws",
+        god_view_snapshot_url:
+          "/api/v2/god-view/games/v2_game_0123456789abcdef/identity-snapshot",
+        god_view_websocket_url:
+          "/api/v2/god-view/games/v2_game_0123456789abcdef/ws",
+        god_view_access_token: "a".repeat(43),
+      },
+    });
+  });
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -130,25 +163,25 @@ export async function installMobileApiFixtures(
       return;
     }
 
-    if (path === "/api/v1/games/runs" && request.method() === "POST") {
-      const body = request.postDataJSON() as CreateGameRunRequest;
-      createRequests.push(body);
+    if (path === "/api/v1/games/lineup-preview" && request.method() === "POST") {
+      const body = request.postDataJSON() as LineupPreviewRequest;
+      const playerConfigs = body.player_configs ?? [];
       await route.fulfill({
         json: {
-          run_id: "run-e2e",
-          session_id: "session-e2e",
-          villager_model: "e2e-model",
-          werewolf_model: "e2e-model",
-          seed: body.seed ?? null,
-          max_rounds: body.max_rounds ?? 8,
-          winner: null,
-          status: "queued",
-          created_at: "2026-07-12T00:00:00Z",
-          started_at: null,
-          completed_at: null,
-          error: null,
-          event_count: 0,
-          player_configs: body.player_configs ?? [],
+          player_configs: playerConfigs,
+          lineup_quality_report: {
+            schema_version: 1,
+            policy_mode: "repair",
+            player_count: playerConfigs.length,
+            configured_count: playerConfigs.filter((item) => item.profile_id)
+              .length,
+            is_blocked: false,
+            was_repaired: false,
+            style_bucket_count: 1,
+            required_style_bucket_count: 1,
+            violations: [],
+          },
+          rule_set_revision_id: "revision-e2e",
         },
       });
       return;

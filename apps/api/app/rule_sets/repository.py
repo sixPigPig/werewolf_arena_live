@@ -7,8 +7,6 @@ from typing import Literal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from app.models.game_session import GameSessionRecord
-from app.models.live import LiveRunRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.rule_sets.errors import RuleSetCatalogCorrupt
 
@@ -216,61 +214,14 @@ def get_rule_set_usage(
     if any(type(revision_id) is not str or not revision_id for revision_id in revision_ids):
         raise ValueError("revision_ids must contain non-empty strings")
 
-    game_count = int(
-        db.scalar(
-            select(func.count())
-            .select_from(GameSessionRecord)
-            .where(GameSessionRecord.rule_set_id == rule_set_id)
-        )
-        or 0
-    )
-    live_count = int(
-        db.scalar(
-            select(func.count())
-            .select_from(LiveRunRecord)
-            .where(LiveRunRecord.rule_set_id == rule_set_id)
-        )
-        or 0
-    )
-    game_counts_by_revision: dict[str, int] = {}
-    live_counts_by_revision: dict[str, int] = {}
-    if revision_ids:
-        game_counts_by_revision = {
-            str(revision_id): int(count)
-            for revision_id, count in db.execute(
-                select(
-                    GameSessionRecord.rule_set_revision_id,
-                    func.count(),
-                )
-                .where(
-                    GameSessionRecord.rule_set_id == rule_set_id,
-                    GameSessionRecord.rule_set_revision_id.in_(revision_ids),
-                )
-                .group_by(GameSessionRecord.rule_set_revision_id)
-            )
-        }
-        live_counts_by_revision = {
-            str(revision_id): int(count)
-            for revision_id, count in db.execute(
-                select(
-                    LiveRunRecord.rule_set_revision_id,
-                    func.count(),
-                )
-                .where(
-                    LiveRunRecord.rule_set_id == rule_set_id,
-                    LiveRunRecord.rule_set_revision_id.in_(revision_ids),
-                )
-                .group_by(LiveRunRecord.rule_set_revision_id)
-            )
-        }
     return RuleSetUsageAggregate(
-        game_count=game_count,
-        live_count=live_count,
+        game_count=0,
+        live_count=0,
         revisions=tuple(
             RuleSetRevisionUsage(
                 revision_id=revision_id,
-                game_count=game_counts_by_revision.get(revision_id, 0),
-                live_count=live_counts_by_revision.get(revision_id, 0),
+                game_count=0,
+                live_count=0,
             )
             for revision_id in revision_ids
         ),

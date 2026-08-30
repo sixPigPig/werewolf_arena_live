@@ -9,61 +9,61 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.v2.ability_runtime import compile_ability_runtime_snapshot
-from app.v2.day_speech_pipeline_contract import (
+from app.match.ability_runtime import compile_ability_runtime_snapshot
+from app.match.day_speech_pipeline_contract import (
     day_speech_pipeline_contract_summary,
     freeze_day_speech_pipeline_contract,
 )
-from app.v2.event_contract import canonical_event_payload
-from app.v2.models import (
-    V2AbilityActivation,
-    V2AbilityInstance,
-    V2ActionWindow,
-    V2EffectIntent,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2GodViewAccessGrant,
-    V2LivePresentation,
-    V2MatchState,
-    V2KnowledgeFact,
-    V2PlayerState,
-    V2RoleAssignment,
-    V2RoleAssignmentBatch,
-    V2VoiceAsset,
+from app.match.event_contract import canonical_event_payload
+from app.match.models import (
+    AbilityActivation,
+    AbilityInstance,
+    ActionWindow,
+    EffectIntent,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    GodViewAccessGrant,
+    LivePresentation,
+    MatchState,
+    KnowledgeFact,
+    PlayerState,
+    RoleAssignment,
+    RoleAssignmentBatch,
+    VoiceAsset,
 )
-from app.v2.god_view_access import (
+from app.match.god_view_access import (
     issue_god_view_access_token,
     verify_god_view_access_token,
 )
-from app.v2.model_context_contract import freeze_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.model_context_contract import freeze_model_context_contract
+from app.match.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
-from app.v2.pre_exile_pipeline_contract import (
+from app.match.pre_exile_pipeline_contract import (
     freeze_pre_exile_pipeline_contract,
     pre_exile_pipeline_contract_summary,
 )
-from app.v2.role_assignment import assign_private_roles
+from app.match.role_assignment import assign_private_roles
 
 
-class V2RecordNotFound(LookupError):
+class RecordNotFound(LookupError):
     pass
 
 
-class V2VoiceAssetUnavailable(RuntimeError):
+class VoiceAssetUnavailable(RuntimeError):
     pass
 
 
-class V2RoleAssignmentStateError(RuntimeError):
+class RoleAssignmentStateError(RuntimeError):
     pass
 
 
-class V2GodViewAccessDenied(PermissionError):
+class GodViewAccessDenied(PermissionError):
     pass
 
 
-class V2GodViewUnavailable(RuntimeError):
+class GodViewUnavailable(RuntimeError):
     pass
 
 
@@ -75,7 +75,7 @@ def create_waiting_game(
     rule_snapshot: dict[str, Any] | None = None,
     players_snapshot: list[dict[str, Any]] | None = None,
     judge_voice_snapshot: dict[str, Any] | None = None,
-) -> tuple[V2GameRecord, V2GameRun, str]:
+) -> tuple[GameRecord, GameRun, str]:
     created_from_lobby = rule_snapshot is not None
     game_id = f"v2_game_{uuid4().hex[:16]}"
     run_id = f"v2_run_{uuid4().hex[:16]}"
@@ -107,7 +107,7 @@ def create_waiting_game(
             assignments=assignment_result.assignments,
         )
     initial_record_seq = 3 if assignment_result is not None else 1
-    game = V2GameRecord(
+    game = GameRecord(
         game_id=game_id,
         title=title.strip(),
         status="waiting_to_start",
@@ -125,14 +125,14 @@ def create_waiting_game(
         ability_snapshot=ability_snapshot,
         ability_snapshot_hash=(ability_snapshot or {}).get("snapshot_hash"),
     )
-    run = V2GameRun(
+    run = GameRun(
         run_id=run_id,
         game_id=game_id,
         attempt_no=1,
         status="waiting_to_start",
         started_at=None,
     )
-    created = V2GameRecordEvent(
+    created = GameRecordEvent(
         game_id=game_id,
         event_id=1,
         record_seq=1,
@@ -172,14 +172,14 @@ def create_waiting_game(
     if assignment_result is not None:
         sheriff_enabled = bool(frozen_rule_snapshot.get("rule_set", {}).get("sheriff_enabled"))
         db.add(
-            V2MatchState(
+            MatchState(
                 game_id=game_id,
                 round_no=1,
                 sheriff_badge_state="pending" if sheriff_enabled else "disabled",
             )
         )
     db.add(
-        V2GodViewAccessGrant(
+        GodViewAccessGrant(
             game_id=game_id,
             token_sha256=god_view_token_hash,
         )
@@ -190,7 +190,7 @@ def create_waiting_game(
     if assignment_result is not None:
         assert assignment_id is not None
         assert private_seed is not None
-        assignment_batch = V2RoleAssignmentBatch(
+        assignment_batch = RoleAssignmentBatch(
             assignment_id=assignment_id,
             game_id=game_id,
             seed_hex=private_seed,
@@ -201,7 +201,7 @@ def create_waiting_game(
         db.flush()
         db.add_all(
             [
-                V2RoleAssignment(
+                RoleAssignment(
                     game_id=game_id,
                     seat=item.seat,
                     assignment_id=assignment_id,
@@ -214,7 +214,7 @@ def create_waiting_game(
             ]
         )
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=game_id,
                 event_id=2,
                 record_seq=2,
@@ -233,7 +233,7 @@ def create_waiting_game(
         )
         db.add_all(
             [
-                V2PlayerState(
+                PlayerState(
                     game_id=game_id,
                     player_id=item.player_id,
                     seat=item.seat,
@@ -245,7 +245,7 @@ def create_waiting_game(
         )
         db.add_all(
             [
-                V2AbilityInstance(
+                AbilityInstance(
                     ability_instance_id=item["ability_instance_id"],
                     game_id=game_id,
                     ability_id=item["ability_id"],
@@ -259,7 +259,7 @@ def create_waiting_game(
             ]
         )
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=game_id,
                 event_id=3,
                 record_seq=3,
@@ -283,16 +283,16 @@ def create_waiting_game(
     return game, run, god_view_token
 
 
-def get_game(db: Session, game_id: str) -> V2GameRecord:
-    record = db.get(V2GameRecord, game_id)
+def get_game(db: Session, game_id: str) -> GameRecord:
+    record = db.get(GameRecord, game_id)
     if record is None:
-        raise V2RecordNotFound(game_id)
+        raise RecordNotFound(game_id)
     return record
 
 
-def get_match_state(db: Session, game_id: str) -> V2MatchState | None:
+def get_match_state(db: Session, game_id: str) -> MatchState | None:
     get_game(db, game_id)
-    return db.get(V2MatchState, game_id)
+    return db.get(MatchState, game_id)
 
 
 def current_presentation(
@@ -300,7 +300,7 @@ def current_presentation(
     game_id: str,
     *,
     audience: str = "player_public",
-) -> V2LivePresentation | None:
+) -> LivePresentation | None:
     get_game(db, game_id)
     if audience == "spectator_directed":
         allowed = ("all", "public", "god_view")
@@ -309,13 +309,13 @@ def current_presentation(
     else:
         allowed = ("all", "public")
     return db.scalar(
-        select(V2LivePresentation)
+        select(LivePresentation)
         .where(
-            V2LivePresentation.game_id == game_id,
-            V2LivePresentation.state == "active",
-            V2LivePresentation.audience.in_(allowed),
+            LivePresentation.game_id == game_id,
+            LivePresentation.state == "active",
+            LivePresentation.audience.in_(allowed),
         )
-        .order_by(V2LivePresentation.presentation_seq.desc())
+        .order_by(LivePresentation.presentation_seq.desc())
         .limit(1)
     )
 
@@ -325,13 +325,13 @@ def current_action_context(db: Session, game_id: str) -> dict[str, Any] | None:
     if game.status not in {"generating", "broadcasting", "finalizing"}:
         return None
     events = db.scalars(
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.run_id == game.current_run_id,
-            V2GameRecordEvent.event_type == "action_opened",
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.run_id == game.current_run_id,
+            GameRecordEvent.event_type == "action_opened",
         )
-        .order_by(V2GameRecordEvent.record_seq.desc())
+        .order_by(GameRecordEvent.record_seq.desc())
     )
     for event in events:
         if not isinstance(event.payload, dict):
@@ -348,25 +348,25 @@ def current_action_context(db: Session, game_id: str) -> dict[str, Any] | None:
 
 def role_assignment_count(db: Session, game_id: str) -> int | None:
     expected_count = db.scalar(
-        select(V2RoleAssignmentBatch.player_count).where(V2RoleAssignmentBatch.game_id == game_id)
+        select(RoleAssignmentBatch.player_count).where(RoleAssignmentBatch.game_id == game_id)
     )
     if expected_count is None:
         return None
     actual_count = int(
         db.scalar(
             select(func.count())
-            .select_from(V2RoleAssignment)
-            .where(V2RoleAssignment.game_id == game_id)
+            .select_from(RoleAssignment)
+            .where(RoleAssignment.game_id == game_id)
         )
         or 0
     )
     if actual_count != expected_count:
-        raise V2RoleAssignmentStateError("private role assignment batch is incomplete")
+        raise RoleAssignmentStateError("private role assignment batch is incomplete")
     return expected_count
 
 
 def authorize_god_view(db: Session, *, game_id: str, token: str | None) -> None:
-    grant = db.get(V2GodViewAccessGrant, game_id)
+    grant = db.get(GodViewAccessGrant, game_id)
     if (
         grant is None
         or token is None
@@ -375,38 +375,38 @@ def authorize_god_view(db: Session, *, game_id: str, token: str | None) -> None:
             expected_sha256=grant.token_sha256,
         )
     ):
-        raise V2GodViewAccessDenied(game_id)
+        raise GodViewAccessDenied(game_id)
 
 
-def god_view_role_assignments(db: Session, game_id: str) -> list[V2RoleAssignment]:
+def god_view_role_assignments(db: Session, game_id: str) -> list[RoleAssignment]:
     expected_count = role_assignment_count(db, game_id)
     if expected_count is None:
-        raise V2GodViewUnavailable(game_id)
+        raise GodViewUnavailable(game_id)
     assignments = list(
         db.scalars(
-            select(V2RoleAssignment)
-            .where(V2RoleAssignment.game_id == game_id)
-            .order_by(V2RoleAssignment.seat.asc())
+            select(RoleAssignment)
+            .where(RoleAssignment.game_id == game_id)
+            .order_by(RoleAssignment.seat.asc())
         )
     )
     if len(assignments) != expected_count:
-        raise V2RoleAssignmentStateError("private role assignment batch is incomplete")
+        raise RoleAssignmentStateError("private role assignment batch is incomplete")
     return assignments
 
 
-def player_state_map(db: Session, game_id: str) -> dict[str, V2PlayerState]:
+def player_state_map(db: Session, game_id: str) -> dict[str, PlayerState]:
     get_game(db, game_id)
-    states = list(db.scalars(select(V2PlayerState).where(V2PlayerState.game_id == game_id)))
+    states = list(db.scalars(select(PlayerState).where(PlayerState.game_id == game_id)))
     result = {item.player_id: item for item in states}
     if len(result) != len(states):
-        raise V2RoleAssignmentStateError("duplicate V2 player state")
+        raise RoleAssignmentStateError("duplicate V2 player state")
     return result
 
 
-def get_voice_asset(db: Session, *, game_id: str, voice_asset_id: str) -> V2VoiceAsset:
-    asset = db.get(V2VoiceAsset, voice_asset_id)
+def get_voice_asset(db: Session, *, game_id: str, voice_asset_id: str) -> VoiceAsset:
+    asset = db.get(VoiceAsset, voice_asset_id)
     if asset is None or asset.game_id != game_id:
-        raise V2RecordNotFound(f"{game_id}:{voice_asset_id}")
+        raise RecordNotFound(f"{game_id}:{voice_asset_id}")
     return asset
 
 
@@ -415,12 +415,12 @@ def list_games(
     *,
     page: int,
     page_size: int,
-) -> tuple[list[V2GameRecord], int]:
-    total = int(db.scalar(select(func.count()).select_from(V2GameRecord)) or 0)
+) -> tuple[list[GameRecord], int]:
+    total = int(db.scalar(select(func.count()).select_from(GameRecord)) or 0)
     records = list(
         db.scalars(
-            select(V2GameRecord)
-            .order_by(V2GameRecord.created_at.desc(), V2GameRecord.game_id.desc())
+            select(GameRecord)
+            .order_by(GameRecord.created_at.desc(), GameRecord.game_id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -432,91 +432,91 @@ def game_summary(
     db: Session,
     game_id: str,
 ) -> tuple[
-    V2GameRecord,
-    list[V2GameRun],
-    list[V2LivePresentation],
-    list[V2VoiceAsset],
-    list[V2RoleAssignment],
-    list[V2PlayerState],
-    list[V2ActionWindow],
-    list[V2AbilityInstance],
-    list[V2AbilityActivation],
-    list[V2EffectIntent],
-    list[V2KnowledgeFact],
-    V2MatchState | None,
+    GameRecord,
+    list[GameRun],
+    list[LivePresentation],
+    list[VoiceAsset],
+    list[RoleAssignment],
+    list[PlayerState],
+    list[ActionWindow],
+    list[AbilityInstance],
+    list[AbilityActivation],
+    list[EffectIntent],
+    list[KnowledgeFact],
+    MatchState | None,
 ]:
     game = get_game(db, game_id)
     runs = list(
         db.scalars(
-            select(V2GameRun)
-            .where(V2GameRun.game_id == game_id)
-            .order_by(V2GameRun.attempt_no.asc())
+            select(GameRun)
+            .where(GameRun.game_id == game_id)
+            .order_by(GameRun.attempt_no.asc())
         )
     )
     presentations = list(
         db.scalars(
-            select(V2LivePresentation)
-            .where(V2LivePresentation.game_id == game_id)
-            .order_by(V2LivePresentation.presentation_seq.asc())
+            select(LivePresentation)
+            .where(LivePresentation.game_id == game_id)
+            .order_by(LivePresentation.presentation_seq.asc())
         )
     )
     voices = list(
         db.scalars(
-            select(V2VoiceAsset)
-            .where(V2VoiceAsset.game_id == game_id)
-            .order_by(V2VoiceAsset.created_at.asc(), V2VoiceAsset.voice_asset_id.asc())
+            select(VoiceAsset)
+            .where(VoiceAsset.game_id == game_id)
+            .order_by(VoiceAsset.created_at.asc(), VoiceAsset.voice_asset_id.asc())
         )
     )
     role_assignments = list(
         db.scalars(
-            select(V2RoleAssignment)
-            .where(V2RoleAssignment.game_id == game_id)
-            .order_by(V2RoleAssignment.seat.asc())
+            select(RoleAssignment)
+            .where(RoleAssignment.game_id == game_id)
+            .order_by(RoleAssignment.seat.asc())
         )
     )
     player_states = list(
         db.scalars(
-            select(V2PlayerState)
-            .where(V2PlayerState.game_id == game_id)
-            .order_by(V2PlayerState.seat.asc())
+            select(PlayerState)
+            .where(PlayerState.game_id == game_id)
+            .order_by(PlayerState.seat.asc())
         )
     )
     action_windows = list(
         db.scalars(
-            select(V2ActionWindow)
-            .where(V2ActionWindow.game_id == game_id)
-            .order_by(V2ActionWindow.window_seq.asc())
+            select(ActionWindow)
+            .where(ActionWindow.game_id == game_id)
+            .order_by(ActionWindow.window_seq.asc())
         )
     )
     ability_instances = list(
         db.scalars(
-            select(V2AbilityInstance)
-            .where(V2AbilityInstance.game_id == game_id)
-            .order_by(V2AbilityInstance.ability_id.asc())
+            select(AbilityInstance)
+            .where(AbilityInstance.game_id == game_id)
+            .order_by(AbilityInstance.ability_id.asc())
         )
     )
     ability_activations = list(
         db.scalars(
-            select(V2AbilityActivation)
-            .where(V2AbilityActivation.game_id == game_id)
-            .order_by(V2AbilityActivation.opened_at.asc())
+            select(AbilityActivation)
+            .where(AbilityActivation.game_id == game_id)
+            .order_by(AbilityActivation.opened_at.asc())
         )
     )
     effect_intents = list(
         db.scalars(
-            select(V2EffectIntent)
-            .where(V2EffectIntent.game_id == game_id)
-            .order_by(V2EffectIntent.created_at.asc())
+            select(EffectIntent)
+            .where(EffectIntent.game_id == game_id)
+            .order_by(EffectIntent.created_at.asc())
         )
     )
     knowledge_facts = list(
         db.scalars(
-            select(V2KnowledgeFact)
-            .where(V2KnowledgeFact.game_id == game_id)
-            .order_by(V2KnowledgeFact.created_at.asc())
+            select(KnowledgeFact)
+            .where(KnowledgeFact.game_id == game_id)
+            .order_by(KnowledgeFact.created_at.asc())
         )
     )
-    match_state = db.get(V2MatchState, game_id)
+    match_state = db.get(MatchState, game_id)
     return (
         game,
         runs,
@@ -539,29 +539,29 @@ def list_game_events(
     *,
     after_record_seq: int,
     page_size: int,
-) -> tuple[list[V2GameRecordEvent], bool]:
+) -> tuple[list[GameRecordEvent], bool]:
     get_game(db, game_id)
     rows = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.record_seq > after_record_seq,
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.record_seq > after_record_seq,
             )
-            .order_by(V2GameRecordEvent.record_seq.asc())
+            .order_by(GameRecordEvent.record_seq.asc())
             .limit(page_size + 1)
         )
     )
     return rows[:page_size], len(rows) > page_size
 
 
-def all_game_events(db: Session, game_id: str) -> list[V2GameRecordEvent]:
+def all_game_events(db: Session, game_id: str) -> list[GameRecordEvent]:
     get_game(db, game_id)
     return list(
         db.scalars(
-            select(V2GameRecordEvent)
-            .where(V2GameRecordEvent.game_id == game_id)
-            .order_by(V2GameRecordEvent.record_seq.asc())
+            select(GameRecordEvent)
+            .where(GameRecordEvent.game_id == game_id)
+            .order_by(GameRecordEvent.record_seq.asc())
         )
     )
 
@@ -569,13 +569,13 @@ def all_game_events(db: Session, game_id: str) -> list[V2GameRecordEvent]:
 def list_game_presentations(
     db: Session,
     game_id: str,
-) -> list[V2LivePresentation]:
+) -> list[LivePresentation]:
     get_game(db, game_id)
     return list(
         db.scalars(
-            select(V2LivePresentation)
-            .where(V2LivePresentation.game_id == game_id)
-            .order_by(V2LivePresentation.presentation_seq.asc())
+            select(LivePresentation)
+            .where(LivePresentation.game_id == game_id)
+            .order_by(LivePresentation.presentation_seq.asc())
         )
     )
 
@@ -585,21 +585,21 @@ def get_game_event(
     *,
     game_id: str,
     event_id: int,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     get_game(db, game_id)
-    event = db.get(V2GameRecordEvent, (game_id, event_id))
+    event = db.get(GameRecordEvent, (game_id, event_id))
     if event is None:
-        raise V2RecordNotFound(f"{game_id}:{event_id}")
+        raise RecordNotFound(f"{game_id}:{event_id}")
     return event
 
 
-def voice_asset_path(*, root: Path, asset: V2VoiceAsset) -> Path:
+def voice_asset_path(*, root: Path, asset: VoiceAsset) -> Path:
     if asset.state != "ready":
-        raise V2VoiceAssetUnavailable(asset.voice_asset_id)
+        raise VoiceAssetUnavailable(asset.voice_asset_id)
     safe_root = root.resolve()
     path = (safe_root / asset.storage_key).resolve()
     if safe_root not in path.parents or not path.is_file():
-        raise V2VoiceAssetUnavailable(asset.voice_asset_id)
+        raise VoiceAssetUnavailable(asset.voice_asset_id)
     return path
 
 

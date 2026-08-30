@@ -1,100 +1,100 @@
 import { adminApiFetch } from "@/api/client";
 import {
-  parseV2GameEventPage,
-  parseV2GameRecordEvent,
-  parseV2GameRecordSummary,
-  parseV2ModelRequest,
-  parseV2ModelRequestPage,
-  parseV2ModelActionRetryResult,
-  parseV2GameRecordList,
-  parseV2GameControlResult,
-} from "@/v2/game-records/parsers";
+  parseGameEventPage,
+  parseGameRecordEvent,
+  parseGameRecordSummary,
+  parseModelRequest,
+  parseModelRequestPage,
+  parseModelActionRetryResult,
+  parseGameRecordList,
+  parseGameControlResult,
+} from "@/match/game-records/parsers";
 import type {
-  V2GameEventPage,
-  V2GameControlResult,
-  V2GameRecordEvent,
-  V2GameRecordList,
-  V2GameRecordSummary,
-  V2ModelRequest,
-  V2ModelActionRetryResult,
-  V2ModelRequestPage,
-} from "@/v2/game-records/types";
+  GameEventPage,
+  GameControlResult,
+  GameRecordEvent,
+  GameRecordList,
+  GameRecordSummary,
+  ModelRequest,
+  ModelActionRetryResult,
+  ModelRequestPage,
+} from "@/match/game-records/types";
 
-export async function listV2GameRecords(
+export async function listGameRecords(
   page: number,
   signal?: AbortSignal,
-): Promise<V2GameRecordList> {
+): Promise<GameRecordList> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games?page=${page}&page_size=20`,
     { signal },
   );
-  return parseV2GameRecordList(value);
+  return parseGameRecordList(value);
 }
 
-export async function readV2GameRecordSummary(
+export async function readGameRecordSummary(
   gameId: string,
   signal?: AbortSignal,
-): Promise<V2GameRecordSummary> {
+): Promise<GameRecordSummary> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}`,
     { signal },
   );
-  return parseV2GameRecordSummary(value);
+  return parseGameRecordSummary(value);
 }
 
-export async function listV2GameEvents(
+export async function listGameEvents(
   gameId: string,
   afterRecordSeq: number,
   signal?: AbortSignal,
-): Promise<V2GameEventPage> {
+): Promise<GameEventPage> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/events?after_record_seq=${afterRecordSeq}&page_size=500`,
     { signal },
   );
-  return parseV2GameEventPage(value);
+  return parseGameEventPage(value);
 }
 
-export async function readV2GameEvent(
+export async function readGameEvent(
   gameId: string,
   eventId: number,
   signal?: AbortSignal,
-): Promise<V2GameRecordEvent> {
+): Promise<GameRecordEvent> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/events/${eventId}`,
     { signal },
   );
-  return parseV2GameRecordEvent(value);
+  return parseGameRecordEvent(value);
 }
 
-export async function listV2ModelRequests(
+export async function listModelRequests(
   gameId: string,
   afterRecordSeq: number,
   signal?: AbortSignal,
-): Promise<V2ModelRequestPage> {
+): Promise<ModelRequestPage> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/model-requests?after_record_seq=${afterRecordSeq}&page_size=500`,
     { signal },
   );
-  return parseV2ModelRequestPage(value);
+  return parseModelRequestPage(value);
 }
 
-export async function readV2ModelRequest(
+export async function readModelRequest(
   gameId: string,
   attemptId: string,
   signal?: AbortSignal,
-): Promise<V2ModelRequest> {
+): Promise<ModelRequest> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/model-requests/${encodeURIComponent(attemptId)}`,
     { signal },
   );
-  return parseV2ModelRequest(value);
+  return parseModelRequest(value);
 }
 
-export async function stopV2Game(
+export async function stopGame(
   gameId: string,
   reason: string,
   csrfToken: string,
-): Promise<V2GameControlResult> {
+): Promise<GameControlResult> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/stop`,
     {
@@ -107,14 +107,14 @@ export async function stopV2Game(
       body: JSON.stringify({ reason }),
     },
   );
-  return parseV2GameControlResult(value);
+  return parseGameControlResult(value);
 }
 
-export async function retryV2ModelAction(
+export async function retryModelAction(
   gameId: string,
   reason: string,
   csrfToken: string,
-): Promise<V2ModelActionRetryResult> {
+): Promise<ModelActionRetryResult> {
   const value = await adminApiFetch<unknown>(
     `/api/v1/admin/v2/games/${encodeURIComponent(gameId)}/retry-model-action`,
     {
@@ -127,5 +127,5 @@ export async function retryV2ModelAction(
       body: JSON.stringify({ reason }),
     },
   );
-  return parseV2ModelActionRetryResult(value);
+  return parseModelActionRetryResult(value);
 }

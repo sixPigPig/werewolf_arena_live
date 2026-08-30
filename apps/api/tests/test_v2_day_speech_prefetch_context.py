@@ -11,27 +11,27 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers the referenced users table
-from app.v2.day_speech_pipeline_contract import (
+from app.match.day_speech_pipeline_contract import (
     freeze_day_speech_pipeline_contract,
 )
-from app.v2.match_repository import V2MatchRepository
-from app.v2.model_context_contract import freeze_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.match_repository import MatchRepository
+from app.match.model_context_contract import freeze_model_context_contract
+from app.match.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
-from app.v2.models import (
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2MatchState,
+from app.match.models import (
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    MatchState,
 )
-from app.v2.repository import (
-    V2ActionRepository,
-    V2ExecutionOwnershipLost,
-    V2GameCanceled,
-    V2PresentationIdentity,
-    V2RepositoryError,
+from app.match.repository import (
+    ActionRepository,
+    ExecutionOwnershipLost,
+    GameCanceled,
+    PresentationIdentity,
+    RepositoryError,
 )
 
 
@@ -59,10 +59,10 @@ def session_factory() -> sessionmaker[Session]:
 @dataclass(frozen=True)
 class _Scenario:
     session_factory: sessionmaker[Session]
-    match_repository: V2MatchRepository
-    action_repository: V2ActionRepository
-    previous: V2PresentationIdentity
-    predecessor: V2PresentationIdentity
+    match_repository: MatchRepository
+    action_repository: ActionRepository
+    previous: PresentationIdentity
+    predecessor: PresentationIdentity
     predecessor_source_event_id: int
     predecessor_source_record_seq: int
     cutoff: int
@@ -90,7 +90,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
     with session_factory.begin() as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=GAME_ID,
                 title="prefetch context test",
                 status="ready",
@@ -108,7 +108,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=RUN_ID,
                 game_id=GAME_ID,
                 attempt_no=1,
@@ -117,14 +117,14 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
             )
         )
         db.add(
-            V2MatchState(
+            MatchState(
                 game_id=GAME_ID,
                 round_no=1,
                 sheriff_badge_state="disabled",
             )
         )
 
-    actions = V2ActionRepository(session_factory)
+    actions = ActionRepository(session_factory)
     previous = _open_player_presentation(
         actions,
         action_id="v2_action_previous",
@@ -154,37 +154,37 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
     durable_source_event_id = 900
     with session_factory.begin() as db:
         previous_presentation = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, previous.presentation_seq),
         )
         assert previous_presentation is not None
         previous_source = db.get(
-            V2GameRecordEvent,
+            GameRecordEvent,
             (GAME_ID, previous_presentation.source_event_id),
         )
         assert previous_source is not None
         previous_source.event_id = durable_previous_source_event_id
         previous_presentation.source_event_id = durable_previous_source_event_id
         presentation = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, predecessor.presentation_seq),
         )
         assert presentation is not None
         source = db.get(
-            V2GameRecordEvent,
+            GameRecordEvent,
             (GAME_ID, presentation.source_event_id),
         )
         assert source is not None
         source_record_seq = source.record_seq
         source.event_id = durable_source_event_id
         presentation.source_event_id = durable_source_event_id
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         cutoff = game.last_record_seq
 
     return _Scenario(
         session_factory=session_factory,
-        match_repository=V2MatchRepository(session_factory),
+        match_repository=MatchRepository(session_factory),
         action_repository=actions,
         previous=previous,
         predecessor=predecessor,
@@ -208,14 +208,14 @@ def _action_context(*, action_id: str, actor_id: str) -> dict[str, Any]:
 
 
 def _open_player_presentation(
-    repository: V2ActionRepository,
+    repository: ActionRepository,
     *,
     action_id: str,
     actor_id: str,
     presentation_id: str,
     speech_id: str,
     speech: str,
-) -> V2PresentationIdentity:
+) -> PresentationIdentity:
     claim = repository.claim_action(
         game_id=GAME_ID,
         action_id=action_id,
@@ -282,7 +282,7 @@ def test_snapshot_resolves_missing_pipeline_contract_as_legacy_sequential(
     scenario: _Scenario,
 ) -> None:
     with scenario.session_factory.begin() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         snapshot = dict(game.rule_snapshot)
         snapshot.pop("day_speech_pipeline_contract")
@@ -313,14 +313,14 @@ def test_prefetch_snapshot_rejects_wrong_lineage_or_phase(
 ) -> None:
     arguments = scenario.prefetch_args()
     arguments[key] = value
-    with pytest.raises(V2RepositoryError):
+    with pytest.raises(RepositoryError):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**arguments)
 
 
 def test_prefetch_snapshot_rejects_wrong_game(scenario: _Scenario) -> None:
     arguments = scenario.prefetch_args()
     arguments["game_id"] = "v2_game_wrong"
-    with pytest.raises(V2RepositoryError, match="unknown game"):
+    with pytest.raises(RepositoryError, match="unknown game"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**arguments)
 
 
@@ -335,13 +335,13 @@ def test_prefetch_snapshot_rejects_non_public_player_predecessor(
 ) -> None:
     with scenario.session_factory.begin() as db:
         presentation = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, scenario.predecessor.presentation_seq),
         )
         assert presentation is not None
         setattr(presentation, field, value)
 
-    with pytest.raises(V2RepositoryError, match="identity is invalid"):
+    with pytest.raises(RepositoryError, match="identity is invalid"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
@@ -352,7 +352,7 @@ def test_prefetch_snapshot_rejects_invalid_source_event(
 ) -> None:
     with scenario.session_factory.begin() as db:
         source = db.get(
-            V2GameRecordEvent,
+            GameRecordEvent,
             (GAME_ID, scenario.predecessor_source_event_id),
         )
         assert source is not None
@@ -363,27 +363,27 @@ def test_prefetch_snapshot_rejects_invalid_source_event(
             payload[corruption] = "wrong"
             source.payload = payload
 
-    with pytest.raises(V2RepositoryError, match="source is invalid"):
+    with pytest.raises(RepositoryError, match="source is invalid"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
 def test_prefetch_snapshot_rejects_unsealed_predecessor(scenario: _Scenario) -> None:
     with scenario.session_factory.begin() as db:
         sealed = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "speech_sealed",
-                V2GameRecordEvent.payload["presentation_id"].as_string()
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "speech_sealed",
+                GameRecordEvent.payload["presentation_id"].as_string()
                 == scenario.predecessor.presentation_id,
             )
         )
         assert sealed is not None
         db.delete(sealed)
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         game.last_record_seq = scenario.predecessor_source_record_seq
 
-    with pytest.raises(V2RepositoryError, match="not sealed"):
+    with pytest.raises(RepositoryError, match="not sealed"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
@@ -393,7 +393,7 @@ def test_prefetch_snapshot_rejects_closed_predecessor(scenario: _Scenario) -> No
         next_live_state="ready",
         next_phase_state=PHASE_STATE,
     )
-    with pytest.raises(V2RepositoryError):
+    with pytest.raises(RepositoryError):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
@@ -490,10 +490,10 @@ def test_prefetch_snapshot_rejects_another_active_presentation(
 ) -> None:
     with scenario.session_factory.begin() as db:
         predecessor = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, scenario.predecessor.presentation_seq),
         )
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert predecessor is not None and game is not None
         db.add(
             _copy_presentation(
@@ -505,7 +505,7 @@ def test_prefetch_snapshot_rejects_another_active_presentation(
         )
         game.last_presentation_seq = predecessor.presentation_seq + 1
 
-    with pytest.raises(V2RepositoryError, match="unique active presentation"):
+    with pytest.raises(RepositoryError, match="unique active presentation"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
@@ -514,10 +514,10 @@ def test_prefetch_snapshot_rejects_later_closed_presentation(
 ) -> None:
     with scenario.session_factory.begin() as db:
         predecessor = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, scenario.predecessor.presentation_seq),
         )
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert predecessor is not None and game is not None
         db.add(
             _copy_presentation(
@@ -530,7 +530,7 @@ def test_prefetch_snapshot_rejects_later_closed_presentation(
         )
         game.last_presentation_seq = predecessor.presentation_seq + 1
 
-    with pytest.raises(V2RepositoryError, match="not latest"):
+    with pytest.raises(RepositoryError, match="not latest"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
@@ -539,7 +539,7 @@ def test_prefetch_snapshot_rejects_record_beyond_frozen_cutoff(
 ) -> None:
     with scenario.session_factory.begin() as db:
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=GAME_ID,
                 event_id=901,
                 record_seq=scenario.cutoff + 1,
@@ -550,38 +550,38 @@ def test_prefetch_snapshot_rejects_record_beyond_frozen_cutoff(
             )
         )
 
-    with pytest.raises(V2RepositoryError, match="record cutoff is inconsistent"):
+    with pytest.raises(RepositoryError, match="record cutoff is inconsistent"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
 def test_prefetch_snapshot_enforces_execution_fence(scenario: _Scenario) -> None:
-    guarded = V2MatchRepository(
+    guarded = MatchRepository(
         scenario.session_factory,
         enforce_execution_fence=True,
     )
-    with pytest.raises(V2ExecutionOwnershipLost):
+    with pytest.raises(ExecutionOwnershipLost):
         guarded.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
 def test_prefetch_snapshot_honors_stop_request(scenario: _Scenario) -> None:
     with scenario.session_factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
+        run = db.get(GameRun, RUN_ID)
         assert run is not None
         run.stop_requested_at = datetime.now(tz=UTC)
 
-    with pytest.raises(V2GameCanceled):
+    with pytest.raises(GameCanceled):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 
 def _copy_presentation(
-    source: V2LivePresentation,
+    source: LivePresentation,
     *,
     presentation_seq: int,
     presentation_id: str,
     state: str,
     closed_at: datetime | None = None,
-) -> V2LivePresentation:
-    return V2LivePresentation(
+) -> LivePresentation:
+    return LivePresentation(
         game_id=source.game_id,
         presentation_seq=presentation_seq,
         presentation_id=presentation_id,

@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   actionLabel,
-  buildV2HistoricalIdentities,
-  buildV2RoundSummaries,
-  buildV2Timeline,
-  groupV2Phases,
+  buildHistoricalIdentities,
+  buildRoundSummaries,
+  buildTimeline,
+  groupPhases,
   phaseLabel,
-} from "@/v2/game-records/presentation";
+} from "@/match/game-records/presentation";
 import type {
-  V2GameRecordDetail,
-  V2GameRecordEvent,
-  V2PlayerIdentity,
-} from "@/v2/game-records/types";
+  GameRecordDetail,
+  GameRecordEvent,
+  PlayerIdentity,
+} from "@/match/game-records/types";
 
-const identities: V2PlayerIdentity[] = [
+const identities: PlayerIdentity[] = [
   {
     seat: 1,
     player_id: "player-1",
@@ -115,7 +115,7 @@ describe("V2 game record presentation", () => {
   it("prefers presentation audience and links legacy TTS completion by attempt id", () => {
     const actionId = "v2_action_audience";
     const attemptId = "v2_tts_legacy";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -140,7 +140,7 @@ describe("V2 game record presentation", () => {
       presentations: [{ action_id: actionId, audience: "god_view" }],
       voice_assets: [],
       player_identities: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline).toHaveLength(1);
     expect(timeline[0]).toMatchObject({
@@ -157,7 +157,7 @@ describe("V2 game record presentation", () => {
 
   it("keeps expected control-flow actions failed while excluding them from phase failures", () => {
     const actionId = "v2_action_expected_control_flow";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -184,10 +184,10 @@ describe("V2 game record presentation", () => {
       player_identities: identities,
       player_states: [],
       players_snapshot: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline[0]?.status).toBe("failed");
-    expect(groupV2Phases(timeline, "day_1")[0]).toMatchObject({
+    expect(groupPhases(timeline, "day_1")[0]).toMatchObject({
       modelRequestCount: 1,
       failureCount: 0,
     });
@@ -196,7 +196,7 @@ describe("V2 game record presentation", () => {
   it("uses skipped or canceled request status for failed actions without counting a phase failure", () => {
     for (const requestStatus of ["skipped", "canceled"] as const) {
       const actionId = `v2_action_${requestStatus}`;
-      const timeline = buildV2Timeline({
+      const timeline = buildTimeline({
         events: [
           event(1, "action_opened", {
             action_id: actionId,
@@ -228,10 +228,10 @@ describe("V2 game record presentation", () => {
         player_identities: identities,
         player_states: [],
         players_snapshot: [],
-      } as unknown as V2GameRecordDetail);
+      } as unknown as GameRecordDetail);
 
       expect(timeline[0]?.status).toBe(requestStatus);
-      expect(groupV2Phases(timeline, "day_1")[0]).toMatchObject({
+      expect(groupPhases(timeline, "day_1")[0]).toMatchObject({
         modelRequestCount: 2,
         failureCount: 0,
       });
@@ -240,7 +240,7 @@ describe("V2 game record presentation", () => {
 
   it("marks a paused terminal model timeout as failed without an action_failed event", () => {
     const actionId = "v2_action_paused_timeout";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -281,18 +281,18 @@ describe("V2 game record presentation", () => {
       player_identities: identities,
       player_states: [],
       players_snapshot: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline[0]).toMatchObject({
       status: "failed",
       completedAt: "2026-07-29T08:00:04Z",
     });
-    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(1);
+    expect(groupPhases(timeline, "day_1")[0]?.failureCount).toBe(1);
   });
 
   it("keeps an intermediate failed attempt running until its scheduled retry starts", () => {
     const actionId = "v2_action_retry_pending";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -327,15 +327,15 @@ describe("V2 game record presentation", () => {
       player_identities: identities,
       player_states: [],
       players_snapshot: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
-    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+    expect(groupPhases(timeline, "day_1")[0]?.failureCount).toBe(0);
   });
 
   it("does not terminate an action for an explicitly nonterminal failed attempt", () => {
     const actionId = "v2_action_nonterminal_failure";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -366,15 +366,15 @@ describe("V2 game record presentation", () => {
       player_identities: identities,
       player_states: [],
       players_snapshot: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
-    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+    expect(groupPhases(timeline, "day_1")[0]?.failureCount).toBe(0);
   });
 
   it("returns a paused action to running after model_action_resumed", () => {
     const actionId = "v2_action_resumed";
-    const timeline = buildV2Timeline({
+    const timeline = buildTimeline({
       events: [
         event(1, "action_opened", {
           action_id: actionId,
@@ -411,16 +411,16 @@ describe("V2 game record presentation", () => {
       player_identities: identities,
       player_states: [],
       players_snapshot: [],
-    } as unknown as V2GameRecordDetail);
+    } as unknown as GameRecordDetail);
 
     expect(timeline[0]).toMatchObject({ status: "running", completedAt: null });
-    expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+    expect(groupPhases(timeline, "day_1")[0]?.failureCount).toBe(0);
   });
 
   it("lets the latest action_succeeded override historical failures and control results", () => {
     for (const requestStatus of ["skipped", "canceled"] as const) {
       const actionId = `v2_action_recovered_${requestStatus}`;
-      const timeline = buildV2Timeline({
+      const timeline = buildTimeline({
         events: [
           event(1, "action_opened", {
             action_id: actionId,
@@ -449,18 +449,18 @@ describe("V2 game record presentation", () => {
         player_identities: identities,
         player_states: [],
         players_snapshot: [],
-      } as unknown as V2GameRecordDetail);
+      } as unknown as GameRecordDetail);
 
       expect(timeline[0]).toMatchObject({
         status: "succeeded",
         completedAt: "2026-07-29T08:00:04Z",
       });
-      expect(groupV2Phases(timeline, "day_1")[0]?.failureCount).toBe(0);
+      expect(groupPhases(timeline, "day_1")[0]?.failureCount).toBe(0);
     }
   });
 
   it("builds deterministic round digests from persisted settlement events", () => {
-    const summaries = buildV2RoundSummaries(
+    const summaries = buildRoundSummaries(
       [
         event(1, "game_phase_changed", {
           phase_id: "first_night",
@@ -546,7 +546,7 @@ describe("V2 game record presentation", () => {
   });
 
   it("marks the last digest as canceled when the durable game is canceled", () => {
-    const summaries = buildV2RoundSummaries(
+    const summaries = buildRoundSummaries(
       [
         event(1, "game_phase_changed", {
           phase_id: "first_night",
@@ -586,7 +586,7 @@ describe("V2 game record presentation", () => {
     ];
 
     expect(
-      buildV2HistoricalIdentities(events, identities, 1).map((item) => ({
+      buildHistoricalIdentities(events, identities, 1).map((item) => ({
         alive: item.alive,
         cause: item.death_cause,
         playerId: item.player_id,
@@ -598,7 +598,7 @@ describe("V2 game record presentation", () => {
     ]);
 
     expect(
-      buildV2HistoricalIdentities(events, identities, 2).map((item) => ({
+      buildHistoricalIdentities(events, identities, 2).map((item) => ({
         alive: item.alive,
         cause: item.death_cause,
         playerId: item.player_id,
@@ -609,7 +609,7 @@ describe("V2 game record presentation", () => {
       { alive: true, cause: null, playerId: "player-3" },
     ]);
 
-    expect(buildV2HistoricalIdentities(events, identities, 3)).toEqual(
+    expect(buildHistoricalIdentities(events, identities, 3)).toEqual(
       identities,
     );
   });
@@ -619,7 +619,7 @@ function event(
   recordSeq: number,
   eventType: string,
   payload: Record<string, unknown>,
-): V2GameRecordEvent {
+): GameRecordEvent {
   return {
     event_id: recordSeq,
     record_seq: recordSeq,

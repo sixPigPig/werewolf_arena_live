@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import math
 from typing import Annotated, Literal
 
@@ -10,35 +10,27 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.admin.rbac import AdminPermission
-from app.admin.quality_evaluations import build_admin_quality_overview
 from app.api.admin.dependencies import AdminPrincipal, require_admin_permission
 from app.api.admin.errors import AdminAPIProblem, request_id_for
 from app.api.schemas.admin_dashboard import (
     AdminJobItem,
     AdminJobListResponse,
     AdminOverviewAlert,
-    AdminOverviewGames,
     AdminOverviewJobs,
     AdminOverviewProfiles,
-    AdminOverviewQuality,
     AdminOverviewResponse,
-    AdminOverviewRuns,
     AdminSearchResponse,
     AdminSearchResult,
     AdminSettingsAuthentication,
     AdminSettingsCompatibility,
-    AdminSettingsLiveRuns,
     AdminSettingsResponse,
     AdminSettingsWorkers,
 )
 from app.api.schemas.common import PaginationResponse
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.game_session import GameSessionRecord
 from app.models.judge_voice_asset import JudgeVoiceGenerationJob
-from app.models.live import LiveRunRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.worker_telemetry import live_run_reaper_is_alive
 
 
 router = APIRouter()
@@ -58,59 +50,20 @@ def get_admin_overview(
     try:
         now = datetime.now(tz=UTC)
         profile_counts = _group_counts(db, VirtualPlayerProfile.status)
-        game_counts = _group_counts(db, GameSessionRecord.status)
-        run_counts = _group_counts(db, LiveRunRecord.status)
         job_counts = _group_counts(db, JudgeVoiceGenerationJob.status)
-        stale_before = now - timedelta(seconds=settings.live_run_reaper_stale_grace_seconds)
-        stale_filter = (
-            LiveRunRecord.status.in_(("queued", "running")),
-            (
-                (LiveRunRecord.lease_expires_at <= stale_before)
-                | (
-                    LiveRunRecord.lease_expires_at.is_(None)
-                    & (LiveRunRecord.created_at <= stale_before)
-                )
-            ),
-        )
-        stale_total = _count(db, LiveRunRecord, *stale_filter)
-        exhausted_total = _count(
-            db,
-            LiveRunRecord,
-            *stale_filter,
-            LiveRunRecord.recovery_attempts >= settings.live_run_reaper_max_attempts,
-        )
-        reaper_up = live_run_reaper_is_alive(
-            db,
-            max_age_seconds=settings.live_run_reaper_probe_max_age_seconds,
-        )
         profiles_total = sum(profile_counts.values())
-        games_total = sum(game_counts.values())
-        runs_total = sum(run_counts.values())
         jobs_total = sum(job_counts.values())
-        failed_games = sum(
-            count for status, count in game_counts.items() if status not in {"complete"}
-        )
         featured_total = _count(
             db,
             VirtualPlayerProfile,
             VirtualPlayerProfile.featured.is_(True),
         )
-        resumable_total = _count(
-            db,
-            GameSessionRecord,
-            GameSessionRecord.resumable.is_(True),
-        )
-        quality = build_admin_quality_overview(db, now=now)
     except SQLAlchemyError as exc:
         raise _dashboard_unavailable() from exc
 
     alerts = _overview_alerts(
-        reaper_up=reaper_up,
-        stale_total=stale_total,
-        exhausted_total=exhausted_total,
         failed_jobs=job_counts.get("failed", 0),
         queued_jobs=job_counts.get("queued", 0),
-        quality=quality,
     )
     _set_private_headers(request, response)
     return AdminOverviewResponse(
@@ -123,22 +76,6 @@ def get_admin_overview(
             archived=profile_counts.get("archived", 0),
             featured=featured_total,
         ),
-        games=AdminOverviewGames(
-            total=games_total,
-            complete=game_counts.get("complete", 0),
-            incomplete=failed_games,
-            resumable=resumable_total,
-        ),
-        runs=AdminOverviewRuns(
-            total=runs_total,
-            queued=run_counts.get("queued", 0),
-            running=run_counts.get("running", 0),
-            completed=run_counts.get("completed", 0),
-            canceled=run_counts.get("canceled", 0),
-            failed=run_counts.get("failed", 0),
-            stale=stale_total,
-            recovery_exhausted=exhausted_total,
-        ),
         jobs=AdminOverviewJobs(
             total=jobs_total,
             queued=job_counts.get("queued", 0),
@@ -146,10 +83,9 @@ def get_admin_overview(
             completed=job_counts.get("completed", 0),
             failed=job_counts.get("failed", 0),
         ),
-        quality=AdminOverviewQuality(**quality),
-        reaper_up=reaper_up,
         alerts=alerts,
     )
+
 
 @router.get("/jobs", response_model=AdminJobListResponse)
 def list_admin_jobs(
@@ -229,15 +165,6 @@ def get_admin_settings(
             judge_voice_probe_max_age_seconds=(
                 settings.judge_voice_worker_probe_max_age_seconds
             ),
-            reaper_poll_seconds=settings.live_run_reaper_poll_seconds,
-            reaper_stale_grace_seconds=settings.live_run_reaper_stale_grace_seconds,
-            reaper_max_attempts=settings.live_run_reaper_max_attempts,
-            reaper_probe_max_age_seconds=settings.live_run_reaper_probe_max_age_seconds,
-        ),
-        live_runs=AdminSettingsLiveRuns(
-            lease_seconds=settings.live_run_lease_seconds,
-            heartbeat_seconds=settings.live_run_heartbeat_seconds,
-            event_poll_seconds=settings.live_run_event_poll_seconds,
         ),
     )
 
@@ -265,47 +192,6 @@ def search_admin_resources(
     contains = f"%{_escape_like(query)}%"
     items: list[AdminSearchResult] = []
     try:
-        if AdminPermission.RUNS_READ in principal.permissions:
-            runs = db.scalars(
-                select(LiveRunRecord)
-                .where(
-                    or_(
-                        LiveRunRecord.run_id.ilike(starts_with, escape="\\"),
-                        LiveRunRecord.session_id.ilike(starts_with, escape="\\"),
-                    )
-                )
-                .order_by(LiveRunRecord.updated_at.desc())
-                .limit(5)
-            )
-            items.extend(
-                AdminSearchResult(
-                    type="run",
-                    id=run.run_id,
-                    label=run.run_id,
-                    description=f"对局 {run.session_id}",
-                    status=run.status,
-                    href=f"/operations/runs/{run.run_id}",
-                )
-                for run in runs
-            )
-        if AdminPermission.GAMES_READ in principal.permissions:
-            games = db.scalars(
-                select(GameSessionRecord)
-                .where(GameSessionRecord.session_id.ilike(starts_with, escape="\\"))
-                .order_by(GameSessionRecord.updated_at.desc())
-                .limit(5)
-            )
-            items.extend(
-                AdminSearchResult(
-                    type="game",
-                    id=game.session_id,
-                    label=game.session_id,
-                    description=f"{game.round_count} 轮对局",
-                    status=game.status,
-                    href=f"/operations/games/{game.session_id}",
-                )
-                for game in games
-            )
         if AdminPermission.PLAYERS_READ in principal.permissions:
             profiles = db.scalars(
                 select(VirtualPlayerProfile)
@@ -355,47 +241,10 @@ def search_admin_resources(
 
 def _overview_alerts(
     *,
-    reaper_up: bool,
-    stale_total: int,
-    exhausted_total: int,
     failed_jobs: int,
     queued_jobs: int,
-    quality: dict[str, object],
 ) -> list[AdminOverviewAlert]:
     alerts: list[AdminOverviewAlert] = []
-    if not reaper_up:
-        alerts.append(
-            AdminOverviewAlert(
-                code="live_run_reaper_down",
-                severity="critical",
-                title="自动恢复进程没有新鲜心跳",
-                detail="孤儿运行不会被自动认领，请检查 live-run reaper。",
-                count=1,
-                href="/operations/runs",
-            )
-        )
-    if exhausted_total:
-        alerts.append(
-            AdminOverviewAlert(
-                code="live_run_recovery_exhausted",
-                severity="critical",
-                title="运行自动恢复次数已耗尽",
-                detail="需要人工检查失败原因并决定是否从检查点恢复。",
-                count=exhausted_total,
-                href="/operations/runs?worker_state=stale",
-            )
-        )
-    elif stale_total:
-        alerts.append(
-            AdminOverviewAlert(
-                code="live_run_stale",
-                severity="warning",
-                title="存在等待自动恢复的运行",
-                detail="运行租约已经过期，reaper 将按退避策略处理。",
-                count=stale_total,
-                href="/operations/runs?worker_state=stale",
-            )
-        )
     if failed_jobs:
         alerts.append(
             AdminOverviewAlert(
@@ -416,42 +265,6 @@ def _overview_alerts(
                 detail="持续 worker 启动后会按创建时间领取任务。",
                 count=queued_jobs,
                 href="/system/jobs?status=queued",
-            )
-        )
-    p0_game_count = int(quality.get("p0_game_count") or 0)
-    if p0_game_count:
-        alerts.append(
-            AdminOverviewAlert(
-                code="quality_p0_detected",
-                severity="critical",
-                title="近期对局检出 P0 质量问题",
-                detail="只展示安全问题码和坐标；请进入对局详情显式读取。",
-                count=p0_game_count,
-                href="/operations/games",
-            )
-        )
-    pending_count = int(quality.get("pending_count") or 0)
-    if pending_count and not bool(quality.get("worker_up")):
-        alerts.append(
-            AdminOverviewAlert(
-                code="quality_evaluator_backlog",
-                severity="critical",
-                title="质量评估积压且 Worker 心跳异常",
-                detail="对局终局不受影响，但质量结论会延迟生成。",
-                count=pending_count,
-                href="/operations/games",
-            )
-        )
-    failed_count = int(quality.get("worker_failed_count") or 0)
-    if failed_count:
-        alerts.append(
-            AdminOverviewAlert(
-                code="quality_evaluation_failed",
-                severity="warning",
-                title="存在执行失败的质量评估",
-                detail="可在对应对局详情中显式重试，失败不会伪装为通过。",
-                count=failed_count,
-                href="/operations/games",
             )
         )
     return alerts

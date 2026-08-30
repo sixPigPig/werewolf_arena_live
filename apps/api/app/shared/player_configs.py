@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.werewolf.player_avatar_assets import avatar_asset_url
-from app.werewolf.player_profile_prompts import compose_player_profile_prompt
-from app.werewolf.player_presets import default_personality_text
+from app.shared.player_avatar_assets import avatar_asset_url
+from app.shared.player_profile_prompts import compose_player_profile_prompt
+from app.shared.player_presets import default_personality_text
 
 
 @dataclass(frozen=True)

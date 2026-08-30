@@ -26,16 +26,16 @@ from app.player_profiles.service import (
     list_published_player_profiles,
     update_player_profile as update_profile_service,
 )
-from app.werewolf.player_avatar_assets import (
+from app.shared.player_avatar_assets import (
     avatar_asset_url,
     decode_avatar_asset_data,
     save_uploaded_avatar_asset,
 )
-from app.werewolf.player_presets import (
+from app.shared.player_presets import (
     is_valid_personality,
     is_valid_strategy,
 )
-from app.werewolf.providers import create_model_provider
+from app.shared.providers import create_model_provider
 
 
 router = APIRouter()

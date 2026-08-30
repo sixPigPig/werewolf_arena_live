@@ -5,17 +5,17 @@ from dataclasses import dataclass, field as dataclass_field
 import json
 from typing import Any
 
-from app.v2.ability_runtime import normalize_role_key, normalize_team_key
-from app.v2.discourse_ledger import build_public_discourse_ledger
-from app.v2.discourse_model_view import build_discourse_model_view
-from app.v2.model_context_compaction import (
+from app.match.ability_runtime import normalize_role_key, normalize_team_key
+from app.match.discourse_ledger import build_public_discourse_ledger
+from app.match.discourse_model_view import build_discourse_model_view
+from app.match.model_context_compaction import (
     KNOWN_EVENTS_CANONICAL_SCHEMA_VERSION,
-    V2ModelContextCompactionError,
+    ModelContextCompactionError,
     build_known_events_v7_compaction_metadata,
     encode_known_events_v7,
     expand_known_events_v7,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
@@ -24,8 +24,8 @@ from app.v2.model_context_contract import (
     PUBLIC_TIMELINE_SCHEMA_VERSION,
     is_supported_model_context_contract,
 )
-from app.v2.model_context_selector import select_known_events_v13
-from app.v2.win_conditions import (
+from app.match.model_context_selector import select_known_events_v13
+from app.match.win_conditions import (
     build_public_win_condition_contract,
 )
 
@@ -42,7 +42,7 @@ _DIRECT_ACTION_ABILITY_IDS = {
 
 
 @dataclass(frozen=True)
-class V2ModelPlayerReference:
+class ModelPlayerReference:
     player_id: str
     seat: int
     display_name: str
@@ -57,13 +57,13 @@ class V2ModelPlayerReference:
 
 
 @dataclass(frozen=True)
-class V2ProjectedModelContext:
+class ProjectedModelContext:
     context: dict[str, Any]
     projection_metadata: dict[str, Any]
     observation_context: dict[str, Any] = dataclass_field(default_factory=dict)
 
 
-class V2ModelContextProjectionInvariantError(ValueError):
+class ModelContextProjectionInvariantError(ValueError):
     def __init__(self, invariant_code: str) -> None:
         super().__init__("model_context_projection_invariant_failed")
         self.invariant_code = invariant_code
@@ -72,7 +72,7 @@ class V2ModelContextProjectionInvariantError(ValueError):
 def project_model_action_context(
     context: dict[str, Any],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     model_context_contract: dict[str, Any] | None = None,
     action_record_seq: int | None = None,
     projection_at_seq: int | None = None,
@@ -89,11 +89,11 @@ def project_model_action_context(
 def project_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     model_context_contract: dict[str, Any] | None = None,
     action_record_seq: int | None = None,
     projection_at_seq: int | None = None,
-) -> V2ProjectedModelContext:
+) -> ProjectedModelContext:
     resolved_projection_at_seq = _resolved_projection_at_seq(
         action_record_seq=action_record_seq,
         projection_at_seq=projection_at_seq,
@@ -115,15 +115,15 @@ def project_model_action_context_with_metadata(
 def _project_v13_model_action_context_with_metadata(
     context: dict[str, Any],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     projection_at_seq: int | None,
     prompt_template_version: int,
     known_events_schema_version: int,
     ledger_schema_version: int,
     model_view_schema_version: int,
-) -> V2ProjectedModelContext:
+) -> ProjectedModelContext:
     if not players:
-        raise V2ModelContextProjectionInvariantError("players_required")
+        raise ModelContextProjectionInvariantError("players_required")
 
     source = _project_value(context, players=players)
     private_facts = source.pop("private_authoritative_facts", None)
@@ -317,10 +317,10 @@ def _project_v13_model_action_context_with_metadata(
     )
     try:
         compact_known_events = encode_known_events_v7(canonical_known_events)
-    except V2ModelContextCompactionError as exc:
-        raise V2ModelContextProjectionInvariantError(exc.code) from exc
+    except ModelContextCompactionError as exc:
+        raise ModelContextProjectionInvariantError(exc.code) from exc
     if compact_known_events.get("schema_version") != known_events_schema_version:
-        raise V2ModelContextProjectionInvariantError("known_events_schema_version")
+        raise ModelContextProjectionInvariantError("known_events_schema_version")
     projected_context["known_events"] = compact_known_events
     validate_projected_model_context(
         projected_context,
@@ -357,7 +357,7 @@ def _project_v13_model_action_context_with_metadata(
         latest_vote_result_ref=None,
         model_view_schema_version=model_view_schema_version,
     )
-    return V2ProjectedModelContext(
+    return ProjectedModelContext(
         context=projected_context,
         projection_metadata=projection_metadata,
         observation_context={
@@ -377,7 +377,7 @@ def validate_projected_model_context(
     _canonical_known_events: dict[str, Any] | None = None,
 ) -> None:
     def fail(code: str) -> None:
-        raise V2ModelContextProjectionInvariantError(code)
+        raise ModelContextProjectionInvariantError(code)
 
     if context.get("model_context_schema_version") != MODEL_CONTEXT_SCHEMA_VERSION:
         fail("model_context_schema_version")
@@ -396,7 +396,7 @@ def validate_projected_model_context(
             fail("known_events_schema_version")
         try:
             known_events = expand_known_events_v7(compact_known_events)
-        except V2ModelContextCompactionError as exc:
+        except ModelContextCompactionError as exc:
             fail(exc.code)
 
     task = context.get("task")
@@ -1509,7 +1509,7 @@ def model_prompt_metadata(
         raise ValueError("unsupported_known_events_schema_version")
     try:
         known_events = expand_known_events_v7(compact_known_events)
-    except V2ModelContextCompactionError as exc:
+    except ModelContextCompactionError as exc:
         raise ValueError("unsupported_known_events_schema_version") from exc
     events = known_events.get("events")
     questions = known_events.get("questions")
@@ -1943,7 +1943,7 @@ def _without_explanations(value: Any) -> Any:
 def sanitize_model_speech(
     speech: str,
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> str:
     return _project_text(speech, players=players)
 
@@ -1951,7 +1951,7 @@ def sanitize_model_speech(
 def resolve_model_target(
     target: str | None,
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> str | None:
     if target is None:
         return None
@@ -2752,7 +2752,7 @@ def _without_internal_model_failure_audit(value: Any) -> Any:
 def _project_public_history(
     history: Iterable[Any],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     include_technical_speech_skips: bool = False,
 ) -> tuple[
     list[dict[str, Any]],
@@ -3019,7 +3019,7 @@ def _public_event_period(event_type: str) -> str:
 def _project_value(
     value: Any,
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> Any:
     if isinstance(value, dict):
         return {
@@ -3040,7 +3040,7 @@ def _project_value(
 def _project_text(
     value: str,
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> str:
     projected = value
     for player in sorted(players, key=lambda item: len(item.player_id), reverse=True):

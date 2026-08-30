@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 import httpx
 
-from app.werewolf.volcengine_tts import supports_tts_context_texts
+from app.shared.volcengine_tts import supports_tts_context_texts
 
 logger = logging.getLogger(__name__)
 

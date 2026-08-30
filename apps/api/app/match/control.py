@@ -9,20 +9,20 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.v2.models import (
-    V2GameControlRequest,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2MatchState,
-    V2ModelActionRecovery,
+from app.match.models import (
+    GameControlRequest,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    MatchState,
+    ModelActionRecovery,
 )
-from app.v2.event_contract import canonical_event_payload, model_event_audience
-from app.v2.execution import database_utc_now
-from app.v2.runtime_state import project_v2_runtime_state
+from app.match.event_contract import canonical_event_payload, model_event_audience
+from app.match.execution import database_utc_now
+from app.match.runtime_state import project_runtime_state
 
 
-ACTIVE_V2_GAME_STATES = frozenset(
+ACTIVE_GAME_STATES = frozenset(
     {
         "waiting_to_start",
         "ready",
@@ -34,55 +34,55 @@ ACTIVE_V2_GAME_STATES = frozenset(
 )
 
 
-class V2GameControlError(RuntimeError):
+class GameControlError(RuntimeError):
     code = "admin_v2_game_control_rejected"
 
 
-class V2GameControlNotFound(V2GameControlError):
+class GameControlNotFound(GameControlError):
     code = "admin_v2_game_not_found"
 
 
-class V2GameControlNotActive(V2GameControlError):
+class GameControlNotActive(GameControlError):
     code = "admin_v2_game_not_active"
 
 
-class V2GameStopAlreadyRequested(V2GameControlError):
+class GameStopAlreadyRequested(GameControlError):
     code = "admin_v2_game_stop_already_requested"
 
 
-class V2GameModelActionNotPaused(V2GameControlError):
+class GameModelActionNotPaused(GameControlError):
     code = "admin_v2_model_action_not_paused"
 
 
-class V2GameControlIdempotencyConflict(V2GameControlError):
+class GameControlIdempotencyConflict(GameControlError):
     code = "admin_idempotency_conflict"
 
 
 @dataclass(frozen=True)
-class V2GameStopRequestResult:
-    control: V2GameControlRequest
-    game: V2GameRecord
-    run: V2GameRun
+class GameStopRequestResult:
+    control: GameControlRequest
+    game: GameRecord
+    run: GameRun
     replayed: bool
 
 
 @dataclass(frozen=True)
-class V2GameModelRetryRequestResult:
-    control: V2GameControlRequest
-    game: V2GameRecord
-    run: V2GameRun
+class GameModelRetryRequestResult:
+    control: GameControlRequest
+    game: GameRecord
+    run: GameRun
     action_id: str
     replayed: bool
 
 
-def request_v2_game_stop(
+def request_game_stop(
     db: Session,
     *,
     game_id: str,
     actor_user_id: int,
     idempotency_key: str,
     reason: str,
-) -> V2GameStopRequestResult:
+) -> GameStopRequestResult:
     normalized_reason = reason.strip()
     request_hash = _request_hash(
         action="stop",
@@ -90,48 +90,48 @@ def request_v2_game_stop(
         reason=normalized_reason,
     )
     existing = db.scalar(
-        select(V2GameControlRequest).where(
-            V2GameControlRequest.actor_user_id == actor_user_id,
-            V2GameControlRequest.idempotency_key == idempotency_key,
+        select(GameControlRequest).where(
+            GameControlRequest.actor_user_id == actor_user_id,
+            GameControlRequest.idempotency_key == idempotency_key,
         )
     )
     if existing is not None:
         if existing.request_hash != request_hash:
-            raise V2GameControlIdempotencyConflict
-        game = db.get(V2GameRecord, existing.game_id)
-        run = db.get(V2GameRun, existing.run_id)
+            raise GameControlIdempotencyConflict
+        game = db.get(GameRecord, existing.game_id)
+        run = db.get(GameRun, existing.run_id)
         if game is None or run is None:
-            raise V2GameControlNotFound
-        return V2GameStopRequestResult(
+            raise GameControlNotFound
+        return GameStopRequestResult(
             control=existing,
             game=game,
             run=run,
             replayed=True,
         )
 
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2GameControlNotFound
-    run = db.get(V2GameRun, game.current_run_id)
+        raise GameControlNotFound
+    run = db.get(GameRun, game.current_run_id)
     if run is None:
-        raise V2GameControlNotFound
+        raise GameControlNotFound
     stoppable_incomplete_terminal = False
     if game.status == "awaiting_observation":
-        runtime_state = project_v2_runtime_state(
+        runtime_state = project_runtime_state(
             game=game,
             run=run,
-            match=db.get(V2MatchState, game.game_id),
+            match=db.get(MatchState, game.game_id),
             now=database_utc_now(db),
         )
         stoppable_incomplete_terminal = runtime_state.match_status == "running"
-    if game.status not in ACTIVE_V2_GAME_STATES and not stoppable_incomplete_terminal:
-        raise V2GameControlNotActive
+    if game.status not in ACTIVE_GAME_STATES and not stoppable_incomplete_terminal:
+        raise GameControlNotActive
     if run.stop_requested_at is not None:
-        raise V2GameStopAlreadyRequested
+        raise GameStopAlreadyRequested
 
     requested_at = datetime.now(tz=UTC)
     run.stop_requested_at = requested_at
-    control = V2GameControlRequest(
+    control = GameControlRequest(
         id=str(uuid4()),
         actor_user_id=actor_user_id,
         idempotency_key=idempotency_key,
@@ -143,7 +143,7 @@ def request_v2_game_stop(
     db.add(control)
     next_seq = game.last_record_seq + 1
     db.add(
-        V2GameRecordEvent(
+        GameRecordEvent(
             game_id=game.game_id,
             event_id=next_seq,
             record_seq=next_seq,
@@ -157,7 +157,7 @@ def request_v2_game_stop(
         )
     )
     game.last_record_seq = next_seq
-    return V2GameStopRequestResult(
+    return GameStopRequestResult(
         control=control,
         game=game,
         run=run,
@@ -165,14 +165,14 @@ def request_v2_game_stop(
     )
 
 
-def request_v2_model_action_retry(
+def request_model_action_retry(
     db: Session,
     *,
     game_id: str,
     actor_user_id: int,
     idempotency_key: str,
     reason: str,
-) -> V2GameModelRetryRequestResult:
+) -> GameModelRetryRequestResult:
     normalized_reason = reason.strip()
     request_hash = _request_hash(
         action="retry_model_action",
@@ -180,20 +180,20 @@ def request_v2_model_action_retry(
         reason=normalized_reason,
     )
     existing = db.scalar(
-        select(V2GameControlRequest).where(
-            V2GameControlRequest.actor_user_id == actor_user_id,
-            V2GameControlRequest.idempotency_key == idempotency_key,
+        select(GameControlRequest).where(
+            GameControlRequest.actor_user_id == actor_user_id,
+            GameControlRequest.idempotency_key == idempotency_key,
         )
     )
     if existing is not None:
         if existing.action != "retry_model_action" or existing.request_hash != request_hash:
-            raise V2GameControlIdempotencyConflict
-        game = db.get(V2GameRecord, existing.game_id)
-        run = db.get(V2GameRun, existing.run_id)
+            raise GameControlIdempotencyConflict
+        game = db.get(GameRecord, existing.game_id)
+        run = db.get(GameRun, existing.run_id)
         action_id = _control_model_action_id(db, existing)
         if game is None or run is None or action_id is None:
-            raise V2GameControlNotFound
-        return V2GameModelRetryRequestResult(
+            raise GameControlNotFound
+        return GameModelRetryRequestResult(
             control=existing,
             game=game,
             run=run,
@@ -201,25 +201,25 @@ def request_v2_model_action_retry(
             replayed=True,
         )
 
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2GameControlNotFound
-    run = db.get(V2GameRun, game.current_run_id)
+        raise GameControlNotFound
+    run = db.get(GameRun, game.current_run_id)
     if run is None:
-        raise V2GameControlNotFound
+        raise GameControlNotFound
     if (
         game.status != "paused_model_error"
         or run.status != "paused_model_error"
         or run.stop_requested_at is not None
     ):
-        raise V2GameModelActionNotPaused
+        raise GameModelActionNotPaused
     paused = db.scalar(
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == game.game_id,
-            V2GameRecordEvent.event_type == "model_action_paused",
+            GameRecordEvent.game_id == game.game_id,
+            GameRecordEvent.event_type == "model_action_paused",
         )
-        .order_by(V2GameRecordEvent.record_seq.desc())
+        .order_by(GameRecordEvent.record_seq.desc())
         .limit(1)
     )
     action_id = (
@@ -228,9 +228,9 @@ def request_v2_model_action_retry(
         else None
     )
     if not isinstance(action_id, str):
-        raise V2GameModelActionNotPaused
+        raise GameModelActionNotPaused
 
-    control = V2GameControlRequest(
+    control = GameControlRequest(
         id=str(uuid4()),
         actor_user_id=actor_user_id,
         idempotency_key=idempotency_key,
@@ -240,14 +240,14 @@ def request_v2_model_action_retry(
         run_id=run.run_id,
     )
     db.add(control)
-    recovery = db.get(V2ModelActionRecovery, action_id)
+    recovery = db.get(ModelActionRecovery, action_id)
     if recovery is None or recovery.state != "paused":
-        raise V2GameModelActionNotPaused
+        raise GameModelActionNotPaused
     recovery.state = "retry_requested"
     recovery.control_request_id = control.id
     next_seq = game.last_record_seq + 1
     db.add(
-        V2GameRecordEvent(
+        GameRecordEvent(
             game_id=game.game_id,
             event_id=next_seq,
             record_seq=next_seq,
@@ -268,7 +268,7 @@ def request_v2_model_action_retry(
         )
     )
     game.last_record_seq = next_seq
-    return V2GameModelRetryRequestResult(
+    return GameModelRetryRequestResult(
         control=control,
         game=game,
         run=run,
@@ -279,16 +279,16 @@ def request_v2_model_action_retry(
 
 def _control_model_action_id(
     db: Session,
-    control: V2GameControlRequest,
+    control: GameControlRequest,
 ) -> str | None:
     events = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == control.game_id,
-                V2GameRecordEvent.event_type == "model_action_retry_requested",
+                GameRecordEvent.game_id == control.game_id,
+                GameRecordEvent.event_type == "model_action_retry_requested",
             )
-            .order_by(V2GameRecordEvent.record_seq.desc())
+            .order_by(GameRecordEvent.record_seq.desc())
         )
     )
     for event in events:
@@ -299,7 +299,7 @@ def _control_model_action_id(
     return None
 
 
-def _event_audience(event: V2GameRecordEvent) -> str:
+def _event_audience(event: GameRecordEvent) -> str:
     payload = event.payload if isinstance(event.payload, dict) else {}
     audience = payload.get("audience")
     if isinstance(audience, str):
@@ -310,8 +310,8 @@ def _event_audience(event: V2GameRecordEvent) -> str:
 
 
 def _model_retry_event_audience(
-    event: V2GameRecordEvent,
-    recovery: V2ModelActionRecovery,
+    event: GameRecordEvent,
+    recovery: ModelActionRecovery,
 ) -> str:
     snapshot = recovery.action_snapshot if isinstance(recovery.action_snapshot, dict) else {}
     actor_kind = snapshot.get("actor_kind")

@@ -15,40 +15,13 @@ const JOB_STATUSES: AdminJobStatus[] = ["queued", "running", "completed", "faile
 
 export function parseAdminOverview(value: unknown): AdminOverview {
   const record = objectValue(value);
-  const quality = objectValue(record.quality);
   return {
     generated_at: dateValue(record.generated_at, "generated_at"),
     environment: enumValue(record.environment, ENVIRONMENTS, "environment"),
     profiles: countRecord(record.profiles, ["total", "draft", "published", "archived", "featured"]),
-    games: countRecord(record.games, ["total", "complete", "incomplete", "resumable"]),
-    runs: countRecord(record.runs, [
-      "total", "queued", "running", "completed", "canceled", "failed", "stale", "recovery_exhausted",
-    ]),
     jobs: countRecord(record.jobs, ["total", "queued", "running", "completed", "failed"]),
-    quality: {
-      ...countRecord(quality, [
-        "cohort_days", "sample_count", "pass_count", "warn_count", "fail_count",
-        "unavailable_count", "partial_count", "legacy_count", "p0_game_count",
-        "pending_count", "processing_count", "worker_failed_count", "expired_lease_count",
-        "critical_fact_expected", "critical_fact_recorded", "prompt_fact_expected",
-        "prompt_fact_included", "voice_expected", "voice_covered", "action_sample_count",
-        "speech_check_count", "repeated_speech_count", "speech_retry_exhausted_count",
-        "lineup_warning_count",
-      ]),
-      latest_p0_at: nullableDate(quality.latest_p0_at, "quality.latest_p0_at"),
-      oldest_pending_seconds: nullableNonNegativeInteger(
-        quality.oldest_pending_seconds,
-        "quality.oldest_pending_seconds",
-      ),
-      worker_up: booleanValue(quality.worker_up, "quality.worker_up"),
-      action_p95_ms: nullableNonNegativeInteger(
-        quality.action_p95_ms,
-        "quality.action_p95_ms",
-      ),
-    },
-    reaper_up: booleanValue(record.reaper_up, "reaper_up"),
     alerts: arrayValue(record.alerts, "alerts").map(parseAlert),
-  } as AdminOverview;
+  };
 }
 export function parseAdminJobList(value: unknown): AdminJobList {
   const record = objectValue(value);
@@ -69,7 +42,6 @@ export function parseAdminSettings(value: unknown): AdminSettings {
   const authentication = objectValue(record.authentication);
   const compatibility = objectValue(record.compatibility);
   const workers = objectValue(record.workers);
-  const liveRuns = objectValue(record.live_runs);
   return {
     environment: enumValue(record.environment, ENVIRONMENTS, "environment"),
     api_prefix: stringValue(record.api_prefix, "api_prefix"),
@@ -90,15 +62,6 @@ export function parseAdminSettings(value: unknown): AdminSettings {
       judge_voice_poll_seconds: nonNegativeNumber(workers.judge_voice_poll_seconds, "judge_voice_poll_seconds"),
       judge_voice_heartbeat_seconds: nonNegativeNumber(workers.judge_voice_heartbeat_seconds, "judge_voice_heartbeat_seconds"),
       judge_voice_probe_max_age_seconds: nonNegativeNumber(workers.judge_voice_probe_max_age_seconds, "judge_voice_probe_max_age_seconds"),
-      reaper_poll_seconds: nonNegativeNumber(workers.reaper_poll_seconds, "reaper_poll_seconds"),
-      reaper_stale_grace_seconds: nonNegativeNumber(workers.reaper_stale_grace_seconds, "reaper_stale_grace_seconds"),
-      reaper_max_attempts: positiveInteger(workers.reaper_max_attempts, "reaper_max_attempts"),
-      reaper_probe_max_age_seconds: nonNegativeNumber(workers.reaper_probe_max_age_seconds, "reaper_probe_max_age_seconds"),
-    },
-    live_runs: {
-      lease_seconds: nonNegativeNumber(liveRuns.lease_seconds, "lease_seconds"),
-      heartbeat_seconds: nonNegativeNumber(liveRuns.heartbeat_seconds, "heartbeat_seconds"),
-      event_poll_seconds: nonNegativeNumber(liveRuns.event_poll_seconds, "event_poll_seconds"),
     },
   };
 }
@@ -145,7 +108,7 @@ function parseJob(value: unknown): AdminJob {
 function parseSearchResult(value: unknown): AdminSearchResult {
   const record = objectValue(value);
   return {
-    type: enumValue(record.type, ["run", "game", "player", "job"] as const, "search.type"),
+    type: enumValue(record.type, ["player", "job"] as const, "search.type"),
     id: stringValue(record.id, "search.id"),
     label: stringValue(record.label, "search.label"),
     description: stringValue(record.description, "search.description"),
@@ -192,10 +155,6 @@ function positiveInteger(value: unknown, field: string): number {
   const result = nonNegativeInteger(value, field);
   if (result < 1) throw invalidContract(`${field} 不是正整数`);
   return result;
-}
-
-function nullableNonNegativeInteger(value: unknown, field: string): number | null {
-  return value === null ? null : nonNegativeInteger(value, field);
 }
 
 function nonNegativeNumber(value: unknown, field: string): number {

@@ -9,21 +9,21 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.action_engine import V2ActionFailure, V2ActionResult, V2SpeechSpec
-from app.v2.day_engine import V2DayEngine
-from app.v2.day_speech_pipeline_contract import (
+from app.match.action_engine import ActionFailure, ActionResult, SpeechSpec
+from app.match.day_engine import DayEngine
+from app.match.day_speech_pipeline_contract import (
     freeze_day_speech_pipeline_contract,
     resolve_day_speech_pipeline_contract,
 )
-from app.v2.day_speech_pipeline_repository import V2DaySpeechSlotSnapshot
-from app.v2.live_runtime import V2LiveRuntime
-from app.v2.match_repository import (
-    V2DaySpeechPrefetchSnapshot,
-    V2MatchPlayer,
-    V2MatchSnapshot,
+from app.match.day_speech_pipeline_repository import DaySpeechSlotSnapshot
+from app.match.live_runtime import LiveRuntime
+from app.match.match_repository import (
+    DaySpeechPrefetchSnapshot,
+    MatchPlayer,
+    MatchSnapshot,
 )
-from app.v2.model_client import V2ModelDecision
-from app.v2.repository import V2PresentationIdentity
+from app.match.model_client import ModelDecision
+from app.match.repository import PresentationIdentity
 
 
 GAME_ID = "v2_game_pipeline_orchestration"
@@ -43,7 +43,7 @@ class _Broadcaster:
         self,
         _value: bytes,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         next_sample_cursor: int,
         audience: str = "all",
     ) -> None:
@@ -51,7 +51,7 @@ class _Broadcaster:
 
     async def set_current(
         self,
-        _identity: V2PresentationIdentity | None,
+        _identity: PresentationIdentity | None,
         _sample_cursor: int,
         *,
         audience: str = "all",
@@ -60,21 +60,28 @@ class _Broadcaster:
 
 
 class _MatchRepository:
-    def __init__(self, snapshot: V2MatchSnapshot) -> None:
+    def __init__(self, snapshot: MatchSnapshot) -> None:
         self.state = snapshot
         self.record_seq = snapshot.last_record_seq
         self.presentation_seq = 0
         self.public_commits: list[dict[str, Any]] = []
         self.prefetch_cutoffs: list[dict[str, Any]] = []
         self.fail_next_public_commit = False
-        self.action_failures: dict[int, tuple[str, V2ActionFailure]] = {}
+        self.action_failures: dict[int, tuple[str, ActionFailure]] = {}
 
-    def snapshot(self, game_id: str) -> V2MatchSnapshot:
+    def snapshot(self, game_id: str) -> MatchSnapshot:
         assert game_id == GAME_ID
         return self.state
 
-    def private_knowledge(self, *, game_id: str, player_id: str) -> list[dict[str, Any]]:
+    def private_knowledge(
+        self,
+        *,
+        game_id: str,
+        player_id: str,
+        at_or_before_record_seq: int | None = None,
+    ) -> list[dict[str, Any]]:
         assert game_id == GAME_ID and player_id
+        assert at_or_before_record_seq is None or at_or_before_record_seq <= self.record_seq
         return []
 
     def append_event(
@@ -115,12 +122,12 @@ class _MatchRepository:
         action_id: str,
         speech: str,
         actor_kind: str = "player",
-    ) -> V2PresentationIdentity:
+    ) -> PresentationIdentity:
         self.presentation_seq += 1
         self.record_seq += 4
         source_record_seq = self.record_seq - 1
         self.state = replace(self.state, last_record_seq=self.record_seq)
-        return V2PresentationIdentity(
+        return PresentationIdentity(
             game_id=GAME_ID,
             run_id=RUN_ID,
             action_id=action_id,
@@ -139,7 +146,7 @@ class _MatchRepository:
             source_record_seq=source_record_seq,
         )
 
-    def close_presentation(self, identity: V2PresentationIdentity) -> None:
+    def close_presentation(self, identity: PresentationIdentity) -> None:
         assert identity.source_record_seq is not None
         self.record_seq += 2
         if identity.actor_kind != "player":
@@ -176,7 +183,7 @@ class _MatchRepository:
         self,
         *,
         action_id: str,
-        failure: V2ActionFailure,
+        failure: ActionFailure,
     ) -> int:
         record_seq = self.allocate_event()
         self.action_failures[record_seq] = (action_id, failure)
@@ -193,7 +200,7 @@ class _MatchRepository:
         predecessor_action_id: str,
         predecessor_source_event_id: int,
         predecessor_turn_player_id: str | None = None,
-    ) -> V2DaySpeechPrefetchSnapshot:
+    ) -> DaySpeechPrefetchSnapshot:
         assert (game_id, run_id, phase_id, phase_state) == (
             GAME_ID,
             RUN_ID,
@@ -235,7 +242,7 @@ class _MatchRepository:
                 "cutoff": cutoff,
             }
         )
-        return V2DaySpeechPrefetchSnapshot(
+        return DaySpeechPrefetchSnapshot(
             match_snapshot=frozen,
             public_cutoff_record_seq=cutoff,
             predecessor_presentation_id=predecessor_presentation_id,
@@ -250,11 +257,11 @@ class _MatchRepository:
 class _PipelineRepository:
     def __init__(self, repository: _MatchRepository) -> None:
         self.repository = repository
-        self.slots: dict[str, V2DaySpeechSlotSnapshot] = {}
+        self.slots: dict[str, DaySpeechSlotSnapshot] = {}
         self.reserve_calls: list[dict[str, Any]] = []
         self.events: list[tuple[str, str]] = []
 
-    def reserve_slot(self, **kwargs: Any) -> V2DaySpeechSlotSnapshot:
+    def reserve_slot(self, **kwargs: Any) -> DaySpeechSlotSnapshot:
         self.reserve_calls.append(dict(kwargs))
         slot = _slot(
             slot_id=f"v2_slot_{len(self.slots) + 1}",
@@ -271,13 +278,13 @@ class _PipelineRepository:
         self.events.append((slot.slot_id, "reserved"))
         return slot
 
-    def get_slot(self, slot_id: str) -> V2DaySpeechSlotSnapshot:
+    def get_slot(self, slot_id: str) -> DaySpeechSlotSnapshot:
         return self.slots[slot_id]
 
     def predecessor_is_active(self, slot_id: str) -> bool:
         return self.slots[slot_id].state in {"reserved", "generating"}
 
-    def mark_generating(self, *, slot_id: str) -> V2DaySpeechSlotSnapshot:
+    def mark_generating(self, *, slot_id: str) -> DaySpeechSlotSnapshot:
         return self._state(slot_id, "generating")
 
     def mark_ready(
@@ -286,7 +293,7 @@ class _PipelineRepository:
         slot_id: str,
         generation_action_id: str,
         generation_response_record_seq: int,
-    ) -> V2DaySpeechSlotSnapshot:
+    ) -> DaySpeechSlotSnapshot:
         slot = self.slots[slot_id]
         updated = replace(
             slot,
@@ -306,7 +313,7 @@ class _PipelineRepository:
         slot_id: str,
         presentation_action_id: str,
         presentation_id: str,
-    ) -> V2DaySpeechSlotSnapshot:
+    ) -> DaySpeechSlotSnapshot:
         slot = self.slots[slot_id]
         updated = replace(
             slot,
@@ -318,7 +325,7 @@ class _PipelineRepository:
         self.events.append((slot_id, "presenting"))
         return updated
 
-    def mark_consumed(self, *, slot_id: str) -> V2DaySpeechSlotSnapshot:
+    def mark_consumed(self, *, slot_id: str) -> DaySpeechSlotSnapshot:
         return self._state(slot_id, "consumed")
 
     def mark_failed(
@@ -326,7 +333,7 @@ class _PipelineRepository:
         *,
         slot_id: str,
         failure_record_seq: int,
-    ) -> V2DaySpeechSlotSnapshot:
+    ) -> DaySpeechSlotSnapshot:
         slot = self.slots[slot_id]
         action_id, action_failure = self.repository.action_failures[failure_record_seq]
         failure = {
@@ -366,7 +373,7 @@ class _PipelineRepository:
         *,
         slot_id: str,
         reason_code: str,
-    ) -> V2DaySpeechSlotSnapshot:
+    ) -> DaySpeechSlotSnapshot:
         slot = self.slots[slot_id]
         if slot.state in {"consumed", "failed", "canceled", "invalidated"}:
             return slot
@@ -379,7 +386,7 @@ class _PipelineRepository:
         self.events.append((slot_id, "canceled"))
         return updated
 
-    def _state(self, slot_id: str, state: str) -> V2DaySpeechSlotSnapshot:
+    def _state(self, slot_id: str, state: str) -> DaySpeechSlotSnapshot:
         updated = replace(self.slots[slot_id], state=state)
         self.slots[slot_id] = updated
         self.events.append((slot_id, state))
@@ -411,7 +418,7 @@ class _Actions:
         self.prefetched_actors: list[str] = []
         self.precomputed_actors: list[str] = []
         self.overlaps: list[tuple[str, str]] = []
-        self.generation_specs: list[V2SpeechSpec] = []
+        self.generation_specs: list[SpeechSpec] = []
         self.active_presentations: set[str] = set()
         self.generation_started = asyncio.Event()
         self.presentation_closed = asyncio.Event()
@@ -429,10 +436,10 @@ class _Actions:
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
+        spec: SpeechSpec,
         on_presentation_opened: Any = None,
         on_presentation_closed: Any = None,
-    ) -> V2ModelDecision | None:
+    ) -> ModelDecision | None:
         result = await self.run_player_decision_result(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -447,11 +454,11 @@ class _Actions:
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
+        spec: SpeechSpec,
         on_presentation_opened: Any = None,
         on_presentation_closed: Any = None,
         model_retry_guard: Any = None,
-    ) -> V2ActionResult | None:
+    ) -> ActionResult | None:
         if spec.pipeline_stage == "generation":
             self.model_retry_guards.append(model_retry_guard)
         assert game_id == GAME_ID
@@ -471,11 +478,11 @@ class _Actions:
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
-        decision: V2ModelDecision,
+        spec: SpeechSpec,
+        decision: ModelDecision,
         on_presentation_opened: Any = None,
         on_presentation_closed: Any = None,
-    ) -> V2ActionResult | None:
+    ) -> ActionResult | None:
         del broadcaster
         assert game_id == GAME_ID and spec.pipeline_stage == "presentation"
         self.precomputed_actors.append(spec.actor_id)
@@ -486,7 +493,7 @@ class _Actions:
             on_presentation_closed=on_presentation_closed,
         )
 
-    async def _generate(self, spec: V2SpeechSpec) -> V2ActionResult:
+    async def _generate(self, spec: SpeechSpec) -> ActionResult:
         self.prefetched_actors.append(spec.actor_id)
         self.generation_specs.append(spec)
         self.active_generation_count += 1
@@ -506,12 +513,12 @@ class _Actions:
                     if self.complete_prefetch_on_cancel:
                         pass
                     elif exc.args and exc.args[0] == ("day_speech_prefetch_post_close_deadline"):
-                        failure = V2ActionFailure(
+                        failure = ActionFailure(
                             code="day_speech_prefetch_post_close_deadline",
                             category="timeout",
                             terminal_attempt_id=f"attempt_{spec.actor_id}",
                         )
-                        return V2ActionResult(
+                        return ActionResult(
                             action_id=action_id,
                             failure=failure,
                             terminal_event_record_seq=(
@@ -526,12 +533,12 @@ class _Actions:
             await asyncio.sleep(0)
             if spec.actor_id in self.failed_prefetch_actors:
                 self.failed_prefetch_actors.remove(spec.actor_id)
-                failure = V2ActionFailure(
+                failure = ActionFailure(
                     code="model_prefetch_capacity_unavailable",
                     category="transport",
                     terminal_attempt_id=f"attempt_{spec.actor_id}",
                 )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=action_id,
                     failure=failure,
                     terminal_event_record_seq=self.repository.allocate_failure_event(
@@ -542,12 +549,12 @@ class _Actions:
             configured_failure = self.prefetch_failures.pop(spec.actor_id, None)
             if configured_failure is not None:
                 failure_code, failure_category = configured_failure
-                failure = V2ActionFailure(
+                failure = ActionFailure(
                     code=failure_code,
                     category=failure_category,
                     terminal_attempt_id=f"attempt_{spec.actor_id}",
                 )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=action_id,
                     failure=failure,
                     terminal_event_record_seq=self.repository.allocate_failure_event(
@@ -556,7 +563,7 @@ class _Actions:
                     ),
                 )
             decision = _decision(f"prefetch:{spec.actor_id}")
-            return V2ActionResult(
+            return ActionResult(
                 action_id=action_id,
                 decision=decision,
                 model_response_record_seq=self.repository.allocate_event(),
@@ -568,11 +575,11 @@ class _Actions:
     async def _present(
         self,
         *,
-        spec: V2SpeechSpec,
-        decision: V2ModelDecision,
+        spec: SpeechSpec,
+        decision: ModelDecision,
         on_presentation_opened: Any,
         on_presentation_closed: Any,
-    ) -> V2ActionResult:
+    ) -> ActionResult:
         self._action_index += 1
         action_id = f"v2_presentation_{self._action_index}_{spec.actor_id}"
         identity = self.repository.open_presentation(
@@ -587,12 +594,12 @@ class _Actions:
             if spec.actor_id in self.failed_presentation_actors:
                 self.failed_presentation_actors.remove(spec.actor_id)
                 await asyncio.sleep(0)
-                failure = V2ActionFailure(
+                failure = ActionFailure(
                     code="synthetic_tts_failure",
                     category=None,
                     terminal_attempt_id=None,
                 )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=action_id,
                     failure=failure,
                     terminal_event_record_seq=self.repository.allocate_failure_event(
@@ -611,7 +618,7 @@ class _Actions:
         terminal_event_record_seq = self.repository.allocate_event()
         if on_presentation_closed is not None:
             on_presentation_closed(identity)
-        return V2ActionResult(
+        return ActionResult(
             action_id=action_id,
             decision=decision,
             terminal_event_record_seq=terminal_event_record_seq,
@@ -620,7 +627,7 @@ class _Actions:
     async def complete_pipeline_speech_technical_skip(
         self,
         **kwargs: Any,
-    ) -> V2ActionResult:
+    ) -> ActionResult:
         self._action_index += 1
         action_id = f"v2_judge_technical_skip_{self._action_index}_{kwargs['player_id']}"
         self.technical_skips.append(dict(kwargs))
@@ -657,19 +664,19 @@ class _Actions:
         on_presentation_closed = kwargs.get("on_presentation_closed")
         if on_presentation_closed is not None:
             on_presentation_closed(identity)
-        return V2ActionResult(
+        return ActionResult(
             action_id=action_id,
             terminal_event_record_seq=terminal_record_seq,
         )
 
 
-class _DayEngine(V2DayEngine):
+class _DayEngine(DayEngine):
     async def _offer_all_wolves_explosion(self, **_kwargs: Any) -> bool:
         return False
 
 
-def _player(player_id: str, seat: int) -> V2MatchPlayer:
-    return V2MatchPlayer(
+def _player(player_id: str, seat: int) -> MatchPlayer:
+    return MatchPlayer(
         player_id=player_id,
         seat=seat,
         display_name=f"{seat}号玩家",
@@ -695,7 +702,7 @@ def _snapshot(
     player_count: int = 3,
     schema_version: int = 3,
     post_close_grace_ms: int | None = None,
-) -> V2MatchSnapshot:
+) -> MatchSnapshot:
     rule_snapshot: dict[str, Any] = {}
     if pipeline_enabled:
         if schema_version == 1:
@@ -735,7 +742,7 @@ def _snapshot(
             resolved_pipeline_contract,
             post_predecessor_close_grace_ms=post_close_grace_ms,
         )
-    return V2MatchSnapshot(
+    return MatchSnapshot(
         game_id=GAME_ID,
         run_id=RUN_ID,
         last_record_seq=1,
@@ -774,13 +781,13 @@ def _slot(
     predecessor_source_event_id: int,
     predecessor_source_record_seq: int,
     context_cutoff_record_seq: int,
-) -> V2DaySpeechSlotSnapshot:
+) -> DaySpeechSlotSnapshot:
     now = datetime.now(tz=UTC)
-    return V2DaySpeechSlotSnapshot(
+    return DaySpeechSlotSnapshot(
         slot_id=slot_id,
         game_id=GAME_ID,
         run_id=RUN_ID,
-        fence_worker_id="v2_test_worker",
+        fence_worker_id="test_worker",
         fence_token=1,
         phase_id=PHASE_ID,
         round_no=1,
@@ -812,8 +819,8 @@ def _slot(
     )
 
 
-def _decision(speech: str) -> V2ModelDecision:
-    return V2ModelDecision(
+def _decision(speech: str) -> ModelDecision:
+    return ModelDecision(
         target_player_id=None,
         speech=speech,
         provider_request_id=f"request:{speech}",
@@ -823,7 +830,7 @@ def _decision(speech: str) -> V2ModelDecision:
 
 
 def _engine(
-    snapshot: V2MatchSnapshot,
+    snapshot: MatchSnapshot,
     *,
     failed_prefetch_actors: set[str] | None = None,
     prefetch_failures: dict[str, tuple[str, str | None]] | None = None,
@@ -1197,7 +1204,7 @@ def test_prefetched_presentation_failure_marks_current_and_cancels_successor() -
 
 
 def test_live_runtime_injects_real_day_speech_pipeline_repository(tmp_path: Path) -> None:
-    runtime = V2LiveRuntime(
+    runtime = LiveRuntime(
         session_factory=sessionmaker[Session](),
         model_client=object(),  # type: ignore[arg-type]
         tts_client=None,

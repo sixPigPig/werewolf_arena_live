@@ -39,7 +39,7 @@ _COMPACT_EVENT_KEYS = {"scope_ref", "occurred_in_ref", "annotation_count"}
 _READABLE_CATALOG_KEY = re.compile(r"^[a-z][a-z0-9_]{2,}$")
 
 
-class V2ModelContextCompactionError(ValueError):
+class ModelContextCompactionError(ValueError):
     """A stable fail-closed error raised for invalid V5/V6 known events."""
 
     def __init__(self, code: str) -> None:
@@ -788,15 +788,15 @@ def _canonical_json_text(value: Any) -> str:
             separators=(",", ":"),
         )
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise V2ModelContextCompactionError("canonical_json_invalid") from exc
+        raise ModelContextCompactionError("canonical_json_invalid") from exc
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
     try:
         return _canonical_json_text(value).encode("utf-8")
     except UnicodeEncodeError as exc:
-        raise V2ModelContextCompactionError("canonical_json_invalid") from exc
+        raise ModelContextCompactionError("canonical_json_invalid") from exc
 
 
 def _fail(code: str) -> None:
-    raise V2ModelContextCompactionError(code)
+    raise ModelContextCompactionError(code)

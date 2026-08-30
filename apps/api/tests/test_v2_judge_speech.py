@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
+from app.match.judge_speech import JudgeTemplateError, render_judge_speech
 
 
 def _render(action_type: str, **context):
@@ -92,5 +92,5 @@ def test_fact_templates_render_only_supplied_engine_result(
 
 
 def test_unknown_judge_action_fails_closed() -> None:
-    with pytest.raises(V2JudgeTemplateError, match="missing judge template"):
+    with pytest.raises(JudgeTemplateError, match="missing judge template"):
         _render("judge_unregistered")

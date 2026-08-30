@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.werewolf.tts_speaker_catalog import (
+from app.shared.tts_speaker_catalog import (
     TtsSpeakerCatalogUnavailable,
     VolcengineTtsSpeakerCatalog,
     parse_supported_tts_speakers,

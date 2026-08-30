@@ -1935,11 +1935,6 @@ a {
   text-decoration: none;
 }
 
-.game-records-heading,
-.game-detail-heading {
-  align-items: center;
-}
-
 .game-filter-panel,
 .game-list-panel,
 .game-detail-panel,
@@ -5261,9 +5256,6 @@ a {
     padding: 20px;
   }
 
-  .game-records-heading,
-  .game-detail-heading,
-  .live-runs-heading,
   .voice-assets-heading {
     align-items: stretch;
     flex-direction: column;

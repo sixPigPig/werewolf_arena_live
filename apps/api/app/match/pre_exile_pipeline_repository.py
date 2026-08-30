@@ -10,27 +10,27 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
-from app.v2.event_contract import canonical_event_payload
-from app.v2.execution import V2RunFence, V2RunFenceRejected, require_v2_run_fence
-from app.v2.model_failure_episode import derive_failure_episodes, stable_failure_episode_id
-from app.v2.models import (
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2KnowledgeFact,
-    V2LivePresentation,
-    V2MatchState,
-    V2PlayerState,
-    V2PreExilePipeline,
-    V2PreExileResult,
-    V2RoleAssignment,
+from app.match.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
+from app.match.event_contract import canonical_event_payload
+from app.match.execution import RunFence, RunFenceRejected, require_run_fence
+from app.match.model_failure_episode import derive_failure_episodes, stable_failure_episode_id
+from app.match.models import (
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    KnowledgeFact,
+    LivePresentation,
+    MatchState,
+    PlayerState,
+    PreExilePipeline,
+    PreExileResult,
+    RoleAssignment,
 )
-from app.v2.pre_exile_pipeline_contract import resolve_pre_exile_pipeline_contract
-from app.v2.repository import V2ExecutionOwnershipLost, V2RepositoryError
+from app.match.pre_exile_pipeline_contract import resolve_pre_exile_pipeline_contract
+from app.match.repository import ExecutionOwnershipLost, RepositoryError
 
 
-V2PreExilePipelineState = Literal[
+PreExilePipelineState = Literal[
     "collecting",
     "no_explosion",
     "explosion_selected",
@@ -39,8 +39,8 @@ V2PreExilePipelineState = Literal[
     "canceled",
     "invalidated",
 ]
-V2PreExileResultKind = Literal["self_explosion", "exile_vote"]
-V2PreExileResultState = Literal[
+PreExileResultKind = Literal["self_explosion", "exile_vote"]
+PreExileResultState = Literal[
     "reserved",
     "generating",
     "ready",
@@ -55,12 +55,12 @@ _RESULT_TERMINAL_STATES = frozenset({"committed", "discarded"})
 _PUBLIC_AUDIENCES = frozenset({"all", "public"})
 
 
-class V2PreExilePipelineRepositoryError(V2RepositoryError):
+class PreExilePipelineRepositoryError(RepositoryError):
     pass
 
 
 @dataclass(frozen=True)
-class V2PreExilePipelineSnapshot:
+class PreExilePipelineSnapshot:
     pipeline_id: str
     game_id: str
     run_id: str
@@ -75,7 +75,7 @@ class V2PreExilePipelineSnapshot:
     predecessor_sealed_record_seq: int
     public_cutoff_record_seq: int
     public_history_sha256: str
-    state: V2PreExilePipelineState
+    state: PreExilePipelineState
     selected_explosion_player_id: str | None
     vote_batch_id: str | None
     vote_decision_context_sha256: str | None
@@ -89,13 +89,13 @@ class V2PreExilePipelineSnapshot:
 
 
 @dataclass(frozen=True)
-class V2PreExileResultSnapshot:
+class PreExileResultSnapshot:
     result_id: str
     pipeline_id: str
     game_id: str
     actor_player_id: str
-    result_kind: V2PreExileResultKind
-    state: V2PreExileResultState
+    result_kind: PreExileResultKind
+    state: PreExileResultState
     action_id: str | None
     recovery_action_id: str | None
     recovery_attempt_id: str | None
@@ -118,36 +118,36 @@ class V2PreExileResultSnapshot:
 
 
 @dataclass(frozen=True)
-class V2PreExileExplosionResolution:
+class PreExileExplosionResolution:
     outcome: Literal["no_explosion", "explosion_selected"]
     selected_player_id: str | None
     failed_player_ids: tuple[str, ...]
 
 
-class V2PreExilePipelineRepository:
+class PreExilePipelineRepository:
     """Durable, fenced state for last-speech/pre-exile overlap."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
-    def get_pipeline(self, pipeline_id: str) -> V2PreExilePipelineSnapshot:
+    def get_pipeline(self, pipeline_id: str) -> PreExilePipelineSnapshot:
         with self._session_factory() as db:
-            row = db.get(V2PreExilePipeline, pipeline_id)
+            row = db.get(PreExilePipeline, pipeline_id)
             if row is None:
-                raise V2PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
+                raise PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
             return _pipeline_snapshot(row)
 
-    def list_results(self, pipeline_id: str) -> tuple[V2PreExileResultSnapshot, ...]:
+    def list_results(self, pipeline_id: str) -> tuple[PreExileResultSnapshot, ...]:
         with self._session_factory() as db:
-            if db.get(V2PreExilePipeline, pipeline_id) is None:
-                raise V2PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
+            if db.get(PreExilePipeline, pipeline_id) is None:
+                raise PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
             rows = list(
                 db.scalars(
-                    select(V2PreExileResult)
-                    .where(V2PreExileResult.pipeline_id == pipeline_id)
+                    select(PreExileResult)
+                    .where(PreExileResult.pipeline_id == pipeline_id)
                     .order_by(
-                        V2PreExileResult.result_kind,
-                        V2PreExileResult.actor_player_id,
+                        PreExileResult.result_kind,
+                        PreExileResult.actor_player_id,
                     )
                 )
             )
@@ -159,7 +159,7 @@ class V2PreExilePipelineRepository:
         pipeline_id: str,
         actor_player_id: str,
         private_fact_id: str,
-        fence: V2RunFence | None = None,
+        fence: RunFence | None = None,
     ) -> dict[str, Any]:
         """Return only this wolf's durable false fact for its speculative vote."""
 
@@ -172,7 +172,7 @@ class V2PreExilePipelineRepository:
                 result_kind="self_explosion",
                 fence=fence,
             )
-            fact = db.get(V2KnowledgeFact, private_fact_id)
+            fact = db.get(KnowledgeFact, private_fact_id)
             if (
                 not (
                     pipeline.state == "collecting"
@@ -189,7 +189,7 @@ class V2PreExilePipelineRepository:
                 or fact.owner_id != actor_player_id
                 or fact.fact_type != "private_action_decision"
             ):
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre_exile_provisional_self_explosion_fact_unavailable"
                 )
             payload = deepcopy(fact.payload or {})
@@ -203,7 +203,7 @@ class V2PreExilePipelineRepository:
                 or context.get("visibility_mode") != "pre_exile_provisional_until_atomic_arbiter"
                 or (payload.get("decision") or {}).get("explode") is not False
             ):
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre_exile_provisional_self_explosion_fact_invalid"
                 )
             recorded = _event_at(
@@ -214,7 +214,7 @@ class V2PreExilePipelineRepository:
                 event_type="private_knowledge_recorded",
             )
             if _payload(recorded).get("knowledge_fact_id") != private_fact_id:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre_exile_provisional_self_explosion_fact_clock_invalid"
                 )
             return {
@@ -244,8 +244,8 @@ class V2PreExilePipelineRepository:
         predecessor_sealed_record_seq: int,
         public_cutoff_record_seq: int,
         public_history_sha256: str,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExilePipelineSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExilePipelineSnapshot:
         _canonical_id(game_id, field="game_id", maximum=40)
         _canonical_id(phase_id, field="phase_id", maximum=40)
         _canonical_id(predecessor_action_id, field="predecessor_action_id", maximum=48)
@@ -267,7 +267,7 @@ class V2PreExilePipelineRepository:
             < predecessor_sealed_record_seq
             <= public_cutoff_record_seq
         ):
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile predecessor cutoff lineage is invalid"
             )
         if (
@@ -275,7 +275,7 @@ class V2PreExilePipelineRepository:
             or len(public_history_sha256) != 64
             or any(char not in "0123456789abcdef" for char in public_history_sha256)
         ):
-            raise V2PreExilePipelineRepositoryError("pre-exile public history hash is invalid")
+            raise PreExilePipelineRepositoryError("pre-exile public history hash is invalid")
 
         with self._session_factory.begin() as db:
             game, run = _locked_game_and_fence(db, game_id=game_id, fence=fence)
@@ -285,21 +285,21 @@ class V2PreExilePipelineRepository:
                 contract.enables(action_type)
                 for action_type in ("werewolf_self_explosion", "exile_vote")
             ):
-                raise V2PreExilePipelineRepositoryError("pre_exile_pipeline_contract_disabled")
-            match = db.get(V2MatchState, game_id)
+                raise PreExilePipelineRepositoryError("pre_exile_pipeline_contract_disabled")
+            match = db.get(MatchState, game_id)
             if (
                 match is None
                 or match.round_no != round_no
                 or phase_id != f"day_{round_no}"
                 or game.phase_id != phase_id
             ):
-                raise V2PreExilePipelineRepositoryError("pre-exile pipeline day changed")
+                raise PreExilePipelineRepositoryError("pre-exile pipeline day changed")
             if game.status != "broadcasting" or run.status != "broadcasting":
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile reservation requires active last-speech broadcast"
                 )
             if public_cutoff_record_seq > game.last_record_seq:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile public cutoff is ahead of durable history"
                 )
             _validate_sealed_last_speech(
@@ -323,12 +323,12 @@ class V2PreExilePipelineRepository:
                 str(public_cutoff_record_seq),
             )
             existing = db.scalar(
-                select(V2PreExilePipeline)
+                select(PreExilePipeline)
                 .where(
-                    V2PreExilePipeline.game_id == game_id,
-                    V2PreExilePipeline.run_id == run.run_id,
-                    V2PreExilePipeline.phase_id == phase_id,
-                    V2PreExilePipeline.round_no == round_no,
+                    PreExilePipeline.game_id == game_id,
+                    PreExilePipeline.run_id == run.run_id,
+                    PreExilePipeline.phase_id == phase_id,
+                    PreExilePipeline.round_no == round_no,
                 )
                 .with_for_update()
             )
@@ -344,12 +344,12 @@ class V2PreExilePipelineRepository:
             }
             if existing is not None:
                 if any(getattr(existing, key) != value for key, value in immutable.items()):
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile reservation conflicts with durable pipeline"
                     )
                 _require_owned_pipeline(existing, run)
                 return _pipeline_snapshot(existing)
-            row = V2PreExilePipeline(
+            row = PreExilePipeline(
                 pipeline_id=pipeline_id,
                 game_id=game_id,
                 run_id=run.run_id,
@@ -391,9 +391,9 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         actor_player_id: str,
-        result_kind: V2PreExileResultKind,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExileResultSnapshot:
+        result_kind: PreExileResultKind,
+        fence: RunFence | None = None,
+    ) -> PreExileResultSnapshot:
         _canonical_id(actor_player_id, field="actor_player_id", maximum=80)
         _result_kind(result_kind)
         with self._session_factory.begin() as db:
@@ -403,40 +403,40 @@ class V2PreExilePipelineRepository:
                 _require_pipeline_state(pipeline, "collecting")
             else:
                 _require_pipeline_state(pipeline, "collecting", "no_explosion")
-            player = db.get(V2PlayerState, (game.game_id, actor_player_id))
+            player = db.get(PlayerState, (game.game_id, actor_player_id))
             assignment = db.scalar(
-                select(V2RoleAssignment).where(
-                    V2RoleAssignment.game_id == game.game_id,
-                    V2RoleAssignment.player_id == actor_player_id,
+                select(RoleAssignment).where(
+                    RoleAssignment.game_id == game.game_id,
+                    RoleAssignment.player_id == actor_player_id,
                 )
             )
             if player is None or assignment is None or not player.alive:
-                raise V2PreExilePipelineRepositoryError("pre-exile result actor must be alive")
+                raise PreExilePipelineRepositoryError("pre-exile result actor must be alive")
             if result_kind == "self_explosion" and assignment.role_key != "werewolf":
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "self-explosion result actor must be a werewolf"
                 )
             if result_kind == "exile_vote" and not bool((player.state or {}).get("can_vote", True)):
-                raise V2PreExilePipelineRepositoryError("pre-exile vote actor cannot vote")
+                raise PreExilePipelineRepositoryError("pre-exile vote actor cannot vote")
             result_id = _deterministic_id(
                 "v2_prexr_", pipeline.pipeline_id, result_kind, actor_player_id
             )
             existing = db.scalar(
-                select(V2PreExileResult)
+                select(PreExileResult)
                 .where(
-                    V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                    V2PreExileResult.actor_player_id == actor_player_id,
-                    V2PreExileResult.result_kind == result_kind,
+                    PreExileResult.pipeline_id == pipeline.pipeline_id,
+                    PreExileResult.actor_player_id == actor_player_id,
+                    PreExileResult.result_kind == result_kind,
                 )
                 .with_for_update()
             )
             if existing is not None:
                 if existing.result_id != result_id or existing.game_id != game.game_id:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile result reservation conflicts with durable member"
                     )
                 return _result_snapshot(existing)
-            row = V2PreExileResult(
+            row = PreExileResult(
                 result_id=result_id,
                 pipeline_id=pipeline.pipeline_id,
                 game_id=game.game_id,
@@ -465,13 +465,13 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         actor_player_id: str,
-        result_kind: V2PreExileResultKind,
+        result_kind: PreExileResultKind,
         action_id: str,
         response_record_seq: int | None = None,
         terminal_record_seq: int | None = None,
         technical_outcome_record_seq: int | None = None,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExileResultSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExileResultSnapshot:
         _canonical_id(action_id, field="action_id", maximum=48)
         if response_record_seq is not None:
             _positive_int(response_record_seq, field="response_record_seq")
@@ -491,7 +491,7 @@ class V2PreExilePipelineRepository:
                 fence=fence,
             )
             if row.action_id != action_id:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile result action changed after claim"
                 )
             resolved_response = response_record_seq
@@ -520,7 +520,7 @@ class V2PreExilePipelineRepository:
                 if type(candidate) is int and candidate > 0:
                     resolved_technical = candidate
             if resolved_terminal is None:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile result has no durable action success"
                 )
             if row.state in {"ready", "failed", "accepted", "committed", "discarded"}:
@@ -537,13 +537,13 @@ class V2PreExilePipelineRepository:
                     and (stored_technical is None or row.failure_record_seq == stored_technical)
                 ):
                     return _result_snapshot(row)
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile result has different durable success lineage"
                 )
             _require_result_state(row, "generating")
             if resolved_response is not None:
                 if resolved_terminal <= resolved_response:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile result terminal event precedes response"
                     )
                 attempt_id, decision = _validate_success_result(
@@ -562,7 +562,7 @@ class V2PreExilePipelineRepository:
                 decision_status = "completed"
             else:
                 if resolved_technical is None:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile technical result has no supporting event"
                     )
                 technical = _event_at_any(
@@ -577,7 +577,7 @@ class V2PreExilePipelineRepository:
                 )
                 technical_payload = _payload(technical)
                 if technical_payload.get("action_id") != action_id:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile technical result action changed"
                     )
                 attempt_id = technical_payload.get("attempt_id")
@@ -625,11 +625,11 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         actor_player_id: str,
-        result_kind: V2PreExileResultKind,
+        result_kind: PreExileResultKind,
         action_id: str,
         failure_record_seq: int,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExileResultSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExileResultSnapshot:
         _canonical_id(action_id, field="action_id", maximum=48)
         _positive_int(failure_record_seq, field="failure_record_seq")
         with self._session_factory.begin() as db:
@@ -643,12 +643,12 @@ class V2PreExilePipelineRepository:
             if row.state == "failed":
                 if row.action_id == action_id and row.failure_record_seq == failure_record_seq:
                     return _result_snapshot(row)
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile result has different durable failure lineage"
                 )
             _require_result_state(row, "generating")
             if row.action_id != action_id:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile result failure action changed after claim"
                 )
             failure, attempt_id = _validate_failure_result(
@@ -697,10 +697,10 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         expected_wolf_ids: tuple[str, ...],
-        fence: V2RunFence | None = None,
-    ) -> V2PreExileExplosionResolution:
+        fence: RunFence | None = None,
+    ) -> PreExileExplosionResolution:
         del pipeline_id, expected_wolf_ids, fence
-        raise V2PreExilePipelineRepositoryError("pre_exile_atomic_arbiter_required")
+        raise PreExilePipelineRepositoryError("pre_exile_atomic_arbiter_required")
 
     def adopt_vote_recovery_result(
         self,
@@ -712,8 +712,8 @@ class V2PreExilePipelineRepository:
         response_record_seq: int | None = None,
         terminal_record_seq: int | None = None,
         technical_outcome_record_seq: int | None = None,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExileResultSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExileResultSnapshot:
         """Adopt the sole normal recovery allowed after idle admission rejection."""
 
         for field, value in (
@@ -737,7 +737,7 @@ class V2PreExilePipelineRepository:
                 fence=fence,
             )
             if row.action_id != source_action_id:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile vote recovery source action changed"
                 )
             if row.recovery_action_id is not None:
@@ -755,12 +755,12 @@ class V2PreExilePipelineRepository:
                         or technical_outcome_record_seq is not None
                         and technical_outcome_record_seq != stored_technical_seq
                     ):
-                        raise V2PreExilePipelineRepositoryError(
+                        raise PreExilePipelineRepositoryError(
                             "pre-exile vote recovery retry changed durable lineage"
                         )
                     return _result_snapshot(row)
                 if row.recovery_action_id != recovery_action_id:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile vote already has durable recovery lineage"
                     )
             _require_result_state(row, "failed")
@@ -816,7 +816,7 @@ class V2PreExilePipelineRepository:
                 or terminal_payload.get("action_id") != recovery_action_id
                 or opened.record_seq >= terminal.record_seq
             ):
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "pre-exile vote recovery has no durable action success"
                 )
             recovery_failure: dict[str, Any] | None = None
@@ -843,7 +843,7 @@ class V2PreExilePipelineRepository:
                     or decision_note is not None
                     and not isinstance(decision_note, str)
                 ):
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile vote recovery result is invalid"
                     )
                 row.decision = {
@@ -857,7 +857,7 @@ class V2PreExilePipelineRepository:
                     candidate = terminal_payload.get("technical_outcome_record_seq")
                     supporting_seq = candidate if type(candidate) is int else None
                 if supporting_seq is None:
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile vote recovery has no response or technical outcome"
                     )
                 technical = _event_at(
@@ -876,7 +876,7 @@ class V2PreExilePipelineRepository:
                     or technical_payload.get("technical_outcome") != "technical_abstain"
                     or not isinstance(attempt_id, str)
                 ):
-                    raise V2PreExilePipelineRepositoryError(
+                    raise PreExilePipelineRepositoryError(
                         "pre-exile vote recovery technical outcome is invalid"
                     )
                 recovery_failure = {
@@ -915,36 +915,36 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         expected_voter_ids: tuple[str, ...],
-        fence: V2RunFence | None = None,
-    ) -> tuple[V2PreExileResultSnapshot, ...]:
+        fence: RunFence | None = None,
+    ) -> tuple[PreExileResultSnapshot, ...]:
         del pipeline_id, expected_voter_ids, fence
-        raise V2PreExilePipelineRepositoryError("pre_exile_atomic_vote_commit_required")
+        raise PreExilePipelineRepositoryError("pre_exile_atomic_vote_commit_required")
 
     def mark_consumed(
         self,
         *,
         pipeline_id: str,
         vote_batch_id: str,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExilePipelineSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExilePipelineSnapshot:
         _canonical_id(vote_batch_id, field="vote_batch_id", maximum=180)
         with self._session_factory.begin() as db:
             game, run, pipeline = _locked_owned_pipeline(db, pipeline_id=pipeline_id, fence=fence)
             if pipeline.state == "consumed":
                 if pipeline.vote_batch_id == vote_batch_id:
                     return _pipeline_snapshot(pipeline)
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     "consumed pre-exile pipeline has different vote batch"
                 )
-            raise V2PreExilePipelineRepositoryError("pre_exile_atomic_vote_commit_required")
+            raise PreExilePipelineRepositoryError("pre_exile_atomic_vote_commit_required")
 
     def cancel_pipeline(
         self,
         *,
         pipeline_id: str,
         reason_code: str,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExilePipelineSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExilePipelineSnapshot:
         return self._terminalize_pipeline(
             pipeline_id=pipeline_id,
             reason_code=reason_code,
@@ -957,8 +957,8 @@ class V2PreExilePipelineRepository:
         *,
         pipeline_id: str,
         reason_code: str,
-        fence: V2RunFence | None = None,
-    ) -> V2PreExilePipelineSnapshot:
+        fence: RunFence | None = None,
+    ) -> PreExilePipelineSnapshot:
         return self._terminalize_pipeline(
             pipeline_id=pipeline_id,
             reason_code=reason_code,
@@ -972,8 +972,8 @@ class V2PreExilePipelineRepository:
         pipeline_id: str,
         reason_code: str,
         target_state: Literal["canceled", "invalidated"],
-        fence: V2RunFence | None,
-    ) -> V2PreExilePipelineSnapshot:
+        fence: RunFence | None,
+    ) -> PreExilePipelineSnapshot:
         _canonical_id(reason_code, field="reason_code", maximum=120)
         with self._session_factory.begin() as db:
             if target_state == "canceled":
@@ -987,17 +987,17 @@ class V2PreExilePipelineRepository:
             if pipeline.state == target_state:
                 if (pipeline.failure or {}).get("reason_code") == reason_code:
                     return _pipeline_snapshot(pipeline)
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     f"{target_state} pre-exile pipeline has different reason"
                 )
             if pipeline.state in _PIPELINE_TERMINAL_STATES:
-                raise V2PreExilePipelineRepositoryError(
+                raise PreExilePipelineRepositoryError(
                     f"pre-exile pipeline is terminal ({pipeline.state})"
                 )
             rows = list(
                 db.scalars(
-                    select(V2PreExileResult)
-                    .where(V2PreExileResult.pipeline_id == pipeline.pipeline_id)
+                    select(PreExileResult)
+                    .where(PreExileResult.pipeline_id == pipeline.pipeline_id)
                     .with_for_update()
                 )
             )
@@ -1044,15 +1044,15 @@ def _locked_game_and_fence(
     db: Session,
     *,
     game_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun]:
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun]:
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2PreExilePipelineRepositoryError(f"unknown game {game_id}")
+        raise PreExilePipelineRepositoryError(f"unknown game {game_id}")
     try:
-        run = require_v2_run_fence(db, game, fence=fence)
-    except V2RunFenceRejected as exc:
-        raise V2ExecutionOwnershipLost(str(exc)) from exc
+        run = require_run_fence(db, game, fence=fence)
+    except RunFenceRejected as exc:
+        raise ExecutionOwnershipLost(str(exc)) from exc
     return game, run
 
 
@@ -1060,22 +1060,22 @@ def _locked_owned_pipeline(
     db: Session,
     *,
     pipeline_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun, V2PreExilePipeline]:
-    probe = db.get(V2PreExilePipeline, pipeline_id)
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun, PreExilePipeline]:
+    probe = db.get(PreExilePipeline, pipeline_id)
     if probe is None:
-        raise V2PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
+        raise PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
     game, run = _locked_game_and_fence(db, game_id=probe.game_id, fence=fence)
     row = db.scalar(
-        select(V2PreExilePipeline)
-        .where(V2PreExilePipeline.pipeline_id == pipeline_id)
+        select(PreExilePipeline)
+        .where(PreExilePipeline.pipeline_id == pipeline_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     assert row is not None
     _require_owned_pipeline(row, run)
     if game.phase_id != row.phase_id:
-        raise V2PreExilePipelineRepositoryError("pre-exile pipeline phase changed")
+        raise PreExilePipelineRepositoryError("pre-exile pipeline phase changed")
     return game, run, row
 
 
@@ -1083,15 +1083,15 @@ def _locked_pipeline_for_invalidation(
     db: Session,
     *,
     pipeline_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun, V2PreExilePipeline]:
-    probe = db.get(V2PreExilePipeline, pipeline_id)
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun, PreExilePipeline]:
+    probe = db.get(PreExilePipeline, pipeline_id)
     if probe is None:
-        raise V2PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
+        raise PreExilePipelineRepositoryError(f"unknown pre-exile pipeline {pipeline_id}")
     game, run = _locked_game_and_fence(db, game_id=probe.game_id, fence=fence)
     row = db.scalar(
-        select(V2PreExilePipeline)
-        .where(V2PreExilePipeline.pipeline_id == pipeline_id)
+        select(PreExilePipeline)
+        .where(PreExilePipeline.pipeline_id == pipeline_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -1104,23 +1104,23 @@ def _locked_result(
     *,
     pipeline_id: str,
     actor_player_id: str,
-    result_kind: V2PreExileResultKind,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun, V2PreExilePipeline, V2PreExileResult]:
+    result_kind: PreExileResultKind,
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun, PreExilePipeline, PreExileResult]:
     _result_kind(result_kind)
     game, run, pipeline = _locked_owned_pipeline(db, pipeline_id=pipeline_id, fence=fence)
     row = db.scalar(
-        select(V2PreExileResult)
+        select(PreExileResult)
         .where(
-            V2PreExileResult.pipeline_id == pipeline_id,
-            V2PreExileResult.actor_player_id == actor_player_id,
-            V2PreExileResult.result_kind == result_kind,
+            PreExileResult.pipeline_id == pipeline_id,
+            PreExileResult.actor_player_id == actor_player_id,
+            PreExileResult.result_kind == result_kind,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     if row is None:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile result must be reserved before recording"
         )
     return game, run, pipeline, row
@@ -1129,7 +1129,7 @@ def _locked_result(
 def _validate_sealed_last_speech(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     round_no: int,
     predecessor_action_id: str,
     predecessor_presentation_id: str,
@@ -1140,14 +1140,14 @@ def _validate_sealed_last_speech(
 ) -> None:
     active = list(
         db.scalars(
-            select(V2LivePresentation).where(
-                V2LivePresentation.game_id == game.game_id,
-                V2LivePresentation.state == "active",
+            select(LivePresentation).where(
+                LivePresentation.game_id == game.game_id,
+                LivePresentation.state == "active",
             )
         )
     )
     if len(active) != 1:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile predecessor is not the unique active presentation"
         )
     presentation = active[0]
@@ -1160,7 +1160,7 @@ def _validate_sealed_last_speech(
         or presentation.audience not in _PUBLIC_AUDIENCES
         or presentation.closed_at is not None
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile predecessor presentation lineage is invalid"
         )
     source = _event_by_id(
@@ -1171,7 +1171,7 @@ def _validate_sealed_last_speech(
         event_type="speech_segment_committed",
     )
     if source.record_seq != predecessor_source_record_seq:
-        raise V2PreExilePipelineRepositoryError("pre-exile predecessor source record changed")
+        raise PreExilePipelineRepositoryError("pre-exile predecessor source record changed")
     source_payload = _payload(source)
     if (
         source_payload.get("action_id") != predecessor_action_id
@@ -1179,7 +1179,7 @@ def _validate_sealed_last_speech(
         or source_payload.get("audience") not in _PUBLIC_AUDIENCES
         or source_payload.get("text") != presentation.subtitle_text
     ):
-        raise V2PreExilePipelineRepositoryError("pre-exile predecessor source payload is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile predecessor source payload is invalid")
     sealed = _event_at(
         db,
         game_id=game.game_id,
@@ -1193,7 +1193,7 @@ def _validate_sealed_last_speech(
         or sealed_payload.get("presentation_id") != predecessor_presentation_id
         or sealed_payload.get("audience") not in _PUBLIC_AUDIENCES
     ):
-        raise V2PreExilePipelineRepositoryError("pre-exile predecessor sealed event is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile predecessor sealed event is invalid")
     opened = _find_event(
         db,
         game_id=game.game_id,
@@ -1204,7 +1204,7 @@ def _validate_sealed_last_speech(
     )
     context = _payload(opened).get("context") if opened is not None else None
     if type(context) is not dict:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile predecessor action has no durable context"
         )
     speech_order = context.get("speech_order")
@@ -1226,7 +1226,7 @@ def _validate_sealed_last_speech(
         or speech_order[-1] != turn_player_id
         or speech_round != final_round
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile predecessor is not the final discussion turn"
         )
     if technical_skip:
@@ -1240,7 +1240,7 @@ def _validate_sealed_last_speech(
             or public_skip_record_seq <= 0
             or public_skip_record_seq >= opened.record_seq
         ):
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile technical-skip predecessor identity is invalid"
             )
         public_skip = _event_at(
@@ -1258,7 +1258,7 @@ def _validate_sealed_last_speech(
             or public_skip_payload.get("action_type") != "day_debate_speech"
             or public_skip_payload.get("actor_id") != turn_player_id
         ):
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile technical-skip predecessor has no public skip fact"
             )
     elif (
@@ -1267,7 +1267,7 @@ def _validate_sealed_last_speech(
         or presentation.actor_kind != "player"
         or presentation.actor_id != turn_player_id
     ):
-        raise V2PreExilePipelineRepositoryError("pre-exile player predecessor identity is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile player predecessor identity is invalid")
     later_public = _find_public_speech_after(
         db,
         game_id=game.game_id,
@@ -1277,21 +1277,21 @@ def _validate_sealed_last_speech(
         excluding_presentation_id=predecessor_presentation_id,
     )
     if later_public is not None:
-        raise V2PreExilePipelineRepositoryError("pre-exile cutoff contains a later public speech")
+        raise PreExilePipelineRepositoryError("pre-exile cutoff contains a later public speech")
 
 
 def _validate_success_result(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
     action_id: str,
     response_record_seq: int,
     terminal_record_seq: int,
     last_record_seq: int,
 ) -> tuple[str, dict[str, Any]]:
     if terminal_record_seq > last_record_seq:
-        raise V2PreExilePipelineRepositoryError("pre-exile result is ahead of durable history")
+        raise PreExilePipelineRepositoryError("pre-exile result is ahead of durable history")
     opened = _validate_result_action_opened(db, pipeline=pipeline, row=row, action_id=action_id)
     response = _event_at(
         db,
@@ -1320,15 +1320,15 @@ def _validate_success_result(
         or not attempt_id
         or terminal_payload.get("action_id") != action_id
     ):
-        raise V2PreExilePipelineRepositoryError("pre-exile model result lineage is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile model result lineage is invalid")
     _canonical_id(attempt_id, field="attempt_id", maximum=48)
     decision_note = parsed.get("decision_note")
     if decision_note is not None and not isinstance(decision_note, str):
-        raise V2PreExilePipelineRepositoryError("pre-exile result decision note is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile result decision note is invalid")
     if row.result_kind == "self_explosion":
         explode = parsed.get("explode")
         if not isinstance(explode, bool):
-            raise V2PreExilePipelineRepositoryError("pre-exile self-explosion result is invalid")
+            raise PreExilePipelineRepositoryError("pre-exile self-explosion result is invalid")
         decision = {"explode": explode, "decision_note": decision_note}
     else:
         target_id = parsed.get("target_player_id")
@@ -1341,7 +1341,7 @@ def _validate_success_result(
             if isinstance(item, dict) and isinstance(item.get("player_id"), str)
         }
         if target_id == row.actor_player_id or target_id not in candidate_ids:
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile vote target left its frozen candidate set"
             )
         decision = {"target_player_id": target_id, "decision_note": decision_note}
@@ -1351,14 +1351,14 @@ def _validate_success_result(
 def _validate_failure_result(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
     action_id: str,
     failure_record_seq: int,
     last_record_seq: int,
 ) -> tuple[dict[str, Any], str | None]:
     if failure_record_seq > last_record_seq:
-        raise V2PreExilePipelineRepositoryError("pre-exile failure is ahead of durable history")
+        raise PreExilePipelineRepositoryError("pre-exile failure is ahead of durable history")
     opened = _validate_result_action_opened(db, pipeline=pipeline, row=row, action_id=action_id)
     failed = _event_at(
         db,
@@ -1369,7 +1369,7 @@ def _validate_failure_result(
     )
     payload = _payload(failed)
     if opened.record_seq >= failure_record_seq or payload.get("action_id") != action_id:
-        raise V2PreExilePipelineRepositoryError("pre-exile action failure lineage is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile action failure lineage is invalid")
     request_failure = _find_event(
         db,
         game_id=pipeline.game_id,
@@ -1400,10 +1400,10 @@ def _validate_failure_result(
 def _validate_result_action_opened(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
     action_id: str,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     opened = _find_event(
         db,
         game_id=pipeline.game_id,
@@ -1417,9 +1417,9 @@ def _validate_result_action_opened(
         "werewolf_self_explosion" if row.result_kind == "self_explosion" else "exile_vote"
     )
     expected_admission = "normal" if row.result_kind == "self_explosion" else "idle_only"
-    game = db.get(V2GameRecord, pipeline.game_id)
+    game = db.get(GameRecord, pipeline.game_id)
     if game is None:
-        raise V2PreExilePipelineRepositoryError("pre-exile action game is missing")
+        raise PreExilePipelineRepositoryError("pre-exile action game is missing")
     contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
     guarded_self_explosion_retry = (
         row.result_kind == "self_explosion"
@@ -1454,7 +1454,7 @@ def _validate_result_action_opened(
         or context.get("actor") != {"kind": "player", "id": row.actor_player_id}
         or context.get("public_history_cutoff_record_seq") != pipeline.public_cutoff_record_seq
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile action opened context lineage is invalid"
         )
     return opened
@@ -1463,8 +1463,8 @@ def _validate_result_action_opened(
 def _validate_admission_capacity_recovery_source(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
 ) -> None:
     failure = row.failure or {}
     request_failure = failure.get("model_request_failed")
@@ -1475,7 +1475,7 @@ def _validate_admission_capacity_recovery_source(
         or request_failure.get("failure_stage") != "provider_admission"
         or request_failure.get("failure_code") != "model_prefetch_capacity_unavailable"
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile vote recovery requires an admission-capacity source"
         )
     forbidden_types = {
@@ -1486,10 +1486,10 @@ def _validate_admission_capacity_recovery_source(
     }
     events = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == pipeline.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type.in_(forbidden_types),
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == pipeline.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type.in_(forbidden_types),
             )
         )
     )
@@ -1497,7 +1497,7 @@ def _validate_admission_capacity_recovery_source(
         isinstance(event.payload, dict) and event.payload.get("action_id") == row.action_id
         for event in events
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile vote source reached the provider and cannot be repeated"
         )
 
@@ -1505,11 +1505,11 @@ def _validate_admission_capacity_recovery_source(
 def _validate_vote_recovery_action_opened(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
     source_action_id: str,
     recovery_action_id: str,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     opened = _find_event(
         db,
         game_id=pipeline.game_id,
@@ -1538,21 +1538,21 @@ def _validate_vote_recovery_action_opened(
             "model_admission_mode": "normal",
         }
     ):
-        raise V2PreExilePipelineRepositoryError("pre-exile vote recovery action lineage is invalid")
+        raise PreExilePipelineRepositoryError("pre-exile vote recovery action lineage is invalid")
     return opened
 
 
 def _persist_self_explosion_fact(
     db: Session,
     *,
-    game: V2GameRecord,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
+    game: GameRecord,
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
     decision: dict[str, Any],
     decision_status: str,
 ) -> tuple[str, int]:
     fact_id = _deterministic_id("v2_fact_", row.result_id, "self_explosion")
-    existing = db.get(V2KnowledgeFact, fact_id)
+    existing = db.get(KnowledgeFact, fact_id)
     payload = {
         "schema_version": 1,
         "round_no": pipeline.round_no,
@@ -1584,29 +1584,29 @@ def _persist_self_explosion_fact(
             or existing.fact_type != "private_action_decision"
             or existing.payload != payload
         ):
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile private fact conflicts with durable fact"
             )
         matching_events = [
             event
             for event in db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == game.game_id,
-                    V2GameRecordEvent.run_id == pipeline.run_id,
-                    V2GameRecordEvent.event_type == "private_knowledge_recorded",
-                    V2GameRecordEvent.record_seq > pipeline.public_cutoff_record_seq,
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == game.game_id,
+                    GameRecordEvent.run_id == pipeline.run_id,
+                    GameRecordEvent.event_type == "private_knowledge_recorded",
+                    GameRecordEvent.record_seq > pipeline.public_cutoff_record_seq,
                 )
             )
             if _payload(event).get("knowledge_fact_id") == fact_id
         ]
         if len(matching_events) != 1:
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile private fact has no durable record event"
             )
         event = matching_events[0]
         return fact_id, event.record_seq
     db.add(
-        V2KnowledgeFact(
+        KnowledgeFact(
             knowledge_fact_id=fact_id,
             game_id=game.game_id,
             source_activation_id=None,
@@ -1638,11 +1638,11 @@ def _persist_self_explosion_fact(
 def _append_result_recorded_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     run_id: str,
-    pipeline: V2PreExilePipeline,
-    row: V2PreExileResult,
-) -> V2GameRecordEvent:
+    pipeline: PreExilePipeline,
+    row: PreExileResult,
+) -> GameRecordEvent:
     return _append_pipeline_event(
         db,
         game=game,
@@ -1675,12 +1675,12 @@ def _append_result_recorded_event(
 def _validate_predecessor_closed(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
 ) -> int:
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == pipeline.game_id,
-            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == pipeline.game_id,
+            LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
         )
     )
     if (
@@ -1690,7 +1690,7 @@ def _validate_predecessor_closed(
         or presentation.state != "closed"
         or presentation.closed_at is None
     ):
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "pre-exile votes cannot be accepted before predecessor close"
         )
     closed = _find_event(
@@ -1703,16 +1703,16 @@ def _validate_predecessor_closed(
         minimum_record_seq=pipeline.predecessor_sealed_record_seq + 1,
     )
     if closed is None:
-        raise V2PreExilePipelineRepositoryError("pre-exile predecessor has no durable close event")
+        raise PreExilePipelineRepositoryError("pre-exile predecessor has no durable close event")
     return closed.record_seq
 
 
 def _terminalize_result_actions(
     db: Session,
     *,
-    game: V2GameRecord,
-    pipeline: V2PreExilePipeline,
-    rows: list[V2PreExileResult],
+    game: GameRecord,
+    pipeline: PreExilePipeline,
+    rows: list[PreExileResult],
     failure_code: str,
     failure_stage: str,
     failure_episode_disposition: Literal["isolated_action_failure"] | None = None,
@@ -1739,18 +1739,18 @@ def _terminalize_result_actions(
         return
     events = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     terminal_actions: set[str] = set()
     terminal_attempts: set[str] = set()
-    starts: dict[str, list[V2GameRecordEvent]] = {action_id: [] for action_id in action_ids}
-    opened: dict[str, V2GameRecordEvent] = {}
+    starts: dict[str, list[GameRecordEvent]] = {action_id: [] for action_id in action_ids}
+    opened: dict[str, GameRecordEvent] = {}
     open_episode_ids: dict[str, set[str]] = {action_id: set() for action_id in action_ids}
     for episode in derive_failure_episodes(events):
         if episode.is_open and episode.action_id in open_episode_ids:
@@ -1821,7 +1821,7 @@ def _terminalize_result_actions(
             continue
         action_episode_ids = open_episode_ids[action_id]
         if failure_episode_disposition is not None and len(action_episode_ids) > 1:
-            raise V2PreExilePipelineRepositoryError(
+            raise PreExilePipelineRepositoryError(
                 "pre-exile action has multiple open failure episodes"
             )
         failure_episode_id = (
@@ -1855,26 +1855,26 @@ def _terminalize_result_actions(
 def _validate_expected_wolves(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
     expected: tuple[str, ...],
 ) -> None:
     rows = list(
         db.execute(
-            select(V2RoleAssignment.player_id, V2PlayerState.alive)
+            select(RoleAssignment.player_id, PlayerState.alive)
             .join(
-                V2PlayerState,
-                (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                PlayerState,
+                (PlayerState.game_id == RoleAssignment.game_id)
+                & (PlayerState.player_id == RoleAssignment.player_id),
             )
             .where(
-                V2RoleAssignment.game_id == pipeline.game_id,
-                V2RoleAssignment.role_key == "werewolf",
+                RoleAssignment.game_id == pipeline.game_id,
+                RoleAssignment.role_key == "werewolf",
             )
         )
     )
     alive_wolves = {player_id for player_id, alive in rows if alive}
     if set(expected) != alive_wolves:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "expected pre-exile wolves changed from durable roster"
         )
 
@@ -1882,23 +1882,23 @@ def _validate_expected_wolves(
 def _existing_explosion_resolution(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
     expected: tuple[str, ...],
-) -> V2PreExileExplosionResolution:
+) -> PreExileExplosionResolution:
     rows = list(
         db.scalars(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                V2PreExileResult.result_kind == "self_explosion",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == pipeline.pipeline_id,
+                PreExileResult.result_kind == "self_explosion",
             )
         )
     )
     by_actor = {row.actor_player_id: row for row in rows}
     if set(by_actor) != set(expected):
-        raise V2PreExilePipelineRepositoryError("resolved pre-exile wolf membership changed")
+        raise PreExilePipelineRepositoryError("resolved pre-exile wolf membership changed")
     failed = tuple(actor_id for actor_id in expected if by_actor[actor_id].state == "failed")
     selected = pipeline.selected_explosion_player_id
-    return V2PreExileExplosionResolution(
+    return PreExileExplosionResolution(
         outcome="explosion_selected" if selected is not None else "no_explosion",
         selected_player_id=selected,
         failed_player_ids=failed,
@@ -1910,14 +1910,14 @@ def _ordered_vote_results(
     *,
     pipeline_id: str,
     lock: bool = False,
-) -> list[V2PreExileResult]:
+) -> list[PreExileResult]:
     statement = (
-        select(V2PreExileResult)
+        select(PreExileResult)
         .where(
-            V2PreExileResult.pipeline_id == pipeline_id,
-            V2PreExileResult.result_kind == "exile_vote",
+            PreExileResult.pipeline_id == pipeline_id,
+            PreExileResult.result_kind == "exile_vote",
         )
-        .order_by(V2PreExileResult.actor_player_id)
+        .order_by(PreExileResult.actor_player_id)
     )
     if lock:
         statement = statement.with_for_update()
@@ -1925,31 +1925,31 @@ def _ordered_vote_results(
 
 
 def _require_expected_results(
-    rows: list[V2PreExileResult],
+    rows: list[PreExileResult],
     *,
     expected: tuple[str, ...],
     states: set[str],
 ) -> None:
     by_actor = {row.actor_player_id: row for row in rows}
     if set(by_actor) != set(expected) or any(row.state not in states for row in rows):
-        raise V2PreExilePipelineRepositoryError("pre-exile speculative vote batch is incomplete")
+        raise PreExilePipelineRepositoryError("pre-exile speculative vote batch is incomplete")
 
 
 def _require_no_day_vote_events(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
 ) -> None:
     event = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == pipeline.game_id,
-            V2GameRecordEvent.run_id == pipeline.run_id,
-            V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
-            V2GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == pipeline.game_id,
+            GameRecordEvent.run_id == pipeline.run_id,
+            GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+            GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
         )
     )
     if event is not None:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             "self-explosion cannot discard votes after public vote commit"
         )
 
@@ -1962,15 +1962,15 @@ def _seat_by_player(
 ) -> dict[str, int]:
     rows = list(
         db.execute(
-            select(V2RoleAssignment.player_id, V2RoleAssignment.seat).where(
-                V2RoleAssignment.game_id == game_id,
-                V2RoleAssignment.player_id.in_(player_ids),
+            select(RoleAssignment.player_id, RoleAssignment.seat).where(
+                RoleAssignment.game_id == game_id,
+                RoleAssignment.player_id.in_(player_ids),
             )
         )
     )
     seats = {player_id: seat for player_id, seat in rows}
     if set(seats) != set(player_ids):
-        raise V2PreExilePipelineRepositoryError("pre-exile result roster is incomplete")
+        raise PreExilePipelineRepositoryError("pre-exile result roster is incomplete")
     return seats
 
 
@@ -1982,17 +1982,17 @@ def _find_public_speech_after(
     minimum_record_seq: int,
     maximum_record_seq: int,
     excluding_presentation_id: str,
-) -> V2GameRecordEvent | None:
+) -> GameRecordEvent | None:
     statement = (
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.run_id == run_id,
-            V2GameRecordEvent.event_type == "speech_segment_committed",
-            V2GameRecordEvent.record_seq >= minimum_record_seq,
-            V2GameRecordEvent.record_seq <= maximum_record_seq,
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.run_id == run_id,
+            GameRecordEvent.event_type == "speech_segment_committed",
+            GameRecordEvent.record_seq >= minimum_record_seq,
+            GameRecordEvent.record_seq <= maximum_record_seq,
         )
-        .order_by(V2GameRecordEvent.record_seq)
+        .order_by(GameRecordEvent.record_seq)
     )
     for event in db.scalars(statement):
         payload = _payload(event)
@@ -2011,15 +2011,15 @@ def _event_at(
     run_id: str,
     record_seq: int,
     event_type: str,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     event = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.record_seq == record_seq,
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.record_seq == record_seq,
         )
     )
     if event is None or event.run_id != run_id or event.event_type != event_type:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             f"invalid {event_type} lineage at record {record_seq}"
         )
     return event
@@ -2032,15 +2032,15 @@ def _event_at_any(
     run_id: str,
     record_seq: int,
     event_types: set[str],
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     event = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.record_seq == record_seq,
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.record_seq == record_seq,
         )
     )
     if event is None or event.run_id != run_id or event.event_type not in event_types:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             f"invalid technical result lineage at record {record_seq}"
         )
     return event
@@ -2053,10 +2053,10 @@ def _event_by_id(
     run_id: str,
     event_id: int,
     event_type: str,
-) -> V2GameRecordEvent:
-    event = db.get(V2GameRecordEvent, (game_id, event_id))
+) -> GameRecordEvent:
+    event = db.get(GameRecordEvent, (game_id, event_id))
     if event is None or event.run_id != run_id or event.event_type != event_type:
-        raise V2PreExilePipelineRepositoryError(f"invalid {event_type} lineage at event {event_id}")
+        raise PreExilePipelineRepositoryError(f"invalid {event_type} lineage at event {event_id}")
     return event
 
 
@@ -2071,18 +2071,18 @@ def _find_event(
     minimum_record_seq: int | None = None,
     maximum_record_seq: int | None = None,
     latest: bool = False,
-) -> V2GameRecordEvent | None:
-    statement = select(V2GameRecordEvent).where(
-        V2GameRecordEvent.game_id == game_id,
-        V2GameRecordEvent.run_id == run_id,
-        V2GameRecordEvent.event_type == event_type,
+) -> GameRecordEvent | None:
+    statement = select(GameRecordEvent).where(
+        GameRecordEvent.game_id == game_id,
+        GameRecordEvent.run_id == run_id,
+        GameRecordEvent.event_type == event_type,
     )
     if minimum_record_seq is not None:
-        statement = statement.where(V2GameRecordEvent.record_seq >= minimum_record_seq)
+        statement = statement.where(GameRecordEvent.record_seq >= minimum_record_seq)
     if maximum_record_seq is not None:
-        statement = statement.where(V2GameRecordEvent.record_seq <= maximum_record_seq)
+        statement = statement.where(GameRecordEvent.record_seq <= maximum_record_seq)
     statement = statement.order_by(
-        V2GameRecordEvent.record_seq.desc() if latest else V2GameRecordEvent.record_seq
+        GameRecordEvent.record_seq.desc() if latest else GameRecordEvent.record_seq
     )
     for event in db.scalars(statement):
         payload = _payload(event)
@@ -2100,15 +2100,15 @@ def _find_accepted_model_response(
     game_id: str,
     run_id: str,
     action_id: str,
-) -> V2GameRecordEvent | None:
+) -> GameRecordEvent | None:
     rows = db.scalars(
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.run_id == run_id,
-            V2GameRecordEvent.event_type == "model_response_received",
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.run_id == run_id,
+            GameRecordEvent.event_type == "model_response_received",
         )
-        .order_by(V2GameRecordEvent.record_seq.desc())
+        .order_by(GameRecordEvent.record_seq.desc())
     )
     for event in rows:
         payload = _payload(event)
@@ -2123,12 +2123,12 @@ def _find_accepted_model_response(
 def _append_pipeline_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     run_id: str,
     event_type: str,
-    row: V2PreExilePipeline,
+    row: PreExilePipeline,
     payload: dict[str, Any],
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     return _append_raw_event(
         db,
         game=game,
@@ -2148,13 +2148,13 @@ def _append_pipeline_event(
 def _append_raw_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     run_id: str,
     event_type: str,
     payload: dict[str, Any],
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     next_seq = game.last_record_seq + 1
-    event = V2GameRecordEvent(
+    event = GameRecordEvent(
         game_id=game.game_id,
         event_id=next_seq,
         record_seq=next_seq,
@@ -2168,8 +2168,8 @@ def _append_raw_event(
     return event
 
 
-def _pipeline_snapshot(row: V2PreExilePipeline) -> V2PreExilePipelineSnapshot:
-    return V2PreExilePipelineSnapshot(
+def _pipeline_snapshot(row: PreExilePipeline) -> PreExilePipelineSnapshot:
+    return PreExilePipelineSnapshot(
         pipeline_id=row.pipeline_id,
         game_id=row.game_id,
         run_id=row.run_id,
@@ -2198,8 +2198,8 @@ def _pipeline_snapshot(row: V2PreExilePipeline) -> V2PreExilePipelineSnapshot:
     )
 
 
-def _result_snapshot(row: V2PreExileResult) -> V2PreExileResultSnapshot:
-    return V2PreExileResultSnapshot(
+def _result_snapshot(row: PreExileResult) -> PreExileResultSnapshot:
+    return PreExileResultSnapshot(
         result_id=row.result_id,
         pipeline_id=row.pipeline_id,
         game_id=row.game_id,
@@ -2228,66 +2228,66 @@ def _result_snapshot(row: V2PreExileResult) -> V2PreExileResultSnapshot:
     )
 
 
-def _require_owned_pipeline(row: V2PreExilePipeline, run: V2GameRun) -> None:
+def _require_owned_pipeline(row: PreExilePipeline, run: GameRun) -> None:
     if (
         row.run_id != run.run_id
         or row.fence_worker_id != run.worker_id
         or row.fence_token != run.fence_token
     ):
-        raise V2ExecutionOwnershipLost("v2_pre_exile_pipeline_fence_lost")
+        raise ExecutionOwnershipLost("v2_pre_exile_pipeline_fence_lost")
 
 
-def _required_worker_id(run: V2GameRun) -> str:
+def _required_worker_id(run: GameRun) -> str:
     if not isinstance(run.worker_id, str) or not run.worker_id:
-        raise V2ExecutionOwnershipLost("v2_run_execution_lease_missing")
+        raise ExecutionOwnershipLost("v2_run_execution_lease_missing")
     return run.worker_id
 
 
-def _raise_if_stop_requested(run: V2GameRun) -> None:
+def _raise_if_stop_requested(run: GameRun) -> None:
     if run.stop_requested_at is not None:
-        raise V2PreExilePipelineRepositoryError("V2 game stop was requested")
+        raise PreExilePipelineRepositoryError("V2 game stop was requested")
 
 
-def _require_pipeline_state(row: V2PreExilePipeline, *expected: str) -> None:
+def _require_pipeline_state(row: PreExilePipeline, *expected: str) -> None:
     if row.state not in expected:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             f"pre-exile pipeline {row.pipeline_id} cannot transition from {row.state}; "
             f"expected {','.join(expected)}"
         )
 
 
-def _require_result_state(row: V2PreExileResult, *expected: str) -> None:
+def _require_result_state(row: PreExileResult, *expected: str) -> None:
     if row.state not in expected:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             f"pre-exile result {row.result_id} cannot transition from {row.state}; "
             f"expected {','.join(expected)}"
         )
 
 
-def _result_kind(value: Any) -> V2PreExileResultKind:
+def _result_kind(value: Any) -> PreExileResultKind:
     if value not in {"self_explosion", "exile_vote"}:
-        raise V2PreExilePipelineRepositoryError("invalid result_kind")
+        raise PreExilePipelineRepositoryError("invalid result_kind")
     return value
 
 
 def _canonical_member_ids(values: tuple[str, ...], *, field: str) -> tuple[str, ...]:
     if not isinstance(values, tuple) or not values:
-        raise V2PreExilePipelineRepositoryError(f"invalid {field}")
+        raise PreExilePipelineRepositoryError(f"invalid {field}")
     normalized = tuple(_canonical_id(value, field=field, maximum=80) for value in values)
     if len(set(normalized)) != len(normalized):
-        raise V2PreExilePipelineRepositoryError(f"duplicate {field}")
+        raise PreExilePipelineRepositoryError(f"duplicate {field}")
     return normalized
 
 
 def _canonical_id(value: Any, *, field: str, maximum: int) -> str:
     if not isinstance(value, str) or not value or value.strip() != value or len(value) > maximum:
-        raise V2PreExilePipelineRepositoryError(f"invalid {field}")
+        raise PreExilePipelineRepositoryError(f"invalid {field}")
     return value
 
 
 def _positive_int(value: Any, *, field: str) -> int:
     if type(value) is not int or value <= 0:
-        raise V2PreExilePipelineRepositoryError(f"invalid {field}")
+        raise PreExilePipelineRepositoryError(f"invalid {field}")
     return value
 
 
@@ -2295,9 +2295,9 @@ def _positive_event_int(value: object, *, default: int) -> int:
     return value if type(value) is int and value > 0 else default
 
 
-def _payload(event: V2GameRecordEvent) -> dict[str, Any]:
+def _payload(event: GameRecordEvent) -> dict[str, Any]:
     if type(event.payload) is not dict:
-        raise V2PreExilePipelineRepositoryError(
+        raise PreExilePipelineRepositoryError(
             f"invalid payload for {event.event_type} at record {event.record_seq}"
         )
     return event.payload
@@ -2318,7 +2318,7 @@ def _json_sha256(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _result_set_sha256(rows: list[V2PreExileResult]) -> str:
+def _result_set_sha256(rows: list[PreExileResult]) -> str:
     return _json_sha256(
         {
             row.result_id: {
@@ -2337,10 +2337,10 @@ def _now() -> datetime:
 
 
 __all__ = [
-    "V2PreExileExplosionResolution",
-    "V2PreExilePipelineRepository",
-    "V2PreExilePipelineRepositoryError",
-    "V2PreExilePipelineSnapshot",
-    "V2PreExileResultKind",
-    "V2PreExileResultSnapshot",
+    "PreExileExplosionResolution",
+    "PreExilePipelineRepository",
+    "PreExilePipelineRepositoryError",
+    "PreExilePipelineSnapshot",
+    "PreExileResultKind",
+    "PreExileResultSnapshot",
 ]

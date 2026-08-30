@@ -1,13 +1,13 @@
-export type V2AudioMode = "tts" | "text_only" | "legacy_unknown";
-export type V2MatchStatus =
+export type AudioMode = "tts" | "text_only" | "legacy_unknown";
+export type MatchStatus =
   | "waiting"
   | "running"
   | "completed"
   | "failed"
   | "canceled";
-export type V2ExecutionState = "unowned" | "owned" | "stale" | "stopped";
+export type ExecutionState = "unowned" | "owned" | "stale" | "stopped";
 
-export type V2GameRecordListItem = {
+export type GameRecordListItem = {
   game_id: string;
   title: string;
   status: string;
@@ -18,9 +18,9 @@ export type V2GameRecordListItem = {
   phase_seq: number;
   phase_id: string;
   phase_state: string;
-  audio_mode: V2AudioMode;
-  match_status: V2MatchStatus;
-  execution_state: V2ExecutionState;
+  audio_mode: AudioMode;
+  match_status: MatchStatus;
+  execution_state: ExecutionState;
   winner: "villagers" | "werewolves" | null;
   completion_reason: string | null;
   completed_at: string | null;
@@ -28,8 +28,8 @@ export type V2GameRecordListItem = {
   updated_at: string;
 };
 
-export type V2GameRecordList = {
-  items: V2GameRecordListItem[];
+export type GameRecordList = {
+  items: GameRecordListItem[];
   pagination: {
     page: number;
     page_size: number;
@@ -38,7 +38,7 @@ export type V2GameRecordList = {
   };
 };
 
-export type V2GameRun = {
+export type GameRun = {
   run_id: string;
   attempt_no: number;
   status: string;
@@ -51,7 +51,7 @@ export type V2GameRun = {
   fence_token: number;
 };
 
-export type V2GameControlResult = {
+export type GameControlResult = {
   action: "stop";
   game_id: string;
   run_id: string;
@@ -60,7 +60,7 @@ export type V2GameControlResult = {
   replayed: boolean;
 };
 
-export type V2ModelActionRetryResult = {
+export type ModelActionRetryResult = {
   action: "retry_model_action";
   game_id: string;
   run_id: string;
@@ -69,7 +69,7 @@ export type V2ModelActionRetryResult = {
   replayed: boolean;
 };
 
-export type V2GameRecordEvent = {
+export type GameRecordEvent = {
   event_id: number;
   record_seq: number;
   run_id: string;
@@ -79,14 +79,14 @@ export type V2GameRecordEvent = {
   created_at: string;
 };
 
-export type V2GameEventPage = {
-  items: V2GameRecordEvent[];
+export type GameEventPage = {
+  items: GameRecordEvent[];
   after_record_seq: number;
   next_after_record_seq: number;
   has_more: boolean;
 };
 
-export type V2GamePresentation = {
+export type GamePresentation = {
   presentation_seq: number;
   presentation_id: string;
   action_id: string | null;
@@ -106,7 +106,7 @@ export type V2GamePresentation = {
   closed_at: string | null;
 };
 
-export type V2VoiceAsset = {
+export type VoiceAsset = {
   voice_asset_id: string;
   action_id: string;
   activation_id: string | null;
@@ -127,33 +127,33 @@ export type V2VoiceAsset = {
   completed_at: string | null;
 };
 
-export type V2DerivationRejection = Record<string, unknown> & {
+export type DerivationRejection = Record<string, unknown> & {
   source_event_ref: string;
   kind: string;
   reason: string;
   missing_fields?: string[];
 };
 
-export type V2MemorySelectorAuditEntry = {
+export type MemorySelectorAuditEntry = {
   event_ref: string;
   category: string;
   reason: string;
 };
 
-export type V2MemorySelectorFutureFilteredEntry = {
+export type MemorySelectorFutureFilteredEntry = {
   event_ref: string;
   reason: string;
 };
 
-export type V2MemorySelectorAudit = {
+export type MemorySelectorAudit = {
   version: 3;
   source_count: number;
   retained_count: number;
   omitted_count: number;
   future_filtered_count: number;
-  retained: V2MemorySelectorAuditEntry[];
-  omitted: V2MemorySelectorAuditEntry[];
-  future_filtered: V2MemorySelectorFutureFilteredEntry[];
+  retained: MemorySelectorAuditEntry[];
+  omitted: MemorySelectorAuditEntry[];
+  future_filtered: MemorySelectorFutureFilteredEntry[];
   latest_actor_memory_ref: string | null;
   latest_actor_memory_cutoff_seq: number | null;
   latest_actor_memory_hash: string | null;
@@ -162,7 +162,7 @@ export type V2MemorySelectorAudit = {
   omitted_type_counts: Record<string, number>;
 };
 
-export type V2PromptProjection = Record<string, unknown> & {
+export type PromptProjection = Record<string, unknown> & {
   model_context_schema_version?: number | null;
   prompt_template_version?: number | null;
   known_events_schema_version?: number | null;
@@ -197,7 +197,7 @@ export type V2PromptProjection = Record<string, unknown> & {
   awaiting_scheduled_turn_question_count?: number;
   current_round_statement_count?: number;
   current_round_statement_char_count?: number;
-  derivation_rejections?: V2DerivationRejection[];
+  derivation_rejections?: DerivationRejection[];
   known_event_record_seq_min?: number | null;
   known_event_record_seq_max?: number | null;
   canonical_serialized_char_count?: number;
@@ -210,17 +210,17 @@ export type V2PromptProjection = Record<string, unknown> & {
   canonical_sha256?: string;
   round_trip_verified?: boolean;
   lossless_scope?: "selector_retained_projection";
-  selector?: V2MemorySelectorAudit;
+  selector?: MemorySelectorAudit;
 };
 
-export type V2OutputEnforcementAudit = {
+export type OutputEnforcementAudit = {
   requested: string | null;
   actual: string | null;
   schema_name: string | null;
   schema_version: number | null;
 };
 
-export type V2ProviderUsage = {
+export type ProviderUsage = {
   input_tokens?: number;
   output_tokens?: number;
   reasoning_tokens?: number;
@@ -228,7 +228,7 @@ export type V2ProviderUsage = {
   cached_input_tokens?: number;
 };
 
-export type V2ModelFinishReason =
+export type ModelFinishReason =
   | "completed"
   | "stop"
   | "length"
@@ -237,7 +237,7 @@ export type V2ModelFinishReason =
   | "tool_calls"
   | "unknown";
 
-export type V2ModelFailureResolution =
+export type ModelFailureResolution =
   | "automatic_retry_success"
   | "technical_skip"
   | "technical_false_fallback"
@@ -249,18 +249,18 @@ export type V2ModelFailureResolution =
   | "invariant_conflict"
   | "legacy_unavailable";
 
-export type V2ModelFailureImpact =
+export type ModelFailureImpact =
   | "expected_control_flow"
   | "user_visible_degradation"
   | "operational_failure";
 
-export type V2FailureEpisodeEventRef = {
+export type FailureEpisodeEventRef = {
   event_type: string;
   event_id: number | string | null;
   record_seq: number;
 };
 
-export type V2ModelRequestAudienceSource =
+export type ModelRequestAudienceSource =
   | "event_contract"
   | "event_contract_narrowed"
   | "presentation"
@@ -268,7 +268,7 @@ export type V2ModelRequestAudienceSource =
   | "action_context"
   | "legacy_unknown";
 
-export type V2ModelRequestSummary = {
+export type ModelRequestSummary = {
   attempt_id: string;
   decision_family_id: string | null;
   retry_scope:
@@ -300,7 +300,7 @@ export type V2ModelRequestSummary = {
   audience: string;
   stored_audience: string | null;
   effective_audience: string;
-  audience_source: V2ModelRequestAudienceSource;
+  audience_source: ModelRequestAudienceSource;
   request_kind: string;
   model_id: string | null;
   model_provider: string | null;
@@ -309,7 +309,7 @@ export type V2ModelRequestSummary = {
   model_context_schema_version: number | null;
   prompt_template_version: number | null;
   model_view_selector_version: number | null;
-  prompt_projection: V2PromptProjection | null;
+  prompt_projection: PromptProjection | null;
   status: "running" | "succeeded" | "failed" | "skipped" | "canceled";
   input_source: "persisted" | "reconstructed" | "unavailable";
   passive_observation_count: number;
@@ -338,8 +338,8 @@ export type V2ModelRequestSummary = {
   reasoning_only_timeout_ms: number | null;
   timeout_max_attempts: number | null;
   shadow_would_timeout: boolean | null;
-  finish_reason: V2ModelFinishReason | null;
-  provider_usage: V2ProviderUsage | null;
+  finish_reason: ModelFinishReason | null;
+  provider_usage: ProviderUsage | null;
   usage_update_count: number | null;
   usage_conflict_observed: boolean | null;
   usage_consistency:
@@ -360,10 +360,10 @@ export type V2ModelRequestSummary = {
   failure_kind: string | null;
   failure_code: string | null;
   failure_category?: string | null;
-  failure_impact: V2ModelFailureImpact | null;
+  failure_impact: ModelFailureImpact | null;
   counts_as_failure: boolean;
   repair_kind?: string | null;
-  output_enforcement?: V2OutputEnforcementAudit | null;
+  output_enforcement?: OutputEnforcementAudit | null;
   application_validation_result?: "accepted" | "rejected" | null;
   retryable: boolean | null;
   terminal: boolean | null;
@@ -393,10 +393,10 @@ export type V2ModelRequestSummary = {
     | "insufficient_action_budget"
     | null;
   failure_episode_id: string | null;
-  failure_resolution: V2ModelFailureResolution | null;
+  failure_resolution: ModelFailureResolution | null;
   failure_episode_source_attempt_ids: string[] | null;
-  failure_episode_source_event_refs: V2FailureEpisodeEventRef[] | null;
-  failure_episode_terminal_event_refs: V2FailureEpisodeEventRef[] | null;
+  failure_episode_source_event_refs: FailureEpisodeEventRef[] | null;
+  failure_episode_terminal_event_refs: FailureEpisodeEventRef[] | null;
   resolution_event_type: string | null;
   resolution_event_id: number | null;
   resolution_event_record_seq: number | null;
@@ -412,7 +412,7 @@ export type V2ModelRequestSummary = {
   completed_at: string | null;
 };
 
-export type V2ModelRequest = V2ModelRequestSummary & {
+export type ModelRequest = ModelRequestSummary & {
   request_payload: Record<string, unknown> | null;
   expanded_known_events: Record<string, unknown> | null;
   known_events_expansion_status:
@@ -433,14 +433,14 @@ export type V2ModelRequest = V2ModelRequestSummary & {
   stream_progress_updated_at: string | null;
 };
 
-export type V2ModelRequestPage = {
-  items: V2ModelRequestSummary[];
+export type ModelRequestPage = {
+  items: ModelRequestSummary[];
   after_record_seq: number;
   next_after_record_seq: number;
   has_more: boolean;
 };
 
-export type V2PlayerIdentity = {
+export type PlayerIdentity = {
   seat: number;
   player_id: string;
   display_name: string;
@@ -451,17 +451,17 @@ export type V2PlayerIdentity = {
   death_cause: string | null;
 };
 
-export type V2GameRecordSummary = V2GameRecordListItem & {
+export type GameRecordSummary = GameRecordListItem & {
   rule_snapshot: Record<string, unknown>;
   players_snapshot: Array<Record<string, unknown>>;
   judge_voice_snapshot: Record<string, unknown>;
   delivery_snapshot: Record<string, unknown> | null;
   ability_snapshot: Record<string, unknown>;
   match_state: Record<string, unknown> | null;
-  player_identities: V2PlayerIdentity[];
-  runs: V2GameRun[];
-  presentations: V2GamePresentation[];
-  voice_assets: V2VoiceAsset[];
+  player_identities: PlayerIdentity[];
+  runs: GameRun[];
+  presentations: GamePresentation[];
+  voice_assets: VoiceAsset[];
   player_states: Array<Record<string, unknown>>;
   action_windows: Array<Record<string, unknown>>;
   ability_instances: Array<Record<string, unknown>>;
@@ -470,7 +470,7 @@ export type V2GameRecordSummary = V2GameRecordListItem & {
   knowledge_facts: Array<Record<string, unknown>>;
 };
 
-export type V2GameRecordDetail = V2GameRecordSummary & {
-  events: V2GameRecordEvent[];
-  model_requests: V2ModelRequestSummary[];
+export type GameRecordDetail = GameRecordSummary & {
+  events: GameRecordEvent[];
+  model_requests: ModelRequestSummary[];
 };

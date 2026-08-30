@@ -19,9 +19,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_application
 from app.models.admin import AuditEvent
-from app.models.game_session import GameSessionRecord
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
-from app.models.live import LiveRunRecord
 from app.models.rule_set import RuleSetRecord, RuleSetRevisionRecord
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
@@ -299,69 +297,6 @@ def _seed_detail(context: AdminRuleSetsContext) -> None:
                     source="generated",
                 )
             )
-        for index, current_id in enumerate((rule_set_id, rule_set_id, "other_rule")):
-            revision_no = 56 - index if index < 2 else None
-            revision_id = (
-                f"00000000-0000-0000-0000-{revision_no:012d}" if revision_no is not None else None
-            )
-            db.add(
-                LiveRunRecord(
-                    run_id=f"run-{index}",
-                    session_id=f"live-session-{index}",
-                    status="completed",
-                    villager_model="test-model",
-                    werewolf_model="test-model",
-                    max_rounds=10,
-                    rule_set_id=current_id,
-                    rule_set_revision_id=revision_id,
-                    rule_set_revision_no=revision_no,
-                    rule_set={
-                        "id": "history_rule" if current_id == "other_rule" else "other_rule",
-                        "config": {"must": "not leak"},
-                    },
-                    player_configs=[],
-                    lineup_quality_warnings=[],
-                )
-            )
-            db.add(
-                GameSessionRecord(
-                    session_id=f"game-session-{index}",
-                    status="completed",
-                    rule_set_id=current_id,
-                    rule_set_revision_id=revision_id,
-                    rule_set_revision_no=revision_no,
-                    rule_set={
-                        "id": "history_rule" if current_id == "other_rule" else "other_rule",
-                        "snapshot": {"must": "not leak"},
-                    },
-                )
-            )
-        db.add(
-            LiveRunRecord(
-                run_id="run-legacy",
-                session_id="live-session-legacy",
-                status="completed",
-                villager_model="test-model",
-                werewolf_model="test-model",
-                max_rounds=10,
-                rule_set_id=rule_set_id,
-                rule_set_revision_id=None,
-                rule_set_revision_no=None,
-                rule_set={"id": rule_set_id, "legacy": True},
-                player_configs=[],
-                lineup_quality_warnings=[],
-            )
-        )
-        db.add(
-            GameSessionRecord(
-                session_id="game-session-legacy",
-                status="completed",
-                rule_set_id=rule_set_id,
-                rule_set_revision_id=None,
-                rule_set_revision_no=None,
-                rule_set={"id": rule_set_id, "legacy": True},
-            )
-        )
         db.commit()
         db.connection().exec_driver_sql("PRAGMA ignore_check_constraints = OFF")
 
@@ -2623,12 +2558,12 @@ def test_rule_set_usage_repository_is_scalar_ordered_frozen_and_query_bounded(
         finally:
             event.remove(engine, "before_cursor_execute", capture_fifty_revision_statement)
 
-    assert (usage.game_count, usage.live_count) == (3, 3)
+    assert (usage.game_count, usage.live_count) == (0, 0)
     assert [item.revision_id for item in usage.revisions] == list(revision_ids)
     assert [(item.game_count, item.live_count) for item in usage.revisions] == [
         (0, 0),
-        (1, 1),
-        (1, 1),
+        (0, 0),
+        (0, 0),
     ]
     with pytest.raises(FrozenInstanceError):
         usage.game_count = 99  # type: ignore[misc]
@@ -2696,18 +2631,18 @@ def test_rule_set_detail_is_bounded_and_uses_scalar_revision_counts_and_warnings
     assert len(payload["revisions"]) == 50
     assert [revision["revision_no"] for revision in payload["revisions"]] == list(range(56, 6, -1))
     assert all(revision["config"] is None for revision in payload["revisions"])
-    assert payload["usage"] == {"game_count": 3, "live_count": 3}
+    assert payload["usage"] == {"game_count": 0, "live_count": 0}
     revisions_by_number = {revision["revision_no"]: revision for revision in payload["revisions"]}
-    assert revisions_by_number[56]["usage"] == {"game_count": 1, "live_count": 1}
-    assert revisions_by_number[55]["usage"] == {"game_count": 1, "live_count": 1}
+    assert revisions_by_number[56]["usage"] == {"game_count": 0, "live_count": 0}
+    assert revisions_by_number[55]["usage"] == {"game_count": 0, "live_count": 0}
     assert revisions_by_number[54]["usage"] == {"game_count": 0, "live_count": 0}
     assert all(
         set(revision["usage"]) == {"game_count", "live_count"} for revision in payload["revisions"]
     )
     assert all(revision["config"] is None for revision in payload["revisions"])
     assert "usage" not in payload["published_revision"]
-    assert sum(revision["usage"]["game_count"] for revision in payload["revisions"]) == 2
-    assert sum(revision["usage"]["live_count"] for revision in payload["revisions"]) == 2
+    assert sum(revision["usage"]["game_count"] for revision in payload["revisions"]) == 0
+    assert sum(revision["usage"]["live_count"] for revision in payload["revisions"]) == 0
     warnings = {warning["code"]: warning for warning in payload["warnings"]}
     assert warnings["published_player_shortage"] == {
         "code": "published_player_shortage",

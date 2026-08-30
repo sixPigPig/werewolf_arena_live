@@ -1,13 +1,13 @@
 import type {
-  V2GamePresentation,
-  V2GameRecordDetail,
-  V2GameRecordEvent,
-  V2ModelRequestSummary,
-  V2PlayerIdentity,
-  V2VoiceAsset,
-} from "@/v2/game-records/types";
+  GamePresentation,
+  GameRecordDetail,
+  GameRecordEvent,
+  ModelRequestSummary,
+  PlayerIdentity,
+  VoiceAsset,
+} from "@/match/game-records/types";
 
-export type V2TimelineItem = {
+export type TimelineItem = {
   id: string;
   kind: "action" | "milestone";
   actionId: string | null;
@@ -25,24 +25,24 @@ export type V2TimelineItem = {
   durationMs: number | null;
   firstRecordSeq: number;
   lastRecordSeq: number;
-  modelRequest: V2ModelRequestSummary | null;
-  modelRequests: V2ModelRequestSummary[];
-  templateRender: V2GameRecordEvent | null;
-  presentation: V2GamePresentation | null;
-  voiceAsset: V2VoiceAsset | null;
-  events: V2GameRecordEvent[];
+  modelRequest: ModelRequestSummary | null;
+  modelRequests: ModelRequestSummary[];
+  templateRender: GameRecordEvent | null;
+  presentation: GamePresentation | null;
+  voiceAsset: VoiceAsset | null;
+  events: GameRecordEvent[];
 };
 
-export type V2PhaseGroup = {
+export type PhaseGroup = {
   phaseId: string;
   label: string;
-  items: V2TimelineItem[];
+  items: TimelineItem[];
   modelRequestCount: number;
   failureCount: number;
   isCurrent: boolean;
 };
 
-export type V2RoundSummary = {
+export type RoundSummary = {
   roundNo: number;
   reachedDay: boolean;
   status: "running" | "succeeded" | "failed" | "canceled";
@@ -50,10 +50,10 @@ export type V2RoundSummary = {
   endedAt: string | null;
   firstRecordSeq: number;
   lastRecordSeq: number;
-  highlights: V2RoundHighlight[];
+  highlights: RoundHighlight[];
 };
 
-export type V2RoundHighlight = {
+export type RoundHighlight = {
   id: string;
   kind:
     | "night"
@@ -68,14 +68,14 @@ export type V2RoundHighlight = {
   tone: "neutral" | "success" | "warning" | "danger";
 };
 
-type V2RoundAccumulator = {
+type RoundAccumulator = {
   roundNo: number;
   reachedDay: boolean;
   startedAt: string;
   lastEventAt: string;
   firstRecordSeq: number;
   lastRecordSeq: number;
-  highlights: V2RoundHighlight[];
+  highlights: RoundHighlight[];
 };
 
 const lifecycleEventTypes = new Set([
@@ -201,25 +201,25 @@ const eventLabels: Record<string, string> = {
   game_completed: "对局结束",
 };
 
-export function buildV2RoundSummaries(
-  events: V2GameRecordEvent[],
-  identities: V2PlayerIdentity[],
+export function buildRoundSummaries(
+  events: GameRecordEvent[],
+  identities: PlayerIdentity[],
   gameStatus: string,
-): V2RoundSummary[] {
+): RoundSummary[] {
   const orderedEvents = [...events].sort(
     (left, right) => left.record_seq - right.record_seq,
   );
   const identityById = new Map(
     identities.map((identity) => [identity.player_id, identity]),
   );
-  const rounds = new Map<number, V2RoundAccumulator>();
+  const rounds = new Map<number, RoundAccumulator>();
   const roundByWindowId = new Map<string, number>();
   let currentRound: number | null = null;
 
   const touchRound = (
     roundNo: number,
-    event: V2GameRecordEvent,
-  ): V2RoundAccumulator => {
+    event: GameRecordEvent,
+  ): RoundAccumulator => {
     const existing = rounds.get(roundNo);
     if (existing) {
       existing.lastEventAt = event.created_at;
@@ -316,11 +316,11 @@ export function buildV2RoundSummaries(
   });
 }
 
-export function buildV2HistoricalIdentities(
-  events: V2GameRecordEvent[],
-  identities: V2PlayerIdentity[],
+export function buildHistoricalIdentities(
+  events: GameRecordEvent[],
+  identities: PlayerIdentity[],
   recordSeq: number,
-): V2PlayerIdentity[] {
+): PlayerIdentity[] {
   const latestRecordSeq = events.reduce(
     (latest, event) => Math.max(latest, event.record_seq),
     0,
@@ -329,7 +329,7 @@ export function buildV2HistoricalIdentities(
     return identities.map((identity) => ({ ...identity }));
   }
 
-  const snapshot = new Map<string, V2PlayerIdentity>(
+  const snapshot = new Map<string, PlayerIdentity>(
     identities.map((identity) => [
       identity.player_id,
       {
@@ -400,7 +400,7 @@ export function buildV2HistoricalIdentities(
   );
 }
 
-export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
+export function buildTimeline(game: GameRecordDetail): TimelineItem[] {
   const actionIdByTtsAttempt = new Map<string, string>();
   for (const event of game.events) {
     if (event.event_type !== "tts_stream_started") continue;
@@ -409,8 +409,8 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     if (attemptId && actionId) actionIdByTtsAttempt.set(attemptId, actionId);
   }
 
-  const eventsByAction = new Map<string, V2GameRecordEvent[]>();
-  const actionOpenEvents: V2GameRecordEvent[] = [];
+  const eventsByAction = new Map<string, GameRecordEvent[]>();
+  const actionOpenEvents: GameRecordEvent[] = [];
   for (const event of game.events) {
     const actionId =
       stringValue(event.payload.action_id) ??
@@ -427,7 +427,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     }
   }
 
-  const requestsByAction = new Map<string, V2ModelRequestSummary[]>();
+  const requestsByAction = new Map<string, ModelRequestSummary[]>();
   for (const request of game.model_requests) {
     const requests = requestsByAction.get(request.action_id) ?? [];
     requests.push(request);
@@ -479,7 +479,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
         stringValue(item.payload.attempt_id) === request.attempt_id
       );
     });
-    let status: V2TimelineItem["status"] = "running";
+    let status: TimelineItem["status"] = "running";
     if (latestStateEvent?.event_type === "action_succeeded") {
       status = "succeeded";
     } else if (latestStateEvent?.event_type === "action_failed") {
@@ -544,7 +544,7 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
     };
   });
 
-  const milestones: V2TimelineItem[] = [];
+  const milestones: TimelineItem[] = [];
   let phaseId = "opening";
   for (const event of game.events) {
     if (event.event_type === "game_phase_changed") {
@@ -592,12 +592,12 @@ export function buildV2Timeline(game: V2GameRecordDetail): V2TimelineItem[] {
   );
 }
 
-export function groupV2Phases(
-  items: V2TimelineItem[],
+export function groupPhases(
+  items: TimelineItem[],
   currentPhaseId: string,
-): V2PhaseGroup[] {
+): PhaseGroup[] {
   const order: string[] = [];
-  const grouped = new Map<string, V2TimelineItem[]>();
+  const grouped = new Map<string, TimelineItem[]>();
   for (const item of items) {
     if (!grouped.has(item.phaseId)) {
       order.push(item.phaseId);
@@ -621,7 +621,7 @@ export function groupV2Phases(
   });
 }
 
-function timelineItemCountsAsFailure(item: V2TimelineItem): boolean {
+function timelineItemCountsAsFailure(item: TimelineItem): boolean {
   if (item.status !== "failed") return false;
   const failedModelRequests = item.modelRequests.filter(
     (request) => request.status === "failed",
@@ -674,7 +674,7 @@ export function prettyJson(value: unknown): string {
 }
 
 function actorLabel(
-  game: V2GameRecordDetail,
+  game: GameRecordDetail,
   actorKind: string,
   actorId: string,
 ): string {
@@ -693,7 +693,7 @@ function actorLabel(
   return actorId;
 }
 
-function milestoneSummary(event: V2GameRecordEvent): string | null {
+function milestoneSummary(event: GameRecordEvent): string | null {
   if (event.event_type === "game_phase_changed") {
     return `${phaseLabel(
       stringValue(event.payload.previous_phase_id) ?? "unknown",
@@ -711,16 +711,16 @@ function milestoneSummary(event: V2GameRecordEvent): string | null {
 }
 
 function roundHighlights(
-  event: V2GameRecordEvent,
-  round: V2RoundAccumulator,
-  identities: Map<string, V2PlayerIdentity>,
-): V2RoundHighlight[] {
+  event: GameRecordEvent,
+  round: RoundAccumulator,
+  identities: Map<string, PlayerIdentity>,
+): RoundHighlight[] {
   const payload = event.payload;
   const highlight = (
-    kind: V2RoundHighlight["kind"],
+    kind: RoundHighlight["kind"],
     label: string,
-    tone: V2RoundHighlight["tone"] = "neutral",
-  ): V2RoundHighlight => ({
+    tone: RoundHighlight["tone"] = "neutral",
+  ): RoundHighlight => ({
     id: `${event.event_type}-${event.record_seq}-${round.highlights.length}`,
     kind,
     label,
@@ -924,13 +924,13 @@ function roundHighlights(
 }
 
 function playerHighlight(
-  event: V2GameRecordEvent,
-  kind: V2RoundHighlight["kind"],
+  event: GameRecordEvent,
+  kind: RoundHighlight["kind"],
   label: string,
   playerId: string | null,
-  identities: Map<string, V2PlayerIdentity>,
-  tone: V2RoundHighlight["tone"],
-): V2RoundHighlight[] {
+  identities: Map<string, PlayerIdentity>,
+  tone: RoundHighlight["tone"],
+): RoundHighlight[] {
   if (!playerId) return [];
   return [
     {
@@ -945,7 +945,7 @@ function playerHighlight(
 
 function summaryPlayerLabel(
   playerId: string | null,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
 ): string {
   if (!playerId) return "无人";
   const identity = identities.get(playerId);
@@ -1010,7 +1010,7 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function ttsAttemptId(event: V2GameRecordEvent): string | null {
+function ttsAttemptId(event: GameRecordEvent): string | null {
   return (
     stringValue(event.payload.tts_attempt_id) ??
     stringValue(event.payload.attempt_id)

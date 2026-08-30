@@ -11,22 +11,22 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
-from app.v2.event_contract import canonical_event_payload
-from app.v2.execution import V2RunFence, V2RunFenceRejected, require_v2_run_fence
-from app.v2.models import (
-    V2DaySpeechSlot,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2PlayerState,
-    V2VoiceAsset,
+from app.match.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
+from app.match.event_contract import canonical_event_payload
+from app.match.execution import RunFence, RunFenceRejected, require_run_fence
+from app.match.models import (
+    DaySpeechSlot,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    PlayerState,
+    VoiceAsset,
 )
-from app.v2.repository import V2ExecutionOwnershipLost, V2RepositoryError
+from app.match.repository import ExecutionOwnershipLost, RepositoryError
 
 
-V2DaySpeechSlotState = Literal[
+DaySpeechSlotState = Literal[
     "reserved",
     "generating",
     "ready",
@@ -41,12 +41,12 @@ _TERMINAL_STATES = frozenset({"consumed", "failed", "canceled", "invalidated"})
 _PUBLIC_AUDIENCES = frozenset({"all", "public"})
 
 
-class V2DaySpeechPipelineRepositoryError(V2RepositoryError):
+class DaySpeechPipelineRepositoryError(RepositoryError):
     pass
 
 
 @dataclass(frozen=True)
-class V2DaySpeechSlotSnapshot:
+class DaySpeechSlotSnapshot:
     slot_id: str
     game_id: str
     run_id: str
@@ -63,7 +63,7 @@ class V2DaySpeechSlotSnapshot:
     predecessor_source_event_id: int
     predecessor_source_record_seq: int
     context_cutoff_record_seq: int
-    state: V2DaySpeechSlotState
+    state: DaySpeechSlotState
     generation_action_id: str | None
     generation_attempt_id: str | None
     generation_response_record_seq: int | None
@@ -81,28 +81,28 @@ class V2DaySpeechSlotSnapshot:
     terminal_at: datetime | None
 
 
-class V2DaySpeechPipelineRepository:
+class DaySpeechPipelineRepository:
     """Durable, fenced state machine for one-ahead public day speeches."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
-    def get_slot(self, slot_id: str) -> V2DaySpeechSlotSnapshot:
+    def get_slot(self, slot_id: str) -> DaySpeechSlotSnapshot:
         with self._session_factory() as db:
-            row = db.get(V2DaySpeechSlot, slot_id)
+            row = db.get(DaySpeechSlot, slot_id)
             if row is None:
-                raise V2DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
+                raise DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
             return _snapshot(row)
 
     def predecessor_is_active(self, slot_id: str) -> bool:
         """Return whether a hidden retry still fits inside predecessor playback."""
 
         with self._session_factory() as db:
-            row = db.get(V2DaySpeechSlot, slot_id)
+            row = db.get(DaySpeechSlot, slot_id)
             if row is None or row.state != "generating":
                 return False
-            game = db.get(V2GameRecord, row.game_id)
-            run = db.get(V2GameRun, row.run_id)
+            game = db.get(GameRecord, row.game_id)
+            run = db.get(GameRun, row.run_id)
             if (
                 game is None
                 or run is None
@@ -115,9 +115,9 @@ class V2DaySpeechPipelineRepository:
             ):
                 return False
             predecessor = db.scalar(
-                select(V2LivePresentation).where(
-                    V2LivePresentation.game_id == row.game_id,
-                    V2LivePresentation.presentation_id == row.predecessor_presentation_id,
+                select(LivePresentation).where(
+                    LivePresentation.game_id == row.game_id,
+                    LivePresentation.presentation_id == row.predecessor_presentation_id,
                 )
             )
             return bool(
@@ -144,8 +144,8 @@ class V2DaySpeechPipelineRepository:
         context_cutoff_record_seq: int,
         predecessor_turn_player_id: str | None = None,
         action_type: str = "day_debate_speech",
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _canonical_id(game_id, field="game_id", maximum=40)
         _canonical_id(phase_id, field="phase_id", maximum=40)
         _canonical_id(actor_player_id, field="actor_player_id", maximum=80)
@@ -174,15 +174,15 @@ class V2DaySpeechPipelineRepository:
         )
         _positive_int(context_cutoff_record_seq, field="context_cutoff_record_seq")
         if action_type != "day_debate_speech":
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech slots only support day_debate_speech"
             )
         if turn_index < 2:
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "one-ahead day speech slots require turn_index >= 2"
             )
         if context_cutoff_record_seq < predecessor_source_record_seq:
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech cutoff precedes its predecessor speech"
             )
 
@@ -191,24 +191,24 @@ class V2DaySpeechPipelineRepository:
             _raise_if_stop_requested(run)
             contract = resolve_day_speech_pipeline_contract(game.rule_snapshot)
             if not contract.enables(action_type):
-                raise V2DaySpeechPipelineRepositoryError("day_speech_pipeline_contract_disabled")
+                raise DaySpeechPipelineRepositoryError("day_speech_pipeline_contract_disabled")
             if predecessor_turn_player_id is not None and contract.schema_version not in {2, 3}:
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "technical skip predecessor requires pipeline schema v2 or v3"
                 )
             if game.status != "broadcasting" or run.status != "broadcasting":
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "one-ahead reservation requires an active broadcast"
                 )
             if game.phase_id != phase_id or phase_id != f"day_{round_no}":
-                raise V2DaySpeechPipelineRepositoryError("day speech reservation phase changed")
+                raise DaySpeechPipelineRepositoryError("day speech reservation phase changed")
             if context_cutoff_record_seq > game.last_record_seq:
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "day speech cutoff is ahead of durable history"
                 )
-            player = db.get(V2PlayerState, (game_id, actor_player_id))
+            player = db.get(PlayerState, (game_id, actor_player_id))
             if player is None or not player.alive:
-                raise V2DaySpeechPipelineRepositoryError("day speech slot actor must be alive")
+                raise DaySpeechPipelineRepositoryError("day speech slot actor must be alive")
             predecessor = _validate_active_predecessor(
                 db,
                 game=game,
@@ -225,13 +225,13 @@ class V2DaySpeechPipelineRepository:
                 predecessor_turn_player_id=predecessor_turn_player_id,
             )
             existing = db.scalar(
-                select(V2DaySpeechSlot)
+                select(DaySpeechSlot)
                 .where(
-                    V2DaySpeechSlot.game_id == game_id,
-                    V2DaySpeechSlot.run_id == run.run_id,
-                    V2DaySpeechSlot.phase_id == phase_id,
-                    V2DaySpeechSlot.speech_round == speech_round,
-                    V2DaySpeechSlot.turn_index == turn_index,
+                    DaySpeechSlot.game_id == game_id,
+                    DaySpeechSlot.run_id == run.run_id,
+                    DaySpeechSlot.phase_id == phase_id,
+                    DaySpeechSlot.speech_round == speech_round,
+                    DaySpeechSlot.turn_index == turn_index,
                 )
                 .with_for_update()
             )
@@ -246,12 +246,12 @@ class V2DaySpeechPipelineRepository:
             }
             if existing is not None:
                 if any(getattr(existing, key) != value for key, value in immutable.items()):
-                    raise V2DaySpeechPipelineRepositoryError(
+                    raise DaySpeechPipelineRepositoryError(
                         "day speech slot reservation conflicts with durable slot"
                     )
                 _require_owned_slot(existing, run)
                 return _snapshot(existing)
-            row = V2DaySpeechSlot(
+            row = DaySpeechSlot(
                 slot_id=f"v2_slot_{uuid4().hex[:16]}",
                 game_id=game_id,
                 run_id=run.run_id,
@@ -292,8 +292,8 @@ class V2DaySpeechPipelineRepository:
         self,
         *,
         slot_id: str,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         with self._session_factory.begin() as db:
             game, run, row = _locked_owned_slot(db, slot_id=slot_id, fence=fence)
             _raise_if_stop_requested(run)
@@ -319,8 +319,8 @@ class V2DaySpeechPipelineRepository:
         slot_id: str,
         generation_action_id: str,
         generation_response_record_seq: int,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _canonical_id(
             generation_action_id,
             field="generation_action_id",
@@ -339,7 +339,7 @@ class V2DaySpeechPipelineRepository:
                     and row.generation_response_record_seq == generation_response_record_seq
                 ):
                     return _snapshot(row)
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "ready day speech slot has different generation lineage"
                 )
             _require_state(row, "generating")
@@ -380,8 +380,8 @@ class V2DaySpeechPipelineRepository:
         slot_id: str,
         presentation_action_id: str,
         presentation_id: str,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _canonical_id(
             presentation_action_id,
             field="presentation_action_id",
@@ -397,12 +397,12 @@ class V2DaySpeechPipelineRepository:
                     and row.presentation_id == presentation_id
                 ):
                     return _snapshot(row)
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "presenting day speech slot has different presentation lineage"
                 )
             _require_state(row, "ready")
             if presentation_action_id == row.generation_action_id:
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "generation and presentation actions must be distinct"
                 )
             predecessor_closed_seq = _validate_closed_predecessor(db, row=row)
@@ -444,8 +444,8 @@ class V2DaySpeechPipelineRepository:
         self,
         *,
         slot_id: str,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         with self._session_factory.begin() as db:
             game, run, row = _locked_owned_slot(db, slot_id=slot_id, fence=fence)
             _raise_if_stop_requested(run)
@@ -483,15 +483,15 @@ class V2DaySpeechPipelineRepository:
         *,
         slot_id: str,
         failure_record_seq: int,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _positive_int(failure_record_seq, field="failure_record_seq")
         with self._session_factory.begin() as db:
             game, run, row = _locked_owned_slot(db, slot_id=slot_id, fence=fence)
             if row.state == "failed":
                 if row.failure_record_seq == failure_record_seq:
                     return _snapshot(row)
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "failed day speech slot has different failure lineage"
                 )
             if row.state not in {"generating", "presenting"}:
@@ -534,15 +534,15 @@ class V2DaySpeechPipelineRepository:
         *,
         slot_id: str,
         reason_code: str,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _canonical_id(reason_code, field="reason_code", maximum=120)
         with self._session_factory.begin() as db:
             game, run, row = _locked_owned_slot(db, slot_id=slot_id, fence=fence)
             if row.state == "canceled":
                 if (row.failure or {}).get("reason_code") == reason_code:
                     return _snapshot(row)
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "canceled day speech slot has different reason"
                 )
             _require_nonterminal(row)
@@ -566,8 +566,8 @@ class V2DaySpeechPipelineRepository:
         *,
         slot_id: str,
         reason_code: str,
-        fence: V2RunFence | None = None,
-    ) -> V2DaySpeechSlotSnapshot:
+        fence: RunFence | None = None,
+    ) -> DaySpeechSlotSnapshot:
         _canonical_id(reason_code, field="reason_code", maximum=120)
         with self._session_factory.begin() as db:
             game, current_run, row = _locked_slot_for_invalidation(
@@ -578,7 +578,7 @@ class V2DaySpeechPipelineRepository:
             if row.state == "invalidated":
                 if (row.failure or {}).get("reason_code") == reason_code:
                     return _snapshot(row)
-                raise V2DaySpeechPipelineRepositoryError(
+                raise DaySpeechPipelineRepositoryError(
                     "invalidated day speech slot has different reason"
                 )
             _require_nonterminal(row)
@@ -616,15 +616,15 @@ def _locked_game_and_fence(
     db: Session,
     *,
     game_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun]:
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun]:
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2DaySpeechPipelineRepositoryError(f"unknown game {game_id}")
+        raise DaySpeechPipelineRepositoryError(f"unknown game {game_id}")
     try:
-        run = require_v2_run_fence(db, game, fence=fence)
-    except V2RunFenceRejected as exc:
-        raise V2ExecutionOwnershipLost(str(exc)) from exc
+        run = require_run_fence(db, game, fence=fence)
+    except RunFenceRejected as exc:
+        raise ExecutionOwnershipLost(str(exc)) from exc
     return game, run
 
 
@@ -632,20 +632,20 @@ def _locked_owned_slot(
     db: Session,
     *,
     slot_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun, V2DaySpeechSlot]:
-    probe = db.get(V2DaySpeechSlot, slot_id)
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun, DaySpeechSlot]:
+    probe = db.get(DaySpeechSlot, slot_id)
     if probe is None:
-        raise V2DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
+        raise DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
     game, run = _locked_game_and_fence(db, game_id=probe.game_id, fence=fence)
     row = db.scalar(
-        select(V2DaySpeechSlot).where(V2DaySpeechSlot.slot_id == slot_id).with_for_update()
+        select(DaySpeechSlot).where(DaySpeechSlot.slot_id == slot_id).with_for_update()
     )
     if row is None:
-        raise V2DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
+        raise DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
     _require_owned_slot(row, run)
     if game.phase_id != row.phase_id:
-        raise V2DaySpeechPipelineRepositoryError("day speech slot phase changed")
+        raise DaySpeechPipelineRepositoryError("day speech slot phase changed")
     return game, run, row
 
 
@@ -653,44 +653,44 @@ def _locked_slot_for_invalidation(
     db: Session,
     *,
     slot_id: str,
-    fence: V2RunFence | None,
-) -> tuple[V2GameRecord, V2GameRun, V2DaySpeechSlot]:
-    probe = db.get(V2DaySpeechSlot, slot_id)
+    fence: RunFence | None,
+) -> tuple[GameRecord, GameRun, DaySpeechSlot]:
+    probe = db.get(DaySpeechSlot, slot_id)
     if probe is None:
-        raise V2DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
+        raise DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
     game, run = _locked_game_and_fence(db, game_id=probe.game_id, fence=fence)
     row = db.scalar(
-        select(V2DaySpeechSlot).where(V2DaySpeechSlot.slot_id == slot_id).with_for_update()
+        select(DaySpeechSlot).where(DaySpeechSlot.slot_id == slot_id).with_for_update()
     )
     if row is None:
-        raise V2DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
+        raise DaySpeechPipelineRepositoryError(f"unknown day speech slot {slot_id}")
     return game, run, row
 
 
-def _require_owned_slot(row: V2DaySpeechSlot, run: V2GameRun) -> None:
+def _require_owned_slot(row: DaySpeechSlot, run: GameRun) -> None:
     if (
         row.run_id != run.run_id
         or row.fence_worker_id != run.worker_id
         or row.fence_token != run.fence_token
     ):
-        raise V2ExecutionOwnershipLost("v2_day_speech_slot_fence_lost")
+        raise ExecutionOwnershipLost("v2_day_speech_slot_fence_lost")
 
 
-def _required_worker_id(run: V2GameRun) -> str:
+def _required_worker_id(run: GameRun) -> str:
     if not isinstance(run.worker_id, str) or not run.worker_id:
-        raise V2ExecutionOwnershipLost("v2_run_execution_lease_missing")
+        raise ExecutionOwnershipLost("v2_run_execution_lease_missing")
     return run.worker_id
 
 
-def _raise_if_stop_requested(run: V2GameRun) -> None:
+def _raise_if_stop_requested(run: GameRun) -> None:
     if run.stop_requested_at is not None:
-        raise V2DaySpeechPipelineRepositoryError("V2 game stop was requested")
+        raise DaySpeechPipelineRepositoryError("V2 game stop was requested")
 
 
 def _validate_active_predecessor(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     phase_id: str,
     round_no: int,
     speech_round: int,
@@ -702,11 +702,11 @@ def _validate_active_predecessor(
     predecessor_source_record_seq: int,
     context_cutoff_record_seq: int,
     predecessor_turn_player_id: str | None,
-) -> V2LivePresentation:
+) -> LivePresentation:
     predecessor = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == game.game_id,
-            V2LivePresentation.presentation_id == predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == game.game_id,
+            LivePresentation.presentation_id == predecessor_presentation_id,
         )
     )
     technical_skip_predecessor = predecessor_turn_player_id is not None
@@ -722,10 +722,10 @@ def _validate_active_predecessor(
         or predecessor.state != "active"
         or predecessor.voice_asset_id is None
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor is not an active public TTS presentation"
         )
-    voice = db.get(V2VoiceAsset, predecessor.voice_asset_id)
+    voice = db.get(VoiceAsset, predecessor.voice_asset_id)
     if (
         voice is None
         or voice.game_id != game.game_id
@@ -734,7 +734,7 @@ def _validate_active_predecessor(
         or voice.presentation_id != predecessor_presentation_id
         or voice.state not in {"writing", "ready"}
     ):
-        raise V2DaySpeechPipelineRepositoryError("day speech predecessor has no active TTS asset")
+        raise DaySpeechPipelineRepositoryError("day speech predecessor has no active TTS asset")
     source = _event_by_id(
         db,
         game_id=game.game_id,
@@ -743,7 +743,7 @@ def _validate_active_predecessor(
         event_type="speech_segment_committed",
     )
     if source.record_seq != predecessor_source_record_seq:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor event id/record seq lineage is invalid"
         )
     _require_event_lineage(
@@ -753,7 +753,7 @@ def _validate_active_predecessor(
     )
     source_payload = _payload(source)
     if source_payload.get("audience") not in _PUBLIC_AUDIENCES:
-        raise V2DaySpeechPipelineRepositoryError("day speech predecessor source is not public")
+        raise DaySpeechPipelineRepositoryError("day speech predecessor source is not public")
     sealed = _find_event(
         db,
         game_id=game.game_id,
@@ -765,7 +765,7 @@ def _validate_active_predecessor(
         maximum_record_seq=context_cutoff_record_seq,
     )
     if sealed is None:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor was not sealed by the context cutoff"
         )
     opened = _pipeline_source_action_opened(
@@ -787,7 +787,7 @@ def _validate_active_predecessor(
             or public_skip_record_seq <= 0
             or public_skip_record_seq >= opened.record_seq
         ):
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech technical skip predecessor action is invalid"
             )
         public_skip = _event_at(
@@ -805,21 +805,21 @@ def _validate_active_predecessor(
             or public_skip_payload.get("action_type") != "day_debate_speech"
             or public_skip_payload.get("actor_id") != predecessor_turn_player_id
         ):
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech technical skip predecessor has no public fact"
             )
         predecessor_turn_actor_id = predecessor_turn_player_id
     elif context.get("action_type") != "day_debate_speech":
-        raise V2DaySpeechPipelineRepositoryError("day speech predecessor is not a debate speech")
+        raise DaySpeechPipelineRepositoryError("day speech predecessor is not a debate speech")
     if context.get("speech_round") != speech_round:
-        raise V2DaySpeechPipelineRepositoryError("one-ahead day speech cannot cross speech rounds")
+        raise DaySpeechPipelineRepositoryError("one-ahead day speech cannot cross speech rounds")
     speech_order = context.get("speech_order")
     if (
         type(speech_order) is not list
         or not all(isinstance(item, str) and item for item in speech_order)
         or predecessor_turn_actor_id not in speech_order
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor has no durable speech order"
         )
     predecessor_index = speech_order.index(predecessor_turn_actor_id)
@@ -828,7 +828,7 @@ def _validate_active_predecessor(
         or speech_order[predecessor_index + 1] != actor_player_id
         or turn_index != predecessor_index + 2
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot is not the predecessor's immediate next turn"
         )
     later_public_speech = _find_public_speech_after(
@@ -840,7 +840,7 @@ def _validate_active_predecessor(
         excluding_presentation_id=predecessor_presentation_id,
     )
     if later_public_speech is not None:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor is not the latest public speech at cutoff"
         )
     return predecessor
@@ -849,7 +849,7 @@ def _validate_active_predecessor(
 def _validate_generation_result(
     db: Session,
     *,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     action_id: str,
     response_record_seq: int,
     last_record_seq: int,
@@ -874,19 +874,19 @@ def _validate_generation_result(
         or payload.get("application_validation_result") != "accepted"
         or payload.get("audience") != "player_private"
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech generation response lineage is invalid"
         )
     attempt_id = payload.get("attempt_id")
     _canonical_id(attempt_id, field="generation_attempt_id", maximum=48)
     decision = payload.get("parsed_output")
     if type(decision) is not dict:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech generation response has no parsed decision"
         )
     speech = decision.get("speech")
     if not isinstance(speech, str) or not speech.strip():
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech generation response has no public speech"
         )
     success = _find_event(
@@ -901,7 +901,7 @@ def _validate_generation_result(
     if success is None or _payload(success).get("result") != (
         "decision_recorded_without_presentation"
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech generation action was not durably completed"
         )
     failed = _find_event(
@@ -914,18 +914,18 @@ def _validate_generation_result(
         maximum_record_seq=last_record_seq,
     )
     if failed is not None:
-        raise V2DaySpeechPipelineRepositoryError("day speech generation action also has a failure")
+        raise DaySpeechPipelineRepositoryError("day speech generation action also has a failure")
     return str(attempt_id), deepcopy(decision), success.record_seq
 
 
 def _validate_pipeline_action_opened(
     db: Session,
     *,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     action_id: str,
     stage: Literal["generation", "presentation"],
     maximum_record_seq: int,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     opened = _pipeline_source_action_opened(
         db,
         game_id=row.game_id,
@@ -949,7 +949,7 @@ def _validate_pipeline_action_opened(
         or pipeline.get("stage") != stage
         or pipeline.get("model_admission_mode") != expected_admission
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"day speech {stage} action has invalid pipeline lineage"
         )
     actor = context.get("actor")
@@ -957,7 +957,7 @@ def _validate_pipeline_action_opened(
         "kind": "player",
         "id": row.actor_player_id,
     }:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"day speech {stage} action has invalid actor lineage"
         )
     speech_order = context.get("speech_order")
@@ -966,7 +966,7 @@ def _validate_pipeline_action_opened(
         or len(speech_order) < row.turn_index
         or speech_order[row.turn_index - 1] != row.actor_player_id
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"day speech {stage} action has invalid turn lineage"
         )
     if stage == "generation":
@@ -977,17 +977,17 @@ def _validate_pipeline_action_opened(
             or not isinstance(batch_id, str)
             or not batch_id.strip()
         ):
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech generation action changed its frozen context cutoff"
             )
     return opened
 
 
-def _validate_closed_predecessor(db: Session, *, row: V2DaySpeechSlot) -> int:
+def _validate_closed_predecessor(db: Session, *, row: DaySpeechSlot) -> int:
     predecessor = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == row.game_id,
-            V2LivePresentation.presentation_id == row.predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == row.game_id,
+            LivePresentation.presentation_id == row.predecessor_presentation_id,
         )
     )
     if (
@@ -997,7 +997,7 @@ def _validate_closed_predecessor(db: Session, *, row: V2DaySpeechSlot) -> int:
         or predecessor.state != "closed"
         or predecessor.closed_at is None
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor is not closed before presentation"
         )
     closed = _find_event(
@@ -1010,18 +1010,18 @@ def _validate_closed_predecessor(db: Session, *, row: V2DaySpeechSlot) -> int:
         minimum_record_seq=row.predecessor_source_record_seq + 1,
     )
     if closed is None:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech predecessor has no durable close event"
         )
     predecessor_slot = db.scalar(
-        select(V2DaySpeechSlot).where(
-            V2DaySpeechSlot.game_id == row.game_id,
-            V2DaySpeechSlot.run_id == row.run_id,
-            V2DaySpeechSlot.presentation_id == row.predecessor_presentation_id,
+        select(DaySpeechSlot).where(
+            DaySpeechSlot.game_id == row.game_id,
+            DaySpeechSlot.run_id == row.run_id,
+            DaySpeechSlot.presentation_id == row.predecessor_presentation_id,
         )
     )
     if predecessor_slot is not None and predecessor_slot.state != "consumed":
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "predecessor pipeline slot was not consumed in public order"
         )
     return closed.record_seq
@@ -1030,12 +1030,12 @@ def _validate_closed_predecessor(db: Session, *, row: V2DaySpeechSlot) -> int:
 def _validate_open_slot_presentation(
     db: Session,
     *,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     action_id: str,
     presentation_id: str,
     predecessor_closed_record_seq: int,
     last_record_seq: int,
-) -> tuple[V2LivePresentation, int, int]:
+) -> tuple[LivePresentation, int, int]:
     opened = _validate_pipeline_action_opened(
         db,
         row=row,
@@ -1044,9 +1044,9 @@ def _validate_open_slot_presentation(
         maximum_record_seq=last_record_seq,
     )
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == row.game_id,
-            V2LivePresentation.presentation_id == presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == row.game_id,
+            LivePresentation.presentation_id == presentation_id,
         )
     )
     if (
@@ -1059,7 +1059,7 @@ def _validate_open_slot_presentation(
         or presentation.audience not in _PUBLIC_AUDIENCES
         or presentation.state != "active"
     ):
-        raise V2DaySpeechPipelineRepositoryError("day speech slot presentation lineage is invalid")
+        raise DaySpeechPipelineRepositoryError("day speech slot presentation lineage is invalid")
     source = _event_by_id(
         db,
         game_id=row.game_id,
@@ -1068,7 +1068,7 @@ def _validate_open_slot_presentation(
         event_type="speech_segment_committed",
     )
     if source.record_seq <= predecessor_closed_record_seq or source.record_seq <= opened.record_seq:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot presentation source is out of public order"
         )
     _require_event_lineage(source, action_id=action_id, presentation_id=presentation_id)
@@ -1076,7 +1076,7 @@ def _validate_open_slot_presentation(
     if source_payload.get("audience") not in _PUBLIC_AUDIENCES or source_payload.get("text") != (
         row.decision or {}
     ).get("speech"):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot presentation changed the generated speech"
         )
     sealed = _find_event(
@@ -1090,7 +1090,7 @@ def _validate_open_slot_presentation(
         maximum_record_seq=last_record_seq,
     )
     if sealed is None:
-        raise V2DaySpeechPipelineRepositoryError("day speech slot presentation was not sealed")
+        raise DaySpeechPipelineRepositoryError("day speech slot presentation was not sealed")
     later_public_speech = _find_public_speech_after(
         db,
         game_id=row.game_id,
@@ -1100,7 +1100,7 @@ def _validate_open_slot_presentation(
         excluding_presentation_id=presentation_id,
     )
     if later_public_speech is not None:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot presentation would violate public order"
         )
     return presentation, source.record_seq, sealed.record_seq
@@ -1109,13 +1109,13 @@ def _validate_open_slot_presentation(
 def _validate_consumed_presentation(
     db: Session,
     *,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     last_record_seq: int,
 ) -> tuple[int, int, int | None]:
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == row.game_id,
-            V2LivePresentation.presentation_id == row.presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == row.game_id,
+            LivePresentation.presentation_id == row.presentation_id,
         )
     )
     if (
@@ -1125,7 +1125,7 @@ def _validate_consumed_presentation(
         or presentation.state != "closed"
         or presentation.closed_at is None
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot presentation is not durably closed"
         )
     source = _event_by_id(
@@ -1151,7 +1151,7 @@ def _validate_consumed_presentation(
         maximum_record_seq=last_record_seq,
     )
     if closed is None:
-        raise V2DaySpeechPipelineRepositoryError("day speech slot presentation has no close event")
+        raise DaySpeechPipelineRepositoryError("day speech slot presentation has no close event")
     success = _find_event(
         db,
         game_id=row.game_id,
@@ -1163,7 +1163,7 @@ def _validate_consumed_presentation(
         maximum_record_seq=last_record_seq,
     )
     if success is None:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "day speech slot presentation action did not succeed"
         )
     audio_drained_seq: int | None = None
@@ -1179,7 +1179,7 @@ def _validate_consumed_presentation(
             maximum_record_seq=closed.record_seq - 1,
         )
         if drained is None:
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "day speech slot audio was not drained before close"
             )
         audio_drained_seq = drained.record_seq
@@ -1189,12 +1189,12 @@ def _validate_consumed_presentation(
 def _validate_slot_failure(
     db: Session,
     *,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     failure_record_seq: int,
     last_record_seq: int,
 ) -> dict[str, Any]:
     if failure_record_seq > last_record_seq:
-        raise V2DaySpeechPipelineRepositoryError("day speech failure is ahead of durable history")
+        raise DaySpeechPipelineRepositoryError("day speech failure is ahead of durable history")
     failed = _event_at(
         db,
         game_id=row.game_id,
@@ -1217,16 +1217,16 @@ def _validate_slot_failure(
     )
     if stage == "generation":
         if row.generation_action_id not in {None, action_id}:
-            raise V2DaySpeechPipelineRepositoryError("day speech generation failure action changed")
+            raise DaySpeechPipelineRepositoryError("day speech generation failure action changed")
         if failure_payload.get("presentation_id") is not None:
-            raise V2DaySpeechPipelineRepositoryError(
+            raise DaySpeechPipelineRepositoryError(
                 "deferred day speech generation unexpectedly opened a presentation"
             )
     elif (
         row.presentation_action_id != action_id
         or failure_payload.get("presentation_id") != row.presentation_id
     ):
-        raise V2DaySpeechPipelineRepositoryError("day speech presentation failure lineage changed")
+        raise DaySpeechPipelineRepositoryError("day speech presentation failure lineage changed")
     request_failure = _find_event(
         db,
         game_id=row.game_id,
@@ -1260,17 +1260,17 @@ def _validate_slot_failure(
     }
 
 
-def _require_no_active_slot_presentation(db: Session, *, row: V2DaySpeechSlot) -> None:
+def _require_no_active_slot_presentation(db: Session, *, row: DaySpeechSlot) -> None:
     if row.presentation_id is None:
         return
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == row.game_id,
-            V2LivePresentation.presentation_id == row.presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == row.game_id,
+            LivePresentation.presentation_id == row.presentation_id,
         )
     )
     if presentation is not None and presentation.state == "active":
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             "active presentation must be closed before slot cleanup"
         )
 
@@ -1282,7 +1282,7 @@ def _pipeline_source_action_opened(
     run_id: str,
     action_id: str,
     maximum_record_seq: int,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     opened = _find_event(
         db,
         game_id=game_id,
@@ -1292,14 +1292,14 @@ def _pipeline_source_action_opened(
         maximum_record_seq=maximum_record_seq,
     )
     if opened is None:
-        raise V2DaySpeechPipelineRepositoryError("day speech action has no durable open event")
+        raise DaySpeechPipelineRepositoryError("day speech action has no durable open event")
     return opened
 
 
-def _action_context(event: V2GameRecordEvent) -> dict[str, Any]:
+def _action_context(event: GameRecordEvent) -> dict[str, Any]:
     context = _payload(event).get("context")
     if type(context) is not dict:
-        raise V2DaySpeechPipelineRepositoryError("day speech action has no durable context")
+        raise DaySpeechPipelineRepositoryError("day speech action has no durable context")
     return context
 
 
@@ -1310,11 +1310,11 @@ def _event_at(
     run_id: str,
     record_seq: int,
     event_type: str,
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     event = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.record_seq == record_seq,
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.record_seq == record_seq,
         )
     )
     if (
@@ -1323,7 +1323,7 @@ def _event_at(
         or event.run_id != run_id
         or event.event_type != event_type
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"invalid {event_type} event lineage at record {record_seq}"
         )
     return event
@@ -1336,15 +1336,15 @@ def _event_by_id(
     run_id: str,
     event_id: int,
     event_type: str,
-) -> V2GameRecordEvent:
-    event = db.get(V2GameRecordEvent, (game_id, event_id))
+) -> GameRecordEvent:
+    event = db.get(GameRecordEvent, (game_id, event_id))
     if (
         event is None
         or event.event_id != event_id
         or event.run_id != run_id
         or event.event_type != event_type
     ):
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"invalid {event_type} event id lineage at event {event_id}"
         )
     return event
@@ -1361,18 +1361,18 @@ def _find_event(
     minimum_record_seq: int | None = None,
     maximum_record_seq: int | None = None,
     latest: bool = False,
-) -> V2GameRecordEvent | None:
-    statement = select(V2GameRecordEvent).where(
-        V2GameRecordEvent.game_id == game_id,
-        V2GameRecordEvent.run_id == run_id,
-        V2GameRecordEvent.event_type == event_type,
+) -> GameRecordEvent | None:
+    statement = select(GameRecordEvent).where(
+        GameRecordEvent.game_id == game_id,
+        GameRecordEvent.run_id == run_id,
+        GameRecordEvent.event_type == event_type,
     )
     if minimum_record_seq is not None:
-        statement = statement.where(V2GameRecordEvent.record_seq >= minimum_record_seq)
+        statement = statement.where(GameRecordEvent.record_seq >= minimum_record_seq)
     if maximum_record_seq is not None:
-        statement = statement.where(V2GameRecordEvent.record_seq <= maximum_record_seq)
+        statement = statement.where(GameRecordEvent.record_seq <= maximum_record_seq)
     statement = statement.order_by(
-        V2GameRecordEvent.record_seq.desc() if latest else V2GameRecordEvent.record_seq
+        GameRecordEvent.record_seq.desc() if latest else GameRecordEvent.record_seq
     )
     for event in db.scalars(statement):
         payload = _payload(event)
@@ -1392,19 +1392,19 @@ def _find_public_speech_after(
     minimum_record_seq: int,
     maximum_record_seq: int,
     excluding_presentation_id: str,
-) -> V2GameRecordEvent | None:
+) -> GameRecordEvent | None:
     if maximum_record_seq < minimum_record_seq:
         return None
     statement = (
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == game_id,
-            V2GameRecordEvent.run_id == run_id,
-            V2GameRecordEvent.event_type == "speech_segment_committed",
-            V2GameRecordEvent.record_seq >= minimum_record_seq,
-            V2GameRecordEvent.record_seq <= maximum_record_seq,
+            GameRecordEvent.game_id == game_id,
+            GameRecordEvent.run_id == run_id,
+            GameRecordEvent.event_type == "speech_segment_committed",
+            GameRecordEvent.record_seq >= minimum_record_seq,
+            GameRecordEvent.record_seq <= maximum_record_seq,
         )
-        .order_by(V2GameRecordEvent.record_seq)
+        .order_by(GameRecordEvent.record_seq)
     )
     for event in db.scalars(statement):
         payload = _payload(event)
@@ -1417,21 +1417,21 @@ def _find_public_speech_after(
 
 
 def _require_event_lineage(
-    event: V2GameRecordEvent,
+    event: GameRecordEvent,
     *,
     action_id: str,
     presentation_id: str,
 ) -> None:
     payload = _payload(event)
     if payload.get("action_id") != action_id or payload.get("presentation_id") != presentation_id:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"invalid {event.event_type} action/presentation lineage"
         )
 
 
-def _payload(event: V2GameRecordEvent) -> dict[str, Any]:
+def _payload(event: GameRecordEvent) -> dict[str, Any]:
     if type(event.payload) is not dict:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"invalid payload for {event.event_type} at record {event.record_seq}"
         )
     return event.payload
@@ -1440,14 +1440,14 @@ def _payload(event: V2GameRecordEvent) -> dict[str, Any]:
 def _append_slot_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     run_id: str,
     event_type: str,
-    row: V2DaySpeechSlot,
+    row: DaySpeechSlot,
     payload: dict[str, Any],
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     next_seq = game.last_record_seq + 1
-    event = V2GameRecordEvent(
+    event = GameRecordEvent(
         game_id=game.game_id,
         event_id=next_seq,
         record_seq=next_seq,
@@ -1474,8 +1474,8 @@ def _append_slot_event(
     return event
 
 
-def _snapshot(row: V2DaySpeechSlot) -> V2DaySpeechSlotSnapshot:
-    return V2DaySpeechSlotSnapshot(
+def _snapshot(row: DaySpeechSlot) -> DaySpeechSlotSnapshot:
+    return DaySpeechSlotSnapshot(
         slot_id=row.slot_id,
         game_id=row.game_id,
         run_id=row.run_id,
@@ -1511,30 +1511,30 @@ def _snapshot(row: V2DaySpeechSlot) -> V2DaySpeechSlotSnapshot:
     )
 
 
-def _require_state(row: V2DaySpeechSlot, *expected: str) -> None:
+def _require_state(row: DaySpeechSlot, *expected: str) -> None:
     if row.state not in expected:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"day speech slot {row.slot_id} cannot transition from {row.state}; "
             f"expected {','.join(expected)}"
         )
 
 
-def _require_nonterminal(row: V2DaySpeechSlot) -> None:
+def _require_nonterminal(row: DaySpeechSlot) -> None:
     if row.state in _TERMINAL_STATES:
-        raise V2DaySpeechPipelineRepositoryError(
+        raise DaySpeechPipelineRepositoryError(
             f"day speech slot {row.slot_id} is terminal ({row.state})"
         )
 
 
 def _canonical_id(value: Any, *, field: str, maximum: int) -> str:
     if not isinstance(value, str) or not value or value.strip() != value or len(value) > maximum:
-        raise V2DaySpeechPipelineRepositoryError(f"invalid {field}")
+        raise DaySpeechPipelineRepositoryError(f"invalid {field}")
     return value
 
 
 def _positive_int(value: Any, *, field: str) -> int:
     if type(value) is not int or value <= 0:
-        raise V2DaySpeechPipelineRepositoryError(f"invalid {field}")
+        raise DaySpeechPipelineRepositoryError(f"invalid {field}")
     return value
 
 

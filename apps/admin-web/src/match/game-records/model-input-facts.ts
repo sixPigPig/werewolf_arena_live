@@ -1,10 +1,10 @@
 import {
-  classifyV2ModelContextContract,
+  classifyModelContextContract,
   structuredModelContextFromRequestPayload,
-  type V2ModelContextContractEnvelope,
-} from "@/v2/game-records/model-context-contract";
+  type ModelContextContractEnvelope,
+} from "@/match/game-records/model-context-contract";
 
-export type V2ModelInputFact = {
+export type ModelInputFact = {
   authority: string | null;
   context: string | null;
   id: string;
@@ -14,8 +14,8 @@ export type V2ModelInputFact = {
   title: string;
 };
 
-export type V2ModelInputFactExtraction = {
-  facts: V2ModelInputFact[];
+export type ModelInputFactExtraction = {
+  facts: ModelInputFact[];
   modelContextSchemaVersion: number | null;
   status:
     | "supported"
@@ -23,15 +23,15 @@ export type V2ModelInputFactExtraction = {
     | "unavailable";
 };
 
-export function extractV2ModelInputFacts(
-  request: V2ModelContextContractEnvelope | null,
-): V2ModelInputFact[] {
-  return extractV2ModelInputFactResult(request).facts;
+export function extractModelInputFacts(
+  request: ModelContextContractEnvelope | null,
+): ModelInputFact[] {
+  return extractModelInputFactResult(request).facts;
 }
 
-export function extractV2ModelInputFactResult(
-  request: V2ModelContextContractEnvelope | null,
-): V2ModelInputFactExtraction {
+export function extractModelInputFactResult(
+  request: ModelContextContractEnvelope | null,
+): ModelInputFactExtraction {
   if (!request?.request_payload) {
     return {
       facts: [],
@@ -51,7 +51,7 @@ export function extractV2ModelInputFactResult(
   }
 
   const modelContextSchemaVersion = request.model_context_schema_version;
-  const presentationKind = classifyV2ModelContextContract(
+  const presentationKind = classifyModelContextContract(
     request,
     prompt,
   );
@@ -77,7 +77,7 @@ export function extractV2ModelInputFactResult(
 function publicEventFact(
   event: Record<string, unknown>,
   index: number,
-): V2ModelInputFact {
+): ModelInputFact {
   const recordSeq =
     numberValue(event.known_at_seq) ?? numberValue(event.record_seq);
   const kind = textValue(event.kind) ?? "unknown";

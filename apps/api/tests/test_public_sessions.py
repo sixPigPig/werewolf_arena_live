@@ -201,16 +201,16 @@ def test_public_session_is_server_issued_hash_only_idempotent_and_private(
 def test_public_session_cookie_authenticates_god_view_routes(
     public_context: PublicTestContext,
 ) -> None:
-    live_path = "/api/v1/games/runs/run_missing/god-view/events"
-    playback_path = "/api/v1/games/game_deadbeef/god-view/playback"
+    me_path = "/api/v1/public/me"
+    favorites_path = "/api/v1/public/me/favorite-player-profiles"
 
-    assert public_context.client.get(live_path).status_code == 401
-    assert public_context.client.get(playback_path).status_code == 401
+    assert public_context.client.get(me_path).status_code == 401
+    assert public_context.client.get(favorites_path).status_code == 401
 
     _bootstrap(public_context.client)
 
-    assert public_context.client.get(live_path).status_code == 404
-    assert public_context.client.get(playback_path).status_code == 404
+    assert public_context.client.get(me_path).status_code == 200
+    assert public_context.client.get(favorites_path).status_code == 200
 
 
 def test_public_bootstrap_rejects_foreign_origin_without_replacing_identity(

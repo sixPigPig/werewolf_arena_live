@@ -10,37 +10,37 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.ability_runtime import ability_snapshot_hash, resolve_first_night
-from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
-from app.v2.event_contract import canonical_event_payload
-from app.v2.knowledge_timeline import player_private_knowledge
-from app.v2.model_generation_policy_contract import MODEL_GENERATION_POLICY_SCHEMA_VERSION
-from app.v2.model_parameters import (
-    V2FrozenModelParametersError,
+from app.match.ability_runtime import ability_snapshot_hash, resolve_first_night
+from app.match.execution import RunFenceRejected, require_run_fence
+from app.match.event_contract import canonical_event_payload
+from app.match.knowledge_timeline import player_private_knowledge
+from app.match.model_generation_policy_contract import MODEL_GENERATION_POLICY_SCHEMA_VERSION
+from app.match.model_parameters import (
+    FrozenModelParametersError,
     frozen_player_model_configuration,
 )
-from app.v2.models import (
-    V2AbilityActivation,
-    V2AbilityInstance,
-    V2ActionWindow,
-    V2EffectIntent,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2KnowledgeFact,
-    V2LivePresentation,
-    V2MatchState,
-    V2PlayerState,
-    V2RoleAssignment,
+from app.match.models import (
+    AbilityActivation,
+    AbilityInstance,
+    ActionWindow,
+    EffectIntent,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    KnowledgeFact,
+    LivePresentation,
+    MatchState,
+    PlayerState,
+    RoleAssignment,
 )
-from app.v2.repository import (
-    V2ExecutionOwnershipLost,
-    V2GameCanceled,
-    V2PhaseTransition,
-    V2RepositoryError,
+from app.match.repository import (
+    ExecutionOwnershipLost,
+    GameCanceled,
+    PhaseTransition,
+    RepositoryError,
     _open_failure_episode_ids_for_locked_run,
 )
-from app.v2.win_conditions import (
+from app.match.win_conditions import (
     all_hunter_settlement_branches_terminal,
     hunter_settlement_can_change_winner,
     winner_from_alive_roles,
@@ -48,7 +48,7 @@ from app.v2.win_conditions import (
 
 
 @dataclass(frozen=True)
-class V2NightPlayer:
+class NightPlayer:
     player_id: str
     seat: int
     display_name: str
@@ -65,7 +65,7 @@ class V2NightPlayer:
 
 
 @dataclass(frozen=True)
-class V2NightRuntimeState:
+class NightRuntimeState:
     game_id: str
     run_id: str
     window_id: str
@@ -77,13 +77,13 @@ class V2NightRuntimeState:
     max_rounds: int
     sheriff_player_id: str | None
     sheriff_badge_state: str
-    players: tuple[V2NightPlayer, ...]
+    players: tuple[NightPlayer, ...]
 
-    def player(self, player_id: str) -> V2NightPlayer:
+    def player(self, player_id: str) -> NightPlayer:
         for player in self.players:
             if player.player_id == player_id:
                 return player
-        raise V2RepositoryError(f"unknown V2 player {player_id}")
+        raise RepositoryError(f"unknown V2 player {player_id}")
 
     def instance(self, ability_id: str) -> dict[str, Any] | None:
         for item in self.snapshot["instances"]:
@@ -93,7 +93,7 @@ class V2NightRuntimeState:
 
 
 @dataclass(frozen=True)
-class V2ActivationRef:
+class ActivationRef:
     activation_id: str
     ability_instance_id: str
     ability_id: str
@@ -103,14 +103,14 @@ class V2ActivationRef:
 
 
 @dataclass(frozen=True)
-class V2NightResolutionRecord:
+class NightResolutionRecord:
     deaths: tuple[dict[str, str], ...]
     peaceful: bool
     attack_prevented_by: str | None
-    transition: V2PhaseTransition
+    transition: PhaseTransition
 
 
-class V2NightRepository:
+class NightRepository:
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -122,9 +122,9 @@ class V2NightRepository:
 
     def latest_record_seq(self, game_id: str) -> int:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return game.last_record_seq
 
     def append_event(
@@ -149,30 +149,30 @@ class V2NightRepository:
 
     def execution_enabled(self, game_id: str) -> bool:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             snapshot = game.ability_snapshot or {}
             if not snapshot:
                 return False
             ability_snapshot_hash(snapshot)
             return snapshot.get("execution_enabled") is True
 
-    def start_night(self, game_id: str, *, audience: str) -> V2NightRuntimeState:
+    def start_night(self, game_id: str, *, audience: str) -> NightRuntimeState:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             snapshot = game.ability_snapshot or {}
             digest = ability_snapshot_hash(snapshot)
             if snapshot.get("execution_enabled") is not True:
-                raise V2RepositoryError("ability runtime is not executable")
+                raise RepositoryError("ability runtime is not executable")
             round_no = _night_round_no(game.phase_id)
             if game.status != "ready" or game.phase_state != "nightfall_announced":
-                raise V2RepositoryError("night is not ready to start")
+                raise RepositoryError("night is not ready to start")
             next_window_seq = (
                 int(
                     db.scalar(
-                        select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
-                            V2ActionWindow.game_id == game_id
+                        select(func.coalesce(func.max(ActionWindow.window_seq), 0)).where(
+                            ActionWindow.game_id == game_id
                         )
                     )
                     or 0
@@ -180,13 +180,13 @@ class V2NightRepository:
                 + 1
             )
             existing = db.scalar(
-                select(V2ActionWindow).where(
-                    V2ActionWindow.game_id == game_id,
-                    V2ActionWindow.window_seq == next_window_seq,
+                select(ActionWindow).where(
+                    ActionWindow.game_id == game_id,
+                    ActionWindow.window_seq == next_window_seq,
                 )
             )
             if existing is not None:
-                raise V2RepositoryError("night action window already exists")
+                raise RepositoryError("night action window already exists")
             plan = [
                 {
                     "ability_instance_id": item["ability_instance_id"],
@@ -197,7 +197,7 @@ class V2NightRepository:
                 for item in snapshot["instances"]
                 if item["window_type"] == "night"
             ]
-            window = V2ActionWindow(
+            window = ActionWindow(
                 window_id=f"v2_window_{uuid4().hex[:16]}",
                 game_id=game.game_id,
                 run_id=game.current_run_id,
@@ -235,10 +235,10 @@ class V2NightRepository:
             )
             players = _players(db, game)
             rule = _compiled_rule(game, snapshot)
-            match = db.get(V2MatchState, game_id)
+            match = db.get(MatchState, game_id)
             if match is None:
-                raise V2RepositoryError("night match state is missing")
-            return V2NightRuntimeState(
+                raise RepositoryError("night match state is missing")
+            return NightRuntimeState(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 window_id=window.window_id,
@@ -253,21 +253,21 @@ class V2NightRepository:
                 players=players,
             )
 
-    def start_first_night(self, game_id: str, *, audience: str) -> V2NightRuntimeState:
+    def start_first_night(self, game_id: str, *, audience: str) -> NightRuntimeState:
         return self.start_night(game_id, audience=audience)
 
     def open_activation(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         ability_id: str,
         actor_player_id: str | None,
         occurrence: int,
         audience: str,
-    ) -> V2ActivationRef:
+    ) -> ActivationRef:
         instance_data = state.instance(ability_id)
         if instance_data is None:
-            raise V2RepositoryError(f"ability {ability_id} is not configured")
+            raise RepositoryError(f"ability {ability_id} is not configured")
         activation_id = f"v2_activation_{uuid4().hex[:16]}"
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -291,20 +291,20 @@ class V2NightRepository:
         self,
         *,
         db: Session,
-        game: V2GameRecord,
-        state: V2NightRuntimeState,
+        game: GameRecord,
+        state: NightRuntimeState,
         instance_data: dict[str, Any],
         activation_id: str,
         actor_player_id: str | None,
         occurrence: int,
         audience: str,
-    ) -> tuple[V2AbilityActivation, V2ActivationRef]:
+    ) -> tuple[AbilityActivation, ActivationRef]:
         if game.phase_state not in {"night_running", "dawn_reactions_ready"}:
-            raise V2RepositoryError("ability activation opened outside action window")
-        instance = db.get(V2AbilityInstance, instance_data["ability_instance_id"])
+            raise RepositoryError("ability activation opened outside action window")
+        instance = db.get(AbilityInstance, instance_data["ability_instance_id"])
         if instance is None or instance.game_id != state.game_id:
-            raise V2RepositoryError("ability instance is missing")
-        row = V2AbilityActivation(
+            raise RepositoryError("ability instance is missing")
+        row = AbilityActivation(
             activation_id=activation_id,
             game_id=state.game_id,
             run_id=state.run_id,
@@ -332,7 +332,7 @@ class V2NightRepository:
                 "occurrence": occurrence,
             },
         )
-        return row, V2ActivationRef(
+        return row, ActivationRef(
             activation_id=activation_id,
             ability_instance_id=instance.ability_instance_id,
             ability_id=str(instance_data["ability_id"]),
@@ -344,8 +344,8 @@ class V2NightRepository:
     def complete_activation(
         self,
         *,
-        state: V2NightRuntimeState,
-        activation: V2ActivationRef,
+        state: NightRuntimeState,
+        activation: ActivationRef,
         decision: dict[str, Any],
         result: dict[str, Any],
         effect_type: str | None = None,
@@ -359,9 +359,9 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            row = db.get(V2AbilityActivation, activation.activation_id)
+            row = db.get(AbilityActivation, activation.activation_id)
             if row is None or row.status != "open":
-                raise V2RepositoryError("ability activation is not open")
+                raise RepositoryError("ability activation is not open")
             knowledge_ids: list[str] = []
             durable_knowledge = list(knowledge)
             if activation.actor_player_id is not None:
@@ -404,7 +404,7 @@ class V2NightRepository:
                 fact_id = f"v2_fact_{uuid4().hex[:16]}"
                 knowledge_ids.append(fact_id)
                 db.add(
-                    V2KnowledgeFact(
+                    KnowledgeFact(
                         knowledge_fact_id=fact_id,
                         game_id=state.game_id,
                         source_activation_id=activation.activation_id,
@@ -418,7 +418,7 @@ class V2NightRepository:
             if effect_type is not None and target_player_id is not None:
                 effect_id = f"v2_effect_{uuid4().hex[:16]}"
                 db.add(
-                    V2EffectIntent(
+                    EffectIntent(
                         effect_intent_id=effect_id,
                         game_id=state.game_id,
                         window_id=state.window_id,
@@ -451,9 +451,9 @@ class V2NightRepository:
             row.result = {**result, "effect_intent_id": effect_id}
             row.closed_at = _now()
             if ability_state_patch:
-                instance = db.get(V2AbilityInstance, activation.ability_instance_id)
+                instance = db.get(AbilityInstance, activation.ability_instance_id)
                 if instance is None:
-                    raise V2RepositoryError("ability instance disappeared")
+                    raise RepositoryError("ability instance disappeared")
                 instance.state = {**(instance.state or {}), **ability_state_patch}
             _append_event(
                 db,
@@ -474,17 +474,17 @@ class V2NightRepository:
     def complete_activation_technical_no_action(
         self,
         *,
-        state: V2NightRuntimeState,
-        activation: V2ActivationRef,
+        state: NightRuntimeState,
+        activation: ActivationRef,
         technical_outcome: dict[str, Any],
         decision_context: dict[str, Any] | None = None,
         result_context: dict[str, Any] | None = None,
         knowledge: tuple[tuple[str, str, dict[str, Any]], ...] = (),
     ) -> None:
         if technical_outcome.get("kind") != "technical_no_action":
-            raise V2RepositoryError("invalid technical no-action outcome")
+            raise RepositoryError("invalid technical no-action outcome")
         if activation.audience != "god_view":
-            raise V2RepositoryError("technical no-action activation must remain god-view only")
+            raise RepositoryError("technical no-action activation must remain god-view only")
         source_action_id = technical_outcome.get("source_action_id")
         supporting_event_record_seq = technical_outcome.get("supporting_event_record_seq")
         failure_episode_id = technical_outcome.get("failure_episode_id")
@@ -493,47 +493,47 @@ class V2NightRepository:
         source_attempt_id = technical_outcome.get("source_attempt_id")
         failure_mode = technical_outcome.get("failure_mode")
         if not isinstance(source_action_id, str) or not source_action_id:
-            raise V2RepositoryError("technical no-action source action is missing")
+            raise RepositoryError("technical no-action source action is missing")
         if not isinstance(failure_episode_id, str) or not failure_episode_id:
-            raise V2RepositoryError("technical no-action failure episode is missing")
+            raise RepositoryError("technical no-action failure episode is missing")
         if not isinstance(source_failure_code, str) or not source_failure_code:
-            raise V2RepositoryError("technical no-action failure code is missing")
+            raise RepositoryError("technical no-action failure code is missing")
         if source_failure_category not in {"output_budget", "timeout"}:
-            raise V2RepositoryError("technical no-action failure category is invalid")
+            raise RepositoryError("technical no-action failure category is invalid")
         if not isinstance(source_attempt_id, str) or not source_attempt_id:
-            raise V2RepositoryError("technical no-action source attempt is missing")
+            raise RepositoryError("technical no-action source attempt is missing")
         if failure_mode not in {
             "output_budget_exhausted",
             "attempt_hard_timeout",
             "action_wall_timeout",
         }:
-            raise V2RepositoryError("technical no-action failure mode is invalid")
+            raise RepositoryError("technical no-action failure mode is invalid")
         expected_failure_category = (
             "output_budget" if failure_mode == "output_budget_exhausted" else "timeout"
         )
         if source_failure_category != expected_failure_category:
-            raise V2RepositoryError("technical no-action failure mode does not match")
+            raise RepositoryError("technical no-action failure mode does not match")
         if (
             not isinstance(supporting_event_record_seq, int)
             or isinstance(supporting_event_record_seq, bool)
             or supporting_event_record_seq <= 0
         ):
-            raise V2RepositoryError("technical no-action supporting event is invalid")
+            raise RepositoryError("technical no-action supporting event is invalid")
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            row = db.get(V2AbilityActivation, activation.activation_id)
+            row = db.get(AbilityActivation, activation.activation_id)
             if row is None or row.status != "open":
-                raise V2RepositoryError("ability activation is not open")
+                raise RepositoryError("ability activation is not open")
             if row.action_id != source_action_id:
-                raise V2RepositoryError("technical no-action source action does not match")
+                raise RepositoryError("technical no-action source action does not match")
             supporting_event = db.scalar(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == state.game_id,
-                    V2GameRecordEvent.record_seq == supporting_event_record_seq,
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == state.game_id,
+                    GameRecordEvent.record_seq == supporting_event_record_seq,
                 )
             )
             supporting_payload = supporting_event.payload if supporting_event is not None else {}
@@ -555,13 +555,13 @@ class V2NightRepository:
                 or supporting_payload.get("model_generation_policy_schema_version")
                 != MODEL_GENERATION_POLICY_SCHEMA_VERSION
             ):
-                raise V2RepositoryError("technical no-action supporting event does not match")
+                raise RepositoryError("technical no-action supporting event does not match")
             action_succeeded_events = list(
                 db.scalars(
-                    select(V2GameRecordEvent).where(
-                        V2GameRecordEvent.game_id == state.game_id,
-                        V2GameRecordEvent.run_id == state.run_id,
-                        V2GameRecordEvent.event_type == "action_succeeded",
+                    select(GameRecordEvent).where(
+                        GameRecordEvent.game_id == state.game_id,
+                        GameRecordEvent.run_id == state.run_id,
+                        GameRecordEvent.event_type == "action_succeeded",
                     )
                 )
             )
@@ -587,7 +587,7 @@ class V2NightRepository:
                 != "decision_recorded_without_presentation"
                 or action_succeeded_payload.get("audience") != "god_view"
             ):
-                raise V2RepositoryError("technical no-action action completion does not match")
+                raise RepositoryError("technical no-action action completion does not match")
 
             decision_payload = {
                 **(decision_context or {}),
@@ -633,7 +633,7 @@ class V2NightRepository:
                 fact_id = f"v2_fact_{uuid4().hex[:16]}"
                 knowledge_ids.append(fact_id)
                 db.add(
-                    V2KnowledgeFact(
+                    KnowledgeFact(
                         knowledge_fact_id=fact_id,
                         game_id=state.game_id,
                         source_activation_id=activation.activation_id,
@@ -668,8 +668,8 @@ class V2NightRepository:
     def register_activation_knowledge(
         self,
         *,
-        state: V2NightRuntimeState,
-        activation: V2ActivationRef,
+        state: NightRuntimeState,
+        activation: ActivationRef,
         owner_player_id: str,
         allowed_knowledge: dict[str, Any],
     ) -> tuple[tuple[str, ...], str]:
@@ -687,16 +687,16 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            row = db.get(V2AbilityActivation, activation.activation_id)
+            row = db.get(AbilityActivation, activation.activation_id)
             if row is None or row.status != "open":
-                raise V2RepositoryError("activation knowledge cannot be registered")
+                raise RepositoryError("activation knowledge cannot be registered")
             existing_ids = tuple(row.knowledge_fact_ids or ())
             if existing_ids:
                 facts_by_id = {
                     fact.knowledge_fact_id: fact
                     for fact in db.scalars(
-                        select(V2KnowledgeFact).where(
-                            V2KnowledgeFact.knowledge_fact_id.in_(existing_ids)
+                        select(KnowledgeFact).where(
+                            KnowledgeFact.knowledge_fact_id.in_(existing_ids)
                         )
                     )
                 }
@@ -712,7 +712,7 @@ class V2NightRepository:
                     or existing[0].fact_type != "action_context_projection"
                     or (existing[0].payload or {}).get("normalized_sha256") != digest
                 ):
-                    raise V2RepositoryError("activation knowledge projection changed during retry")
+                    raise RepositoryError("activation knowledge projection changed during retry")
                 _append_event(
                     db,
                     game=game,
@@ -727,7 +727,7 @@ class V2NightRepository:
                 )
                 return existing_ids, digest
             db.add(
-                V2KnowledgeFact(
+                KnowledgeFact(
                     knowledge_fact_id=fact_id,
                     game_id=state.game_id,
                     source_activation_id=activation.activation_id,
@@ -760,8 +760,8 @@ class V2NightRepository:
     def cancel_open_activation(
         self,
         *,
-        state: V2NightRuntimeState,
-        activation: V2ActivationRef,
+        state: NightRuntimeState,
+        activation: ActivationRef,
         reason: str,
         batch_id: str | None = None,
         group: str | None = None,
@@ -772,9 +772,9 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            row = db.get(V2AbilityActivation, activation.activation_id)
+            row = db.get(AbilityActivation, activation.activation_id)
             if row is None or row.game_id != state.game_id:
-                raise V2RepositoryError("ability activation is missing")
+                raise RepositoryError("ability activation is missing")
             if row.status != "open":
                 return False
             row.status = "canceled"
@@ -816,7 +816,7 @@ class V2NightRepository:
     def cancel_open_activations(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         reason: str,
         audience: str,
         batch_id: str | None = None,
@@ -830,15 +830,15 @@ class V2NightRepository:
             )
             rows = list(
                 db.scalars(
-                    select(V2AbilityActivation)
+                    select(AbilityActivation)
                     .where(
-                        V2AbilityActivation.game_id == state.game_id,
-                        V2AbilityActivation.window_id == state.window_id,
-                        V2AbilityActivation.status == "open",
+                        AbilityActivation.game_id == state.game_id,
+                        AbilityActivation.window_id == state.window_id,
+                        AbilityActivation.status == "open",
                     )
                     .order_by(
-                        V2AbilityActivation.ability_instance_id,
-                        V2AbilityActivation.occurrence,
+                        AbilityActivation.ability_instance_id,
+                        AbilityActivation.occurrence,
                     )
                 )
             )
@@ -851,7 +851,7 @@ class V2NightRepository:
                     "action_id": row.action_id,
                 }
                 row.closed_at = _now()
-                instance = db.get(V2AbilityInstance, row.ability_instance_id)
+                instance = db.get(AbilityInstance, row.ability_instance_id)
                 _append_event(
                     db,
                     game=game,
@@ -883,15 +883,15 @@ class V2NightRepository:
     def skip_activation(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         ability_id: str,
         reason: str,
         audience: str,
         occurrence: int = 1,
-    ) -> V2ActivationRef:
+    ) -> ActivationRef:
         instance_data = state.instance(ability_id)
         if instance_data is None:
-            raise V2RepositoryError(f"ability {ability_id} is not configured")
+            raise RepositoryError(f"ability {ability_id} is not configured")
         activation_id = f"v2_activation_{uuid4().hex[:16]}"
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -935,12 +935,12 @@ class V2NightRepository:
     def resolve_night(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         attack_target: str | None,
         protected_target: str | None,
         healed_target: str | None,
         poisoned_target: str | None,
-    ) -> V2NightResolutionRecord:
+    ) -> NightResolutionRecord:
         resolution = resolve_first_night(
             attack_target=attack_target,
             protected_target=protected_target,
@@ -953,15 +953,15 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            window = db.get(V2ActionWindow, state.window_id)
+            window = db.get(ActionWindow, state.window_id)
             if window is None or window.state != "open" or game.phase_state != "night_running":
-                raise V2RepositoryError("night window is not resolvable")
+                raise RepositoryError("night window is not resolvable")
             effect_rows = list(
                 db.scalars(
-                    select(V2EffectIntent).where(
-                        V2EffectIntent.game_id == state.game_id,
-                        V2EffectIntent.window_id == state.window_id,
-                        V2EffectIntent.state == "pending",
+                    select(EffectIntent).where(
+                        EffectIntent.game_id == state.game_id,
+                        EffectIntent.window_id == state.window_id,
+                        EffectIntent.state == "pending",
                     )
                 )
             )
@@ -980,7 +980,7 @@ class V2NightRepository:
                     **(effect.payload or {}),
                     "outcome": outcome,
                 }
-                activation = db.get(V2AbilityActivation, effect.activation_id)
+                activation = db.get(AbilityActivation, effect.activation_id)
                 _append_event(
                     db,
                     game=game,
@@ -996,9 +996,9 @@ class V2NightRepository:
                     },
                 )
             for item in resolution.deaths:
-                player_state = db.get(V2PlayerState, (state.game_id, item["player_id"]))
+                player_state = db.get(PlayerState, (state.game_id, item["player_id"]))
                 if player_state is None or not player_state.alive:
-                    raise V2RepositoryError("night death target is not alive")
+                    raise RepositoryError("night death target is not alive")
                 player_state.state = {
                     **(player_state.state or {}),
                     "pending_dawn_death": {
@@ -1017,9 +1017,9 @@ class V2NightRepository:
             previous_phase_id = game.phase_id
             game.phase_seq += 1
             game.phase_id = f"day_{state.round_no}"
-            match = db.get(V2MatchState, state.game_id)
+            match = db.get(MatchState, state.game_id)
             if match is None:
-                raise V2RepositoryError("night match state is missing")
+                raise RepositoryError("night match state is missing")
             should_elect_before_dawn = (
                 state.round_no == 1
                 and bool(game.ability_snapshot.get("sheriff_enabled"))
@@ -1031,7 +1031,7 @@ class V2NightRepository:
             )
             game.status = "ready"
             _run(db, game.current_run_id).status = "ready"
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1063,20 +1063,20 @@ class V2NightRepository:
                 audience="all",
                 payload=_transition_payload(transition),
             )
-        return V2NightResolutionRecord(
+        return NightResolutionRecord(
             deaths=resolution.deaths,
             peaceful=resolution.peaceful,
             attack_prevented_by=resolution.attack_prevented_by,
             transition=transition,
         )
 
-    def ready_dawn_announcement(self, *, game_id: str) -> V2PhaseTransition:
+    def ready_dawn_announcement(self, *, game_id: str) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if game.phase_state != "sheriff_election_open":
-                raise V2RepositoryError("pre-dawn sheriff election is not complete")
+                raise RepositoryError("pre-dawn sheriff election is not complete")
             game.phase_state = "dawn_announcement_ready"
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1102,13 +1102,13 @@ class V2NightRepository:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if game.phase_state != "dawn_announcement_ready":
-                raise V2RepositoryError("dawn deaths are not ready to reveal")
+                raise RepositoryError("dawn deaths are not ready to reveal")
             revealed: list[dict[str, str]] = []
             rows = list(
                 db.scalars(
-                    select(V2PlayerState)
-                    .where(V2PlayerState.game_id == game_id)
-                    .order_by(V2PlayerState.seat)
+                    select(PlayerState)
+                    .where(PlayerState.game_id == game_id)
+                    .order_by(PlayerState.seat)
                 )
             )
             for player_state in rows:
@@ -1118,7 +1118,7 @@ class V2NightRepository:
                 cause = pending.get("cause")
                 window_seq = pending.get("window_seq")
                 if not isinstance(cause, str) or not isinstance(window_seq, int):
-                    raise V2RepositoryError("pending dawn death is invalid")
+                    raise RepositoryError("pending dawn death is invalid")
                 player_state.alive = False
                 player_state.death_cause = cause
                 player_state.death_window_seq = window_seq
@@ -1133,7 +1133,7 @@ class V2NightRepository:
                 )
             revealed_ids = tuple(item["player_id"] for item in revealed)
             if set(revealed_ids) != set(expected_player_ids):
-                raise V2RepositoryError("revealed dawn deaths differ from night resolution")
+                raise RepositoryError("revealed dawn deaths differ from night resolution")
             round_no = _day_round_no(game.phase_id)
             _append_event(
                 db,
@@ -1151,22 +1151,22 @@ class V2NightRepository:
         with self._session_factory() as db:
             rows = db.execute(
                 select(
-                    V2RoleAssignment.player_id,
-                    V2PlayerState.death_cause,
-                    V2PlayerState.state,
+                    RoleAssignment.player_id,
+                    PlayerState.death_cause,
+                    PlayerState.state,
                 )
                 .join(
-                    V2PlayerState,
-                    (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                    & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                    PlayerState,
+                    (PlayerState.game_id == RoleAssignment.game_id)
+                    & (PlayerState.player_id == RoleAssignment.player_id),
                 )
                 .where(
-                    V2RoleAssignment.game_id == game_id,
-                    V2RoleAssignment.role_key == "hunter",
-                    V2PlayerState.alive.is_(False),
-                    V2PlayerState.death_cause != "witch_poison",
+                    RoleAssignment.game_id == game_id,
+                    RoleAssignment.role_key == "hunter",
+                    PlayerState.alive.is_(False),
+                    PlayerState.death_cause != "witch_poison",
                 )
-                .order_by(V2RoleAssignment.seat)
+                .order_by(RoleAssignment.seat)
             )
             return tuple(
                 player_id
@@ -1176,25 +1176,25 @@ class V2NightRepository:
 
     def hunter_settlement_can_change_winner(self, game_id: str) -> bool:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             rows = list(
                 db.execute(
                     select(
-                        V2RoleAssignment.player_id,
-                        V2RoleAssignment.role_key,
-                        V2PlayerState.alive,
-                        V2PlayerState.death_cause,
-                        V2PlayerState.state,
+                        RoleAssignment.player_id,
+                        RoleAssignment.role_key,
+                        PlayerState.alive,
+                        PlayerState.death_cause,
+                        PlayerState.state,
                     )
                     .join(
-                        V2PlayerState,
-                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                        PlayerState,
+                        (PlayerState.game_id == RoleAssignment.game_id)
+                        & (PlayerState.player_id == RoleAssignment.player_id),
                     )
-                    .where(V2RoleAssignment.game_id == game_id)
-                    .order_by(V2RoleAssignment.seat)
+                    .where(RoleAssignment.game_id == game_id)
+                    .order_by(RoleAssignment.seat)
                 )
             )
             return hunter_settlement_can_change_winner(
@@ -1220,11 +1220,11 @@ class V2NightRepository:
     def open_dawn_reaction_window(
         self,
         *,
-        state: V2NightRuntimeState,
-    ) -> V2NightRuntimeState:
+        state: NightRuntimeState,
+    ) -> NightRuntimeState:
         hunter = state.instance("hunter.death_shot")
         if hunter is None:
-            raise V2RepositoryError("hunter response is not configured")
+            raise RepositoryError("hunter response is not configured")
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
@@ -1232,32 +1232,32 @@ class V2NightRepository:
                 require_fence=self._enforce_execution_fence,
             )
             if game.phase_id != f"day_{state.round_no}":
-                raise V2RepositoryError("dawn response is not ready")
+                raise RepositoryError("dawn response is not ready")
             if game.phase_state == "dawn_reactions_ready":
                 window = db.scalar(
-                    select(V2ActionWindow).where(
-                        V2ActionWindow.game_id == state.game_id,
-                        V2ActionWindow.window_type == "dawn_reaction",
-                        V2ActionWindow.state == "open",
+                    select(ActionWindow).where(
+                        ActionWindow.game_id == state.game_id,
+                        ActionWindow.window_type == "dawn_reaction",
+                        ActionWindow.state == "open",
                     )
                 )
                 if window is None:
-                    raise V2RepositoryError("dawn reaction window is missing")
+                    raise RepositoryError("dawn reaction window is missing")
                 window_id = window.window_id
                 next_window_seq = window.window_seq
             elif game.phase_state == "dawn_announced":
                 next_window_seq = (
                     int(
                         db.scalar(
-                            select(func.coalesce(func.max(V2ActionWindow.window_seq), 0)).where(
-                                V2ActionWindow.game_id == state.game_id
+                            select(func.coalesce(func.max(ActionWindow.window_seq), 0)).where(
+                                ActionWindow.game_id == state.game_id
                             )
                         )
                         or 0
                     )
                     + 1
                 )
-                window = V2ActionWindow(
+                window = ActionWindow(
                     window_id=f"v2_window_{uuid4().hex[:16]}",
                     game_id=state.game_id,
                     run_id=state.run_id,
@@ -1290,8 +1290,8 @@ class V2NightRepository:
                     },
                 )
             else:
-                raise V2RepositoryError("dawn response is not ready")
-        return V2NightRuntimeState(
+                raise RepositoryError("dawn response is not ready")
+        return NightRuntimeState(
             game_id=state.game_id,
             run_id=state.run_id,
             window_id=window_id,
@@ -1309,7 +1309,7 @@ class V2NightRepository:
     def apply_hunter_shot(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         activation_id: str,
         hunter_player_id: str,
         target_player_id: str,
@@ -1320,17 +1320,17 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            activation = db.get(V2AbilityActivation, activation_id)
+            activation = db.get(AbilityActivation, activation_id)
             effect = db.scalar(
-                select(V2EffectIntent).where(
-                    V2EffectIntent.game_id == state.game_id,
-                    V2EffectIntent.window_id == state.window_id,
-                    V2EffectIntent.activation_id == activation_id,
-                    V2EffectIntent.effect_type == "shoot",
+                select(EffectIntent).where(
+                    EffectIntent.game_id == state.game_id,
+                    EffectIntent.window_id == state.window_id,
+                    EffectIntent.activation_id == activation_id,
+                    EffectIntent.effect_type == "shoot",
                 )
             )
             if activation is None or effect is None:
-                raise V2RepositoryError("hunter shoot intent is missing")
+                raise RepositoryError("hunter shoot intent is missing")
             if (
                 activation.game_id != state.game_id
                 or activation.window_id != state.window_id
@@ -1339,13 +1339,13 @@ class V2NightRepository:
                 or effect.actor_id != hunter_player_id
                 or effect.target_player_id != target_player_id
             ):
-                raise V2RepositoryError("hunter shoot intent does not match resolution")
-            target = db.get(V2PlayerState, (state.game_id, target_player_id))
-            hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
+                raise RepositoryError("hunter shoot intent does not match resolution")
+            target = db.get(PlayerState, (state.game_id, target_player_id))
+            hunter = db.get(PlayerState, (state.game_id, hunter_player_id))
             if hunter is None:
-                raise V2RepositoryError("hunter state is missing")
+                raise RepositoryError("hunter state is missing")
             if target is None:
-                raise V2RepositoryError("hunter target is missing")
+                raise RepositoryError("hunter target is missing")
             hunter_response_resolved = (hunter.state or {}).get("hunter_response_resolved")
             if effect.state == "resolved":
                 if (
@@ -1357,13 +1357,13 @@ class V2NightRepository:
                     and hunter_response_resolved is True
                 ):
                     return
-                raise V2RepositoryError("resolved hunter shoot intent is inconsistent")
+                raise RepositoryError("resolved hunter shoot intent is inconsistent")
             if effect.state != "pending":
-                raise V2RepositoryError("hunter shoot intent is not pending or resolved")
+                raise RepositoryError("hunter shoot intent is not pending or resolved")
             if not target.alive:
-                raise V2RepositoryError("hunter target is not alive")
+                raise RepositoryError("hunter target is not alive")
             if hunter_response_resolved is True:
-                raise V2RepositoryError("pending hunter shoot intent is inconsistent")
+                raise RepositoryError("pending hunter shoot intent is inconsistent")
             target.alive = False
             target.death_cause = "hunter_shot"
             target.death_window_seq = state.window_seq
@@ -1402,7 +1402,7 @@ class V2NightRepository:
     def mark_hunter_response_resolved(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         hunter_player_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
@@ -1411,9 +1411,9 @@ class V2NightRepository:
                 state.game_id,
                 require_fence=self._enforce_execution_fence,
             )
-            hunter = db.get(V2PlayerState, (state.game_id, hunter_player_id))
+            hunter = db.get(PlayerState, (state.game_id, hunter_player_id))
             if hunter is None:
-                raise V2RepositoryError("hunter state is missing")
+                raise RepositoryError("hunter state is missing")
             hunter.state = {**(hunter.state or {}), "hunter_response_resolved": True}
             _append_event(
                 db,
@@ -1428,7 +1428,7 @@ class V2NightRepository:
                 },
             )
 
-    def finish_night(self, *, game_id: str) -> V2PhaseTransition:
+    def finish_night(self, *, game_id: str) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             round_no = _day_round_no(game.phase_id)
@@ -1436,11 +1436,11 @@ class V2NightRepository:
                 "dawn_announced",
                 "dawn_reactions_ready",
             }:
-                raise V2RepositoryError("night is not ready to finish")
+                raise RepositoryError("night is not ready to finish")
             open_window = db.scalar(
-                select(V2ActionWindow).where(
-                    V2ActionWindow.game_id == game_id,
-                    V2ActionWindow.state == "open",
+                select(ActionWindow).where(
+                    ActionWindow.game_id == game_id,
+                    ActionWindow.state == "open",
                 )
             )
             if open_window is not None:
@@ -1458,9 +1458,9 @@ class V2NightRepository:
                     },
                 )
             winner = _winner(db, game)
-            match = db.get(V2MatchState, game_id)
+            match = db.get(MatchState, game_id)
             if match is None:
-                raise V2RepositoryError("V2 match state is missing")
+                raise RepositoryError("V2 match state is missing")
             next_state = (
                 "game_completed"
                 if winner is not None
@@ -1491,7 +1491,7 @@ class V2NightRepository:
                         "round_no": round_no,
                     },
                 )
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1508,21 +1508,21 @@ class V2NightRepository:
             )
             return transition
 
-    def finish_first_night(self, *, game_id: str) -> V2PhaseTransition:
+    def finish_first_night(self, *, game_id: str) -> PhaseTransition:
         return self.finish_night(game_id=game_id)
 
     def current_winner(self, game_id: str) -> str | None:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return _winner(db, game)
 
     def match_state(self, game_id: str) -> dict[str, Any]:
         with self._session_factory() as db:
-            match = db.get(V2MatchState, game_id)
+            match = db.get(MatchState, game_id)
             if match is None:
-                raise V2RepositoryError("V2 match state is missing")
+                raise RepositoryError("V2 match state is missing")
             return {
                 "round_no": match.round_no,
                 "sheriff_player_id": match.sheriff_player_id,
@@ -1533,9 +1533,9 @@ class V2NightRepository:
     def ability_state(self, *, game_id: str, ability_id: str) -> dict[str, Any]:
         with self._session_factory() as db:
             row = db.scalar(
-                select(V2AbilityInstance).where(
-                    V2AbilityInstance.game_id == game_id,
-                    V2AbilityInstance.ability_id == ability_id,
+                select(AbilityInstance).where(
+                    AbilityInstance.game_id == game_id,
+                    AbilityInstance.ability_id == ability_id,
                 )
             )
             return dict(row.state or {}) if row is not None else {}
@@ -1567,7 +1567,7 @@ class V2NightRepository:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             fact_id = f"v2_fact_{uuid4().hex[:16]}"
             db.add(
-                V2KnowledgeFact(
+                KnowledgeFact(
                     knowledge_fact_id=fact_id,
                     game_id=game_id,
                     source_activation_id=None,
@@ -1608,12 +1608,12 @@ class V2NightRepository:
         with self._session_factory() as db:
             rows = list(
                 db.scalars(
-                    select(V2GameRecordEvent)
+                    select(GameRecordEvent)
                     .where(
-                        V2GameRecordEvent.game_id == game_id,
-                        V2GameRecordEvent.event_type.in_(public_types),
+                        GameRecordEvent.game_id == game_id,
+                        GameRecordEvent.event_type.in_(public_types),
                     )
-                    .order_by(V2GameRecordEvent.record_seq.desc())
+                    .order_by(GameRecordEvent.record_seq.desc())
                 )
             )
             rows.reverse()
@@ -1628,14 +1628,14 @@ class V2NightRepository:
             ]
             presentations = list(
                 db.scalars(
-                    select(V2LivePresentation)
+                    select(LivePresentation)
                     .where(
-                        V2LivePresentation.game_id == game_id,
-                        V2LivePresentation.actor_kind == "player",
-                        V2LivePresentation.audience == "all",
-                        V2LivePresentation.state == "closed",
+                        LivePresentation.game_id == game_id,
+                        LivePresentation.actor_kind == "player",
+                        LivePresentation.audience == "all",
+                        LivePresentation.state == "closed",
                     )
-                    .order_by(V2LivePresentation.source_event_id)
+                    .order_by(LivePresentation.source_event_id)
                 )
             )
             action_types = _action_types_by_id(db, game_id)
@@ -1658,25 +1658,25 @@ class V2NightRepository:
             history.sort(key=lambda item: int(item["record_seq"]))
             return history
 
-    def current_players(self, game_id: str) -> tuple[V2NightPlayer, ...]:
+    def current_players(self, game_id: str) -> tuple[NightPlayer, ...]:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return _players(db, game)
 
     def latest_presentation_seq(self, game_id: str) -> int:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return game.last_presentation_seq
 
     def current_phase_state(self, game_id: str) -> str:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return game.phase_state
 
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
@@ -1684,7 +1684,7 @@ class V2NightRepository:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             run = _run(db, game.current_run_id)
             if run.stop_requested_at is not None:
-                raise V2GameCanceled("V2 game was canceled by an administrator")
+                raise GameCanceled("V2 game was canceled by an administrator")
             game.status = "failed"
             game.phase_state = "failed"
             run.status = "failed"
@@ -1707,12 +1707,12 @@ class V2NightRepository:
             return run.run_id
 
 
-def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
+def _players(db: Session, game: GameRecord) -> tuple[NightPlayer, ...]:
     assignments = list(
         db.scalars(
-            select(V2RoleAssignment)
-            .where(V2RoleAssignment.game_id == game.game_id)
-            .order_by(V2RoleAssignment.seat)
+            select(RoleAssignment)
+            .where(RoleAssignment.game_id == game.game_id)
+            .order_by(RoleAssignment.seat)
         )
     )
     profiles = {
@@ -1720,18 +1720,18 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
         for item in game.players_snapshot
         if isinstance(item, dict) and item.get("profile_id")
     }
-    result: list[V2NightPlayer] = []
+    result: list[NightPlayer] = []
     for assignment in assignments:
-        player_state = db.get(V2PlayerState, (game.game_id, assignment.player_id))
+        player_state = db.get(PlayerState, (game.game_id, assignment.player_id))
         profile = profiles.get(assignment.player_id, {})
         if player_state is None:
-            raise V2RepositoryError("player state is incomplete")
+            raise RepositoryError("player state is incomplete")
         try:
             frozen_model = frozen_player_model_configuration(profile)
-        except V2FrozenModelParametersError as exc:
-            raise V2RepositoryError("invalid frozen player model configuration") from exc
+        except FrozenModelParametersError as exc:
+            raise RepositoryError("invalid frozen player model configuration") from exc
         result.append(
-            V2NightPlayer(
+            NightPlayer(
                 player_id=assignment.player_id,
                 seat=assignment.seat,
                 display_name=str(profile.get("name") or f"{assignment.seat}号玩家"),
@@ -1762,16 +1762,16 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2NightPlayer, ...]:
     return tuple(result)
 
 
-def _winner(db: Session, game: V2GameRecord) -> str | None:
+def _winner(db: Session, game: GameRecord) -> str | None:
     rows = list(
         db.execute(
-            select(V2RoleAssignment.role_key, V2PlayerState.alive)
+            select(RoleAssignment.role_key, PlayerState.alive)
             .join(
-                V2PlayerState,
-                (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                PlayerState,
+                (PlayerState.game_id == RoleAssignment.game_id)
+                & (PlayerState.player_id == RoleAssignment.player_id),
             )
-            .where(V2RoleAssignment.game_id == game.game_id)
+            .where(RoleAssignment.game_id == game.game_id)
         )
     )
     alive_roles = [role_key for role_key, alive in rows if alive]
@@ -1781,21 +1781,21 @@ def _winner(db: Session, game: V2GameRecord) -> str | None:
     )
 
 
-def _pending_terminal_is_inevitable(db: Session, game: V2GameRecord) -> bool:
+def _pending_terminal_is_inevitable(db: Session, game: GameRecord) -> bool:
     rows = list(
         db.execute(
             select(
-                V2RoleAssignment.player_id,
-                V2RoleAssignment.role_key,
-                V2PlayerState.alive,
-                V2PlayerState.state,
+                RoleAssignment.player_id,
+                RoleAssignment.role_key,
+                PlayerState.alive,
+                PlayerState.state,
             )
             .join(
-                V2PlayerState,
-                (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                PlayerState,
+                (PlayerState.game_id == RoleAssignment.game_id)
+                & (PlayerState.player_id == RoleAssignment.player_id),
             )
-            .where(V2RoleAssignment.game_id == game.game_id)
+            .where(RoleAssignment.game_id == game.game_id)
         )
     )
     roles = {player_id: role_key for player_id, role_key, _alive, _state in rows}
@@ -1836,12 +1836,12 @@ def _effect_outcome(
 
 
 def _compiled_rule(
-    game: V2GameRecord,
+    game: GameRecord,
     ability_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     rule = game.rule_snapshot.get("rule_set")
     if not isinstance(rule, dict):
-        raise V2RepositoryError("V2 night runtime has no frozen rule")
+        raise RepositoryError("V2 night runtime has no frozen rule")
     compiled = dict(rule)
     compiled["day_actions"] = list(ability_snapshot.get("day_actions") or [])
     compiled["ability_policies"] = dict(ability_snapshot.get("policies") or {})
@@ -1855,39 +1855,39 @@ def _locked_game(
     game_id: str,
     *,
     require_fence: bool,
-) -> V2GameRecord:
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+) -> GameRecord:
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2RepositoryError(f"unknown game {game_id}")
+        raise RepositoryError(f"unknown game {game_id}")
     if require_fence:
         try:
-            require_v2_run_fence(db, game)
-        except V2RunFenceRejected as exc:
-            raise V2ExecutionOwnershipLost(str(exc)) from exc
+            require_run_fence(db, game)
+        except RunFenceRejected as exc:
+            raise ExecutionOwnershipLost(str(exc)) from exc
     run = _run(db, game.current_run_id)
     if run.stop_requested_at is not None:
-        raise V2GameCanceled("V2 game was canceled by an administrator")
+        raise GameCanceled("V2 game was canceled by an administrator")
     return game
 
 
-def _run(db: Session, run_id: str) -> V2GameRun:
-    run = db.get(V2GameRun, run_id)
+def _run(db: Session, run_id: str) -> GameRun:
+    run = db.get(GameRun, run_id)
     if run is None:
-        raise V2RepositoryError(f"unknown run {run_id}")
+        raise RepositoryError(f"unknown run {run_id}")
     return run
 
 
 def _append_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     event_type: str,
     audience: str,
     payload: dict[str, Any],
 ) -> None:
     next_seq = game.last_record_seq + 1
     db.add(
-        V2GameRecordEvent(
+        GameRecordEvent(
             game_id=game.game_id,
             event_id=next_seq,
             record_seq=next_seq,
@@ -1900,14 +1900,14 @@ def _append_event(
     game.last_record_seq = next_seq
 
 
-def _effect_intent_audience(effect: V2EffectIntent) -> str:
+def _effect_intent_audience(effect: EffectIntent) -> str:
     audience = (effect.payload or {}).get("transport_audience")
     if not isinstance(audience, str):
-        raise V2RepositoryError("effect intent has no explicit transport audience")
+        raise RepositoryError("effect intent has no explicit transport audience")
     return audience
 
 
-def _transition_payload(transition: V2PhaseTransition) -> dict[str, Any]:
+def _transition_payload(transition: PhaseTransition) -> dict[str, Any]:
     return {
         "phase_seq": transition.phase_seq,
         "previous_phase_id": transition.previous_phase_id,
@@ -1927,15 +1927,15 @@ def _night_round_no(phase_id: str) -> int:
         round_no = int(phase_id[6:])
         if round_no >= 2:
             return round_no
-    raise V2RepositoryError("invalid V2 night phase id")
+    raise RepositoryError("invalid V2 night phase id")
 
 
 def _action_types_by_id(db: Session, game_id: str) -> dict[str, str]:
     rows = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_type == "action_opened",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.event_type == "action_opened",
             )
         )
     )
@@ -1967,4 +1967,4 @@ def _day_round_no(phase_id: str) -> int:
         round_no = int(phase_id[4:])
         if round_no >= 1:
             return round_no
-    raise V2RepositoryError("invalid V2 day phase id")
+    raise RepositoryError("invalid V2 day phase id")

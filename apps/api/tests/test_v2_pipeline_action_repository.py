@@ -11,31 +11,31 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers referenced users table
-from app.v2.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
-from app.v2.execution import V2RunFence, bind_v2_run_fence
-from app.v2.model_failure_episode import (
+from app.match.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
+from app.match.execution import RunFence, bind_run_fence
+from app.match.model_failure_episode import (
     derive_failure_episodes,
     stable_failure_episode_id,
 )
-from app.v2.model_context_contract import freeze_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.model_context_contract import freeze_model_context_contract
+from app.match.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
-from app.v2.models import (
-    V2DaySpeechSlot,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2PlayerState,
+from app.match.models import (
+    DaySpeechSlot,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    PlayerState,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ActionRepository,
-    V2PresentationIdentity,
-    V2RepositoryError,
+from app.match.repository import (
+    ActionClaim,
+    ActionRepository,
+    PresentationIdentity,
+    RepositoryError,
 )
-from app.v2.service import current_action_context
+from app.match.service import current_action_context
 
 
 GAME_ID = "v2_game_pipeline_claim"
@@ -51,10 +51,10 @@ SLOT_ID = "v2_slot_pipeline_claim"
 @dataclass(frozen=True)
 class _Harness:
     factory: sessionmaker[Session]
-    repository: V2ActionRepository
-    fence: V2RunFence
-    predecessor_claim: V2ActionClaim
-    predecessor: V2PresentationIdentity
+    repository: ActionRepository
+    fence: RunFence
+    predecessor_claim: ActionClaim
+    predecessor: PresentationIdentity
     cutoff: int
 
     def generation_context(
@@ -87,8 +87,8 @@ class _Harness:
         context: dict[str, Any] | None = None,
         best_effort: bool = False,
         non_blocking: bool = True,
-    ) -> V2ActionClaim | None:
-        with bind_v2_run_fence(self.fence):
+    ) -> ActionClaim | None:
+        with bind_run_fence(self.fence):
             return self.repository.claim_action(
                 game_id=GAME_ID,
                 action_id=action_id,
@@ -141,7 +141,7 @@ def _build_harness(
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=GAME_ID,
                 title="pipeline claim test",
                 status="ready",
@@ -159,7 +159,7 @@ def _build_harness(
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=RUN_ID,
                 game_id=GAME_ID,
                 attempt_no=1,
@@ -172,14 +172,14 @@ def _build_harness(
         )
         db.add_all(
             [
-                V2PlayerState(
+                PlayerState(
                     game_id=GAME_ID,
                     player_id="player_1",
                     seat=1,
                     alive=True,
                     state={},
                 ),
-                V2PlayerState(
+                PlayerState(
                     game_id=GAME_ID,
                     player_id="player_2",
                     seat=2,
@@ -188,10 +188,10 @@ def _build_harness(
                 ),
             ]
         )
-    fence = V2RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=1)
-    repository = V2ActionRepository(factory, enforce_execution_fence=True)
+    fence = RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=1)
+    repository = ActionRepository(factory, enforce_execution_fence=True)
     public_skip_record_seq: int | None = None
-    with bind_v2_run_fence(fence):
+    with bind_run_fence(fence):
         if technical_skip_predecessor:
             public_skip_record_seq = repository.append_event(
                 game_id=GAME_ID,
@@ -244,11 +244,11 @@ def _build_harness(
     assert predecessor.source_event_id is not None
     assert predecessor.source_record_seq is not None
     with factory.begin() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         cutoff = game.last_record_seq
         db.add(
-            V2DaySpeechSlot(
+            DaySpeechSlot(
                 slot_id=SLOT_ID,
                 game_id=GAME_ID,
                 run_id=RUN_ID,
@@ -283,7 +283,7 @@ def _build_harness(
 def test_open_presentation_exposes_committed_event_identity(harness: _Harness) -> None:
     with harness.factory() as db:
         source = db.get(
-            V2GameRecordEvent,
+            GameRecordEvent,
             (GAME_ID, harness.predecessor.source_event_id),
         )
     assert source is not None
@@ -301,17 +301,17 @@ def test_broadcast_generation_claim_binds_slot_and_preserves_foreground_context(
     assert claim.audience == "player_private"
 
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         contexts = list(
             db.scalars(
-                select(V2GameRecordEvent)
+                select(GameRecordEvent)
                 .where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "action_opened",
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "action_opened",
                 )
-                .order_by(V2GameRecordEvent.record_seq)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
         foreground = current_action_context(db, GAME_ID)
@@ -329,7 +329,7 @@ def test_broadcast_generation_claim_binds_slot_and_preserves_foreground_context(
     assert foreground["action_id"] == PREDECESSOR_ACTION_ID
 
     with pytest.raises(
-        V2RepositoryError,
+        RepositoryError,
         match="already claimed generation",
     ):
         harness.claim_generation("v2_action_pipeline_generation_duplicate")
@@ -345,11 +345,11 @@ def test_broadcast_generation_claim_accepts_technical_skip_judge_predecessor(
     assert claim is not None
     assert claim.non_blocking is True
     with technical_skip_harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         predecessor = db.scalar(
-            select(V2LivePresentation).where(
-                V2LivePresentation.game_id == GAME_ID,
-                V2LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
+            select(LivePresentation).where(
+                LivePresentation.game_id == GAME_ID,
+                LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
             )
         )
     assert slot is not None and slot.generation_action_id == action_id
@@ -372,10 +372,10 @@ def test_broadcast_generation_claim_rejects_technical_skip_lineage_drift(
     with technical_skip_harness.factory.begin() as db:
         if case == "skipped_player_changed":
             opened = db.scalar(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "action_opened",
-                    V2GameRecordEvent.payload["context"]["action_type"].as_string()
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "action_opened",
+                    GameRecordEvent.payload["context"]["action_type"].as_string()
                     == "judge_day_speech_technical_skip",
                 )
             )
@@ -386,9 +386,9 @@ def test_broadcast_generation_claim_rejects_technical_skip_lineage_drift(
             opened.payload = {**payload, "context": context}
         else:
             public_skip = db.scalar(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "action_skipped_technical",
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "action_skipped_technical",
                 )
             )
             assert public_skip is not None
@@ -397,16 +397,16 @@ def test_broadcast_generation_claim_rejects_technical_skip_lineage_drift(
                 "actor_id": "player_changed",
             }
 
-    with pytest.raises(V2RepositoryError, match=expected):
+    with pytest.raises(RepositoryError, match=expected):
         technical_skip_harness.claim_generation(f"v2_action_pipeline_generation_invalid_{case}")
     with technical_skip_harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
     assert slot is not None and slot.generation_action_id is None
 
 
 def test_other_broadcasting_action_remains_unclaimable(harness: _Harness) -> None:
     action_id = "v2_action_pipeline_foreground_collision"
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         claim = harness.repository.claim_action(
             game_id=GAME_ID,
             action_id=action_id,
@@ -418,12 +418,12 @@ def test_other_broadcasting_action_remains_unclaimable(harness: _Harness) -> Non
         )
     assert claim is None
     with harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         opened = list(
             db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "action_opened",
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "action_opened",
                 )
             )
         )
@@ -434,22 +434,22 @@ def test_other_broadcasting_action_remains_unclaimable(harness: _Harness) -> Non
 def test_pipeline_generation_cannot_fall_through_to_ready_claim(harness: _Harness) -> None:
     action_id = "v2_action_pipeline_generation_from_ready"
     with harness.factory.begin() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
         assert game is not None and run is not None
         game.status = "ready"
         run.status = "ready"
 
-    with pytest.raises(V2RepositoryError, match="requires an active broadcast"):
+    with pytest.raises(RepositoryError, match="requires an active broadcast"):
         harness.claim_generation(action_id)
 
     with harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         opened = list(
             db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "action_opened",
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "action_opened",
                 )
             )
         )
@@ -489,25 +489,25 @@ def test_broadcast_generation_claim_fails_closed_on_contract_or_lineage_drift(
     elif case in {"text_only", "inactive_predecessor", "slot_fence_changed"}:
         with harness.factory.begin() as db:
             if case == "text_only":
-                game = db.get(V2GameRecord, GAME_ID)
+                game = db.get(GameRecord, GAME_ID)
                 assert game is not None
                 game.delivery_snapshot = {"schema_version": 1, "mode": "text_only"}
             elif case == "inactive_predecessor":
                 presentation = db.scalar(
-                    select(V2LivePresentation).where(
-                        V2LivePresentation.game_id == GAME_ID,
-                        V2LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
+                    select(LivePresentation).where(
+                        LivePresentation.game_id == GAME_ID,
+                        LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
                     )
                 )
                 assert presentation is not None
                 presentation.state = "closed"
                 presentation.closed_at = datetime.now(tz=UTC)
             else:
-                slot = db.get(V2DaySpeechSlot, SLOT_ID)
+                slot = db.get(DaySpeechSlot, SLOT_ID)
                 assert slot is not None
                 slot.fence_token += 1
 
-    with pytest.raises(V2RepositoryError, match=expected):
+    with pytest.raises(RepositoryError, match=expected):
         harness.claim_generation(
             action_id,
             context=context,
@@ -515,7 +515,7 @@ def test_broadcast_generation_claim_fails_closed_on_contract_or_lineage_drift(
             non_blocking=non_blocking,
         )
     with harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
     assert slot is not None and slot.generation_action_id is None
 
 
@@ -533,12 +533,12 @@ def test_fail_action_returns_durable_failure_record_seq(harness: _Harness) -> No
     assert type(failure_seq) is int and failure_seq > 0
     with harness.factory() as db:
         failure = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.record_seq == failure_seq,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.record_seq == failure_seq,
             )
         )
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
     assert failure is not None
     assert failure.event_type == "action_failed"
     assert failure.payload["action_id"] == action_id
@@ -552,8 +552,8 @@ def test_operator_cancel_terminates_nonterminal_day_speech_slot(
     slot_state: str,
 ) -> None:
     with harness.factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        run = db.get(GameRun, RUN_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         assert run is not None and slot is not None
         run.stop_requested_at = datetime.now(tz=UTC)
         slot.state = slot_state
@@ -567,18 +567,18 @@ def test_operator_cancel_terminates_nonterminal_day_speech_slot(
     assert result.status == "canceled"
 
     with harness.factory() as db:
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         presentation = db.scalar(
-            select(V2LivePresentation).where(
-                V2LivePresentation.game_id == GAME_ID,
-                V2LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
+            select(LivePresentation).where(
+                LivePresentation.game_id == GAME_ID,
+                LivePresentation.presentation_id == PREDECESSOR_PRESENTATION_ID,
             )
         )
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     assert slot is not None
@@ -617,7 +617,7 @@ def test_operator_cancel_terminalizes_open_pipeline_attempt_and_action(
     attempt_id = "v2_attempt_pipeline_cancel_open"
     claim = harness.claim_generation(action_id)
     assert claim is not None
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.repository.append_event(
             game_id=GAME_ID,
             event_type="model_request_started",
@@ -633,7 +633,7 @@ def test_operator_cancel_terminalizes_open_pipeline_attempt_and_action(
             },
         )
     with harness.factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
+        run = db.get(GameRun, RUN_ID)
         assert run is not None
         run.stop_requested_at = datetime.now(tz=UTC)
 
@@ -643,14 +643,14 @@ def test_operator_cancel_terminalizes_open_pipeline_attempt_and_action(
     assert second.changed is False
 
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
-        slot = db.get(V2DaySpeechSlot, SLOT_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
+        slot = db.get(DaySpeechSlot, SLOT_ID)
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     attempt_failures = [
@@ -717,7 +717,7 @@ def test_operator_cancel_does_not_duplicate_terminal_pipeline_lifecycle(
     attempt_id = "v2_attempt_pipeline_cancel_terminal"
     claim = harness.claim_generation(action_id)
     assert claim is not None
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.repository.append_event(
             game_id=GAME_ID,
             event_type="model_request_started",
@@ -748,7 +748,7 @@ def test_operator_cancel_does_not_duplicate_terminal_pipeline_lifecycle(
             next_phase_state=PHASE_STATE,
         )
     with harness.factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
+        run = db.get(GameRun, RUN_ID)
         assert run is not None
         run.stop_requested_at = datetime.now(tz=UTC)
 
@@ -757,9 +757,9 @@ def test_operator_cancel_does_not_duplicate_terminal_pipeline_lifecycle(
     with harness.factory() as db:
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     assert not [
@@ -803,7 +803,7 @@ def test_operator_cancel_closes_only_open_retry_attempt_in_same_episode(
         retry_cycle=1,
         first_failed_attempt_id=first_attempt_id,
     )
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.repository.append_event(
             game_id=GAME_ID,
             event_type="model_request_started",
@@ -868,7 +868,7 @@ def test_operator_cancel_closes_only_open_retry_attempt_in_same_episode(
             },
         )
     with harness.factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
+        run = db.get(GameRun, RUN_ID)
         assert run is not None
         run.stop_requested_at = datetime.now(tz=UTC)
 
@@ -877,9 +877,9 @@ def test_operator_cancel_closes_only_open_retry_attempt_in_same_episode(
     with harness.factory() as db:
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     failures = [

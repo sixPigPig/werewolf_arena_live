@@ -27,7 +27,5 @@ test("mobile-only primary navigation stays usable without horizontal overflow", 
   await expect(page.getByRole("heading", { name: "玩家图鉴" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
-  await page.getByRole("link", { name: "对局记录" }).click();
-  await expect(page.getByRole("heading", { name: "对局历史" })).toBeVisible();
-  await expectNoHorizontalOverflow(page);
+  await expect(page.getByRole("link", { name: "对局记录" })).toHaveCount(0);
 });

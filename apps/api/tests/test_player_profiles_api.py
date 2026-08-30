@@ -23,9 +23,9 @@ from app.models.model_configuration import ModelConfigurationRecord
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.player_avatar_assets import create_avatar_asset, decode_avatar_asset_data
-from app.werewolf.player_profile_store import PlayerProfileFileStore
-from app.werewolf.player_presets import default_personality_text
+from app.shared.player_avatar_assets import create_avatar_asset, decode_avatar_asset_data
+from app.shared.player_profile_store import PlayerProfileFileStore
+from app.shared.player_presets import default_personality_text
 
 
 engine = create_engine(

@@ -270,13 +270,13 @@ test("smart fill and advanced settings produce the preserved create payload", as
   await launch.click();
 
   await expect.poll(() => createRequests.length).toBe(1);
-  expect(createRequests[0]).toMatchObject({
-    rule_set_id: "classic_8",
+  expect(createRequests[0].lobby_snapshot).toMatchObject({
     seed: 42,
     max_rounds: 10,
   });
-  expect(createRequests[0].player_configs).toHaveLength(8);
-  expect(createRequests[0].player_configs?.map((config) => config.seat)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8,
-  ]);
+  expect(createRequests[0].lobby_snapshot.rule_set.id).toBe("classic_8");
+  expect(createRequests[0].lobby_snapshot.player_configs).toHaveLength(8);
+  expect(
+    createRequests[0].lobby_snapshot.player_configs.map((config) => config.seat),
+  ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
 });

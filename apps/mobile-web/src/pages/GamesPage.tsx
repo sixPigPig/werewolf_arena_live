@@ -46,8 +46,8 @@ import {
   publicPlayerProfileFavoritesQueryKey,
   publicPlayerProfilesQueryKey,
 } from "../lib/player-profile-query-keys";
-import { createV2Game } from "../v2/api";
-import type { V2ConfiguredAudioMode } from "../v2/contracts";
+import { createGame } from "../match/api";
+import type { ConfiguredAudioMode } from "../match/contracts";
 
 export function GamesPage() {
   const navigate = useNavigate();
@@ -56,7 +56,7 @@ export function GamesPage() {
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>([]);
   const [seed, setSeed] = useState("");
   const [maxRounds, setMaxRounds] = useState("8");
-  const [audioMode, setAudioMode] = useState<V2ConfiguredAudioMode>("tts");
+  const [audioMode, setAudioMode] = useState<ConfiguredAudioMode>("tts");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [creationConflictError, setCreationConflictError] = useState<string | null>(null);
   const [shortage, setShortage] = useState(false);
@@ -88,9 +88,9 @@ export function GamesPage() {
     queryKey: publicPlayerProfileFavoritesQueryKey,
     queryFn: listPlayerProfileFavorites,
   });
-  const createV2GameMutation = useMutation({
-    mutationFn: (request: Parameters<typeof createV2Game>[0]) =>
-      createV2Game(request),
+  const createGameMutation = useMutation({
+    mutationFn: (request: Parameters<typeof createGame>[0]) =>
+      createGame(request),
     onSuccess: (game) => {
       navigate(`/v2/games/${game.game_id}/live`);
     },
@@ -264,7 +264,7 @@ export function GamesPage() {
     ruleSetsQuery.isError ||
     playerProfilesQuery.isError ||
     !selectedRuleSet ||
-    createV2GameMutation.isPending ||
+    createGameMutation.isPending ||
     previewLineupMutation.isPending;
   const isLaunchDisabled = isSubmitDisabled || !launchStatus.canLaunch;
   const canFillSeats =
@@ -523,7 +523,7 @@ export function GamesPage() {
           setValidationError("阵容快照不完整，请重新检查玩家座位");
           return;
         }
-        createV2GameMutation.mutate({
+        createGameMutation.mutate({
           title: selectedRuleSet.name,
           audio_mode: audioMode,
           lobby_snapshot: {
@@ -568,7 +568,7 @@ export function GamesPage() {
       <LobbyRuleSummary
         changeButtonRef={rulePickerTriggerRef}
         disabled={
-          createV2GameMutation.isPending ||
+          createGameMutation.isPending ||
           previewLineupMutation.isPending ||
           ruleSetsQuery.isFetching
         }
@@ -585,7 +585,7 @@ export function GamesPage() {
           canFillSeats={canFillSeats}
           favoritesAvailable={favoritesAvailable}
           isBusy={
-            createV2GameMutation.isPending || previewLineupMutation.isPending
+            createGameMutation.isPending || previewLineupMutation.isPending
           }
           launchStatus={launchStatus}
           qualityError={lineupQualityError}
@@ -608,7 +608,7 @@ export function GamesPage() {
       <LobbyAdvancedSettings
         audioMode={audioMode}
         disabled={
-          createV2GameMutation.isPending || previewLineupMutation.isPending
+          createGameMutation.isPending || previewLineupMutation.isPending
         }
         maxRounds={maxRounds}
         maxRoundsError={validationError}
@@ -628,7 +628,7 @@ export function GamesPage() {
         error={
           creationConflictError
             ? creationConflictError
-            : createV2GameMutation.isError
+            : createGameMutation.isError
             ? "无法发起对局"
             : lineupQualityError
               ? lineupQualityError
@@ -638,7 +638,7 @@ export function GamesPage() {
         }
         isLaunchDisabled={isLaunchDisabled}
         isPending={
-          createV2GameMutation.isPending || previewLineupMutation.isPending
+          createGameMutation.isPending || previewLineupMutation.isPending
         }
         onLaunch={handleSubmit}
         status={launchStatus}

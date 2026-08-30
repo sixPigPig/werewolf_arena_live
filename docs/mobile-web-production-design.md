@@ -11,16 +11,18 @@
 
 ## 页面与数据边界
 
+当前在演进的页面：
+
 | 页面 | 路由 | 主要 API |
 |---|---|---|
-| 对局大厅 | `/games` | Rule Sets、Public Profiles、Guest Favorites、Create Run |
-| 实时观战 | `/games/:runId/live` | Run、SSE Events、Voice Stream |
-| 直播回放 | `/games/:sessionId/live-replay` | Playback、Persisted Events/Voice |
-| 普通复盘 | `/games/:sessionId/replay` | Playback |
+| 对局大厅 | `/games` | Rule Sets、Lineup Preview、Public Profiles、Guest Favorites、`POST /api/v2/games` |
+| Live V2 观战 | `/v2/games/:gameId/live` | V2 快照、`WS /api/v2/live/games/:gameId/ws` |
+| Live V2 上帝视角 | `/v2/games/:gameId/live/god` | V2 快照、`WS /api/v2/god-view/games/:gameId/ws` |
 | 玩家图鉴 | `/players`、`/players/:profileId` | Public Profiles、Guest Favorites |
-| 对局记录 | `/history` | Games、Resume Run |
 
-Public Profile 和收藏保持 `/api/v1/public/*` 会话边界。现有 `/api/v1/games*` 被定义为 C 端对局契约；后续如迁移到 `/public/games*`，必须先在 `game-client` 内完成，不允许页面直接拼接第二套地址。
+V1 页面已于 2026-08-20 随整包退场下线，不再提供路由：`/games/:runId/live`、`/games/:sessionId/live-replay`、`/games/:sessionId/replay`、`/history`。
+
+Public Profile 和收藏保持 `/api/v1/public/*` 会话边界。大厅的规则目录与阵容预检仍打 `/api/v1/games/rule-sets` 和 `/lineup-preview`，实现已迁到独立 lobby 路由，不再经过 V1 对局引擎。Live V2 的请求封装在 `apps/mobile-web/src/match/`，按重构准则不经过 `game-client`。
 
 ## 运行拓扑
 

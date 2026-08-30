@@ -22,38 +22,38 @@ import Tag from "antd/es/tag";
 import Typography from "antd/es/typography";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 
-import { readV2ModelRequest } from "@/v2/game-records/api";
-import { extractV2ModelInputFactResult } from "@/v2/game-records/model-input-facts";
+import { readModelRequest } from "@/match/game-records/api";
+import { extractModelInputFactResult } from "@/match/game-records/model-input-facts";
 import {
   abilityLabel,
-  buildV2HistoricalIdentities,
+  buildHistoricalIdentities,
   formatClock,
-  groupV2Phases,
+  groupPhases,
   phaseLabel,
-  type V2RoundSummary,
-  type V2TimelineItem,
-} from "@/v2/game-records/presentation";
-import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
+  type RoundSummary,
+  type TimelineItem,
+} from "@/match/game-records/presentation";
+import { gameRecordKeys } from "@/match/game-records/query-keys";
 import type {
-  V2GameRecordDetail,
-  V2GameRecordEvent,
-  V2PlayerIdentity,
-} from "@/v2/game-records/types";
+  GameRecordDetail,
+  GameRecordEvent,
+  PlayerIdentity,
+} from "@/match/game-records/types";
 
 type Props = {
-  game: V2GameRecordDetail;
+  game: GameRecordDetail;
   isRefreshing: boolean;
   onOpenDetails: (id: string) => void;
   onReturnLatest: () => void;
   onSelectMoment: (id: string, phaseId: string) => void;
   refreshedAt: number;
-  roundSummaries: V2RoundSummary[];
+  roundSummaries: RoundSummary[];
   selectedId: string;
-  timeline: V2TimelineItem[];
+  timeline: TimelineItem[];
 };
 
 type SituationStage = {
-  item: V2TimelineItem;
+  item: TimelineItem;
   key: string;
   label: string;
 };
@@ -78,7 +78,7 @@ type SituationDetail = {
   targetLabel: string | null;
 };
 
-export function V2OmniscientSituationPanel({
+export function OmniscientSituationPanel({
   game,
   isRefreshing,
   onOpenDetails,
@@ -122,7 +122,7 @@ export function V2OmniscientSituationPanel({
   const identities =
     identityView === "final"
       ? game.player_identities
-      : buildV2HistoricalIdentities(
+      : buildHistoricalIdentities(
           game.events,
           game.player_identities,
           selectedRecordSeq,
@@ -161,8 +161,8 @@ export function V2OmniscientSituationPanel({
   const modelRequestQuery = useQuery({
     enabled: Boolean(selectedAttemptId),
     queryFn: ({ signal }) =>
-      readV2ModelRequest(game.game_id, selectedAttemptId, signal),
-    queryKey: v2GameRecordKeys.modelRequest(
+      readModelRequest(game.game_id, selectedAttemptId, signal),
+    queryKey: gameRecordKeys.modelRequest(
       game.game_id,
       selectedAttemptId,
     ),
@@ -170,7 +170,7 @@ export function V2OmniscientSituationPanel({
   });
   const modelInputFactResult = useMemo(
     () =>
-      extractV2ModelInputFactResult(modelRequestQuery.data ?? null),
+      extractModelInputFactResult(modelRequestQuery.data ?? null),
     [modelRequestQuery.data],
   );
   const modelInputFacts = modelInputFactResult.facts;
@@ -197,7 +197,7 @@ export function V2OmniscientSituationPanel({
       (value): value is string => value !== null && value !== undefined,
     ),
   );
-  const rosterColumns: ColumnsType<V2PlayerIdentity> = [
+  const rosterColumns: ColumnsType<PlayerIdentity> = [
     {
       key: "player",
       render: (_, identity) => (
@@ -575,7 +575,7 @@ export function V2OmniscientSituationPanel({
               </header>
 
               <div className="v2-situation-roster-wrap">
-                <Table<V2PlayerIdentity>
+                <Table<PlayerIdentity>
                   className="v2-situation-roster-table"
                   columns={rosterColumns}
                   dataSource={identities}
@@ -699,7 +699,7 @@ function NeighborButton({
   onSelect,
 }: {
   direction: "previous" | "next";
-  item: V2TimelineItem | null;
+  item: TimelineItem | null;
   onSelect: (id: string, phaseId: string) => void;
 }) {
   const previous = direction === "previous";
@@ -732,11 +732,11 @@ function StageIcon({ stage }: { stage: string }): ReactNode {
 }
 
 function buildSituationPhases(
-  timeline: V2TimelineItem[],
+  timeline: TimelineItem[],
   currentPhaseId: string,
-  summaries: V2RoundSummary[],
+  summaries: RoundSummary[],
 ): SituationPhase[] {
-  const groups = groupV2Phases(timeline, currentPhaseId);
+  const groups = groupPhases(timeline, currentPhaseId);
   const visibleGroups =
     groups.some((group) => group.phaseId !== "opening")
       ? groups.filter((group) => group.phaseId !== "opening")
@@ -782,9 +782,9 @@ function buildSituationPhases(
 }
 
 function latestTimelineItem(
-  timeline: V2TimelineItem[],
-): V2TimelineItem | null {
-  return timeline.reduce<V2TimelineItem | null>(
+  timeline: TimelineItem[],
+): TimelineItem | null {
+  return timeline.reduce<TimelineItem | null>(
     (latest, item) =>
       latest === null || isLaterTimelineItem(item, latest) ? item : latest,
     null,
@@ -792,8 +792,8 @@ function latestTimelineItem(
 }
 
 function isLaterTimelineItem(
-  candidate: V2TimelineItem,
-  current: V2TimelineItem,
+  candidate: TimelineItem,
+  current: TimelineItem,
 ): boolean {
   if (candidate.lastRecordSeq !== current.lastRecordSeq) {
     return candidate.lastRecordSeq > current.lastRecordSeq;
@@ -801,7 +801,7 @@ function isLaterTimelineItem(
   return candidate.firstRecordSeq > current.firstRecordSeq;
 }
 
-function situationItemPriority(item: V2TimelineItem): number {
+function situationItemPriority(item: TimelineItem): number {
   const actionType = item.actionType.toLowerCase();
   if (actionType.includes("result")) return 11;
   if (item.actorKind === "player" && item.modelRequest) return 10;
@@ -829,7 +829,7 @@ const situationStageOrder = [
 ];
 
 function stageMeta(
-  item: V2TimelineItem,
+  item: TimelineItem,
 ): { key: string; label: string } | null {
   const value = item.actionType.toLowerCase();
   if (value.includes("game_completed")) return { key: "result", label: "结算" };
@@ -859,7 +859,7 @@ function stageMeta(
 
 function phaseDigest(
   phaseId: string,
-  summaries: V2RoundSummary[],
+  summaries: RoundSummary[],
 ): string | null {
   const roundNo = roundFromPhase(phaseId);
   if (roundNo === null) return null;
@@ -875,10 +875,10 @@ function phaseDigest(
 }
 
 function describeSituationItem(
-  game: V2GameRecordDetail,
-  item: V2TimelineItem,
+  game: GameRecordDetail,
+  item: TimelineItem,
   recordSeq: number,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
 ): SituationDetail {
   const activation = activationForItem(game, item, recordSeq);
   if (activation) {
@@ -958,8 +958,8 @@ function describeSituationItem(
 }
 
 function activationForItem(
-  game: V2GameRecordDetail,
-  item: V2TimelineItem,
+  game: GameRecordDetail,
+  item: TimelineItem,
   recordSeq: number,
 ) {
   const opened = item.events.find((event) => event.event_type === "action_opened");
@@ -994,7 +994,7 @@ function activationForItem(
   );
 }
 
-function activationsAt(game: V2GameRecordDetail, recordSeq: number) {
+function activationsAt(game: GameRecordDetail, recordSeq: number) {
   const latestEventSeq = game.events.reduce(
     (latest, event) => Math.max(latest, event.record_seq),
     0,
@@ -1021,10 +1021,10 @@ function activationsAt(game: V2GameRecordDetail, recordSeq: number) {
 }
 
 function privateInformationByPlayer(
-  game: V2GameRecordDetail,
+  game: GameRecordDetail,
   activations: Array<Record<string, unknown>>,
   recordSeq: number,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
 ) {
   const abilityByInstance = new Map(
     game.ability_instances.map((instance) => [
@@ -1118,7 +1118,7 @@ function privateInformationByPlayer(
 
 function privateKnowledgeFactLabel(
   fact: Record<string, unknown>,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
 ): string | null {
   const factType = recordText(fact.fact_type);
   const payload = recordObject(fact.payload);
@@ -1148,9 +1148,9 @@ function privateKnowledgeFactLabel(
 }
 
 function recentPublicSpeeches(
-  events: V2GameRecordEvent[],
+  events: GameRecordEvent[],
   recordSeq: number,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
   phaseId: string,
 ) {
   const roundNo = roundFromPhase(phaseId);
@@ -1171,9 +1171,9 @@ function recentPublicSpeeches(
 }
 
 function publicVoteSummary(
-  events: V2GameRecordEvent[],
+  events: GameRecordEvent[],
   recordSeq: number,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
   phaseId: string,
 ) {
   const roundNo = roundFromPhase(phaseId);
@@ -1202,7 +1202,7 @@ function publicVoteSummary(
 }
 
 function recentJudgeMessages(
-  timeline: V2TimelineItem[],
+  timeline: TimelineItem[],
   recordSeq: number,
 ) {
   return timeline
@@ -1225,7 +1225,7 @@ function recentJudgeMessages(
 }
 
 function abilityIdForActivation(
-  game: V2GameRecordDetail,
+  game: GameRecordDetail,
   activation: Record<string, unknown>,
 ) {
   const instanceId = recordText(activation.ability_instance_id);
@@ -1254,7 +1254,7 @@ function activationResultLabel(activation: Record<string, unknown>): string {
   return status === "completed" ? "行动已完成" : status ?? "事实已记录";
 }
 
-function authorityLabel(item: V2TimelineItem): string {
+function authorityLabel(item: TimelineItem): string {
   if (item.kind === "milestone" || item.templateRender) return "权威事实";
   if (
     item.actionType.includes("speech") ||
@@ -1279,7 +1279,7 @@ function audienceLabel(value: string): string {
 
 function playerLabel(
   playerId: string | null,
-  identities: Map<string, V2PlayerIdentity>,
+  identities: Map<string, PlayerIdentity>,
 ): string {
   if (!playerId) return "无人";
   const identity = identities.get(playerId);

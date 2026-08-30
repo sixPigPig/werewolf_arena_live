@@ -91,7 +91,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("LiveV2Page", () => {
+describe("LivePage", () => {
   it("shows the immutable public seats before starting any realtime action", async () => {
     renderPage();
 

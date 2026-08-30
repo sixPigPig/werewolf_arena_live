@@ -10,27 +10,27 @@ from sqlalchemy.orm import Session
 
 import app.cli as cli
 from app.db.base import Base
-from app.v2.contracts import V2LiveState
-from app.v2.model_context_contract import current_model_context_contract
-from app.v2.model_context_cutover import (
-    V2ModelContextCutoverEventFact,
-    V2ModelContextCutoverFacts,
-    V2ModelContextCutoverFinding,
-    V2ModelContextCutoverReport,
+from app.match.contracts import LiveState
+from app.match.model_context_contract import current_model_context_contract
+from app.match.model_context_cutover import (
+    ModelContextCutoverEventFact,
+    ModelContextCutoverFacts,
+    ModelContextCutoverFinding,
+    ModelContextCutoverReport,
     evaluate_v11_model_context_cutover,
     preflight_v12_model_context_cutover,
 )
-from app.v2.models import (
-    V2AbilityActivation,
-    V2AbilityInstance,
-    V2ActionWindow,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2MatchState,
-    V2ModelActionRecovery,
-    V2VoiceAsset,
+from app.match.models import (
+    AbilityActivation,
+    AbilityInstance,
+    ActionWindow,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    MatchState,
+    ModelActionRecovery,
+    VoiceAsset,
 )
 
 
@@ -50,15 +50,15 @@ def _event(
     event_type: str,
     record_seq: int,
     payload: dict[str, object] | None = None,
-) -> V2ModelContextCutoverEventFact:
-    return V2ModelContextCutoverEventFact(
+) -> ModelContextCutoverEventFact:
+    return ModelContextCutoverEventFact(
         event_type=event_type,
         record_seq=record_seq,
         payload=dict(payload or {}),
     )
 
 
-def _facts(**overrides: object) -> V2ModelContextCutoverFacts:
+def _facts(**overrides: object) -> ModelContextCutoverFacts:
     values: dict[str, object] = {
         "game_id": "v2_game_cutover001",
         "current_run_id": "v2_run_cutover001",
@@ -84,7 +84,7 @@ def _facts(**overrides: object) -> V2ModelContextCutoverFacts:
         ),
     }
     values.update(overrides)
-    return V2ModelContextCutoverFacts(**values)  # type: ignore[arg-type]
+    return ModelContextCutoverFacts(**values)  # type: ignore[arg-type]
 
 
 def _v11_contract(prompt_template_version: int) -> dict[str, int]:
@@ -207,7 +207,7 @@ def test_failed_history_requires_all_failed_states_and_release_after_failure() -
 
 @pytest.mark.parametrize("live_state", BLOCKING_LIVE_STATES)
 def test_every_real_nonterminal_live_state_blocks_cutover(live_state: str) -> None:
-    assert live_state in get_args(V2LiveState)
+    assert live_state in get_args(LiveState)
     finding = evaluate_v11_model_context_cutover(
         _facts(
             game_status=live_state,
@@ -275,16 +275,16 @@ def cutover_db() -> Session:
     Base.metadata.create_all(
         engine,
         tables=[
-            V2GameRecord.__table__,
-            V2GameRun.__table__,
-            V2MatchState.__table__,
-            V2GameRecordEvent.__table__,
-            V2LivePresentation.__table__,
-            V2VoiceAsset.__table__,
-            V2ActionWindow.__table__,
-            V2AbilityInstance.__table__,
-            V2AbilityActivation.__table__,
-            V2ModelActionRecovery.__table__,
+            GameRecord.__table__,
+            GameRun.__table__,
+            MatchState.__table__,
+            GameRecordEvent.__table__,
+            LivePresentation.__table__,
+            VoiceAsset.__table__,
+            ActionWindow.__table__,
+            AbilityInstance.__table__,
+            AbilityActivation.__table__,
+            ModelActionRecovery.__table__,
         ],
     )
     with Session(engine) as db:
@@ -297,10 +297,10 @@ def _add_game(
     suffix: str,
     contract: dict[str, int],
     completed: bool,
-) -> tuple[V2GameRecord, V2GameRun]:
+) -> tuple[GameRecord, GameRun]:
     game_id = f"v2_game_cutover{suffix}"
     run_id = f"v2_run_cutover{suffix}"
-    game = V2GameRecord(
+    game = GameRecord(
         game_id=game_id,
         title=f"cutover {suffix}",
         status="awaiting_observation",
@@ -317,7 +317,7 @@ def _add_game(
         delivery_snapshot={"schema_version": 1, "mode": "text_only"},
         ability_snapshot={},
     )
-    run = V2GameRun(
+    run = GameRun(
         run_id=run_id,
         game_id=game_id,
         attempt_no=1,
@@ -329,7 +329,7 @@ def _add_game(
     db.add_all([game, run])
     if completed:
         db.add(
-            V2MatchState(
+            MatchState(
                 game_id=game_id,
                 round_no=1,
                 sheriff_badge_state="disabled",
@@ -344,7 +344,7 @@ def _add_game(
             (3, "v2_run_execution_released"),
         ):
             db.add(
-                V2GameRecordEvent(
+                GameRecordEvent(
                     game_id=game_id,
                     event_id=record_seq,
                     record_seq=record_seq,
@@ -455,7 +455,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
         contract=_v11_contract(4),
         completed=True,
     )
-    window = V2ActionWindow(
+    window = ActionWindow(
         window_id="v2_window_cutover001",
         game_id=game.game_id,
         run_id=run.run_id,
@@ -466,7 +466,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
         plan=[],
         result={},
     )
-    instance = V2AbilityInstance(
+    instance = AbilityInstance(
         ability_instance_id="v2_instance_cutover001",
         game_id=game.game_id,
         ability_id="seer.inspect",
@@ -480,7 +480,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
     cutover_db.flush()
     cutover_db.add_all(
         [
-            V2LivePresentation(
+            LivePresentation(
                 game_id=game.game_id,
                 presentation_seq=1,
                 presentation_id="v2_presentation_cutover001",
@@ -497,7 +497,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
                 subtitle_text="synthetic",
                 subtitle_timings=[],
             ),
-            V2VoiceAsset(
+            VoiceAsset(
                 voice_asset_id="v2_voice_cutover001",
                 game_id=game.game_id,
                 run_id=run.run_id,
@@ -512,7 +512,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
                 sample_rate=24000,
                 channels=1,
             ),
-            V2AbilityActivation(
+            AbilityActivation(
                 activation_id="v2_activation_cutover001",
                 game_id=game.game_id,
                 run_id=run.run_id,
@@ -524,7 +524,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
                 decision={},
                 result={},
             ),
-            V2ModelActionRecovery(
+            ModelActionRecovery(
                 action_id="v2_action_recovery_cutover001",
                 recovery_id="v2_recovery_cutover001",
                 game_id=game.game_id,
@@ -563,7 +563,7 @@ def test_database_preflight_queries_all_open_resource_and_lease_boundaries(
 
 
 def test_cutover_cli_returns_one_and_lists_blocking_game(capsys, monkeypatch) -> None:
-    finding = V2ModelContextCutoverFinding(
+    finding = ModelContextCutoverFinding(
         game_id="v2_game_blocking001",
         current_run_id="v2_run_blocking001",
         prompt_template_version=4,
@@ -571,7 +571,7 @@ def test_cutover_cli_returns_one_and_lists_blocking_game(capsys, monkeypatch) ->
         execution_state="owned",
         reason_codes=("match_status_not_terminal",),
     )
-    report = V2ModelContextCutoverReport(
+    report = ModelContextCutoverReport(
         scanned_game_count=1,
         ignored_current_v12_game_count=0,
         findings=(finding,),
@@ -586,11 +586,6 @@ def test_cutover_cli_returns_one_and_lists_blocking_game(capsys, monkeypatch) ->
 
     monkeypatch.setattr(cli, "SessionLocal", FakeSession)
     monkeypatch.setattr(cli, "preflight_v12_model_context_cutover", lambda _db: report)
-    monkeypatch.setattr(
-        cli,
-        "default_model_name",
-        lambda: (_ for _ in ()).throw(AssertionError("provider lookup must stay lazy")),
-    )
 
     exit_code = cli.main(["preflight-v12-model-context-cutover"])
 
@@ -602,7 +597,7 @@ def test_cutover_cli_returns_one_and_lists_blocking_game(capsys, monkeypatch) ->
 
 
 def test_cutover_cli_json_marks_safe_empty_database_read_only(capsys, monkeypatch) -> None:
-    report = V2ModelContextCutoverReport(
+    report = ModelContextCutoverReport(
         scanned_game_count=0,
         ignored_current_v12_game_count=0,
         findings=(),

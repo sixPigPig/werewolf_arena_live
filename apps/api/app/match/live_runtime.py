@@ -20,50 +20,50 @@ from app.judge_configuration import (
     configuration_from_voice_snapshot,
     runtime_judge_configuration,
 )
-from app.v2.action_engine import (
-    V2ActionEngine,
-    V2ModelPort,
-    V2ModelRetryPolicy,
-    V2TtsPort,
+from app.match.action_engine import (
+    ActionEngine,
+    ModelPort,
+    ModelRetryPolicy,
+    TtsPort,
 )
-from app.v2.contracts import (
-    V2ActorResponse,
-    V2CurrentPresentationResponse,
-    V2DirectorLiveSnapshotResponse,
-    V2GamePhaseResponse,
-    V2GodViewLiveSnapshotResponse,
-    V2LiveSnapshotResponse,
-    V2MatchStateResponse,
+from app.match.contracts import (
+    ActorResponse,
+    CurrentPresentationResponse,
+    DirectorLiveSnapshotResponse,
+    GamePhaseResponse,
+    GodViewLiveSnapshotResponse,
+    LiveSnapshotResponse,
+    MatchStateResponse,
 )
-from app.v2.day_engine import V2DayEngine
-from app.v2.day_speech_pipeline_repository import V2DaySpeechPipelineRepository
-from app.v2.director_projection import project_director_scene
-from app.v2.god_view_projection import project_god_view_player_identities
-from app.v2.first_night_engine import V2NightEngine
-from app.v2.execution import V2RunFence, bind_v2_run_fence, database_utc_now
-from app.v2.flow_engine import V2LiveFlowEngine
-from app.v2.model_client import V2ModelClient
-from app.v2.model_context_contract import (
+from app.match.day_engine import DayEngine
+from app.match.day_speech_pipeline_repository import DaySpeechPipelineRepository
+from app.match.director_projection import project_director_scene
+from app.match.god_view_projection import project_god_view_player_identities
+from app.match.first_night_engine import NightEngine
+from app.match.execution import RunFence, bind_run_fence, database_utc_now
+from app.match.flow_engine import LiveFlowEngine
+from app.match.model_client import ModelClient
+from app.match.model_context_contract import (
     supports_model_context_contract,
 )
-from app.v2.model_generation_policy_contract import (
-    V2ModelGenerationPolicyContractError,
+from app.match.model_generation_policy_contract import (
+    ModelGenerationPolicyContractError,
     resolve_model_generation_policy_contract,
 )
-from app.v2.night_repository import V2NightRepository
-from app.v2.match_repository import V2MatchRepository
-from app.v2.models import V2GameRecord, V2GameRun
-from app.v2.public_projection import (
+from app.match.night_repository import NightRepository
+from app.match.match_repository import MatchRepository
+from app.match.models import GameRecord, GameRun
+from app.match.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
-from app.v2.protocol import live_state
-from app.v2.pre_exile_pipeline_repository import V2PreExilePipelineRepository
-from app.v2.repository import V2ActionRepository, V2PresentationIdentity
-from app.v2.runtime_state import project_v2_runtime_state
-from app.v2.service import (
-    V2RecordNotFound,
+from app.match.protocol import live_state
+from app.match.pre_exile_pipeline_repository import PreExilePipelineRepository
+from app.match.repository import ActionRepository, PresentationIdentity
+from app.match.runtime_state import project_runtime_state
+from app.match.service import (
+    RecordNotFound,
     current_presentation,
     current_action_context,
     get_game,
@@ -73,20 +73,20 @@ from app.v2.service import (
     role_assignment_count,
     server_now,
 )
-from app.v2.tts_client import V2TtsClient
+from app.match.tts_client import TtsClient
 
 
 logger = logging.getLogger(__name__)
 
 
-class V2ClientProtocolError(RuntimeError):
+class ClientProtocolError(RuntimeError):
     pass
 
 
-V2Audience = Literal["player_public", "spectator_directed", "spectator_god_view"]
+Audience = Literal["player_public", "spectator_directed", "spectator_god_view"]
 
 
-def _audience_targets(value: str) -> tuple[V2Audience, ...]:
+def _audience_targets(value: str) -> tuple[Audience, ...]:
     if value == "all":
         return ("player_public", "spectator_directed", "spectator_god_view")
     if value == "public":
@@ -95,13 +95,13 @@ def _audience_targets(value: str) -> tuple[V2Audience, ...]:
         return ("spectator_directed", "spectator_god_view")
     if value == "director":
         return ("spectator_directed",)
-    raise V2ClientProtocolError("invalid_server_audience")
+    raise ClientProtocolError("invalid_server_audience")
 
 
 @dataclass
 class _Subscriber:
     websocket: WebSocket
-    audience: V2Audience
+    audience: Audience
     ready: bool = False
 
 
@@ -111,10 +111,10 @@ class _GameChannel:
         *,
         game_id: str,
         snapshot_factory: Any,
-        engine: V2LiveFlowEngine,
-        repository: V2ActionRepository | None = None,
+        engine: LiveFlowEngine,
+        repository: ActionRepository | None = None,
         game_starter: Callable[..., bool] | None = None,
-        worker_id: str = "v2_test_worker",
+        worker_id: str = "test_worker",
         lease_seconds: float = 15.0,
         heartbeat_seconds: float = 3.0,
         tts_capability_enabled: bool = True,
@@ -131,18 +131,18 @@ class _GameChannel:
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, _Subscriber] = {}
         self._task: asyncio.Task[None] | None = None
-        self._current_identity: dict[V2Audience, V2PresentationIdentity | None] = {
+        self._current_identity: dict[Audience, PresentationIdentity | None] = {
             "player_public": None,
             "spectator_directed": None,
             "spectator_god_view": None,
         }
-        self._sample_cursor: dict[V2Audience, int] = {
+        self._sample_cursor: dict[Audience, int] = {
             "player_public": 0,
             "spectator_directed": 0,
             "spectator_god_view": 0,
         }
 
-    async def connect(self, websocket: WebSocket, *, audience: V2Audience) -> str:
+    async def connect(self, websocket: WebSocket, *, audience: Audience) -> str:
         subscriber_id = f"v2_conn_{uuid4().hex[:16]}"
         async with self._lock:
             subscriber = _Subscriber(websocket=websocket, audience=audience)
@@ -154,7 +154,7 @@ class _GameChannel:
         async with self._lock:
             subscriber = self._subscribers.get(subscriber_id)
             if subscriber is None:
-                raise V2ClientProtocolError("unknown_connection")
+                raise ClientProtocolError("unknown_connection")
             before_start = self._snapshot(subscriber.audience)
             _validate_ready(
                 message,
@@ -168,7 +168,7 @@ class _GameChannel:
                 and before_start.get("audio_mode") == "tts"
                 and not self._tts_capability_enabled
             ):
-                raise V2ClientProtocolError("v2_audio_mode_unavailable")
+                raise ClientProtocolError("v2_audio_mode_unavailable")
             subscriber.ready = True
             if before_start["live_state"] == "waiting_to_start":
                 if self._repository is not None:
@@ -188,7 +188,7 @@ class _GameChannel:
             snapshot = self._snapshot(subscriber.audience)
             await subscriber.websocket.send_json(snapshot)
 
-    def _register_owned_task(self, fence: V2RunFence) -> None:
+    def _register_owned_task(self, fence: RunFence) -> None:
         if self._task is not None:
             return
         self._task = asyncio.create_task(self._run_owned(fence))
@@ -221,7 +221,7 @@ class _GameChannel:
         self,
         value: bytes,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         next_sample_cursor: int,
         audience: str = "all",
     ) -> None:
@@ -243,7 +243,7 @@ class _GameChannel:
 
     async def set_current(
         self,
-        identity: V2PresentationIdentity | None,
+        identity: PresentationIdentity | None,
         sample_cursor: int,
         *,
         audience: str = "all",
@@ -269,7 +269,7 @@ class _GameChannel:
             for subscriber_id in failed:
                 self._subscribers.pop(subscriber_id, None)
 
-    def _snapshot(self, audience: V2Audience) -> dict[str, Any]:
+    def _snapshot(self, audience: Audience) -> dict[str, Any]:
         return self._snapshot_factory(
             game_id=self.game_id,
             sample_cursor=self._sample_cursor[audience],
@@ -288,7 +288,7 @@ class _GameChannel:
                     extra={"game_id": self.game_id, "worker_id": self._worker_id},
                 )
 
-    async def _run_owned(self, fence: V2RunFence) -> None:
+    async def _run_owned(self, fence: RunFence) -> None:
         if self._repository is None:
             raise RuntimeError("V2 execution repository is unavailable")
         task = asyncio.current_task()
@@ -298,7 +298,7 @@ class _GameChannel:
         heartbeat = asyncio.create_task(self._heartbeat(fence, task, lease_lost))
         release_reason = "completed"
         try:
-            with bind_v2_run_fence(fence):
+            with bind_run_fence(fence):
                 await self._engine.run(game_id=self.game_id, broadcaster=self)
                 release_reason = self._repository.execution_release_reason(fence=fence)
         except asyncio.CancelledError:
@@ -352,7 +352,7 @@ class _GameChannel:
     async def _broadcast_current_snapshots(self) -> None:
         """Refresh connected clients after runtime-only state changes."""
         async with self._lock:
-            snapshots: dict[V2Audience, dict[str, Any]] = {}
+            snapshots: dict[Audience, dict[str, Any]] = {}
             failed: list[str] = []
             for subscriber_id, subscriber in self._subscribers.items():
                 if not subscriber.ready:
@@ -370,7 +370,7 @@ class _GameChannel:
 
     async def _heartbeat(
         self,
-        fence: V2RunFence,
+        fence: RunFence,
         engine_task: asyncio.Task[None],
         lease_lost: asyncio.Event,
     ) -> None:
@@ -424,18 +424,18 @@ class _GameChannel:
                 return
 
 
-class V2LiveRuntime:
+class LiveRuntime:
     def __init__(
         self,
         *,
         session_factory: sessionmaker[Session],
-        model_client: V2ModelPort,
-        tts_client: V2TtsPort | None,
+        model_client: ModelPort,
+        tts_client: TtsPort | None,
         voice_root: Path,
         sample_rate: int,
         judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
-        model_retry_policy: V2ModelRetryPolicy = V2ModelRetryPolicy(),
-        tts_client_factory: Callable[[], V2TtsPort] | None = None,
+        model_retry_policy: ModelRetryPolicy = ModelRetryPolicy(),
+        tts_client_factory: Callable[[], TtsPort] | None = None,
         tts_capability_enabled: bool | None = None,
         worker_id: str | None = None,
         lease_seconds: float = 15.0,
@@ -455,21 +455,21 @@ class V2LiveRuntime:
         )
         if tts_client is None and tts_client_factory is None:
             self._tts_capability_enabled = False
-        self._repository = V2ActionRepository(
+        self._repository = ActionRepository(
             session_factory,
             enforce_execution_fence=True,
         )
-        self._night_repository = V2NightRepository(
+        self._night_repository = NightRepository(
             session_factory,
             enforce_execution_fence=True,
         )
-        self._match_repository = V2MatchRepository(
+        self._match_repository = MatchRepository(
             session_factory,
             enforce_execution_fence=True,
         )
-        self._day_speech_pipeline_repository = V2DaySpeechPipelineRepository(session_factory)
-        self._pre_exile_pipeline_repository = V2PreExilePipelineRepository(session_factory)
-        self._action_engine = V2ActionEngine(
+        self._day_speech_pipeline_repository = DaySpeechPipelineRepository(session_factory)
+        self._pre_exile_pipeline_repository = PreExilePipelineRepository(session_factory)
+        self._action_engine = ActionEngine(
             repository=self._repository,
             model_client=model_client,
             tts_client=tts_client,
@@ -480,18 +480,18 @@ class V2LiveRuntime:
             judge_configuration_provider=judge_configuration_provider,
             model_retry_policy=model_retry_policy,
         )
-        self._day_engine = V2DayEngine(
+        self._day_engine = DayEngine(
             repository=self._match_repository,
             action_engine=self._action_engine,
             day_speech_pipeline_repository=self._day_speech_pipeline_repository,
             pre_exile_pipeline_repository=self._pre_exile_pipeline_repository,
         )
-        self._first_night_engine = V2NightEngine(
+        self._first_night_engine = NightEngine(
             repository=self._night_repository,
             action_engine=self._action_engine,
             day_engine=self._day_engine,
         )
-        self._engine = V2LiveFlowEngine(
+        self._engine = LiveFlowEngine(
             action_repository=self._repository,
             night_repository=self._night_repository,
             match_repository=self._match_repository,
@@ -520,7 +520,7 @@ class V2LiveRuntime:
         *,
         game_id: str,
         websocket: WebSocket,
-        audience: V2Audience = "player_public",
+        audience: Audience = "player_public",
     ) -> tuple[str, _GameChannel]:
         channel = await self._channel(game_id)
         return await channel.connect(websocket, audience=audience), channel
@@ -578,15 +578,15 @@ class V2LiveRuntime:
         *,
         game_id: str,
         sample_cursor: int = 0,
-        audience: V2Audience = "player_public",
+        audience: Audience = "player_public",
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             game = get_game(db, game_id)
             match = get_match_state(db, game_id)
-            run = db.get(V2GameRun, game.current_run_id)
+            run = db.get(GameRun, game.current_run_id)
             if run is None:
-                raise V2RecordNotFound(f"missing current run for {game_id}")
-            runtime_state = project_v2_runtime_state(
+                raise RecordNotFound(f"missing current run for {game_id}")
+            runtime_state = project_runtime_state(
                 game=game,
                 run=run,
                 match=match,
@@ -604,12 +604,12 @@ class V2LiveRuntime:
             states = player_state_map(db, game_id)
             current = None
             if presentation is not None and presentation.action_id is not None:
-                current = V2CurrentPresentationResponse(
+                current = CurrentPresentationResponse(
                     action_id=presentation.action_id,
                     presentation_seq=presentation.presentation_seq,
                     presentation_id=presentation.presentation_id,
                     phase_id=presentation.phase_id,
-                    actor=V2ActorResponse(
+                    actor=ActorResponse(
                         kind=presentation.actor_kind,
                         id=presentation.actor_id,
                     ),
@@ -619,7 +619,7 @@ class V2LiveRuntime:
                     join_sample_cursor=sample_cursor,
                 )
             if audience == "spectator_directed":
-                response = V2DirectorLiveSnapshotResponse(
+                response = DirectorLiveSnapshotResponse(
                     game_id=game.game_id,
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
@@ -642,7 +642,7 @@ class V2LiveRuntime:
                     current_presentation=current,
                 )
             elif audience == "spectator_god_view":
-                response = V2GodViewLiveSnapshotResponse(
+                response = GodViewLiveSnapshotResponse(
                     game_id=game.game_id,
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
@@ -660,7 +660,7 @@ class V2LiveRuntime:
                     current_presentation=current,
                 )
             else:
-                response = V2LiveSnapshotResponse(
+                response = LiveSnapshotResponse(
                     audience="player_public",
                     game_id=game.game_id,
                     run_id=game.current_run_id,
@@ -690,11 +690,11 @@ class V2LiveRuntime:
                 with self._session_factory() as db:
                     game = get_game(db, game_id)
                     if not supports_model_context_contract(game.rule_snapshot):
-                        raise V2ClientProtocolError("unsupported_model_context_contract")
+                        raise ClientProtocolError("unsupported_model_context_contract")
                     try:
                         resolve_model_generation_policy_contract(game.rule_snapshot)
-                    except V2ModelGenerationPolicyContractError as exc:
-                        raise V2ClientProtocolError(
+                    except ModelGenerationPolicyContractError as exc:
+                        raise ClientProtocolError(
                             "unsupported_model_generation_policy_contract"
                         ) from exc
                 channel = _GameChannel(
@@ -711,10 +711,10 @@ class V2LiveRuntime:
             return channel
 
 
-def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
-    return V2LiveRuntime(
+def build_live_runtime(config: Settings = settings) -> LiveRuntime:
+    return LiveRuntime(
         session_factory=SessionLocal,
-        model_client=V2ModelClient(
+        model_client=ModelClient(
             agent_plan_api_key=config.live_v2_agent_plan_api_key,
             agent_plan_base_url=config.live_v2_agent_plan_base_url,
             ark_api_key=config.live_v2_ark_api_key,
@@ -738,7 +738,7 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
         tts_client=None,
         tts_client_factory=(
             (
-                lambda: V2TtsClient(
+                lambda: TtsClient(
                     enabled=True,
                     api_key=config.live_v2_tts_api_key,
                     resource_id=config.live_v2_tts_resource_id,
@@ -759,7 +759,7 @@ def build_v2_live_runtime(config: Settings = settings) -> V2LiveRuntime:
             config,
             game_id,
         ),
-        model_retry_policy=V2ModelRetryPolicy(
+        model_retry_policy=ModelRetryPolicy(
             max_attempts=config.live_v2_model_max_attempts,
             attempt_total_seconds=config.live_v2_model_attempt_total_seconds,
             action_total_seconds=config.live_v2_model_action_total_seconds,
@@ -777,7 +777,7 @@ def _runtime_judge_configuration(
 ) -> RuntimeJudgeConfiguration:
     try:
         with SessionLocal.begin() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is not None:
                 frozen = configuration_from_voice_snapshot(game.judge_voice_snapshot)
                 if frozen is not None:
@@ -804,7 +804,7 @@ def _runtime_judge_configuration(
 def _validate_ready(
     message: dict[str, Any],
     *,
-    audience: V2Audience,
+    audience: Audience,
     audio_required: bool,
 ) -> None:
     expected_type = {
@@ -813,15 +813,15 @@ def _validate_ready(
         "spectator_god_view": "god_view.ready",
     }[audience]
     if message.get("protocol_version") != 1 or message.get("type") != expected_type:
-        raise V2ClientProtocolError("invalid_ready_message")
+        raise ClientProtocolError("invalid_ready_message")
     audio = message.get("audio")
     if audio is None and not audio_required:
         return
     if not isinstance(audio, dict):
-        raise V2ClientProtocolError("missing_audio_capability")
+        raise ClientProtocolError("missing_audio_capability")
     expected = {"encoding": "pcm_s16le", "sample_rate": 24000, "channels": 1}
     if any(audio.get(key) != value for key, value in expected.items()):
-        raise V2ClientProtocolError("unsupported_audio_capability")
+        raise ClientProtocolError("unsupported_audio_capability")
 
 
 def _live_state(status: str) -> str:
@@ -840,18 +840,18 @@ def _live_state(status: str) -> str:
     return "failed"
 
 
-def _game_phase(game: Any) -> V2GamePhaseResponse:
-    return V2GamePhaseResponse(
+def _game_phase(game: Any) -> GamePhaseResponse:
+    return GamePhaseResponse(
         phase_seq=game.phase_seq,
         phase_id=game.phase_id,
         phase_state=game.phase_state,
     )
 
 
-def _match_state(match: Any) -> V2MatchStateResponse | None:
+def _match_state(match: Any) -> MatchStateResponse | None:
     if match is None:
         return None
-    return V2MatchStateResponse(
+    return MatchStateResponse(
         round_no=match.round_no,
         sheriff_player_id=match.sheriff_player_id,
         sheriff_badge_state=match.sheriff_badge_state,

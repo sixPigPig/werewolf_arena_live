@@ -8,8 +8,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
-from app.werewolf.judge_voice_assets import list_judge_voice_assets
-from app.werewolf.volcengine_tts import mime_type_for_format
+from app.shared.judge_voice_assets import list_judge_voice_assets
+from app.shared.volcengine_tts import mime_type_for_format
 
 
 class JudgeVoiceAssetImportError(RuntimeError):

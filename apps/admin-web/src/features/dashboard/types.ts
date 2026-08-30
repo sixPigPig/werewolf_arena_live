@@ -8,22 +8,6 @@ export type AdminOverview = {
     archived: number;
     featured: number;
   };
-  games: {
-    total: number;
-    complete: number;
-    incomplete: number;
-    resumable: number;
-  };
-  runs: {
-    total: number;
-    queued: number;
-    running: number;
-    completed: number;
-    canceled: number;
-    failed: number;
-    stale: number;
-    recovery_exhausted: number;
-  };
   jobs: {
     total: number;
     queued: number;
@@ -31,37 +15,6 @@ export type AdminOverview = {
     completed: number;
     failed: number;
   };
-  quality: {
-    cohort_days: number;
-    sample_count: number;
-    pass_count: number;
-    warn_count: number;
-    fail_count: number;
-    unavailable_count: number;
-    partial_count: number;
-    legacy_count: number;
-    p0_game_count: number;
-    latest_p0_at: string | null;
-    pending_count: number;
-    processing_count: number;
-    worker_failed_count: number;
-    expired_lease_count: number;
-    oldest_pending_seconds: number | null;
-    worker_up: boolean;
-    critical_fact_expected: number;
-    critical_fact_recorded: number;
-    prompt_fact_expected: number;
-    prompt_fact_included: number;
-    voice_expected: number;
-    voice_covered: number;
-    action_sample_count: number;
-    action_p95_ms: number | null;
-    speech_check_count: number;
-    repeated_speech_count: number;
-    speech_retry_exhausted_count: number;
-    lineup_warning_count: number;
-  };
-  reaper_up: boolean;
   alerts: AdminOverviewAlert[];
 };
 export type AdminOverviewAlert = {
@@ -115,20 +68,11 @@ export type AdminSettings = {
     judge_voice_poll_seconds: number;
     judge_voice_heartbeat_seconds: number;
     judge_voice_probe_max_age_seconds: number;
-    reaper_poll_seconds: number;
-    reaper_stale_grace_seconds: number;
-    reaper_max_attempts: number;
-    reaper_probe_max_age_seconds: number;
-  };
-  live_runs: {
-    lease_seconds: number;
-    heartbeat_seconds: number;
-    event_poll_seconds: number;
   };
 };
 
 export type AdminSearchResult = {
-  type: "run" | "game" | "player" | "job";
+  type: "player" | "job";
   id: string;
   label: string;
   description: string;

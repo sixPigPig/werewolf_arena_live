@@ -4,7 +4,7 @@ from collections.abc import Iterable
 import re
 from typing import Any
 
-from app.v2.model_context_contract import DISCOURSE_LEDGER_SCHEMA_VERSION
+from app.match.model_context_contract import DISCOURSE_LEDGER_SCHEMA_VERSION
 
 
 _SENTENCE = re.compile(r"[^。！？!?；;]+[。！？!?；;]?")

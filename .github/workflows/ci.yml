@@ -147,14 +147,12 @@ jobs:
       - run: grep -q 'name: werewolf-mobile-web' /tmp/werewolf-production/application.yaml
       - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-staging/application.yaml
       - run: grep -q 'check-judge-voice-worker' /tmp/werewolf-production/application.yaml
-      - run: grep -q 'name: werewolf-quality-evaluator' /tmp/werewolf-staging/application.yaml
-      - run: grep -q 'name: werewolf-quality-evaluator' /tmp/werewolf-production/application.yaml
-      - run: grep -q 'check-quality-evaluator' /tmp/werewolf-staging/application.yaml
-      - run: grep -q 'check-quality-evaluator' /tmp/werewolf-production/application.yaml
-      - run: grep -q 'QUALITY_EVALUATION_ENABLED: "true"' /tmp/werewolf-staging/application.yaml
-      - run: grep -q 'QUALITY_EVALUATION_ENABLED: "false"' /tmp/werewolf-production/application.yaml
-      - run: grep -A4 'name: werewolf-quality-evaluator' /tmp/werewolf-staging/application.yaml | grep -q 'replicas: 1'
-      - run: grep -A4 'name: werewolf-quality-evaluator' /tmp/werewolf-production/application.yaml | grep -q 'replicas: 0'
+      - run: '! grep -q werewolf-quality-evaluator /tmp/werewolf-staging/application.yaml'
+      - run: '! grep -q werewolf-quality-evaluator /tmp/werewolf-production/application.yaml'
+      - run: '! grep -q werewolf-live-run-reaper /tmp/werewolf-staging/application.yaml'
+      - run: '! grep -q werewolf-live-run-reaper /tmp/werewolf-production/application.yaml'
+      - run: '! grep -q werewolf-live-voice-materializer /tmp/werewolf-staging/application.yaml'
+      - run: '! grep -q werewolf-live-voice-materializer /tmp/werewolf-production/application.yaml'
 
   container-images:
     needs:

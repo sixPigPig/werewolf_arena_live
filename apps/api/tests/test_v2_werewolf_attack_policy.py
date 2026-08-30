@@ -4,27 +4,27 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
-from app.v2.first_night_engine import (
-    V2NightEngine,
+from app.match.first_night_engine import (
+    NightEngine,
     _WorkingNight,
     _resolve_werewolf_attack,
 )
-from app.v2.model_client import V2ModelDecision
-from app.v2.model_context import (
-    V2ModelPlayerReference,
+from app.match.model_client import ModelDecision
+from app.match.model_context import (
+    ModelPlayerReference,
     build_public_rule_contract,
     project_model_action_context,
 )
-from app.v2.model_context_contract import current_model_context_contract
-from app.v2.night_repository import (
-    V2ActivationRef,
-    V2NightPlayer,
-    V2NightRuntimeState,
+from app.match.model_context_contract import current_model_context_contract
+from app.match.night_repository import (
+    ActivationRef,
+    NightPlayer,
+    NightRuntimeState,
 )
 
 
-def _player(player_id: str, seat: int, role_key: str) -> V2NightPlayer:
-    return V2NightPlayer(
+def _player(player_id: str, seat: int, role_key: str) -> NightPlayer:
+    return NightPlayer(
         player_id=player_id,
         seat=seat,
         display_name=f"{seat}号",
@@ -46,8 +46,8 @@ def _decision(
     speech: str | None,
     *,
     decision_note: str | None = None,
-) -> V2ModelDecision:
-    return V2ModelDecision(
+) -> ModelDecision:
+    return ModelDecision(
         target_player_id=target_player_id,
         speech=speech,
         provider_request_id="request",
@@ -59,11 +59,11 @@ def _decision(
 
 def _state(
     *,
-    players: tuple[V2NightPlayer, ...],
+    players: tuple[NightPlayer, ...],
     policy: dict[str, Any],
     round_no: int = 1,
-) -> V2NightRuntimeState:
-    return V2NightRuntimeState(
+) -> NightRuntimeState:
+    return NightRuntimeState(
         game_id="v2_game_test",
         run_id="v2_run_test",
         window_id="v2_window_test",
@@ -98,10 +98,10 @@ def _v11_werewolf_attack_ability(
 ) -> dict[str, Any]:
     teammate_ids = living_teammates if living_teammates is not None else ["wolf-2"]
     players = (
-        V2ModelPlayerReference("wolf-1", 1, "1号"),
-        V2ModelPlayerReference("wolf-2", 2, "2号"),
-        V2ModelPlayerReference("good-3", 3, "3号"),
-        V2ModelPlayerReference("good-4", 4, "4号"),
+        ModelPlayerReference("wolf-1", 1, "1号"),
+        ModelPlayerReference("wolf-2", 2, "2号"),
+        ModelPlayerReference("good-3", 3, "3号"),
+        ModelPlayerReference("good-4", 4, "4号"),
     )
     rule_contract = build_public_rule_contract(
         rule={
@@ -243,7 +243,7 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
         "allow_no_attack": False,
         "allow_wolf_target": False,
     }
-    state = V2NightRuntimeState(
+    state = NightRuntimeState(
         game_id="v2_game_test",
         run_id="v2_run_test",
         window_id="v2_window_test",
@@ -281,7 +281,7 @@ def test_second_round_receives_first_round_and_prior_second_round_speech() -> No
             _decision("good-3", "综合讨论，我也归票3号。"),
         ]
     )
-    engine = V2NightEngine(
+    engine = NightEngine(
         repository=repository,
         action_engine=actions,
         day_engine=SimpleNamespace(),
@@ -398,7 +398,7 @@ def test_parallel_unanimous_preference_skips_second_round_and_forms_attack() -> 
         expected_wolves=2,
         target_player_id="good-3",
     )
-    engine = V2NightEngine(
+    engine = NightEngine(
         repository=repository,
         action_engine=actions,
         day_engine=SimpleNamespace(),
@@ -451,7 +451,7 @@ def test_tied_second_round_requests_explicit_rotating_tiebreak() -> None:
         ]
     )
     working = _WorkingNight()
-    engine = V2NightEngine(
+    engine = NightEngine(
         repository=repository,
         action_engine=actions,
         day_engine=SimpleNamespace(),
@@ -549,7 +549,7 @@ def test_optional_no_attack_and_wolf_target_switches_change_decision_contract() 
         "allow_no_attack": True,
         "allow_wolf_target": True,
     }
-    state = V2NightRuntimeState(
+    state = NightRuntimeState(
         game_id="v2_game_optional",
         run_id="v2_run_optional",
         window_id="v2_window_optional",
@@ -581,7 +581,7 @@ def test_optional_no_attack_and_wolf_target_switches_change_decision_contract() 
     repository = _FakeRepository()
     actions = _FakeActions([_decision(None, "本夜主动空刀。")])
     working = _WorkingNight()
-    engine = V2NightEngine(
+    engine = NightEngine(
         repository=repository,
         action_engine=actions,
         day_engine=SimpleNamespace(),
@@ -606,14 +606,14 @@ class _FakeRepository:
     def open_activation(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         ability_id: str,
         actor_player_id: str,
         occurrence: int,
         audience: str,
-    ) -> V2ActivationRef:
+    ) -> ActivationRef:
         self._occurrence = occurrence
-        return V2ActivationRef(
+        return ActivationRef(
             activation_id=f"activation-{occurrence}",
             ability_instance_id="instance",
             ability_id=ability_id,
@@ -625,8 +625,8 @@ class _FakeRepository:
     def register_activation_knowledge(
         self,
         *,
-        state: V2NightRuntimeState,
-        activation: V2ActivationRef,
+        state: NightRuntimeState,
+        activation: ActivationRef,
         owner_player_id: str,
         allowed_knowledge: dict[str, Any],
     ) -> tuple[tuple[str, ...], str]:
@@ -650,15 +650,15 @@ class _FakeRepository:
 
 
 class _FakeActions:
-    def __init__(self, decisions: list[V2ModelDecision]) -> None:
+    def __init__(self, decisions: list[ModelDecision]) -> None:
         self._decisions = iter(decisions)
         self.specs: list[Any] = []
-        self.presented: list[V2ModelDecision] = []
+        self.presented: list[ModelDecision] = []
 
     async def run_judge_speech(self, **kwargs: Any) -> bool:
         return True
 
-    async def run_player_decision(self, **kwargs: Any) -> V2ModelDecision:
+    async def run_player_decision(self, **kwargs: Any) -> ModelDecision:
         self.specs.append(kwargs["spec"])
         return next(self._decisions)
 
@@ -681,7 +681,7 @@ def test_round_two_night_action_marks_missing_first_actor_memory_as_unarchived()
     )
     repository = _FakeRepository()
     actions = _FakeActions([_decision(target.player_id, "今晚选择2号。")])
-    engine = V2NightEngine(
+    engine = NightEngine(
         repository=repository,  # type: ignore[arg-type]
         action_engine=actions,  # type: ignore[arg-type]
         day_engine=SimpleNamespace(),
@@ -719,12 +719,12 @@ class _ConcurrentPreferenceActions:
         self._all_started = asyncio.Event()
         self.max_in_flight = 0
         self.specs: list[Any] = []
-        self.presented: list[V2ModelDecision] = []
+        self.presented: list[ModelDecision] = []
 
     async def run_judge_speech(self, **kwargs: Any) -> bool:
         return True
 
-    async def run_player_decision(self, **kwargs: Any) -> V2ModelDecision:
+    async def run_player_decision(self, **kwargs: Any) -> ModelDecision:
         spec = kwargs["spec"]
         self.specs.append(spec)
         assert spec.defer_presentation is True

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from sqlalchemy.dialects import postgresql, sqlite
 
-from app.v2.execution import database_utc_now
+from app.match.execution import database_utc_now
 
 
 def test_postgresql_lease_clock_uses_wall_clock_not_transaction_timestamp() -> None:

@@ -45,57 +45,57 @@ from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.rule_sets.errors import RuleRevisionChanged, RuleSetNotFound, RuleSetUnavailable
 from app.rule_sets.service import resolve_published_rule_set
 from app.rule_sets.static_catalog import resolve_static_rule_set
-from app.v2.contracts import (
-    AdminV2EventPageResponse,
-    AdminV2EventResponse,
-    AdminV2GameDetailResponse,
-    AdminV2GameControlRequest,
-    AdminV2GameControlResponse,
-    AdminV2GameListItem,
-    AdminV2GameListResponse,
-    AdminV2ModelRequestPageResponse,
-    AdminV2ModelRequestResponse,
-    AdminV2ModelRequestSummaryResponse,
-    AdminV2ModelActionRetryResponse,
-    AdminV2Pagination,
-    AdminV2PresentationResponse,
-    AdminV2RunResponse,
-    AdminV2VoiceAssetResponse,
-    V2ActorResponse,
-    V2ApiMetaResponse,
-    V2CurrentPresentationResponse,
-    V2DirectorLiveSnapshotResponse,
-    V2GameCreateRequest,
-    V2GameCreateResponse,
-    V2GamePhaseResponse,
-    V2GodViewIdentitySnapshotResponse,
-    V2LiveSnapshotResponse,
-    V2LobbyCreateSnapshot,
-    V2MatchStateResponse,
+from app.match.contracts import (
+    AdminEventPageResponse,
+    AdminEventResponse,
+    AdminGameDetailResponse,
+    AdminGameControlRequest,
+    AdminGameControlResponse,
+    AdminGameListItem,
+    AdminGameListResponse,
+    AdminModelRequestPageResponse,
+    AdminModelRequestResponse,
+    AdminModelRequestSummaryResponse,
+    AdminModelActionRetryResponse,
+    AdminPagination,
+    AdminPresentationResponse,
+    AdminRunResponse,
+    AdminVoiceAssetResponse,
+    ActorResponse,
+    ApiMetaResponse,
+    CurrentPresentationResponse,
+    DirectorLiveSnapshotResponse,
+    GameCreateRequest,
+    GameCreateResponse,
+    GamePhaseResponse,
+    GodViewIdentitySnapshotResponse,
+    LiveSnapshotResponse,
+    LobbyCreateSnapshot,
+    MatchStateResponse,
 )
-from app.v2.control import (
-    V2GameControlError,
-    V2GameControlIdempotencyConflict,
-    V2GameModelActionNotPaused,
-    V2GameControlNotActive,
-    V2GameControlNotFound,
-    V2GameStopAlreadyRequested,
-    request_v2_model_action_retry,
-    request_v2_game_stop,
+from app.match.control import (
+    GameControlError,
+    GameControlIdempotencyConflict,
+    GameModelActionNotPaused,
+    GameControlNotActive,
+    GameControlNotFound,
+    GameStopAlreadyRequested,
+    request_model_action_retry,
+    request_game_stop,
 )
-from app.v2.execution import database_utc_now
-from app.v2.event_contract import (
+from app.match.execution import database_utc_now
+from app.match.event_contract import (
     AUDIENCE_CONTRACT_VERSION,
-    V2_EVENT_AUDIENCES,
+    EVENT_AUDIENCES,
     model_event_audience,
 )
-from app.v2.model_client import V2ModelError, build_model_request_payload
-from app.v2.model_context_compaction import (
-    V2ModelContextCompactionError,
+from app.match.model_client import ModelError, build_model_request_payload
+from app.match.model_context_compaction import (
+    ModelContextCompactionError,
     canonical_known_events_v5_sha256,
     expand_known_events_v7,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     CURRENT_DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
     KNOWN_EVENTS_SCHEMA_VERSION,
@@ -103,22 +103,22 @@ from app.v2.model_context_contract import (
     MODEL_VIEW_SELECTOR_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.model_failure_episode import FailureEpisode, derive_failure_episodes
-from app.v2.model_failure_impact import classify_model_failure_impact
-from app.v2.god_view_projection import project_god_view_player_identities
-from app.v2.live_runtime import V2ClientProtocolError, V2LiveRuntime
-from app.v2.models import V2GameRun
-from app.v2.public_projection import (
+from app.match.model_failure_episode import FailureEpisode, derive_failure_episodes
+from app.match.model_failure_impact import classify_model_failure_impact
+from app.match.god_view_projection import project_god_view_player_identities
+from app.match.live_runtime import ClientProtocolError, LiveRuntime
+from app.match.models import GameRun
+from app.match.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
     project_public_rule_snapshot,
 )
-from app.v2.runtime_state import project_v2_runtime_state
-from app.v2.service import (
-    V2GodViewAccessDenied,
-    V2GodViewUnavailable,
-    V2RecordNotFound,
-    V2VoiceAssetUnavailable,
+from app.match.runtime_state import project_runtime_state
+from app.match.service import (
+    GodViewAccessDenied,
+    GodViewUnavailable,
+    RecordNotFound,
+    VoiceAssetUnavailable,
     all_game_events,
     authorize_god_view,
     create_waiting_game,
@@ -152,19 +152,19 @@ def get_v2_voice_root() -> Path:
     return Path(settings.live_v2_voice_storage_dir)
 
 
-@public_router.get("/meta", response_model=V2ApiMetaResponse)
-def read_v2_meta(response: Response) -> V2ApiMetaResponse:
+@public_router.get("/meta", response_model=ApiMetaResponse)
+def read_v2_meta(response: Response) -> ApiMetaResponse:
     response.headers["Cache-Control"] = "no-store"
-    return V2ApiMetaResponse()
+    return ApiMetaResponse()
 
 
-@public_router.post("/games", response_model=V2GameCreateResponse, status_code=201)
+@public_router.post("/games", response_model=GameCreateResponse, status_code=201)
 def create_v2_game(
-    body: V2GameCreateRequest,
+    body: GameCreateRequest,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-) -> V2GameCreateResponse | JSONResponse:
-    runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+) -> GameCreateResponse | JSONResponse:
+    runtime: LiveRuntime = request.app.state.live_runtime
     audio_mode = body.audio_mode or runtime.default_audio_mode
     if audio_mode == "tts" and not runtime.tts_capability_enabled:
         return JSONResponse(
@@ -278,7 +278,7 @@ def create_v2_game(
             )
         ),
     )
-    return V2GameCreateResponse(
+    return GameCreateResponse(
         game_id=game.game_id,
         run_id=run.run_id,
         status=game.status,
@@ -295,7 +295,7 @@ def create_v2_game(
 
 def _resolve_library_rule_snapshot(
     db: Session,
-    lobby: V2LobbyCreateSnapshot,
+    lobby: LobbyCreateSnapshot,
 ) -> tuple[dict[str, Any], str]:
     expected_revision_id = lobby.rule_set_revision_id
     assert expected_revision_id is not None
@@ -387,30 +387,30 @@ def _library_player_snapshot(profile: VirtualPlayerProfile) -> dict[str, Any]:
 
 @public_router.get(
     "/live/games/{game_id}/snapshot",
-    response_model=V2LiveSnapshotResponse,
+    response_model=LiveSnapshotResponse,
 )
 def read_live_snapshot(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
     request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
-) -> V2LiveSnapshotResponse:
+) -> LiveSnapshotResponse:
     try:
         game = get_game(db, game_id)
         presentation = current_presentation(db, game_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise HTTPException(status_code=404, detail="V2 game not found") from exc
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
     match = get_match_state(db, game_id)
     run = _current_run(db, game)
-    runtime_state = project_v2_runtime_state(
+    runtime_state = project_runtime_state(
         game=game,
         run=run,
         match=match,
         now=database_utc_now(db),
     )
-    return V2LiveSnapshotResponse(
+    return LiveSnapshotResponse(
         audience="player_public",
         game_id=game.game_id,
         run_id=game.current_run_id,
@@ -429,12 +429,12 @@ def read_live_snapshot(
             role_assignment_count(db, game.game_id)
         ),
         current_presentation=(
-            V2CurrentPresentationResponse(
+            CurrentPresentationResponse(
                 action_id=presentation.action_id,
                 presentation_seq=presentation.presentation_seq,
                 presentation_id=presentation.presentation_id,
                 phase_id=presentation.phase_id,
-                actor=V2ActorResponse(
+                actor=ActorResponse(
                     kind=presentation.actor_kind,
                     id=presentation.actor_id,
                 ),
@@ -451,23 +451,23 @@ def read_live_snapshot(
 
 @public_router.get(
     "/director/games/{game_id}/snapshot",
-    response_model=V2DirectorLiveSnapshotResponse,
+    response_model=DirectorLiveSnapshotResponse,
 )
 def read_director_snapshot(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
     request: Request,
     response: Response,
-) -> V2DirectorLiveSnapshotResponse:
-    runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+) -> DirectorLiveSnapshotResponse:
+    runtime: LiveRuntime = request.app.state.live_runtime
     try:
         payload = runtime.snapshot(game_id=game_id, audience="spectator_directed")
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise HTTPException(status_code=404, detail="V2 game not found") from exc
-    except V2GodViewUnavailable as exc:
+    except GodViewUnavailable as exc:
         raise HTTPException(status_code=409, detail="Director identity unavailable") from exc
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
-    return V2DirectorLiveSnapshotResponse.model_validate(payload)
+    return DirectorLiveSnapshotResponse.model_validate(payload)
 
 
 @public_router.websocket("/director/games/{game_id}/ws")
@@ -476,7 +476,7 @@ async def director_live_websocket(websocket: WebSocket, game_id: str) -> None:
         await websocket.close(code=4404)
         return
     await websocket.accept()
-    runtime: V2LiveRuntime = websocket.app.state.v2_live_runtime
+    runtime: LiveRuntime = websocket.app.state.live_runtime
     subscriber_id: str | None = None
     channel = None
     try:
@@ -488,17 +488,17 @@ async def director_live_websocket(websocket: WebSocket, game_id: str) -> None:
         while True:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
-                raise V2ClientProtocolError("message_must_be_object")
+                raise ClientProtocolError("message_must_be_object")
             await runtime.ready(
                 channel=channel,
                 subscriber_id=subscriber_id,
                 message=message,
             )
-    except V2RecordNotFound:
+    except RecordNotFound:
         await websocket.close(code=4404)
-    except V2GodViewUnavailable:
+    except GodViewUnavailable:
         await websocket.close(code=4409)
-    except V2ClientProtocolError:
+    except ClientProtocolError:
         await websocket.close(code=4400)
     except WebSocketDisconnect:
         pass
@@ -513,7 +513,7 @@ async def live_websocket(websocket: WebSocket, game_id: str) -> None:
         await websocket.close(code=4404)
         return
     await websocket.accept()
-    runtime: V2LiveRuntime = websocket.app.state.v2_live_runtime
+    runtime: LiveRuntime = websocket.app.state.live_runtime
     subscriber_id: str | None = None
     channel = None
     try:
@@ -521,15 +521,15 @@ async def live_websocket(websocket: WebSocket, game_id: str) -> None:
         while True:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
-                raise V2ClientProtocolError("message_must_be_object")
+                raise ClientProtocolError("message_must_be_object")
             await runtime.ready(
                 channel=channel,
                 subscriber_id=subscriber_id,
                 message=message,
             )
-    except V2RecordNotFound:
+    except RecordNotFound:
         await websocket.close(code=4404)
-    except V2ClientProtocolError:
+    except ClientProtocolError:
         await websocket.close(code=4400)
     except WebSocketDisconnect:
         pass
@@ -550,12 +550,12 @@ async def god_view_websocket(
     access_token = _god_view_websocket_token(websocket)
     try:
         authorize_god_view(db, game_id=game_id, token=access_token)
-    except V2GodViewAccessDenied:
+    except GodViewAccessDenied:
         await websocket.close(code=4403)
         return
 
     await websocket.accept(subprotocol=GOD_VIEW_WEBSOCKET_SUBPROTOCOL)
-    runtime: V2LiveRuntime = websocket.app.state.v2_live_runtime
+    runtime: LiveRuntime = websocket.app.state.live_runtime
     subscriber_id: str | None = None
     channel = None
     try:
@@ -567,17 +567,17 @@ async def god_view_websocket(
         while True:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
-                raise V2ClientProtocolError("message_must_be_object")
+                raise ClientProtocolError("message_must_be_object")
             await runtime.ready(
                 channel=channel,
                 subscriber_id=subscriber_id,
                 message=message,
             )
-    except V2RecordNotFound:
+    except RecordNotFound:
         await websocket.close(code=4404)
-    except V2GodViewUnavailable:
+    except GodViewUnavailable:
         await websocket.close(code=4409)
-    except V2ClientProtocolError:
+    except ClientProtocolError:
         await websocket.close(code=4400)
     except WebSocketDisconnect:
         pass
@@ -588,7 +588,7 @@ async def god_view_websocket(
 
 @god_view_router.get(
     "/god-view/games/{game_id}/identity-snapshot",
-    response_model=V2GodViewIdentitySnapshotResponse,
+    response_model=GodViewIdentitySnapshotResponse,
 )
 def read_god_view_identity_snapshot(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -596,34 +596,34 @@ def read_god_view_identity_snapshot(
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     authorization: Annotated[str | None, Header()] = None,
-) -> V2GodViewIdentitySnapshotResponse:
+) -> GodViewIdentitySnapshotResponse:
     try:
         authorize_god_view(
             db,
             game_id=game_id,
             token=_bearer_token(authorization),
         )
-    except V2GodViewAccessDenied as exc:
+    except GodViewAccessDenied as exc:
         raise HTTPException(status_code=403, detail="God view access denied") from exc
     try:
         game = get_game(db, game_id)
         assignments = god_view_role_assignments(db, game_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise HTTPException(status_code=404, detail="V2 game not found") from exc
-    except V2GodViewUnavailable as exc:
+    except GodViewUnavailable as exc:
         raise HTTPException(status_code=409, detail="God view identity unavailable") from exc
 
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
     match = get_match_state(db, game_id)
     run = _current_run(db, game)
-    runtime_state = project_v2_runtime_state(
+    runtime_state = project_runtime_state(
         game=game,
         run=run,
         match=match,
         now=database_utc_now(db),
     )
-    return V2GodViewIdentitySnapshotResponse(
+    return GodViewIdentitySnapshotResponse(
         game_id=game.game_id,
         run_id=game.current_run_id,
         live_state=_live_state(game.status),
@@ -640,7 +640,7 @@ def read_god_view_identity_snapshot(
     )
 
 
-@admin_router.get("/games", response_model=AdminV2GameListResponse)
+@admin_router.get("/games", response_model=AdminGameListResponse)
 def list_admin_v2_games(
     request: Request,
     response: Response,
@@ -651,13 +651,13 @@ def list_admin_v2_games(
     ],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-) -> AdminV2GameListResponse:
+) -> AdminGameListResponse:
     records, total = list_games(db, page=page, page_size=page_size)
     database_now = database_utc_now(db)
     _set_admin_headers(request, response)
-    return AdminV2GameListResponse(
+    return AdminGameListResponse(
         items=[_admin_game_item(record, db=db, now=database_now) for record in records],
-        pagination=AdminV2Pagination(
+        pagination=AdminPagination(
             page=page,
             page_size=page_size,
             total=total,
@@ -666,7 +666,7 @@ def list_admin_v2_games(
     )
 
 
-@admin_router.get("/games/{game_id}", response_model=AdminV2GameDetailResponse)
+@admin_router.get("/games/{game_id}", response_model=AdminGameDetailResponse)
 def read_admin_v2_game(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
     request: Request,
@@ -676,7 +676,7 @@ def read_admin_v2_game(
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
     ],
-) -> AdminV2GameDetailResponse:
+) -> AdminGameDetailResponse:
     try:
         (
             game,
@@ -692,7 +692,7 @@ def read_admin_v2_game(
             knowledge_facts,
             match_state,
         ) = game_summary(db, game_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
             code="admin_v2_game_not_found",
@@ -710,7 +710,7 @@ def read_admin_v2_game(
         if role_assignments
         else []
     )
-    return AdminV2GameDetailResponse(
+    return AdminGameDetailResponse(
         **_admin_game_item(
             game,
             db=db,
@@ -739,9 +739,9 @@ def read_admin_v2_game(
             if match_state is not None
             else None
         ),
-        runs=[AdminV2RunResponse.model_validate(run, from_attributes=True) for run in runs],
+        runs=[AdminRunResponse.model_validate(run, from_attributes=True) for run in runs],
         presentations=[
-            AdminV2PresentationResponse.model_validate(item, from_attributes=True)
+            AdminPresentationResponse.model_validate(item, from_attributes=True)
             for item in presentations
         ],
         voice_assets=[_admin_voice_asset(item) for item in voices],
@@ -842,7 +842,7 @@ def read_admin_v2_game(
 
 @admin_router.get(
     "/games/{game_id}/events",
-    response_model=AdminV2EventPageResponse,
+    response_model=AdminEventPageResponse,
 )
 def list_admin_v2_game_events(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -855,7 +855,7 @@ def list_admin_v2_game_events(
     ],
     after_record_seq: Annotated[int, Query(ge=0)] = 0,
     page_size: Annotated[int, Query(ge=1, le=500)] = 250,
-) -> AdminV2EventPageResponse:
+) -> AdminEventPageResponse:
     try:
         events, has_more = list_game_events(
             db,
@@ -863,7 +863,7 @@ def list_admin_v2_game_events(
             after_record_seq=after_record_seq,
             page_size=page_size,
         )
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
             code="admin_v2_game_not_found",
@@ -872,7 +872,7 @@ def list_admin_v2_game_events(
         ) from exc
     _set_admin_headers(request, response)
     next_after_record_seq = events[-1].record_seq if events else after_record_seq
-    return AdminV2EventPageResponse(
+    return AdminEventPageResponse(
         items=[_admin_event_summary(event) for event in events],
         after_record_seq=after_record_seq,
         next_after_record_seq=next_after_record_seq,
@@ -882,7 +882,7 @@ def list_admin_v2_game_events(
 
 @admin_router.get(
     "/games/{game_id}/events/{event_id}",
-    response_model=AdminV2EventResponse,
+    response_model=AdminEventResponse,
 )
 def read_admin_v2_game_event(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -894,10 +894,10 @@ def read_admin_v2_game_event(
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
     ],
-) -> AdminV2EventResponse:
+) -> AdminEventResponse:
     try:
         event = get_game_event(db, game_id=game_id, event_id=event_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
             code="admin_v2_event_not_found",
@@ -905,12 +905,12 @@ def read_admin_v2_game_event(
             detail="The requested V2 event does not exist.",
         ) from exc
     _set_admin_headers(request, response)
-    return AdminV2EventResponse.model_validate(event, from_attributes=True)
+    return AdminEventResponse.model_validate(event, from_attributes=True)
 
 
 @admin_router.get(
     "/games/{game_id}/model-requests",
-    response_model=AdminV2ModelRequestPageResponse,
+    response_model=AdminModelRequestPageResponse,
 )
 def list_admin_v2_model_requests(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -923,11 +923,11 @@ def list_admin_v2_model_requests(
     ],
     after_record_seq: Annotated[int, Query(ge=0)] = 0,
     page_size: Annotated[int, Query(ge=1, le=500)] = 250,
-) -> AdminV2ModelRequestPageResponse:
+) -> AdminModelRequestPageResponse:
     try:
         events = all_game_events(db, game_id)
         presentations = list_game_presentations(db, game_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
             code="admin_v2_game_not_found",
@@ -951,7 +951,7 @@ def list_admin_v2_model_requests(
     has_more = len(changed) > len(page)
     current_record_seq = events[-1].record_seq if events else after_record_seq
     _set_admin_headers(request, response)
-    return AdminV2ModelRequestPageResponse(
+    return AdminModelRequestPageResponse(
         items=[_admin_model_request_summary(item) for item in page],
         after_record_seq=after_record_seq,
         next_after_record_seq=(page[-1].last_record_seq if has_more else current_record_seq),
@@ -961,7 +961,7 @@ def list_admin_v2_model_requests(
 
 @admin_router.get(
     "/games/{game_id}/model-requests/{attempt_id}",
-    response_model=AdminV2ModelRequestResponse,
+    response_model=AdminModelRequestResponse,
 )
 def read_admin_v2_model_request(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
@@ -973,11 +973,11 @@ def read_admin_v2_model_request(
         AdminPrincipal,
         Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
     ],
-) -> AdminV2ModelRequestResponse:
+) -> AdminModelRequestResponse:
     try:
         events = all_game_events(db, game_id)
         presentations = list_game_presentations(db, game_id)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise AdminAPIProblem(
             status_code=404,
             code="admin_v2_game_not_found",
@@ -1009,12 +1009,12 @@ def read_admin_v2_model_request(
 
 @admin_router.post(
     "/games/{game_id}/retry-model-action",
-    response_model=AdminV2ModelActionRetryResponse,
+    response_model=AdminModelActionRetryResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def retry_admin_v2_model_action(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
-    request_body: AdminV2GameControlRequest,
+    request_body: AdminGameControlRequest,
     request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
@@ -1023,7 +1023,7 @@ async def retry_admin_v2_model_action(
         str,
         Header(alias="Idempotency-Key", min_length=8, max_length=160),
     ],
-) -> AdminV2ModelActionRetryResponse:
+) -> AdminModelActionRetryResponse:
     if AdminPermission.RUNS_CONTROL not in principal.permissions:
         raise AdminAPIProblem(
             status_code=403,
@@ -1032,7 +1032,7 @@ async def retry_admin_v2_model_action(
             detail="The 'runs.control' permission is required.",
         )
     try:
-        result = request_v2_model_action_retry(
+        result = request_model_action_retry(
             db,
             game_id=game_id,
             actor_user_id=principal.user.id,
@@ -1060,7 +1060,7 @@ async def retry_admin_v2_model_action(
                 },
             )
         db.commit()
-    except V2GameControlError as exc:
+    except GameControlError as exc:
         db.rollback()
         _audit_v2_control_rejection(
             db,
@@ -1093,7 +1093,7 @@ async def retry_admin_v2_model_action(
             detail="The retry request was persisted but its run could not be reloaded.",
         )
     if run.status == "paused_model_error":
-        runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+        runtime: LiveRuntime = request.app.state.live_runtime
         resumed = await runtime.retry_paused_model_action(
             game_id=game_id,
             action_id=result.action_id,
@@ -1112,7 +1112,7 @@ async def retry_admin_v2_model_action(
                 ),
             )
     _set_admin_headers(request, response)
-    return AdminV2ModelActionRetryResponse(
+    return AdminModelActionRetryResponse(
         action="retry_model_action",
         game_id=game_id,
         run_id=run.run_id,
@@ -1124,12 +1124,12 @@ async def retry_admin_v2_model_action(
 
 @admin_router.post(
     "/games/{game_id}/stop",
-    response_model=AdminV2GameControlResponse,
+    response_model=AdminGameControlResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def stop_admin_v2_game(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
-    request_body: AdminV2GameControlRequest,
+    request_body: AdminGameControlRequest,
     request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
@@ -1138,7 +1138,7 @@ async def stop_admin_v2_game(
         str,
         Header(alias="Idempotency-Key", min_length=8, max_length=160),
     ],
-) -> AdminV2GameControlResponse:
+) -> AdminGameControlResponse:
     if AdminPermission.RUNS_CONTROL not in principal.permissions:
         raise AdminAPIProblem(
             status_code=403,
@@ -1147,7 +1147,7 @@ async def stop_admin_v2_game(
             detail="The 'runs.control' permission is required.",
         )
     try:
-        result = request_v2_game_stop(
+        result = request_game_stop(
             db,
             game_id=game_id,
             actor_user_id=principal.user.id,
@@ -1174,7 +1174,7 @@ async def stop_admin_v2_game(
                 },
             )
         db.commit()
-    except V2GameControlError as exc:
+    except GameControlError as exc:
         db.rollback()
         _audit_v2_control_rejection(
             db,
@@ -1197,7 +1197,7 @@ async def stop_admin_v2_game(
     if result.replayed:
         response.status_code = status.HTTP_200_OK
     if not result.replayed or result.run.status != "canceled":
-        runtime: V2LiveRuntime = request.app.state.v2_live_runtime
+        runtime: LiveRuntime = request.app.state.live_runtime
         try:
             await runtime.interrupt(game_id=game_id)
         except Exception:
@@ -1216,7 +1216,7 @@ async def stop_admin_v2_game(
             detail="The stop request was persisted but its run state could not be reloaded.",
         )
     _set_admin_headers(request, response)
-    return AdminV2GameControlResponse(
+    return AdminGameControlResponse(
         action="stop",
         game_id=game_id,
         run_id=run.run_id,
@@ -1240,9 +1240,9 @@ def read_admin_v2_voice_audio(
     try:
         asset = get_voice_asset(db, game_id=game_id, voice_asset_id=voice_asset_id)
         path = voice_asset_path(root=root, asset=asset)
-    except V2RecordNotFound as exc:
+    except RecordNotFound as exc:
         raise HTTPException(status_code=404, detail="V2 voice asset not found") from exc
-    except V2VoiceAssetUnavailable as exc:
+    except VoiceAssetUnavailable as exc:
         raise HTTPException(status_code=409, detail="V2 voice asset is not ready") from exc
     return FileResponse(
         path,
@@ -1255,20 +1255,20 @@ def _admin_game_item(
     record: object,
     *,
     db: Session,
-    run: V2GameRun | None = None,
+    run: GameRun | None = None,
     match: object | None = None,
     now: datetime,
-) -> AdminV2GameListItem:
+) -> AdminGameListItem:
     game = record
     current_run = run or _current_run(db, game)
     current_match = match if match is not None else get_match_state(db, game.game_id)
-    runtime_state = project_v2_runtime_state(
+    runtime_state = project_runtime_state(
         game=game,
         run=current_run,
         match=current_match,
         now=now,
     )
-    return AdminV2GameListItem.model_validate(
+    return AdminGameListItem.model_validate(
         {
             **game.__dict__,
             **_runtime_state_fields(runtime_state),
@@ -1276,10 +1276,10 @@ def _admin_game_item(
     )
 
 
-def _current_run(db: Session, game: object) -> V2GameRun:
-    run = db.get(V2GameRun, game.current_run_id)
+def _current_run(db: Session, game: object) -> GameRun:
+    run = db.get(GameRun, game.current_run_id)
     if run is None:
-        raise V2RecordNotFound(f"missing current run for {game.game_id}")
+        raise RecordNotFound(f"missing current run for {game.game_id}")
     return run
 
 
@@ -1294,8 +1294,8 @@ def _runtime_state_fields(runtime_state: object) -> dict[str, Any]:
     }
 
 
-def _admin_voice_asset(asset: object) -> AdminV2VoiceAssetResponse:
-    value = AdminV2VoiceAssetResponse.model_validate(
+def _admin_voice_asset(asset: object) -> AdminVoiceAssetResponse:
+    value = AdminVoiceAssetResponse.model_validate(
         {**asset.__dict__, "audio_url": None},
     )
     if value.state != "ready":
@@ -1328,7 +1328,7 @@ _ADMIN_ACTION_CONTEXT_KEYS = {
 _ADMIN_STREAM_CONTENT_LIMIT = 200_000
 
 
-def _admin_event_summary(event: object) -> AdminV2EventResponse:
+def _admin_event_summary(event: object) -> AdminEventResponse:
     payload = event.payload if isinstance(event.payload, dict) else {}
     projected = dict(payload)
     if event.event_type == "action_opened":
@@ -1349,15 +1349,15 @@ def _admin_event_summary(event: object) -> AdminV2EventResponse:
     elif event.event_type == "model_stream_progress":
         projected.pop("reasoning_delta", None)
         projected.pop("text_delta", None)
-    return AdminV2EventResponse.model_validate(
+    return AdminEventResponse.model_validate(
         {**event.__dict__, "payload": projected},
     )
 
 
 def _admin_model_request_summary(
-    item: AdminV2ModelRequestResponse,
-) -> AdminV2ModelRequestSummaryResponse:
-    return AdminV2ModelRequestSummaryResponse.model_validate(
+    item: AdminModelRequestResponse,
+) -> AdminModelRequestSummaryResponse:
+    return AdminModelRequestSummaryResponse.model_validate(
         item.model_dump(
             exclude={
                 "request_payload",
@@ -1454,7 +1454,7 @@ def _admin_expanded_known_events(
         return None, "invalid"
     try:
         expanded = expand_known_events_v7(known_events)
-    except V2ModelContextCompactionError:
+    except ModelContextCompactionError:
         return None, "invalid"
     selector = prompt_projection.get("selector")
     expanded_events = expanded.get("events")
@@ -1497,7 +1497,7 @@ def _admin_model_requests(
     presentations: list[object],
     *,
     expanded_known_events_attempt_id: str | None = None,
-) -> list[AdminV2ModelRequestResponse]:
+) -> list[AdminModelRequestResponse]:
     events_by_run: dict[str | None, list[object]] = {}
     for event in events:
         events_by_run.setdefault(getattr(event, "run_id", None), []).append(event)
@@ -1581,7 +1581,7 @@ def _admin_model_requests(
     )
     starts.sort(key=lambda event: event.record_seq)
 
-    result: list[AdminV2ModelRequestResponse] = []
+    result: list[AdminModelRequestResponse] = []
     for start in starts:
         payload = start.payload if isinstance(start.payload, dict) else {}
         attempt_id = payload.get("attempt_id")
@@ -1686,7 +1686,7 @@ def _admin_model_requests(
                     model_id=model_id or "",
                     max_output_tokens=16_384,
                 )
-            except (V2ModelError, KeyError, TypeError, ValueError):
+            except (ModelError, KeyError, TypeError, ValueError):
                 request_payload = None
                 input_source = "unavailable"
             else:
@@ -1985,7 +1985,7 @@ def _admin_model_requests(
         if status == "failed" and failure_impact.display_status is not None:
             status = failure_impact.display_status
         result.append(
-            AdminV2ModelRequestResponse(
+            AdminModelRequestResponse(
                 attempt_id=attempt_id,
                 decision_family_id=(
                     payload.get("decision_family_id")
@@ -2366,7 +2366,7 @@ def _admin_model_request_audience(
     if (
         payload.get("audience_contract_version") == AUDIENCE_CONTRACT_VERSION
         and isinstance(stored_audience, str)
-        and stored_audience in V2_EVENT_AUDIENCES
+        and stored_audience in EVENT_AUDIENCES
     ):
         actor_kind = payload.get("actor_kind")
         effective_audience = model_event_audience(
@@ -2386,7 +2386,7 @@ def _admin_model_request_audience(
         (context.get("audience"), "action_context"),
     )
     for candidate, source in candidates:
-        if isinstance(candidate, str) and candidate in V2_EVENT_AUDIENCES:
+        if isinstance(candidate, str) and candidate in EVENT_AUDIENCES:
             return stored_audience, candidate, source
     return stored_audience, "legacy_unknown", "legacy_unknown"
 
@@ -2504,26 +2504,26 @@ def _audit_v2_control_rejection(
     db.commit()
 
 
-def _v2_control_problem(exc: V2GameControlError) -> AdminAPIProblem:
-    if isinstance(exc, V2GameControlNotFound):
+def _v2_control_problem(exc: GameControlError) -> AdminAPIProblem:
+    if isinstance(exc, GameControlNotFound):
         return AdminAPIProblem(
             status_code=404,
             code=exc.code,
             title="V2 game not found",
             detail="The requested V2 game does not exist.",
         )
-    if isinstance(exc, V2GameControlIdempotencyConflict):
+    if isinstance(exc, GameControlIdempotencyConflict):
         return AdminAPIProblem(
             status_code=409,
             code=exc.code,
             title="Idempotency conflict",
             detail="This idempotency key was already used for another control request.",
         )
-    if isinstance(exc, V2GameStopAlreadyRequested):
+    if isinstance(exc, GameStopAlreadyRequested):
         detail = "A stop request is already pending for this V2 game."
-    elif isinstance(exc, V2GameModelActionNotPaused):
+    elif isinstance(exc, GameModelActionNotPaused):
         detail = "Only a V2 game paused on a recoverable model error can be retried."
-    elif isinstance(exc, V2GameControlNotActive):
+    elif isinstance(exc, GameControlNotActive):
         detail = "Only an active V2 game can be stopped."
     else:
         detail = "The V2 game stop request was rejected."
@@ -2589,18 +2589,18 @@ def _live_state(
     return "failed"
 
 
-def _game_phase(game: object) -> V2GamePhaseResponse:
-    return V2GamePhaseResponse(
+def _game_phase(game: object) -> GamePhaseResponse:
+    return GamePhaseResponse(
         phase_seq=game.phase_seq,
         phase_id=game.phase_id,
         phase_state=game.phase_state,
     )
 
 
-def _match_state(match: object | None) -> V2MatchStateResponse | None:
+def _match_state(match: object | None) -> MatchStateResponse | None:
     if match is None:
         return None
-    return V2MatchStateResponse(
+    return MatchStateResponse(
         round_no=match.round_no,
         sheriff_player_id=match.sheriff_player_id,
         sheriff_badge_state=match.sheriff_badge_state,

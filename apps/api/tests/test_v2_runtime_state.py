@@ -7,13 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
-from app.v2.models import (
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2MatchState,
+from app.match.models import (
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    MatchState,
 )
-from app.v2.runtime_state import project_v2_runtime_state
+from app.match.runtime_state import project_runtime_state
 
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -24,8 +24,8 @@ def _game(
     status: str = "ready",
     phase_state: str = "night_running",
     current_run_id: str = "v2_run_current0001",
-) -> V2GameRecord:
-    return V2GameRecord(
+) -> GameRecord:
+    return GameRecord(
         game_id="v2_game_runtime001",
         title="runtime projection test",
         status=status,
@@ -53,8 +53,8 @@ def _run(
     worker_heartbeat_at: datetime | None = None,
     lease_expires_at: datetime | None = None,
     fence_token: int = 0,
-) -> V2GameRun:
-    return V2GameRun(
+) -> GameRun:
+    return GameRun(
         run_id=run_id,
         game_id="v2_game_runtime001",
         attempt_no=1,
@@ -71,8 +71,8 @@ def _match(
     *,
     winner: str | None = None,
     completion_reason: str | None = None,
-) -> V2MatchState:
-    return V2MatchState(
+) -> MatchState:
+    return MatchState(
         game_id="v2_game_runtime001",
         round_no=1,
         sheriff_badge_state="disabled",
@@ -124,13 +124,13 @@ def _match(
     ],
 )
 def test_match_status_matrix(
-    game: V2GameRecord,
-    run: V2GameRun,
-    match: V2MatchState | None,
+    game: GameRecord,
+    run: GameRun,
+    match: MatchState | None,
     completion_event_present: bool,
     expected: str,
 ) -> None:
-    projection = project_v2_runtime_state(
+    projection = project_runtime_state(
         game=game,
         run=run,
         match=match,
@@ -158,7 +158,7 @@ def test_incomplete_terminal_evidence_remains_running(
     completed_at: datetime | None,
     event_present: bool,
 ) -> None:
-    projection = project_v2_runtime_state(
+    projection = project_runtime_state(
         game=_game(status="awaiting_observation", phase_state=phase_state),
         run=_run(status="awaiting_observation", completed_at=completed_at),
         match=_match(winner=winner, completion_reason=completion_reason),
@@ -174,10 +174,10 @@ def test_completed_requires_a_game_completed_event_from_the_current_run() -> Non
     Base.metadata.create_all(
         engine,
         tables=[
-            V2GameRecord.__table__,
-            V2GameRun.__table__,
-            V2MatchState.__table__,
-            V2GameRecordEvent.__table__,
+            GameRecord.__table__,
+            GameRun.__table__,
+            MatchState.__table__,
+            GameRecordEvent.__table__,
         ],
     )
     with Session(engine) as db:
@@ -196,7 +196,7 @@ def test_completed_requires_a_game_completed_event_from_the_current_run() -> Non
         db.add_all([game, current_run, previous_run, match])
         db.flush()
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=game.game_id,
                 event_id=1,
                 record_seq=1,
@@ -208,7 +208,7 @@ def test_completed_requires_a_game_completed_event_from_the_current_run() -> Non
         )
         db.flush()
 
-        without_current_event = project_v2_runtime_state(
+        without_current_event = project_runtime_state(
             game=game,
             run=current_run,
             match=match,
@@ -217,7 +217,7 @@ def test_completed_requires_a_game_completed_event_from_the_current_run() -> Non
         assert without_current_event.match_status == "running"
 
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=game.game_id,
                 event_id=2,
                 record_seq=2,
@@ -229,7 +229,7 @@ def test_completed_requires_a_game_completed_event_from_the_current_run() -> Non
         )
         db.flush()
 
-        with_current_event = project_v2_runtime_state(
+        with_current_event = project_runtime_state(
             game=game,
             run=current_run,
             match=match,
@@ -262,7 +262,7 @@ def test_execution_state_matrix(
     fence_token: int,
     expected: str,
 ) -> None:
-    projection = project_v2_runtime_state(
+    projection = project_runtime_state(
         game=_game(status=game_status),
         run=_run(
             status=game_status,

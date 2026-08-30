@@ -10,12 +10,12 @@ from app.rule_sets.types import (
     RuleSetConfig,
     RuleSetValidationResult,
     RuleValidationIssue,
+    WEREWOLF_ATTACK_RESOLUTIONS,
     WerewolfAttackResolution,
 )
-from app.werewolf.rules import (
+from app.shared.rules import (
     SPEECH_POLICY_SEQUENTIAL,
     SPEECH_POLICY_SHERIFF_DIRECTED,
-    WEREWOLF_ATTACK_RESOLUTIONS,
     WIN_CONDITION_SLAUGHTER_SIDE,
     WIN_CONDITION_WOLVES_GTE_OTHERS,
 )

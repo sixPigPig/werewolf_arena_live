@@ -17,7 +17,7 @@ from app.rule_sets.snapshots import (
     rule_set_config_from_snapshot,
     rule_set_content_hash,
 )
-from app.werewolf.rules import validate_frozen_rule_contract_snapshot
+from app.shared.rules import validate_frozen_rule_contract_snapshot
 
 
 def valid_config(**overrides: object) -> dict[str, object]:
@@ -513,7 +513,7 @@ def test_v1_frozen_snapshot_round_trips_after_contract_writer_advances(
     )
     frozen_v1_snapshot = copy.deepcopy(compiled.snapshot)
 
-    monkeypatch.setattr("app.werewolf.rules.RULE_CONTRACT_SCHEMA_VERSION", 2)
+    monkeypatch.setattr("app.shared.rules.RULE_CONTRACT_SCHEMA_VERSION", 2)
 
     restored = resolve_rule_set_snapshot(frozen_v1_snapshot)
     assert restored.snapshot == frozen_v1_snapshot

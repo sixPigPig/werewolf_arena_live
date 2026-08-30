@@ -4,6 +4,8 @@
 
 **Status:** Implemented（Work Packages A/B/C）；Work Package D 未实施
 
+> 2026-08-20 核对：代码的 `MODEL_CONTEXT_SCHEMA_VERSION` 已是 **13**，`PROMPT_TEMPLATE_VERSION` 为 6。本文讨论的 V11 是历史版本，`model_context_contract.py` 里以 `HISTORICAL_V11_MODEL_CONTEXT_SCHEMA_VERSION` 保留。阅读本文时不要把 V11 当作当前契约。
+
 **Validation:** 自动化门禁已通过；12 人 V11 text-only 真局因上游 `agent_plan` 全部请求返回 HTTP 400，尚未完成终局验收
 
 **Priority:** P0 Derived Semantics Correctness / P1 Contract Consistency / P2 Context Efficiency

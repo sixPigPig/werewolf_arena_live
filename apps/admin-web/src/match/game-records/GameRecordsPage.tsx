@@ -14,19 +14,19 @@ import {
   AdminPage,
   AdminPageHeader,
 } from "@/components/admin/AdminPage";
-import { listV2GameRecords } from "@/v2/game-records/api";
-import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
-import type { V2GameRecordListItem } from "@/v2/game-records/types";
+import { listGameRecords } from "@/match/game-records/api";
+import { gameRecordKeys } from "@/match/game-records/query-keys";
+import type { GameRecordListItem } from "@/match/game-records/types";
 
-export default function V2GameRecordsPage() {
+export default function GameRecordsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
   const query = useQuery({
     placeholderData: keepPreviousData,
-    queryFn: ({ signal }) => listV2GameRecords(page, signal),
-    queryKey: v2GameRecordKeys.list(page),
+    queryFn: ({ signal }) => listGameRecords(page, signal),
+    queryKey: gameRecordKeys.list(page),
   });
-  const columns: ColumnsType<V2GameRecordListItem> = [
+  const columns: ColumnsType<GameRecordListItem> = [
     {
       key: "game",
       render: (_, game) => (
@@ -101,7 +101,7 @@ export default function V2GameRecordsPage() {
           styles={{ body: { padding: 0 } }}
           title={<h2 id="v2-game-list-title">新对局账本</h2>}
         >
-          <Table<V2GameRecordListItem>
+          <Table<GameRecordListItem>
             columns={columns}
             dataSource={query.data?.items ?? []}
             loading={query.isPending}

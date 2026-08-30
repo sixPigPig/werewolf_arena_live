@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 
 if TYPE_CHECKING:
-    from app.werewolf.rules import RuleSet
+    from app.shared.rules import RuleSet
 
 
 RuleRoleId = Literal["werewolf", "villager", "seer", "guard", "witch", "hunter", "idiot"]
@@ -14,6 +14,10 @@ WerewolfAttackResolution = Literal[
     "plurality_seeded_random",
     "unanimous_no_attack",
 ]
+LEGACY_WEREWOLF_ATTACK_RESOLUTION: WerewolfAttackResolution = "unanimous_no_attack"
+WEREWOLF_ATTACK_RESOLUTIONS: frozenset[WerewolfAttackResolution] = frozenset(
+    get_args(WerewolfAttackResolution)
+)
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models.game_session import GameSessionRecord
 from app.models.rule_set import RuleSetRecord
 from app.rule_sets.telemetry import (
     _reset_rule_set_metrics_for_tests,
@@ -60,8 +59,6 @@ def test_metrics_endpoint_returns_prometheus_text_without_cache() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert response.headers["cache-control"] == "no-store"
-    assert "werewolf_live_run_reaper_up 0" in response.text
-    assert "# TYPE werewolf_live_run_reaper_scans_total counter" in response.text
     assert "# TYPE werewolf_rule_publish_total counter" in response.text
     assert 'werewolf_rule_publish_total{result="success"} 1' in response.text
     assert "# TYPE werewolf_rule_create_conflicts_total counter" in response.text
@@ -118,84 +115,8 @@ def test_rule_metrics_render_all_fixed_results_and_reasons() -> None:
         assert f'werewolf_rule_checkpoint_failures_total{{reason="{reason}"}} 1' in metrics
 
 
-def test_rule_metrics_use_only_scalar_game_columns_and_group_normalized_values() -> None:
-    marker = 'SECRET description {winner="张三"}\\nwerewolf_injected 1'
-    session_factory = _session_factory()
-    with session_factory() as db:
-        db.add_all(
-            [
-                GameSessionRecord(
-                    session_id="game_00000001",
-                    status="complete",
-                    rule_set_id="classic_8",
-                    rule_set_revision_no=1,
-                    rule_set={"id": marker, "revision_no": 999, "description": marker},
-                ),
-                GameSessionRecord(
-                    session_id="game_00000002",
-                    status="complete",
-                    rule_set_id="classic_8",
-                    rule_set_revision_no=1,
-                    rule_set={"id": "other_json_rule", "revision_no": 2},
-                ),
-                GameSessionRecord(
-                    session_id="game_00000003",
-                    status="partial",
-                    rule_set_id="classic_8",
-                    rule_set_revision_no=None,
-                    rule_set={"description": marker},
-                ),
-                GameSessionRecord(
-                    session_id="game_00000004",
-                    status=marker,
-                    rule_set_id=marker,
-                    rule_set_revision_no=-1,
-                    rule_set={"description": marker},
-                ),
-            ]
-        )
-        db.commit()
-        metrics = render_rule_set_metrics(db)
-
-    assert (
-        'werewolf_rule_games{rule_set_id="classic_8",revision_no="1",status="complete"} 2'
-        in metrics
-    )
-    assert (
-        'werewolf_rule_games{rule_set_id="classic_8",revision_no="legacy",status="partial"} 1'
-        in metrics
-    )
-    assert (
-        'werewolf_rule_games{rule_set_id="unknown",revision_no="unknown",status="other"} 1'
-        in metrics
-    )
-    assert marker not in metrics
-    assert "other_json_rule" not in metrics
-    assert "999" not in metrics
 
 
-def test_rule_metrics_compare_failure_ratio_with_preceding_numeric_revision() -> None:
-    session_factory = _session_factory()
-    with session_factory() as db:
-        db.add_all(
-            [
-                GameSessionRecord(
-                    session_id=f"game_{index:08d}",
-                    status="partial" if index >= 36 else "complete",
-                    rule_set_id="history_rule",
-                    rule_set_revision_no=1 if index < 20 else 2,
-                )
-                for index in range(40)
-            ]
-        )
-        db.commit()
-        metrics = render_rule_set_metrics(db)
-
-    assert (
-        'werewolf_rule_game_failure_ratio_delta{rule_set_id="history_rule",revision_no="2"} 0.2'
-        in metrics
-    )
-    assert 'revision_no="1"} 0' not in metrics
 
 
 def test_rule_published_default_count_covers_zero_one_and_corrupt_many() -> None:
@@ -311,7 +232,7 @@ def test_rule_metric_recorders_do_not_raise_for_unrenderable_revision_integer() 
 
 def test_metrics_endpoint_hides_database_failures() -> None:
     session = Mock()
-    session.scalars.side_effect = SQLAlchemyError("secret database details")
+    session.scalar.side_effect = SQLAlchemyError("secret database details")
     app.dependency_overrides[get_db] = lambda: session
     try:
         response = client.get("/api/v1/metrics")

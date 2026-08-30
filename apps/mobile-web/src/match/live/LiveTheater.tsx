@@ -15,16 +15,16 @@ import {
 } from "lucide-react";
 
 import type {
-  V2AbilityProgress,
-  V2DirectorScene,
-  V2GamePhase,
-  V2GodViewNightResolved,
-  V2GodViewPlayerIdentity,
-  V2LiveState,
-  V2MatchState,
-  V2Presentation,
-  V2PublicPlayerSeat,
-  V2RuntimeProjection,
+  AbilityProgress,
+  DirectorScene,
+  GamePhase,
+  GodViewNightResolved,
+  GodViewPlayerIdentity,
+  LiveState,
+  MatchState,
+  Presentation,
+  PublicPlayerSeat,
+  RuntimeProjection,
 } from "../contracts";
 import {
   awaitingObservationLabel,
@@ -32,34 +32,34 @@ import {
   effectiveWinner,
 } from "../runtime";
 
-export type V2ConnectionState = "idle" | "connecting" | "connected" | "failed";
-export type V2ViewingMode = "director" | "challenge";
+export type ConnectionState = "idle" | "connecting" | "connected" | "failed";
+export type ViewingMode = "director" | "challenge";
 
-type V2LiveTheaterProps = {
+type LiveTheaterProps = {
   audioActive: boolean;
-  connectionState: V2ConnectionState;
-  directorAbility: V2AbilityProgress | null;
-  directorPlayers: V2GodViewPlayerIdentity[];
-  directorResolution: V2GodViewNightResolved | null;
-  directorScene: V2DirectorScene | null;
+  connectionState: ConnectionState;
+  directorAbility: AbilityProgress | null;
+  directorPlayers: GodViewPlayerIdentity[];
+  directorResolution: GodViewNightResolved | null;
+  directorScene: DirectorScene | null;
   error: string | null;
-  gamePhase: V2GamePhase | null;
-  liveState: V2LiveState | null;
-  matchState: V2MatchState | null;
-  runtimeProjection: V2RuntimeProjection | null;
+  gamePhase: GamePhase | null;
+  liveState: LiveState | null;
+  matchState: MatchState | null;
+  runtimeProjection: RuntimeProjection | null;
   onEnter: () => void;
-  onViewingModeChange: (mode: V2ViewingMode) => void;
-  presentation: V2Presentation | null;
+  onViewingModeChange: (mode: ViewingMode) => void;
+  presentation: Presentation | null;
   processLabel: string;
-  publicPlayers: V2PublicPlayerSeat[];
+  publicPlayers: PublicPlayerSeat[];
   reactingPlayerIds: ReadonlySet<string>;
   ruleName: string;
-  viewingMode: V2ViewingMode;
+  viewingMode: ViewingMode;
 };
 
 type StageTone = "opening" | "night" | "day" | "vote" | "terminal" | "failed";
 
-export function V2LiveTheater({
+export function LiveTheater({
   audioActive,
   connectionState,
   directorAbility,
@@ -79,7 +79,7 @@ export function V2LiveTheater({
   reactingPlayerIds,
   ruleName,
   viewingMode,
-}: V2LiveTheaterProps) {
+}: LiveTheaterProps) {
   const tone = stageTone(
     gamePhase,
     liveState,
@@ -284,8 +284,8 @@ export function V2LiveTheater({
 
 type CastColumnProps = {
   activePlayerId: string | null;
-  matchState: V2MatchState | null;
-  players: V2PublicPlayerSeat[];
+  matchState: MatchState | null;
+  players: PublicPlayerSeat[];
   reactingPlayerIds: ReadonlySet<string>;
   side: "left" | "right";
   targetedPlayerId: string | null;
@@ -341,8 +341,8 @@ type StageSubtitleProps = {
   actorName: string | null;
   actorRole: string | null;
   audioActive: boolean;
-  audioMode: V2RuntimeProjection["audio_mode"];
-  presentation: V2Presentation | null;
+  audioMode: RuntimeProjection["audio_mode"];
+  presentation: Presentation | null;
   processLabel: string;
 };
 
@@ -386,8 +386,8 @@ function StageSubtitle({
 }
 
 type ViewingModePickerProps = {
-  onChange: (mode: V2ViewingMode) => void;
-  value: V2ViewingMode;
+  onChange: (mode: ViewingMode) => void;
+  value: ViewingMode;
 };
 
 function ViewingModePicker({ onChange, value }: ViewingModePickerProps) {
@@ -426,10 +426,10 @@ function ViewingModePicker({ onChange, value }: ViewingModePickerProps) {
 }
 
 type DirectorSceneRibbonProps = {
-  ability: V2AbilityProgress | null;
-  players: V2GodViewPlayerIdentity[];
-  resolution: V2GodViewNightResolved | null;
-  scene: V2DirectorScene | null;
+  ability: AbilityProgress | null;
+  players: GodViewPlayerIdentity[];
+  resolution: GodViewNightResolved | null;
+  scene: DirectorScene | null;
 };
 
 function DirectorSceneRibbon({
@@ -451,10 +451,10 @@ function DirectorSceneRibbon({
 }
 
 function directorSceneSummary(
-  ability: V2AbilityProgress | null,
-  resolution: V2GodViewNightResolved | null,
-  players: V2GodViewPlayerIdentity[],
-  scene: V2DirectorScene | null,
+  ability: AbilityProgress | null,
+  resolution: GodViewNightResolved | null,
+  players: GodViewPlayerIdentity[],
+  scene: DirectorScene | null,
 ): string {
   if (resolution?.deaths.length) {
     return `夜间结算：${resolution.deaths
@@ -487,7 +487,7 @@ function directorSceneSummary(
 }
 
 function playerName(
-  players: V2GodViewPlayerIdentity[],
+  players: GodViewPlayerIdentity[],
   playerId: string,
 ): string {
   return (
@@ -496,7 +496,7 @@ function playerName(
   );
 }
 
-function sceneLabel(scene: V2DirectorScene | null): string {
+function sceneLabel(scene: DirectorScene | null): string {
   if (!scene) return "等待下一幕";
   return {
     opening: "开幕舞台",
@@ -529,7 +529,7 @@ function roleLabel(role: string): string {
 function StageRhythm({
   gamePhase,
   matchState,
-}: Pick<V2LiveTheaterProps, "gamePhase" | "matchState">) {
+}: Pick<LiveTheaterProps, "gamePhase" | "matchState">) {
   const current = phaseGroup(gamePhase);
   return (
     <div className="mobile-v2-stage-rhythm" aria-label="当前回合节奏">
@@ -555,14 +555,14 @@ function rhythmClass(
   return order[target] < order[current] ? "is-complete" : "";
 }
 
-function splitPlayers(players: V2PublicPlayerSeat[]) {
+function splitPlayers(players: PublicPlayerSeat[]) {
   const ordered = [...players].sort((left, right) => left.seat - right.seat);
   const middle = Math.ceil(ordered.length / 2);
   return { left: ordered.slice(0, middle), right: ordered.slice(middle) };
 }
 
 function phaseGroup(
-  phase: V2GamePhase | null,
+  phase: GamePhase | null,
 ): "opening" | "night" | "day" | "terminal" {
   if (phase?.phase_state === "game_completed") return "terminal";
   if (phase?.phase_id === "first_night" || phase?.phase_id.startsWith("night_")) {
@@ -573,10 +573,10 @@ function phaseGroup(
 }
 
 function stageTone(
-  phase: V2GamePhase | null,
-  liveState: V2LiveState | null,
-  matchState: V2MatchState | null,
-  runtime: V2RuntimeProjection | null,
+  phase: GamePhase | null,
+  liveState: LiveState | null,
+  matchState: MatchState | null,
+  runtime: RuntimeProjection | null,
   error: string | null,
 ): StageTone {
   if (
@@ -607,8 +607,8 @@ function stageTone(
 }
 
 function phaseTitle(
-  phase: V2GamePhase | null,
-  matchState: V2MatchState | null,
+  phase: GamePhase | null,
+  matchState: MatchState | null,
 ): string {
   if (phase?.phase_state === "game_completed") return "终局";
   if (phase?.phase_state === "sheriff_election_open") return "警长竞选";
@@ -621,11 +621,11 @@ function phaseTitle(
 }
 
 function connectionLabel(
-  connectionState: V2ConnectionState,
-  liveState: V2LiveState | null,
-  phase: V2GamePhase | null,
-  matchState: V2MatchState | null,
-  runtime: V2RuntimeProjection | null,
+  connectionState: ConnectionState,
+  liveState: LiveState | null,
+  phase: GamePhase | null,
+  matchState: MatchState | null,
+  runtime: RuntimeProjection | null,
 ): string {
   const matchStatus = effectiveMatchStatus(runtime, phase, matchState, liveState);
   if (matchStatus === "completed") return "对局已完成";
@@ -647,10 +647,10 @@ function connectionLabel(
 }
 
 function terminalPresentation(
-  liveState: V2LiveState | null,
-  phase: V2GamePhase | null,
-  matchState: V2MatchState | null,
-  runtime: V2RuntimeProjection | null,
+  liveState: LiveState | null,
+  phase: GamePhase | null,
+  matchState: MatchState | null,
+  runtime: RuntimeProjection | null,
   error: string | null,
 ): { kind: "complete" | "paused" | "interrupted" | "failed"; title: string; description: string } | null {
   const matchStatus = effectiveMatchStatus(runtime, phase, matchState, liveState);

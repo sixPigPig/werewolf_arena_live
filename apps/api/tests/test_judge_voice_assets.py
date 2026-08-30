@@ -3,15 +3,15 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from app.werewolf.judge_voice_assets import (
+from app.shared.judge_voice_assets import (
     DEFAULT_JUDGE_VOICE_ASSET_DIR,
     JUDGE_VOICE_LINES,
     generate_judge_voice_assets,
     list_judge_voice_assets,
     validate_used_judge_voice_assets,
 )
-from app.werewolf.volcengine_tts import VolcengineTtsConfig
-from app.werewolf.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming
+from app.shared.volcengine_tts import VolcengineTtsConfig
+from app.shared.volcengine_tts import TtsSubtitleCue, TtsSubtitleTiming
 
 
 BASE_CONFIG = VolcengineTtsConfig(

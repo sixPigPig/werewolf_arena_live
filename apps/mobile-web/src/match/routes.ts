@@ -1,14 +1,14 @@
 import type { RouteObject } from "react-router-dom";
 
-export const liveV2Route: RouteObject = {
+export const liveRoute: RouteObject = {
   path: "v2/games/:gameId/live",
   lazy: async () => {
-    const { LiveV2Page } = await import("./live/LiveV2Page");
-    return { Component: LiveV2Page };
+    const { LivePage } = await import("./live/LivePage");
+    return { Component: LivePage };
   },
 };
 
-export const godViewV2Route: RouteObject = {
+export const godViewRoute: RouteObject = {
   path: "v2/games/:gameId/live/god",
   lazy: async () => {
     const { GodViewPage } = await import("./god-view/GodViewPage");

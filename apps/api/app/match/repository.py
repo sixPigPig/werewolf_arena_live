@@ -10,75 +10,75 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.day_speech_pipeline_contract import (
-    V2DaySpeechPipelineContractError,
+from app.match.day_speech_pipeline_contract import (
+    DaySpeechPipelineContractError,
     resolve_day_speech_pipeline_contract,
 )
-from app.v2.models import (
-    V2AbilityActivation,
-    V2ActionWindow,
-    V2DaySpeechSlot,
-    V2EffectIntent,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2KnowledgeFact,
-    V2LivePresentation,
-    V2ModelActionRecovery,
-    V2PlayerState,
-    V2PreExilePipeline,
-    V2PreExileResult,
-    V2RoleAssignment,
-    V2VoiceAsset,
+from app.match.models import (
+    AbilityActivation,
+    ActionWindow,
+    DaySpeechSlot,
+    EffectIntent,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    KnowledgeFact,
+    LivePresentation,
+    ModelActionRecovery,
+    PlayerState,
+    PreExilePipeline,
+    PreExileResult,
+    RoleAssignment,
+    VoiceAsset,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     frozen_model_context_contract,
     supports_model_context_contract,
 )
-from app.v2.model_generation_policy_contract import (
-    V2ModelGenerationPolicyContractError,
+from app.match.model_generation_policy_contract import (
+    ModelGenerationPolicyContractError,
     resolve_model_generation_policy_contract,
 )
-from app.v2.model_parameters import (
-    V2FrozenModelParametersError,
+from app.match.model_parameters import (
+    FrozenModelParametersError,
     validate_players_snapshot_model_configurations,
 )
-from app.v2.pre_exile_pipeline_contract import (
-    V2PreExilePipelineContractError,
+from app.match.pre_exile_pipeline_contract import (
+    PreExilePipelineContractError,
     pre_exile_context_sha256,
     resolve_pre_exile_pipeline_contract,
 )
-from app.v2.knowledge_timeline import player_private_knowledge
-from app.v2.model_failure_episode import (
+from app.match.knowledge_timeline import player_private_knowledge
+from app.match.model_failure_episode import (
     FailureEpisode,
     derive_failure_episodes,
     stable_failure_episode_id,
 )
-from app.v2.execution import (
-    V2RunFence,
-    V2RunFenceRejected,
-    current_v2_run_fence,
+from app.match.execution import (
+    RunFence,
+    RunFenceRejected,
+    current_run_fence,
     database_utc_now,
-    require_v2_run_fence,
+    require_run_fence,
 )
-from app.v2.event_contract import canonical_event_payload, model_event_audience
-from app.v2.runtime_state import V2AudioMode, delivery_audio_mode
+from app.match.event_contract import canonical_event_payload, model_event_audience
+from app.match.runtime_state import AudioMode, delivery_audio_mode
 
 
-class V2RepositoryError(RuntimeError):
+class RepositoryError(RuntimeError):
     pass
 
 
-class V2ExecutionOwnershipLost(V2RepositoryError):
+class ExecutionOwnershipLost(RepositoryError):
     """The active runtime no longer owns the fenced game execution."""
 
 
-class V2GameCanceled(asyncio.CancelledError):
+class GameCanceled(asyncio.CancelledError):
     pass
 
 
 @dataclass(frozen=True)
-class V2ActionClaim:
+class ActionClaim:
     game_id: str
     run_id: str
     action_id: str
@@ -90,12 +90,12 @@ class V2ActionClaim:
     action_record_seq: int | None = None
     model_context_contract: dict[str, int] | None = None
     model_generation_policy_contract: dict[str, Any] | None = None
-    audio_mode: V2AudioMode = "legacy_unknown"
-    run_fence: V2RunFence | None = None
+    audio_mode: AudioMode = "legacy_unknown"
+    run_fence: RunFence | None = None
 
 
 @dataclass(frozen=True)
-class V2PhaseTransition:
+class PhaseTransition:
     game_id: str
     run_id: str
     phase_seq: int
@@ -105,7 +105,7 @@ class V2PhaseTransition:
 
 
 @dataclass(frozen=True)
-class V2PresentationIdentity:
+class PresentationIdentity:
     game_id: str
     run_id: str
     action_id: str
@@ -118,7 +118,7 @@ class V2PresentationIdentity:
     storage_key: str
     subtitle_text: str
     audience: str
-    run_fence: V2RunFence | None = None
+    run_fence: RunFence | None = None
     activation_id: str | None = None
     actor_kind: str = "judge"
     actor_id: str = "judge"
@@ -127,22 +127,22 @@ class V2PresentationIdentity:
 
 
 @dataclass(frozen=True)
-class V2CancellationResult:
+class CancellationResult:
     run_id: str
     status: str
     changed: bool
 
 
 @dataclass(frozen=True)
-class V2ExecutionClaimResult:
+class ExecutionClaimResult:
     status: Literal["owned", "already_owned", "not_startable"]
     run_id: str
-    fence: V2RunFence | None = None
+    fence: RunFence | None = None
     owner_hint: str | None = None
     current_state: str | None = None
 
 
-class V2ActionRepository:
+class ActionRepository:
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -159,37 +159,37 @@ class V2ActionRepository:
         audience: str,
         worker_id: str,
         lease_seconds: float,
-    ) -> V2ExecutionClaimResult:
+    ) -> ExecutionClaimResult:
         """Start a new game and acquire its only execution fence atomically."""
         if not worker_id or len(worker_id) > 64:
-            raise V2RepositoryError("invalid V2 execution worker id")
+            raise RepositoryError("invalid V2 execution worker id")
         if lease_seconds <= 0:
-            raise V2RepositoryError("invalid V2 execution lease duration")
+            raise RepositoryError("invalid V2 execution lease duration")
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=False)
             _raise_if_stop_requested(db, game)
             if not supports_model_context_contract(game.rule_snapshot):
-                raise V2RepositoryError("unsupported_model_context_contract")
+                raise RepositoryError("unsupported_model_context_contract")
             _resolved_model_generation_policy_contract(game.rule_snapshot)
             try:
                 validate_players_snapshot_model_configurations(game.players_snapshot)
-            except V2FrozenModelParametersError as exc:
-                raise V2RepositoryError("invalid frozen player model configuration") from exc
+            except FrozenModelParametersError as exc:
+                raise RepositoryError("invalid frozen player model configuration") from exc
             if game.status != "waiting_to_start":
                 run = _run(db, game.current_run_id)
-                return V2ExecutionClaimResult(
+                return ExecutionClaimResult(
                     status=("already_owned" if run.worker_id is not None else "not_startable"),
                     run_id=run.run_id,
                     owner_hint=run.worker_id,
                     current_state=game.status,
                 )
             if game.phase_id != "opening" or game.phase_state != "opening_ready":
-                raise V2RepositoryError("waiting game is not ready for opening")
+                raise RepositoryError("waiting game is not ready for opening")
             run = _run(db, game.current_run_id)
             if run.status != "waiting_to_start" or run.started_at is not None:
-                raise V2RepositoryError("waiting run has already been started")
+                raise RepositoryError("waiting run has already been started")
             if run.worker_id is not None or run.lease_expires_at is not None:
-                raise V2RepositoryError("waiting run already has an execution owner")
+                raise RepositoryError("waiting run already has an execution owner")
             started_at = database_utc_now(db)
             fence_token = run.fence_token + 1
             lease_expires_at = started_at + timedelta(seconds=lease_seconds)
@@ -229,10 +229,10 @@ class V2ActionRepository:
                     "fence_token": fence_token,
                 },
             )
-            return V2ExecutionClaimResult(
+            return ExecutionClaimResult(
                 status="owned",
                 run_id=run.run_id,
-                fence=V2RunFence(
+                fence=RunFence(
                     run_id=run.run_id,
                     worker_id=worker_id,
                     fence_token=fence_token,
@@ -249,13 +249,13 @@ class V2ActionRepository:
         )
         return result.status == "owned"
 
-    def heartbeat_execution(self, *, fence: V2RunFence, lease_seconds: float) -> bool:
+    def heartbeat_execution(self, *, fence: RunFence, lease_seconds: float) -> bool:
         if lease_seconds <= 0:
-            raise V2RepositoryError("invalid V2 execution lease duration")
+            raise RepositoryError("invalid V2 execution lease duration")
         with self._session_factory.begin() as db:
             run = db.scalar(
-                select(V2GameRun)
-                .where(V2GameRun.run_id == fence.run_id)
+                select(GameRun)
+                .where(GameRun.run_id == fence.run_id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
@@ -275,21 +275,21 @@ class V2ActionRepository:
     def record_execution_heartbeat_lost(
         self,
         *,
-        fence: V2RunFence,
+        fence: RunFence,
         reason: str,
     ) -> bool:
         """Persist fail-closed ownership loss without clearing the stale owner."""
         with self._session_factory.begin() as db:
             game = db.scalar(
-                select(V2GameRecord)
-                .where(V2GameRecord.current_run_id == fence.run_id)
+                select(GameRecord)
+                .where(GameRecord.current_run_id == fence.run_id)
                 .with_for_update()
             )
             if game is None:
                 return False
             run = db.scalar(
-                select(V2GameRun)
-                .where(V2GameRun.run_id == fence.run_id)
+                select(GameRun)
+                .where(GameRun.run_id == fence.run_id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
@@ -323,18 +323,18 @@ class V2ActionRepository:
             run.lease_expires_at = observed_at
             return True
 
-    def release_execution(self, *, fence: V2RunFence, reason: str) -> bool:
+    def release_execution(self, *, fence: RunFence, reason: str) -> bool:
         with self._session_factory.begin() as db:
             game = db.scalar(
-                select(V2GameRecord)
-                .where(V2GameRecord.current_run_id == fence.run_id)
+                select(GameRecord)
+                .where(GameRecord.current_run_id == fence.run_id)
                 .with_for_update()
             )
             if game is None:
                 return False
             try:
-                run = require_v2_run_fence(db, game, fence=fence)
-            except V2RunFenceRejected:
+                run = require_run_fence(db, game, fence=fence)
+            except RunFenceRejected:
                 return False
             _append_event(
                 db,
@@ -367,12 +367,12 @@ class V2ActionRepository:
         with self._session_factory() as db:
             rows = list(
                 db.scalars(
-                    select(V2GameRecordEvent)
+                    select(GameRecordEvent)
                     .where(
-                        V2GameRecordEvent.game_id == game_id,
-                        V2GameRecordEvent.event_type == "model_binding_health_updated",
+                        GameRecordEvent.game_id == game_id,
+                        GameRecordEvent.event_type == "model_binding_health_updated",
                     )
-                    .order_by(V2GameRecordEvent.record_seq.desc())
+                    .order_by(GameRecordEvent.record_seq.desc())
                     .limit(200)
                 )
             )
@@ -387,17 +387,17 @@ class V2ActionRepository:
                 return value if isinstance(value, int) and not isinstance(value, bool) else 0
         return 0
 
-    def execution_release_reason(self, *, fence: V2RunFence) -> str:
+    def execution_release_reason(self, *, fence: RunFence) -> str:
         """Resolve the durable terminal reason before releasing an owned run."""
         with self._session_factory.begin() as db:
             game = db.scalar(
-                select(V2GameRecord)
-                .where(V2GameRecord.current_run_id == fence.run_id)
+                select(GameRecord)
+                .where(GameRecord.current_run_id == fence.run_id)
                 .with_for_update()
             )
             if game is None:
-                raise V2ExecutionOwnershipLost("v2_run_execution_run_changed")
-            run = db.get(V2GameRun, fence.run_id)
+                raise ExecutionOwnershipLost("v2_run_execution_run_changed")
+            run = db.get(GameRun, fence.run_id)
             if (
                 run is not None
                 and game.current_run_id == fence.run_id
@@ -405,9 +405,9 @@ class V2ActionRepository:
             ):
                 return "canceled"
             try:
-                run = require_v2_run_fence(db, game, fence=fence)
-            except V2RunFenceRejected as exc:
-                raise V2ExecutionOwnershipLost(str(exc)) from exc
+                run = require_run_fence(db, game, fence=fence)
+            except RunFenceRejected as exc:
+                raise ExecutionOwnershipLost(str(exc)) from exc
             if game.status == "canceled" or run.status == "canceled":
                 return "canceled"
             if game.status == "failed" or game.phase_state == "failed" or run.status == "failed":
@@ -427,7 +427,7 @@ class V2ActionRepository:
         activation_id: str | None = None,
         best_effort: bool = False,
         non_blocking: bool = False,
-    ) -> V2ActionClaim | None:
+    ) -> ActionClaim | None:
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
@@ -436,7 +436,7 @@ class V2ActionRepository:
             )
             _raise_if_stop_requested(db, game)
             if not supports_model_context_contract(game.rule_snapshot):
-                raise V2RepositoryError("unsupported_model_context_contract")
+                raise RepositoryError("unsupported_model_context_contract")
             model_generation_policy_contract = _resolved_model_generation_policy_contract(
                 game.rule_snapshot
             )
@@ -481,7 +481,7 @@ class V2ActionRepository:
                     non_blocking=non_blocking,
                 )
             elif pipeline_generation:
-                raise V2RepositoryError(
+                raise RepositoryError(
                     "day speech pipeline generation requires an active broadcast"
                 )
             elif (
@@ -507,24 +507,24 @@ class V2ActionRepository:
                 )
             if best_effort and context.get("action_type") == "judge_game_completed":
                 existing = db.scalar(
-                    select(V2GameRecordEvent.event_id).where(
-                        V2GameRecordEvent.game_id == game_id,
-                        V2GameRecordEvent.event_type == "action_opened",
-                        V2GameRecordEvent.payload["context"]["action_type"].as_string()
+                    select(GameRecordEvent.event_id).where(
+                        GameRecordEvent.game_id == game_id,
+                        GameRecordEvent.event_type == "action_opened",
+                        GameRecordEvent.payload["context"]["action_type"].as_string()
                         == "judge_game_completed",
                     )
                 )
                 if existing is not None:
                     return None
             if activation_id is not None:
-                activation = db.get(V2AbilityActivation, activation_id)
+                activation = db.get(AbilityActivation, activation_id)
                 if (
                     activation is None
                     or activation.game_id != game.game_id
                     or activation.status != "open"
                     or activation.action_id is not None
                 ):
-                    raise V2RepositoryError("ability activation cannot claim action")
+                    raise RepositoryError("ability activation cannot claim action")
                 activation.action_id = action_id
             if not best_effort and not non_blocking:
                 game.status = "generating"
@@ -547,8 +547,8 @@ class V2ActionRepository:
                 },
             )
             if opened.record_seq != action_record_seq:
-                raise V2RepositoryError("action record sequence changed while opening")
-            return V2ActionClaim(
+                raise RepositoryError("action record sequence changed while opening")
+            return ActionClaim(
                 game_id=game.game_id,
                 run_id=run.run_id,
                 action_id=action_id,
@@ -561,7 +561,7 @@ class V2ActionRepository:
                 model_context_contract=frozen_model_context_contract(game.rule_snapshot),
                 model_generation_policy_contract=(model_generation_policy_contract),
                 audio_mode=delivery_audio_mode(game.delivery_snapshot),
-                run_fence=current_v2_run_fence(),
+                run_fence=current_run_fence(),
             )
 
     def append_event(
@@ -571,7 +571,7 @@ class V2ActionRepository:
         event_type: str,
         audience: str,
         payload: dict[str, Any],
-        fence: V2RunFence | None = None,
+        fence: RunFence | None = None,
     ) -> int:
         with self._session_factory.begin() as db:
             game = _locked_game(
@@ -594,7 +594,7 @@ class V2ActionRepository:
     def open_presentation(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         presentation_id: str,
         speech_id: str,
         voice_asset_id: str | None,
@@ -602,7 +602,7 @@ class V2ActionRepository:
         sample_rate: int,
         actor_kind: str = "judge",
         actor_id: str = "judge",
-    ) -> V2PresentationIdentity:
+    ) -> PresentationIdentity:
         audience = claim.audience
         storage_key = f"{claim.game_id}/{voice_asset_id}.wav" if voice_asset_id else ""
         with self._session_factory.begin() as db:
@@ -615,7 +615,7 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             expected_status = "awaiting_observation" if claim.best_effort else "generating"
             if game.status != expected_status:
-                raise V2RepositoryError(f"cannot open presentation from {game.status}")
+                raise RepositoryError(f"cannot open presentation from {game.status}")
             presentation_seq = game.last_presentation_seq + 1
             _append_event(
                 db,
@@ -662,7 +662,7 @@ class V2ActionRepository:
                 },
             )
             if voice_asset_id is not None:
-                voice = V2VoiceAsset(
+                voice = VoiceAsset(
                     voice_asset_id=voice_asset_id,
                     game_id=claim.game_id,
                     run_id=claim.run_id,
@@ -680,7 +680,7 @@ class V2ActionRepository:
                 )
                 db.add(voice)
                 db.flush()
-            presentation = V2LivePresentation(
+            presentation = LivePresentation(
                 game_id=claim.game_id,
                 presentation_seq=presentation_seq,
                 presentation_id=presentation_id,
@@ -707,7 +707,7 @@ class V2ActionRepository:
             if not claim.best_effort:
                 game.status = "broadcasting"
                 _run(db, claim.run_id).status = "broadcasting"
-        return V2PresentationIdentity(
+        return PresentationIdentity(
             game_id=claim.game_id,
             run_id=claim.run_id,
             action_id=claim.action_id,
@@ -731,7 +731,7 @@ class V2ActionRepository:
     def complete_text_action(
         self,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         next_live_state: str,
         next_phase_state: str,
         best_effort: bool = False,
@@ -745,15 +745,15 @@ class V2ActionRepository:
             )
             _raise_if_stop_requested(db, game)
             presentation = db.get(
-                V2LivePresentation,
+                LivePresentation,
                 (identity.game_id, identity.presentation_seq),
             )
             if presentation is None or presentation.voice_asset_id is not None:
-                raise V2RepositoryError("text action presentation is not closable")
+                raise RepositoryError("text action presentation is not closable")
             if presentation.state != "active":
-                raise V2RepositoryError("text action presentation is not active")
+                raise RepositoryError("text action presentation is not active")
             if game.phase_id != identity.phase_id:
-                raise V2RepositoryError("action phase changed before text completion")
+                raise RepositoryError("action phase changed before text completion")
             presentation.state = "closed"
             presentation.closed_at = _now()
             run = _run(db, identity.run_id)
@@ -792,7 +792,7 @@ class V2ActionRepository:
     def mark_finalizing(
         self,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         tts_attempt_id: str,
         sample_count: int,
         best_effort: bool = False,
@@ -825,7 +825,7 @@ class V2ActionRepository:
     def mark_voice_ready(
         self,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         tts_attempt_id: str,
         sample_count: int,
         duration_ms: int,
@@ -840,9 +840,9 @@ class V2ActionRepository:
                 fence=identity.run_fence,
             )
             _raise_if_stop_requested(db, game)
-            voice = db.get(V2VoiceAsset, identity.voice_asset_id)
+            voice = db.get(VoiceAsset, identity.voice_asset_id)
             if voice is None or voice.state != "writing":
-                raise V2RepositoryError("voice asset is not writable")
+                raise RepositoryError("voice asset is not writable")
             voice.state = "ready"
             voice.sample_count = sample_count
             voice.duration_ms = duration_ms
@@ -850,11 +850,11 @@ class V2ActionRepository:
             voice.size_bytes = size_bytes
             voice.completed_at = _now()
             presentation = db.get(
-                V2LivePresentation,
+                LivePresentation,
                 (identity.game_id, identity.presentation_seq),
             )
             if presentation is None:
-                raise V2RepositoryError("presentation disappeared")
+                raise RepositoryError("presentation disappeared")
             presentation.audio_asset_id = identity.voice_asset_id
             presentation.audio_mime_type = "audio/wav"
             presentation.audio_duration_ms = duration_ms
@@ -880,7 +880,7 @@ class V2ActionRepository:
     def complete_action(
         self,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         tts_attempt_id: str,
         final_chunk_index: int,
         final_sample_cursor: int,
@@ -897,16 +897,16 @@ class V2ActionRepository:
             )
             _raise_if_stop_requested(db, game)
             presentation = db.get(
-                V2LivePresentation,
+                LivePresentation,
                 (identity.game_id, identity.presentation_seq),
             )
-            voice = db.get(V2VoiceAsset, identity.voice_asset_id)
+            voice = db.get(VoiceAsset, identity.voice_asset_id)
             if presentation is None or voice is None or voice.state != "ready":
-                raise V2RepositoryError("action cannot complete without ready voice")
+                raise RepositoryError("action cannot complete without ready voice")
             presentation.state = "closed"
             presentation.closed_at = _now()
             if game.phase_id != identity.phase_id:
-                raise V2RepositoryError("action phase changed before completion")
+                raise RepositoryError("action phase changed before completion")
             run = _run(db, identity.run_id)
             if not best_effort:
                 game.status = next_live_state
@@ -960,7 +960,7 @@ class V2ActionRepository:
     def complete_silent_action(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         next_live_state: str,
         next_phase_state: str,
         best_effort: bool = False,
@@ -980,15 +980,15 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             if claim.non_blocking:
                 if game.status in {"failed", "canceled"}:
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         f"cannot complete non-blocking action from {game.status}"
                     )
             else:
                 expected_status = "awaiting_observation" if best_effort else "generating"
                 if game.status != expected_status:
-                    raise V2RepositoryError(f"cannot complete silent action from {game.status}")
+                    raise RepositoryError(f"cannot complete silent action from {game.status}")
             if game.phase_id != claim.phase_id:
-                raise V2RepositoryError("action phase changed before completion")
+                raise RepositoryError("action phase changed before completion")
             if not best_effort and not claim.non_blocking:
                 game.status = next_live_state
                 game.phase_state = next_phase_state
@@ -1027,7 +1027,7 @@ class V2ActionRepository:
             )
             return completed.record_seq
 
-    def transition_to_first_night(self, *, game_id: str) -> V2PhaseTransition:
+    def transition_to_first_night(self, *, game_id: str) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
@@ -1036,12 +1036,12 @@ class V2ActionRepository:
                 or game.phase_id != "opening"
                 or game.phase_state != "opening_speech_closed"
             ):
-                raise V2RepositoryError("opening is not ready to enter first night")
+                raise RepositoryError("opening is not ready to enter first night")
             previous_phase_id = game.phase_id
             game.phase_seq += 1
             game.phase_id = "first_night"
             game.phase_state = "nightfall_ready"
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1071,7 +1071,7 @@ class V2ActionRepository:
         phase_id: str,
         previous_phase_state: str,
         phase_state: str,
-    ) -> V2PhaseTransition:
+    ) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             if (
@@ -1079,8 +1079,8 @@ class V2ActionRepository:
                 or game.phase_id != phase_id
                 or game.phase_state != phase_state
             ):
-                raise V2RepositoryError("completed action phase state does not match")
-            transition = V2PhaseTransition(
+                raise RepositoryError("completed action phase state does not match")
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1141,10 +1141,10 @@ class V2ActionRepository:
     def fail_action(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         failure_kind: str,
         failure_code: str,
-        identity: V2PresentationIdentity | None,
+        identity: PresentationIdentity | None,
         tts_attempt_id: str | None = None,
         best_effort: bool = False,
         failure_episode_id: str | None = None,
@@ -1188,13 +1188,13 @@ class V2ActionRepository:
             failed_failure_episode_ids = tuple(sorted(open_episodes)) if run_failure else ()
             if identity is not None:
                 presentation = db.get(
-                    V2LivePresentation,
+                    LivePresentation,
                     (identity.game_id, identity.presentation_seq),
                 )
                 if presentation is not None and presentation.state == "active":
                     presentation.state = "failed"
                     presentation.closed_at = _now()
-                voice = db.get(V2VoiceAsset, identity.voice_asset_id)
+                voice = db.get(VoiceAsset, identity.voice_asset_id)
                 if voice is not None and voice.state == "writing":
                     voice.state = "failed"
                     voice.completed_at = _now()
@@ -1245,7 +1245,7 @@ class V2ActionRepository:
                 },
             )
             if claim.non_blocking and claim.activation_id is not None:
-                activation = db.get(V2AbilityActivation, claim.activation_id)
+                activation = db.get(AbilityActivation, claim.activation_id)
                 if (
                     activation is not None
                     and activation.status == "open"
@@ -1270,7 +1270,7 @@ class V2ActionRepository:
     def pause_model_action(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         attempt_id: str | None,
         failure_code: str,
         recovery: dict[str, Any],
@@ -1287,14 +1287,14 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
             if game.status != "generating" or run.status != "generating":
-                raise V2RepositoryError(
+                raise RepositoryError(
                     f"cannot pause model action from {game.status}/{run.status}"
                 )
             game.status = "paused_model_error"
             run.status = "paused_model_error"
-            existing = db.get(V2ModelActionRecovery, claim.action_id)
+            existing = db.get(ModelActionRecovery, claim.action_id)
             if existing is None:
-                existing = V2ModelActionRecovery(
+                existing = ModelActionRecovery(
                     action_id=claim.action_id,
                     recovery_id=f"v2_recovery_{uuid4().hex[:16]}",
                     game_id=claim.game_id,
@@ -1316,7 +1316,7 @@ class V2ActionRepository:
                 db.add(existing)
             else:
                 if existing.request_hash != recovery["request_hash"]:
-                    raise V2RepositoryError("paused model request hash changed")
+                    raise RepositoryError("paused model request hash changed")
                 existing.failure_code = failure_code
                 existing.failure_category = str(recovery["failure_category"])
                 existing.attempt_no = int(recovery["attempt_no"])
@@ -1459,7 +1459,7 @@ class V2ActionRepository:
 
     def pending_model_action_retry(self, *, game_id: str, action_id: str) -> str | None:
         with self._session_factory() as db:
-            recovery = db.get(V2ModelActionRecovery, action_id)
+            recovery = db.get(ModelActionRecovery, action_id)
             if (
                 recovery is None
                 or recovery.game_id != game_id
@@ -1474,7 +1474,7 @@ class V2ActionRepository:
     def resume_model_action(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         control_request_id: str,
     ) -> None:
         with self._session_factory.begin() as db:
@@ -1487,14 +1487,14 @@ class V2ActionRepository:
             _raise_if_stop_requested(db, game)
             run = _run(db, claim.run_id)
             if game.status != "paused_model_error" or run.status != "paused_model_error":
-                raise V2RepositoryError(
+                raise RepositoryError(
                     f"cannot resume model action from {game.status}/{run.status}"
                 )
             game.status = "generating"
             run.status = "generating"
-            recovery = db.get(V2ModelActionRecovery, claim.action_id)
+            recovery = db.get(ModelActionRecovery, claim.action_id)
             if recovery is None or recovery.state not in {"retry_requested", "paused"}:
-                raise V2RepositoryError("durable model action retry is not pending")
+                raise RepositoryError("durable model action retry is not pending")
             recovery.state = "running"
             recovery.control_request_id = control_request_id
             recovery_audience = _model_action_recovery_audience(recovery)
@@ -1526,13 +1526,13 @@ class V2ActionRepository:
     def resolve_model_action_recovery(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         attempt_id: str,
         attempt_no: int,
         retry_cycle: int,
     ) -> None:
         with self._session_factory.begin() as db:
-            recovery = db.get(V2ModelActionRecovery, claim.action_id)
+            recovery = db.get(ModelActionRecovery, claim.action_id)
             if recovery is None or recovery.state == "resolved":
                 return
             recovery.state = "resolved"
@@ -1563,38 +1563,38 @@ class V2ActionRepository:
 
     def check_cancellation(self, game_id: str) -> None:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             if self._enforce_execution_fence:
                 try:
-                    require_v2_run_fence(db, game, lock=False)
-                except V2RunFenceRejected as exc:
-                    raise V2ExecutionOwnershipLost(str(exc)) from exc
+                    require_run_fence(db, game, lock=False)
+                except RunFenceRejected as exc:
+                    raise ExecutionOwnershipLost(str(exc)) from exc
             _raise_if_stop_requested(db, game)
 
     def stop_requested(self, game_id: str) -> bool:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             run = _run(db, game.current_run_id)
             return run.stop_requested_at is not None
 
-    def cancel_game(self, game_id: str) -> V2CancellationResult:
+    def cancel_game(self, game_id: str) -> CancellationResult:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=False)
             run = _run(db, game.current_run_id)
             if run.stop_requested_at is None:
-                raise V2RepositoryError("game cancellation was not requested")
+                raise RepositoryError("game cancellation was not requested")
             if game.status == "canceled":
-                return V2CancellationResult(
+                return CancellationResult(
                     run_id=run.run_id,
                     status=run.status,
                     changed=False,
                 )
             if game.status in {"completed", "failed"}:
-                return V2CancellationResult(
+                return CancellationResult(
                     run_id=run.run_id,
                     status=run.status,
                     changed=False,
@@ -1603,9 +1603,9 @@ class V2ActionRepository:
             canceled_at = _now()
             interrupted_presentations = list(
                 db.scalars(
-                    select(V2LivePresentation).where(
-                        V2LivePresentation.game_id == game.game_id,
-                        V2LivePresentation.state == "active",
+                    select(LivePresentation).where(
+                        LivePresentation.game_id == game.game_id,
+                        LivePresentation.state == "active",
                     )
                 )
             )
@@ -1614,7 +1614,7 @@ class V2ActionRepository:
                 presentation.state = "canceled"
                 presentation.closed_at = canceled_at
                 if presentation.voice_asset_id is not None:
-                    voice = db.get(V2VoiceAsset, presentation.voice_asset_id)
+                    voice = db.get(VoiceAsset, presentation.voice_asset_id)
                     if voice is not None and voice.state == "writing":
                         voice.state = "canceled"
                         voice.completed_at = canceled_at
@@ -1648,15 +1648,15 @@ class V2ActionRepository:
 
             canceled_day_speech_slots = list(
                 db.scalars(
-                    select(V2DaySpeechSlot)
+                    select(DaySpeechSlot)
                     .where(
-                        V2DaySpeechSlot.game_id == game.game_id,
-                        V2DaySpeechSlot.run_id == run.run_id,
-                        V2DaySpeechSlot.state.in_(
+                        DaySpeechSlot.game_id == game.game_id,
+                        DaySpeechSlot.run_id == run.run_id,
+                        DaySpeechSlot.state.in_(
                             ("reserved", "generating", "ready", "presenting")
                         ),
                     )
-                    .order_by(V2DaySpeechSlot.slot_id)
+                    .order_by(DaySpeechSlot.slot_id)
                     .with_for_update()
                 )
             )
@@ -1694,29 +1694,29 @@ class V2ActionRepository:
 
             canceled_pre_exile_pipelines = list(
                 db.scalars(
-                    select(V2PreExilePipeline)
+                    select(PreExilePipeline)
                     .where(
-                        V2PreExilePipeline.game_id == game.game_id,
-                        V2PreExilePipeline.run_id == run.run_id,
-                        V2PreExilePipeline.state.in_(
+                        PreExilePipeline.game_id == game.game_id,
+                        PreExilePipeline.run_id == run.run_id,
+                        PreExilePipeline.state.in_(
                             ("collecting", "no_explosion", "votes_accepted")
                         ),
                     )
-                    .order_by(V2PreExilePipeline.pipeline_id)
+                    .order_by(PreExilePipeline.pipeline_id)
                     .with_for_update()
                 )
             )
-            canceled_pre_exile_results: list[V2PreExileResult] = []
+            canceled_pre_exile_results: list[PreExileResult] = []
             if canceled_pre_exile_pipelines:
-                from app.v2.pre_exile_pipeline_repository import (
+                from app.match.pre_exile_pipeline_repository import (
                     _terminalize_result_actions,
                 )
 
                 for pipeline in canceled_pre_exile_pipelines:
                     results = list(
                         db.scalars(
-                            select(V2PreExileResult)
-                            .where(V2PreExileResult.pipeline_id == pipeline.pipeline_id)
+                            select(PreExileResult)
+                            .where(PreExileResult.pipeline_id == pipeline.pipeline_id)
                             .with_for_update()
                         )
                     )
@@ -1758,9 +1758,9 @@ class V2ActionRepository:
 
             open_activations = list(
                 db.scalars(
-                    select(V2AbilityActivation).where(
-                        V2AbilityActivation.game_id == game.game_id,
-                        V2AbilityActivation.status == "open",
+                    select(AbilityActivation).where(
+                        AbilityActivation.game_id == game.game_id,
+                        AbilityActivation.status == "open",
                     )
                 )
             )
@@ -1784,9 +1784,9 @@ class V2ActionRepository:
 
             open_windows = list(
                 db.scalars(
-                    select(V2ActionWindow).where(
-                        V2ActionWindow.game_id == game.game_id,
-                        V2ActionWindow.state == "open",
+                    select(ActionWindow).where(
+                        ActionWindow.game_id == game.game_id,
+                        ActionWindow.state == "open",
                     )
                 )
             )
@@ -1797,9 +1797,9 @@ class V2ActionRepository:
 
             pending_effects = list(
                 db.scalars(
-                    select(V2EffectIntent).where(
-                        V2EffectIntent.game_id == game.game_id,
-                        V2EffectIntent.state == "pending",
+                    select(EffectIntent).where(
+                        EffectIntent.game_id == game.game_id,
+                        EffectIntent.state == "pending",
                     )
                 )
             )
@@ -1823,9 +1823,9 @@ class V2ActionRepository:
 
             active_recoveries = list(
                 db.scalars(
-                    select(V2ModelActionRecovery).where(
-                        V2ModelActionRecovery.game_id == game.game_id,
-                        V2ModelActionRecovery.state.in_(("paused", "retry_requested", "running")),
+                    select(ModelActionRecovery).where(
+                        ModelActionRecovery.game_id == game.game_id,
+                        ModelActionRecovery.state.in_(("paused", "retry_requested", "running")),
                     )
                 )
             )
@@ -1884,7 +1884,7 @@ class V2ActionRepository:
                     "canceled_failure_episode_ids": list(canceled_failure_episode_ids),
                 },
             )
-            return V2CancellationResult(
+            return CancellationResult(
                 run_id=run.run_id,
                 status=run.status,
                 changed=True,
@@ -1894,9 +1894,9 @@ class V2ActionRepository:
 def _terminalize_canceled_day_speech_actions(
     db: Session,
     *,
-    game: V2GameRecord,
-    run: V2GameRun,
-    slots: list[V2DaySpeechSlot],
+    game: GameRecord,
+    run: GameRun,
+    slots: list[DaySpeechSlot],
 ) -> None:
     """Close hidden pipeline attempts/actions without bypassing stop globally."""
 
@@ -1918,18 +1918,18 @@ def _terminalize_canceled_day_speech_actions(
 
     events = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == run.run_id,
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == run.run_id,
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
-    opened_by_action: dict[str, V2GameRecordEvent] = {}
+    opened_by_action: dict[str, GameRecordEvent] = {}
     terminal_action_ids: set[str] = set()
     terminal_attempt_ids: set[str] = set()
-    starts_by_action: dict[str, list[V2GameRecordEvent]] = {
+    starts_by_action: dict[str, list[GameRecordEvent]] = {
         action_id: [] for action_id in action_ids
     }
     canceled_episode_ids_by_action: dict[str, set[str]] = {
@@ -2045,7 +2045,7 @@ def _terminalize_canceled_day_speech_actions(
         terminal_action_ids.add(action_id)
 
 
-def _event_payload_audience(event: V2GameRecordEvent) -> str:
+def _event_payload_audience(event: GameRecordEvent) -> str:
     payload = event.payload if isinstance(event.payload, dict) else {}
     audience = payload.get("audience")
     return audience if isinstance(audience, str) and audience else "god_view"
@@ -2062,16 +2062,16 @@ def _locked_game(
     game_id: str,
     *,
     require_fence: bool,
-    fence: V2RunFence | None = None,
-) -> V2GameRecord:
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+    fence: RunFence | None = None,
+) -> GameRecord:
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2RepositoryError(f"unknown game {game_id}")
+        raise RepositoryError(f"unknown game {game_id}")
     if require_fence:
         try:
-            require_v2_run_fence(db, game, fence=fence)
-        except V2RunFenceRejected as exc:
-            raise V2ExecutionOwnershipLost(str(exc)) from exc
+            require_run_fence(db, game, fence=fence)
+        except RunFenceRejected as exc:
+            raise ExecutionOwnershipLost(str(exc)) from exc
     return game
 
 
@@ -2092,8 +2092,8 @@ def _is_pre_exile_pipeline_context(context: dict[str, Any]) -> bool:
 def _bind_broadcast_pipeline_generation_claim(
     db: Session,
     *,
-    game: V2GameRecord,
-    run: V2GameRun,
+    game: GameRecord,
+    run: GameRun,
     action_id: str,
     context: dict[str, Any],
     expected_phase_id: str,
@@ -2108,7 +2108,7 @@ def _bind_broadcast_pipeline_generation_claim(
 
     pipeline = context.get("pipeline")
     if type(pipeline) is not dict:
-        raise V2RepositoryError("day speech pipeline generation context is invalid")
+        raise RepositoryError("day speech pipeline generation context is invalid")
     if pipeline.get("kind") == "pre_exile":
         _bind_pre_exile_pipeline_generation_claim(
             db,
@@ -2126,11 +2126,11 @@ def _bind_broadcast_pipeline_generation_claim(
         )
         return
     if "kind" in pipeline:
-        raise V2RepositoryError("unsupported broadcast pipeline kind")
+        raise RepositoryError("unsupported broadcast pipeline kind")
     try:
         contract = resolve_day_speech_pipeline_contract(game.rule_snapshot)
-    except V2DaySpeechPipelineContractError as exc:
-        raise V2RepositoryError(str(exc)) from exc
+    except DaySpeechPipelineContractError as exc:
+        raise RepositoryError(str(exc)) from exc
     expected_pipeline_keys = {"slot_id", "stage", "model_admission_mode"}
     guarded_retry_enabled = contract.early_transport_hidden_retry_max_retries == 1
     if guarded_retry_enabled:
@@ -2147,13 +2147,13 @@ def _bind_broadcast_pipeline_generation_claim(
         or audience != "player_private"
         or context_audience != "player_private"
     ):
-        raise V2RepositoryError("day speech pipeline generation claim is not isolated")
+        raise RepositoryError("day speech pipeline generation claim is not isolated")
     if guarded_retry_enabled and (
         pipeline.get("retry_mode") != "empty_stream_once_while_predecessor_active"
         or pipeline.get("empty_stream_max_attempts")
         != 1 + contract.early_transport_hidden_retry_max_retries
     ):
-        raise V2RepositoryError("day speech pipeline retry policy is not frozen")
+        raise RepositoryError("day speech pipeline retry policy is not frozen")
     if (
         not contract.enables("day_debate_speech")
         or contract.mode != "one_ahead"
@@ -2162,7 +2162,7 @@ def _bind_broadcast_pipeline_generation_claim(
         or contract.admission_mode != "idle_only"
         or delivery_audio_mode(game.delivery_snapshot) != "tts"
     ):
-        raise V2RepositoryError("day speech pipeline generation is not frozen and enabled")
+        raise RepositoryError("day speech pipeline generation is not frozen and enabled")
     if (
         game.status != "broadcasting"
         or run.status != "broadcasting"
@@ -2171,17 +2171,17 @@ def _bind_broadcast_pipeline_generation_claim(
         or game.phase_id != expected_phase_id
         or game.phase_state != expected_phase_state
     ):
-        raise V2RepositoryError("day speech pipeline generation phase changed")
+        raise RepositoryError("day speech pipeline generation phase changed")
 
     row = db.scalar(
-        select(V2DaySpeechSlot)
-        .where(V2DaySpeechSlot.slot_id == str(pipeline["slot_id"]))
+        select(DaySpeechSlot)
+        .where(DaySpeechSlot.slot_id == str(pipeline["slot_id"]))
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     if row is None:
-        raise V2RepositoryError("unknown day speech pipeline slot")
-    fence = current_v2_run_fence()
+        raise RepositoryError("unknown day speech pipeline slot")
+    fence = current_run_fence()
     if (
         row.game_id != game.game_id
         or row.run_id != run.run_id
@@ -2196,11 +2196,11 @@ def _bind_broadcast_pipeline_generation_claim(
             )
         )
     ):
-        raise V2ExecutionOwnershipLost("v2_day_speech_slot_fence_lost")
+        raise ExecutionOwnershipLost("v2_day_speech_slot_fence_lost")
     if row.state != "generating":
-        raise V2RepositoryError("day speech pipeline slot is not generating")
+        raise RepositoryError("day speech pipeline slot is not generating")
     if row.generation_action_id is not None:
-        raise V2RepositoryError("day speech pipeline slot already claimed generation")
+        raise RepositoryError("day speech pipeline slot already claimed generation")
     if (
         row.phase_id != game.phase_id
         or row.action_type != "day_debate_speech"
@@ -2219,7 +2219,7 @@ def _bind_broadcast_pipeline_generation_claim(
         or type(context.get("output_contract")) is not dict
         or context["output_contract"].get("kind") != "speech"
     ):
-        raise V2RepositoryError("day speech pipeline generation context lineage is invalid")
+        raise RepositoryError("day speech pipeline generation context lineage is invalid")
     actor = context.get("actor")
     speech_order = context.get("speech_order")
     batch_id = context.get("batch_id")
@@ -2231,7 +2231,7 @@ def _bind_broadcast_pipeline_generation_claim(
         or not isinstance(batch_id, str)
         or not batch_id.strip()
     ):
-        raise V2RepositoryError("day speech pipeline generation actor/turn is invalid")
+        raise RepositoryError("day speech pipeline generation actor/turn is invalid")
 
     _validate_pipeline_generation_predecessor(
         db,
@@ -2245,8 +2245,8 @@ def _bind_broadcast_pipeline_generation_claim(
 def _bind_pre_exile_pipeline_generation_claim(
     db: Session,
     *,
-    game: V2GameRecord,
-    run: V2GameRun,
+    game: GameRecord,
+    run: GameRun,
     action_id: str,
     context: dict[str, Any],
     expected_phase_id: str,
@@ -2259,7 +2259,7 @@ def _bind_pre_exile_pipeline_generation_claim(
 ) -> None:
     pipeline_context = context.get("pipeline")
     if type(pipeline_context) is not dict:
-        raise V2RepositoryError("pre-exile pipeline context is invalid")
+        raise RepositoryError("pre-exile pipeline context is invalid")
     result_kind = pipeline_context.get("result_kind")
     expected_action_type = (
         "werewolf_self_explosion"
@@ -2271,8 +2271,8 @@ def _bind_pre_exile_pipeline_generation_claim(
     expected_admission = "normal" if result_kind == "self_explosion" else "idle_only"
     try:
         contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
-    except V2PreExilePipelineContractError as exc:
-        raise V2RepositoryError(str(exc)) from exc
+    except PreExilePipelineContractError as exc:
+        raise RepositoryError(str(exc)) from exc
     guarded_self_explosion_retry = (
         result_kind == "self_explosion"
         and contract.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
@@ -2312,7 +2312,7 @@ def _bind_pre_exile_pipeline_generation_claim(
             )
         )
     ):
-        raise V2RepositoryError("pre-exile pipeline generation claim is not isolated")
+        raise RepositoryError("pre-exile pipeline generation claim is not isolated")
     if (
         not contract.enables(expected_action_type)
         or contract.self_explosion_admission_mode != "normal"
@@ -2322,7 +2322,7 @@ def _bind_pre_exile_pipeline_generation_claim(
         or contract.result_commit_mode != "durable_atomic_arbiter"
         or contract.inflight_recovery_mode != "no_duplicate_provider"
     ):
-        raise V2RepositoryError("pre-exile pipeline contract is not enabled")
+        raise RepositoryError("pre-exile pipeline contract is not enabled")
     if (
         game.status not in {"broadcasting", "finalizing", "ready"}
         or run.status != game.status
@@ -2332,16 +2332,16 @@ def _bind_pre_exile_pipeline_generation_claim(
         or game.phase_state != expected_phase_state
         or not game.phase_id.startswith("day_")
     ):
-        raise V2RepositoryError("pre-exile pipeline generation phase changed")
+        raise RepositoryError("pre-exile pipeline generation phase changed")
     pipeline = db.scalar(
-        select(V2PreExilePipeline)
-        .where(V2PreExilePipeline.pipeline_id == str(pipeline_context["pipeline_id"]))
+        select(PreExilePipeline)
+        .where(PreExilePipeline.pipeline_id == str(pipeline_context["pipeline_id"]))
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     if pipeline is None:
-        raise V2RepositoryError("unknown pre-exile pipeline")
-    fence = current_v2_run_fence()
+        raise RepositoryError("unknown pre-exile pipeline")
+    fence = current_run_fence()
     if (
         pipeline.game_id != game.game_id
         or pipeline.run_id != run.run_id
@@ -2356,25 +2356,25 @@ def _bind_pre_exile_pipeline_generation_claim(
             )
         )
     ):
-        raise V2ExecutionOwnershipLost("v2_pre_exile_pipeline_fence_lost")
+        raise ExecutionOwnershipLost("v2_pre_exile_pipeline_fence_lost")
     if pipeline.state not in {"collecting", "no_explosion"}:
-        raise V2RepositoryError("pre-exile pipeline is not collecting results")
+        raise RepositoryError("pre-exile pipeline is not collecting results")
     actor = context.get("actor")
     actor_player_id = actor.get("id") if isinstance(actor, dict) else None
     result = db.scalar(
-        select(V2PreExileResult)
+        select(PreExileResult)
         .where(
-            V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-            V2PreExileResult.actor_player_id == actor_player_id,
-            V2PreExileResult.result_kind == result_kind,
+            PreExileResult.pipeline_id == pipeline.pipeline_id,
+            PreExileResult.actor_player_id == actor_player_id,
+            PreExileResult.result_kind == result_kind,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     if result is None:
-        raise V2RepositoryError("pre-exile result was not reserved")
+        raise RepositoryError("pre-exile result was not reserved")
     if result.state != "reserved" or result.action_id is not None:
-        raise V2RepositoryError("pre-exile result already has durable provider lineage")
+        raise RepositoryError("pre-exile result already has durable provider lineage")
     output_contract = context.get("output_contract")
     output_valid = type(output_contract) is dict and (
         (
@@ -2401,12 +2401,12 @@ def _bind_pre_exile_pipeline_generation_claim(
         or "projection_at_seq" in context
         or not output_valid
     ):
-        raise V2RepositoryError("pre-exile pipeline action lineage is invalid")
+        raise RepositoryError("pre-exile pipeline action lineage is invalid")
     active = list(
         db.scalars(
-            select(V2LivePresentation).where(
-                V2LivePresentation.game_id == game.game_id,
-                V2LivePresentation.state == "active",
+            select(LivePresentation).where(
+                LivePresentation.game_id == game.game_id,
+                LivePresentation.state == "active",
             )
         )
     )
@@ -2418,14 +2418,14 @@ def _bind_pre_exile_pipeline_generation_claim(
             or active[0].source_event_id != pipeline.predecessor_source_event_id
             or active[0].closed_at is not None
         ):
-            raise V2RepositoryError("pre-exile predecessor is no longer active")
+            raise RepositoryError("pre-exile predecessor is no longer active")
     else:
         if active:
-            raise V2RepositoryError("pre-exile closed-stage claim found an active presentation")
+            raise RepositoryError("pre-exile closed-stage claim found an active presentation")
         predecessor = db.scalar(
-            select(V2LivePresentation).where(
-                V2LivePresentation.game_id == game.game_id,
-                V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+            select(LivePresentation).where(
+                LivePresentation.game_id == game.game_id,
+                LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
             )
         )
         if (
@@ -2436,14 +2436,14 @@ def _bind_pre_exile_pipeline_generation_claim(
             or predecessor.state != "closed"
             or predecessor.closed_at is None
         ):
-            raise V2RepositoryError("pre-exile predecessor is not durably closed")
+            raise RepositoryError("pre-exile predecessor is not durably closed")
         closed_events = list(
             db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == game.game_id,
-                    V2GameRecordEvent.run_id == run.run_id,
-                    V2GameRecordEvent.event_type == "speech_closed",
-                    V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == game.game_id,
+                    GameRecordEvent.run_id == run.run_id,
+                    GameRecordEvent.event_type == "speech_closed",
+                    GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
                 )
             )
         )
@@ -2456,15 +2456,15 @@ def _bind_pre_exile_pipeline_generation_claim(
             )
             != 1
         ):
-            raise V2RepositoryError("pre-exile predecessor has no unique close event")
+            raise RepositoryError("pre-exile predecessor has no unique close event")
         later_events = list(
             db.scalars(
-                select(V2GameRecordEvent)
+                select(GameRecordEvent)
                 .where(
-                    V2GameRecordEvent.game_id == game.game_id,
-                    V2GameRecordEvent.run_id == run.run_id,
-                    V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
-                    V2GameRecordEvent.event_type.in_(
+                    GameRecordEvent.game_id == game.game_id,
+                    GameRecordEvent.run_id == run.run_id,
+                    GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                    GameRecordEvent.event_type.in_(
                         (
                             "speech_segment_committed",
                             "day_vote_committed",
@@ -2472,7 +2472,7 @@ def _bind_pre_exile_pipeline_generation_claim(
                         )
                     ),
                 )
-                .order_by(V2GameRecordEvent.record_seq)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
         for event in later_events:
@@ -2481,26 +2481,26 @@ def _bind_pre_exile_pipeline_generation_claim(
                 payload.get("audience") in {"all", "public"}
                 and payload.get("presentation_id") != pipeline.predecessor_presentation_id
             ):
-                raise V2RepositoryError("pre-exile closed-stage claim crossed a public boundary")
+                raise RepositoryError("pre-exile closed-stage claim crossed a public boundary")
     assignment = db.scalar(
-        select(V2RoleAssignment).where(
-            V2RoleAssignment.game_id == game.game_id,
-            V2RoleAssignment.player_id == result.actor_player_id,
+        select(RoleAssignment).where(
+            RoleAssignment.game_id == game.game_id,
+            RoleAssignment.player_id == result.actor_player_id,
         )
     )
     if assignment is None:
-        raise V2RepositoryError("pre-exile result actor has no role assignment")
+        raise RepositoryError("pre-exile result actor has no role assignment")
     if result_kind == "self_explosion" and (
         assignment.role_key != "werewolf" or pipeline.state != "collecting"
     ):
-        raise V2RepositoryError("invalid pre-exile self-explosion member")
-    own_result: V2PreExileResult | None = None
+        raise RepositoryError("invalid pre-exile self-explosion member")
+    own_result: PreExileResult | None = None
     if result_kind == "exile_vote" and assignment.role_key == "werewolf":
         own_result = db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == result.actor_player_id,
-                V2PreExileResult.result_kind == "self_explosion",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == pipeline.pipeline_id,
+                PreExileResult.actor_player_id == result.actor_player_id,
+                PreExileResult.result_kind == "self_explosion",
             )
         )
         if (
@@ -2510,7 +2510,7 @@ def _bind_pre_exile_pipeline_generation_claim(
             or own_result.private_fact_id is None
             or own_result.private_fact_record_seq is None
         ):
-            raise V2RepositoryError(
+            raise RepositoryError(
                 "werewolf speculative vote requires own durable no-explosion fact"
             )
     _validate_pre_exile_frozen_action_context(
@@ -2545,8 +2545,8 @@ def _bind_pre_exile_pipeline_generation_claim(
 def _bind_pre_exile_vote_recovery_claim(
     db: Session,
     *,
-    game: V2GameRecord,
-    run: V2GameRun,
+    game: GameRecord,
+    run: GameRun,
     action_id: str,
     context: dict[str, Any],
     expected_phase_id: str,
@@ -2580,11 +2580,11 @@ def _bind_pre_exile_vote_recovery_claim(
         or "pipeline" in context
         or "projection_at_seq" in context
     ):
-        raise V2RepositoryError("pre-exile vote recovery claim is invalid")
+        raise RepositoryError("pre-exile vote recovery claim is invalid")
     try:
         contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
-    except V2PreExilePipelineContractError as exc:
-        raise V2RepositoryError(str(exc)) from exc
+    except PreExilePipelineContractError as exc:
+        raise RepositoryError(str(exc)) from exc
     if (
         not contract.enables("exile_vote")
         or contract.speculative_vote_admission_mode != "idle_only"
@@ -2592,15 +2592,15 @@ def _bind_pre_exile_vote_recovery_claim(
         or contract.fallback_mode != "before_launch_sequential_only"
         or contract.inflight_recovery_mode != "no_duplicate_provider"
     ):
-        raise V2RepositoryError("pre-exile vote recovery contract is not enabled")
+        raise RepositoryError("pre-exile vote recovery contract is not enabled")
     pipeline = db.scalar(
-        select(V2PreExilePipeline)
-        .where(V2PreExilePipeline.pipeline_id == recovery.get("pipeline_id"))
+        select(PreExilePipeline)
+        .where(PreExilePipeline.pipeline_id == recovery.get("pipeline_id"))
         .with_for_update()
     )
     result = db.scalar(
-        select(V2PreExileResult)
-        .where(V2PreExileResult.result_id == recovery.get("result_id"))
+        select(PreExileResult)
+        .where(PreExileResult.result_id == recovery.get("result_id"))
         .with_for_update()
     )
     if (
@@ -2626,8 +2626,8 @@ def _bind_pre_exile_vote_recovery_claim(
         or context.get("batch_id")
         != f"{pipeline.phase_id}:exile_vote:{pipeline.public_cutoff_record_seq}:vote"
     ):
-        raise V2RepositoryError("pre-exile vote recovery lineage is invalid")
-    from app.v2.pre_exile_pipeline_repository import (
+        raise RepositoryError("pre-exile vote recovery lineage is invalid")
+    from app.match.pre_exile_pipeline_repository import (
         _validate_admission_capacity_recovery_source,
     )
 
@@ -2637,20 +2637,20 @@ def _bind_pre_exile_vote_recovery_claim(
         row=result,
     )
     predecessor = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == game.game_id,
-            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == game.game_id,
+            LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
         )
     )
     if predecessor is None or predecessor.state != "closed" or predecessor.closed_at is None:
-        raise V2RepositoryError("pre-exile vote recovery requires closed predecessor")
+        raise RepositoryError("pre-exile vote recovery requires closed predecessor")
     later_public = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == run.run_id,
-                V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
-                V2GameRecordEvent.event_type.in_(
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == run.run_id,
+                GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                GameRecordEvent.event_type.in_(
                     (
                         "speech_segment_committed",
                         "day_vote_committed",
@@ -2669,21 +2669,21 @@ def _bind_pre_exile_vote_recovery_claim(
         )
         for event in later_public
     ):
-        raise V2RepositoryError("pre-exile vote recovery crossed a public boundary")
+        raise RepositoryError("pre-exile vote recovery crossed a public boundary")
     assignment = db.scalar(
-        select(V2RoleAssignment).where(
-            V2RoleAssignment.game_id == game.game_id,
-            V2RoleAssignment.player_id == result.actor_player_id,
+        select(RoleAssignment).where(
+            RoleAssignment.game_id == game.game_id,
+            RoleAssignment.player_id == result.actor_player_id,
         )
     )
     if assignment is None:
-        raise V2RepositoryError("pre-exile recovery actor has no role assignment")
+        raise RepositoryError("pre-exile recovery actor has no role assignment")
     own_result = (
         db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == result.actor_player_id,
-                V2PreExileResult.result_kind == "self_explosion",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == pipeline.pipeline_id,
+                PreExileResult.actor_player_id == result.actor_player_id,
+                PreExileResult.result_kind == "self_explosion",
             )
         )
         if assignment.role_key == "werewolf"
@@ -2720,11 +2720,11 @@ def _bind_pre_exile_vote_recovery_claim(
 def _validate_pre_exile_frozen_action_context(
     db: Session,
     *,
-    game: V2GameRecord,
-    pipeline: V2PreExilePipeline,
-    result: V2PreExileResult,
+    game: GameRecord,
+    pipeline: PreExilePipeline,
+    result: PreExileResult,
     actor_role_key: str,
-    own_self_result: V2PreExileResult | None,
+    own_self_result: PreExileResult | None,
     context: dict[str, Any],
 ) -> None:
     public_history = context.get("public_history")
@@ -2733,7 +2733,7 @@ def _validate_pre_exile_frozen_action_context(
         or any(type(item) is not dict for item in public_history)
         or pre_exile_context_sha256(public_history) != pipeline.public_history_sha256
     ):
-        raise V2RepositoryError("pre-exile public history changed from frozen snapshot")
+        raise RepositoryError("pre-exile public history changed from frozen snapshot")
     for item in public_history:
         record_seq = item.get("record_seq")
         known_at_seq = item.get("known_at_seq")
@@ -2748,7 +2748,7 @@ def _validate_pre_exile_frozen_action_context(
                 or known_at_seq > pipeline.public_cutoff_record_seq
             )
         ):
-            raise V2RepositoryError("pre-exile public history crossed its cutoff")
+            raise RepositoryError("pre-exile public history crossed its cutoff")
 
     sealed_private = [
         fact
@@ -2773,19 +2773,19 @@ def _validate_pre_exile_frozen_action_context(
     if actor_role_key == "werewolf":
         teammates = list(
             db.execute(
-                select(V2RoleAssignment.player_id, V2RoleAssignment.seat)
+                select(RoleAssignment.player_id, RoleAssignment.seat)
                 .join(
-                    V2PlayerState,
-                    (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                    & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                    PlayerState,
+                    (PlayerState.game_id == RoleAssignment.game_id)
+                    & (PlayerState.player_id == RoleAssignment.player_id),
                 )
                 .where(
-                    V2RoleAssignment.game_id == game.game_id,
-                    V2RoleAssignment.role_key == "werewolf",
-                    V2PlayerState.alive.is_(True),
-                    V2RoleAssignment.player_id != result.actor_player_id,
+                    RoleAssignment.game_id == game.game_id,
+                    RoleAssignment.role_key == "werewolf",
+                    PlayerState.alive.is_(True),
+                    RoleAssignment.player_id != result.actor_player_id,
                 )
-                .order_by(V2RoleAssignment.seat)
+                .order_by(RoleAssignment.seat)
             )
         )
         expected_private.append(
@@ -2798,7 +2798,7 @@ def _validate_pre_exile_frozen_action_context(
         )
     private_facts = context.get("private_authoritative_facts")
     if type(private_facts) is not list or any(type(item) is not dict for item in private_facts):
-        raise V2RepositoryError("pre-exile private authoritative facts are invalid")
+        raise RepositoryError("pre-exile private authoritative facts are invalid")
     durable_fact_ids: set[str] = set()
     provisional_id = (
         provisional_fact.get("knowledge_fact_id") if provisional_fact is not None else None
@@ -2808,22 +2808,22 @@ def _validate_pre_exile_frozen_action_context(
     )
     for fact in private_facts:
         if fact.get("owner_scope") != "player" or fact.get("owner_id") != result.actor_player_id:
-            raise V2RepositoryError("pre-exile private fact owner changed")
+            raise RepositoryError("pre-exile private fact owner changed")
         fact_id = fact.get("knowledge_fact_id")
         if fact_id is None:
             continue
         if not isinstance(fact_id, str) or not fact_id or fact_id in durable_fact_ids:
-            raise V2RepositoryError("pre-exile private fact identity is invalid")
+            raise RepositoryError("pre-exile private fact identity is invalid")
         durable_fact_ids.add(fact_id)
         clock = _pre_exile_fact_clock(fact)
         if clock is None:
-            raise V2RepositoryError("pre-exile private fact has no durable clock")
+            raise RepositoryError("pre-exile private fact has no durable clock")
         if clock > pipeline.public_cutoff_record_seq and not (
             fact_id == provisional_id and clock == provisional_clock
         ):
-            raise V2RepositoryError("pre-exile private fact crossed its cutoff")
+            raise RepositoryError("pre-exile private fact crossed its cutoff")
     if pre_exile_context_sha256(private_facts) != pre_exile_context_sha256(expected_private):
-        raise V2RepositoryError("pre-exile private facts changed from sealed snapshot")
+        raise RepositoryError("pre-exile private facts changed from sealed snapshot")
 
 
 def _pre_exile_fact_clock(fact: dict[str, Any] | None) -> int | None:
@@ -2838,9 +2838,9 @@ def _pre_exile_fact_clock(fact: dict[str, Any] | None) -> int | None:
 def _pre_exile_provisional_fact_for_claim(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
     actor_player_id: str,
-    own_self_result: V2PreExileResult | None,
+    own_self_result: PreExileResult | None,
 ) -> dict[str, Any]:
     if (
         own_self_result is None
@@ -2851,14 +2851,14 @@ def _pre_exile_provisional_fact_for_claim(
         or not isinstance(own_self_result.private_fact_id, str)
         or type(own_self_result.private_fact_record_seq) is not int
     ):
-        raise V2RepositoryError("werewolf speculative vote requires exact provisional false fact")
-    fact = db.get(V2KnowledgeFact, own_self_result.private_fact_id)
+        raise RepositoryError("werewolf speculative vote requires exact provisional false fact")
+    fact = db.get(KnowledgeFact, own_self_result.private_fact_id)
     event = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == pipeline.game_id,
-            V2GameRecordEvent.run_id == pipeline.run_id,
-            V2GameRecordEvent.record_seq == own_self_result.private_fact_record_seq,
-            V2GameRecordEvent.event_type == "private_knowledge_recorded",
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == pipeline.game_id,
+            GameRecordEvent.run_id == pipeline.run_id,
+            GameRecordEvent.record_seq == own_self_result.private_fact_record_seq,
+            GameRecordEvent.event_type == "private_knowledge_recorded",
         )
     )
     payload = deepcopy(fact.payload or {}) if fact is not None else {}
@@ -2879,7 +2879,7 @@ def _pre_exile_provisional_fact_for_claim(
         or fact_context.get("public_history_cutoff_record_seq") != pipeline.public_cutoff_record_seq
         or fact_context.get("visibility_mode") != "pre_exile_provisional_until_atomic_arbiter"
     ):
-        raise V2RepositoryError("pre-exile provisional false fact lineage changed")
+        raise RepositoryError("pre-exile provisional false fact lineage changed")
     return {
         "knowledge_fact_id": fact.knowledge_fact_id,
         "source_activation_id": fact.source_activation_id,
@@ -2898,27 +2898,27 @@ def _pre_exile_provisional_fact_for_claim(
 def _validate_pipeline_generation_predecessor(
     db: Session,
     *,
-    game: V2GameRecord,
-    row: V2DaySpeechSlot,
+    game: GameRecord,
+    row: DaySpeechSlot,
     speech_order: list[Any],
 ) -> None:
     active = list(
         db.scalars(
-            select(V2LivePresentation)
+            select(LivePresentation)
             .where(
-                V2LivePresentation.game_id == game.game_id,
-                V2LivePresentation.state == "active",
+                LivePresentation.game_id == game.game_id,
+                LivePresentation.state == "active",
             )
-            .order_by(V2LivePresentation.presentation_seq)
+            .order_by(LivePresentation.presentation_seq)
         )
     )
     if len(active) != 1:
-        raise V2RepositoryError(
+        raise RepositoryError(
             "day speech pipeline predecessor is not the unique active presentation"
         )
     predecessor = active[0]
     if row.turn_index < 2 or len(speech_order) < row.turn_index:
-        raise V2RepositoryError("day speech pipeline predecessor identity is invalid")
+        raise RepositoryError("day speech pipeline predecessor identity is invalid")
     predecessor_turn_player_id = speech_order[row.turn_index - 2]
     technical_skip_predecessor = predecessor.actor_kind == "judge"
     predecessor_actor_valid = (
@@ -2941,8 +2941,8 @@ def _validate_pipeline_generation_predecessor(
         or predecessor.voice_asset_id is None
         or predecessor.presentation_seq != game.last_presentation_seq
     ):
-        raise V2RepositoryError("day speech pipeline predecessor identity is invalid")
-    voice = db.get(V2VoiceAsset, predecessor.voice_asset_id)
+        raise RepositoryError("day speech pipeline predecessor identity is invalid")
+    voice = db.get(VoiceAsset, predecessor.voice_asset_id)
     if (
         voice is None
         or voice.game_id != row.game_id
@@ -2952,9 +2952,9 @@ def _validate_pipeline_generation_predecessor(
         or voice.audience != "all"
         or voice.state not in {"writing", "ready"}
     ):
-        raise V2RepositoryError("day speech pipeline predecessor TTS lineage is invalid")
+        raise RepositoryError("day speech pipeline predecessor TTS lineage is invalid")
     source = db.get(
-        V2GameRecordEvent,
+        GameRecordEvent,
         (row.game_id, row.predecessor_source_event_id),
     )
     source_payload = source.payload if source is not None else None
@@ -2973,16 +2973,16 @@ def _validate_pipeline_generation_predecessor(
         or source_payload.get("text") != predecessor.subtitle_text
         or not predecessor.subtitle_text.strip()
     ):
-        raise V2RepositoryError("day speech pipeline predecessor source is invalid")
+        raise RepositoryError("day speech pipeline predecessor source is invalid")
 
     lineage = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == row.game_id,
-                V2GameRecordEvent.run_id == row.run_id,
-                V2GameRecordEvent.record_seq <= row.context_cutoff_record_seq,
-                V2GameRecordEvent.event_type.in_(
+                GameRecordEvent.game_id == row.game_id,
+                GameRecordEvent.run_id == row.run_id,
+                GameRecordEvent.record_seq <= row.context_cutoff_record_seq,
+                GameRecordEvent.event_type.in_(
                     {
                         "action_opened",
                         "action_succeeded",
@@ -2995,7 +2995,7 @@ def _validate_pipeline_generation_predecessor(
                     }
                 ),
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     opened = [
@@ -3005,7 +3005,7 @@ def _validate_pipeline_generation_predecessor(
         and event.payload.get("action_id") == row.predecessor_action_id
     ]
     if len(opened) != 1:
-        raise V2RepositoryError("day speech pipeline predecessor action is invalid")
+        raise RepositoryError("day speech pipeline predecessor action is invalid")
     predecessor_context = opened[0].payload.get("context")
     if (
         type(predecessor_context) is not dict
@@ -3017,7 +3017,7 @@ def _validate_pipeline_generation_predecessor(
         or predecessor_context.get("speech_order") != speech_order
         or predecessor_context.get("action_record_seq") != opened[0].record_seq
     ):
-        raise V2RepositoryError("day speech pipeline predecessor action context is invalid")
+        raise RepositoryError("day speech pipeline predecessor action context is invalid")
     if technical_skip_predecessor:
         public_skip_record_seq = predecessor_context.get("public_skip_record_seq")
         if (
@@ -3029,15 +3029,15 @@ def _validate_pipeline_generation_predecessor(
             or public_skip_record_seq <= 0
             or public_skip_record_seq >= opened[0].record_seq
         ):
-            raise V2RepositoryError(
+            raise RepositoryError(
                 "day speech pipeline technical skip predecessor context is invalid"
             )
         public_skip = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == row.game_id,
-                V2GameRecordEvent.run_id == row.run_id,
-                V2GameRecordEvent.record_seq == public_skip_record_seq,
-                V2GameRecordEvent.event_type == "action_skipped_technical",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == row.game_id,
+                GameRecordEvent.run_id == row.run_id,
+                GameRecordEvent.record_seq == public_skip_record_seq,
+                GameRecordEvent.event_type == "action_skipped_technical",
             )
         )
         public_skip_payload = public_skip.payload if public_skip is not None else None
@@ -3051,13 +3051,13 @@ def _validate_pipeline_generation_predecessor(
             or public_skip_payload.get("actor_id") != predecessor_turn_player_id
             or public_skip_payload.get("reason") != "technical_failure"
         ):
-            raise V2RepositoryError(
+            raise RepositoryError(
                 "day speech pipeline technical skip predecessor public fact is invalid"
             )
     elif predecessor_context.get("action_type") != row.action_type or predecessor_context.get(
         "actor"
     ) != {"kind": "player", "id": predecessor.actor_id}:
-        raise V2RepositoryError("day speech pipeline predecessor action context is invalid")
+        raise RepositoryError("day speech pipeline predecessor action context is invalid")
     speech_events = [
         event
         for event in lineage
@@ -3092,7 +3092,7 @@ def _validate_pipeline_generation_predecessor(
             <= row.context_cutoff_record_seq
         )
     ):
-        raise V2RepositoryError("day speech pipeline predecessor is not active and sealed")
+        raise RepositoryError("day speech pipeline predecessor is not active and sealed")
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -3101,30 +3101,30 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _run(db: Session, run_id: str) -> V2GameRun:
-    run = db.get(V2GameRun, run_id)
+def _run(db: Session, run_id: str) -> GameRun:
+    run = db.get(GameRun, run_id)
     if run is None:
-        raise V2RepositoryError(f"unknown run {run_id}")
+        raise RepositoryError(f"unknown run {run_id}")
     return run
 
 
-def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:
+def _raise_if_stop_requested(db: Session, game: GameRecord) -> None:
     run = _run(db, game.current_run_id)
     if run.stop_requested_at is not None:
-        raise V2GameCanceled("V2 game was canceled by an administrator")
+        raise GameCanceled("V2 game was canceled by an administrator")
 
 
 def _append_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     run_id: str,
     event_type: str,
     audience: str,
     payload: dict[str, Any],
-) -> V2GameRecordEvent:
+) -> GameRecordEvent:
     next_seq = game.last_record_seq + 1
-    event = V2GameRecordEvent(
+    event = GameRecordEvent(
         game_id=game.game_id,
         event_id=next_seq,
         record_seq=next_seq,
@@ -3141,16 +3141,16 @@ def _append_event(
 def _failure_episodes_for_locked_run(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
 ) -> tuple[FailureEpisode, ...]:
     events = tuple(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     return derive_failure_episodes(events)
@@ -3159,7 +3159,7 @@ def _failure_episodes_for_locked_run(
 def _open_failure_episode_ids_for_locked_run(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
 ) -> tuple[str, ...]:
     return tuple(
         sorted(
@@ -3175,8 +3175,8 @@ def _resolved_model_generation_policy_contract(
 ) -> dict[str, Any] | None:
     try:
         return resolve_model_generation_policy_contract(rule_snapshot)
-    except V2ModelGenerationPolicyContractError as exc:
-        raise V2RepositoryError("unsupported_model_generation_policy_contract") from exc
+    except ModelGenerationPolicyContractError as exc:
+        raise RepositoryError("unsupported_model_generation_policy_contract") from exc
 
 
 def _action_snapshot_audience(snapshot: dict[str, Any]) -> str:
@@ -3188,7 +3188,7 @@ def _action_snapshot_audience(snapshot: dict[str, Any]) -> str:
     return "god_view"
 
 
-def _model_action_recovery_audience(recovery: V2ModelActionRecovery) -> str:
+def _model_action_recovery_audience(recovery: ModelActionRecovery) -> str:
     snapshot = recovery.action_snapshot if isinstance(recovery.action_snapshot, dict) else {}
     actor_kind = snapshot.get("actor_kind")
     return model_event_audience(
@@ -3197,16 +3197,16 @@ def _model_action_recovery_audience(recovery: V2ModelActionRecovery) -> str:
     )
 
 
-def _activation_audience(db: Session, activation: V2AbilityActivation) -> str:
+def _activation_audience(db: Session, activation: AbilityActivation) -> str:
     if activation.action_id is not None:
         action_event = db.scalar(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == activation.game_id,
-                V2GameRecordEvent.event_type == "action_opened",
-                V2GameRecordEvent.payload["action_id"].as_string() == activation.action_id,
+                GameRecordEvent.game_id == activation.game_id,
+                GameRecordEvent.event_type == "action_opened",
+                GameRecordEvent.payload["action_id"].as_string() == activation.action_id,
             )
-            .order_by(V2GameRecordEvent.record_seq.desc())
+            .order_by(GameRecordEvent.record_seq.desc())
             .limit(1)
         )
         if action_event is not None:
@@ -3214,13 +3214,13 @@ def _activation_audience(db: Session, activation: V2AbilityActivation) -> str:
             if isinstance(audience, str):
                 return audience
     activation_event = db.scalar(
-        select(V2GameRecordEvent)
+        select(GameRecordEvent)
         .where(
-            V2GameRecordEvent.game_id == activation.game_id,
-            V2GameRecordEvent.event_type == "ability_activation_opened",
-            V2GameRecordEvent.payload["activation_id"].as_string() == activation.activation_id,
+            GameRecordEvent.game_id == activation.game_id,
+            GameRecordEvent.event_type == "ability_activation_opened",
+            GameRecordEvent.payload["activation_id"].as_string() == activation.activation_id,
         )
-        .order_by(V2GameRecordEvent.record_seq.desc())
+        .order_by(GameRecordEvent.record_seq.desc())
         .limit(1)
     )
     audience = (activation_event.payload or {}).get("audience") if activation_event else None
@@ -3229,13 +3229,13 @@ def _activation_audience(db: Session, activation: V2AbilityActivation) -> str:
     return "god_view"
 
 
-def _effect_audience(db: Session, effect: V2EffectIntent) -> str:
+def _effect_audience(db: Session, effect: EffectIntent) -> str:
     audience = (effect.payload or {}).get("transport_audience")
     if isinstance(audience, str):
         return audience
-    activation = db.get(V2AbilityActivation, effect.activation_id)
+    activation = db.get(AbilityActivation, effect.activation_id)
     if activation is None:
-        raise V2RepositoryError("effect intent activation is missing")
+        raise RepositoryError("effect intent activation is missing")
     return _activation_audience(db, activation)
 
 

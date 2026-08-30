@@ -16,7 +16,7 @@ from app.main import create_application
 from app.model_catalog.service import update_model_configuration
 from app.models.admin import AuditEvent
 from app.models.model_configuration import ModelConfigurationRecord
-from app.werewolf.tts_speaker_catalog import TtsSpeakerOption
+from app.shared.tts_speaker_catalog import TtsSpeakerOption
 
 
 class FakeSpeakerCatalog:

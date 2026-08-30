@@ -17,11 +17,11 @@ from app.core.config import settings
 from app.judge_voice_asset_import import import_judge_voice_assets
 from app.judge_configuration import runtime_judge_configuration
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord, JudgeVoiceGenerationJob
-from app.werewolf.judge_voice_assets import (
+from app.shared.judge_voice_assets import (
     generate_judge_voice_assets,
     list_judge_voice_line_definitions,
 )
-from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.shared.volcengine_tts import VolcengineTtsConfig
 
 
 def create_voice_generation_job(

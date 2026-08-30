@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.werewolf.player_presets import default_strategy_text
+from app.shared.player_presets import default_strategy_text
 
 
 def compose_player_profile_prompt(profile: object, base_personality: str) -> str:

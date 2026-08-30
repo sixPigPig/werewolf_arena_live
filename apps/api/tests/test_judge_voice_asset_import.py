@@ -13,7 +13,7 @@ from app.judge_voice_asset_import import import_judge_voice_assets
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
 from app.models.judge_voice_asset import JudgeVoiceGenerationJob
 from app.admin.voice_jobs import create_voice_generation_job, run_next_voice_generation_job
-from app.werewolf.judge_voice_assets import list_judge_voice_line_definitions
+from app.shared.judge_voice_assets import list_judge_voice_line_definitions
 from app.core.config import settings
 
 

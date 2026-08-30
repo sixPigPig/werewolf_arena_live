@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from app.werewolf.system_player_avatar_data import SYSTEM_AVATAR_DATA_BASE64
+from app.shared.system_player_avatar_data import SYSTEM_AVATAR_DATA_BASE64
 
 
 EXPECTED_SYSTEM_AVATARS = {

@@ -38,41 +38,41 @@ import {
 } from "@/components/admin/AdminPage";
 import { useAdminSession } from "@/features/auth/session-context";
 import {
-  isLiveV2StatusActive,
+  isLiveStatusActive,
   liveRefreshInterval,
-} from "@/v2/game-records/live-refresh";
+} from "@/match/game-records/live-refresh";
 import {
-  buildV2RoundSummaries,
-  buildV2Timeline,
+  buildRoundSummaries,
+  buildTimeline,
   formatClock,
   formatDuration,
-  groupV2Phases,
+  groupPhases,
   prettyJson,
-  type V2TimelineItem,
-} from "@/v2/game-records/presentation";
-import { V2OmniscientSituationPanel } from "@/v2/game-records/V2OmniscientSituationPanel";
-import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
+  type TimelineItem,
+} from "@/match/game-records/presentation";
+import { OmniscientSituationPanel } from "@/match/game-records/OmniscientSituationPanel";
+import { gameRecordKeys } from "@/match/game-records/query-keys";
 import {
-  listV2GameEvents,
-  listV2ModelRequests,
-  readV2GameRecordSummary,
-  readV2ModelRequest,
-  retryV2ModelAction,
-  stopV2Game,
-} from "@/v2/game-records/api";
+  listGameEvents,
+  listModelRequests,
+  readGameRecordSummary,
+  readModelRequest,
+  retryModelAction,
+  stopGame,
+} from "@/match/game-records/api";
 import { adminOperationErrorDescription } from "@/lib/admin-notification";
 import type {
-  V2GameRecordEvent,
-  V2GameRecordDetail,
-  V2ModelRequest,
-  V2ModelRequestAudienceSource,
-  V2ModelRequestSummary,
-} from "@/v2/game-records/types";
+  GameRecordEvent,
+  GameRecordDetail,
+  ModelRequest,
+  ModelRequestAudienceSource,
+  ModelRequestSummary,
+} from "@/match/game-records/types";
 import {
   ReadableModelInput,
   ReadableModelOutput,
   ReadableRawEvents,
-} from "@/v2/game-records/request-presentation";
+} from "@/match/game-records/request-presentation";
 
 type CategoryFilter = "all" | "model" | "template" | "milestone";
 type DisplayStatus =
@@ -85,14 +85,14 @@ type StatusFilter = "all" | DisplayStatus;
 const DEFAULT_STOP_REASON = "人工打断异常对局，避免继续消耗 API 额度";
 const DEFAULT_RETRY_REASON = "模型链路已恢复，继续执行同一冻结动作";
 
-export default function V2GameRecordDetailPage() {
+export default function GameRecordDetailPage() {
   const navigate = useNavigate();
   const { gameId = "" } = useParams();
   const queryClient = useQueryClient();
   const query = useQuery({
     enabled: Boolean(gameId),
-    queryFn: ({ signal }) => readV2GameRecordSummary(gameId, signal),
-    queryKey: v2GameRecordKeys.detail(gameId),
+    queryFn: ({ signal }) => readGameRecordSummary(gameId, signal),
+    queryKey: gameRecordKeys.detail(gameId),
     refetchInterval: (currentQuery) =>
       liveRefreshInterval(
         currentQuery.state.data?.match_status,
@@ -105,7 +105,7 @@ export default function V2GameRecordDetailPage() {
     query.data?.last_record_seq ?? 0,
     query.data !== undefined,
   );
-  const game = useMemo<V2GameRecordDetail | null>(
+  const game = useMemo<GameRecordDetail | null>(
     () =>
       query.data
         ? {
@@ -120,7 +120,7 @@ export default function V2GameRecordDetailPage() {
   useEffect(
     () => () => {
       queryClient.removeQueries({
-        queryKey: v2GameRecordKeys.detail(gameId),
+        queryKey: gameRecordKeys.detail(gameId),
       });
     },
     [gameId, queryClient],
@@ -147,7 +147,7 @@ export default function V2GameRecordDetailPage() {
   }
 
   return (
-    <V2GameRecordWorkspace
+    <GameRecordWorkspace
       game={game}
       isRefreshing={query.isFetching || timeline.isFetching}
       onBack={() => navigate("/v2/operations/games")}
@@ -182,7 +182,7 @@ function useIncrementalTimeline(
     async function loadEvents() {
       let cursor = cursors.current.event;
       while (active && cursor < targetRecordSeq) {
-        const page = await listV2GameEvents(
+        const page = await listGameEvents(
           gameId,
           cursor,
           controller.signal,
@@ -210,7 +210,7 @@ function useIncrementalTimeline(
     async function loadModelRequests() {
       let cursor = cursors.current.modelRequest;
       while (active && cursor < targetRecordSeq) {
-        const page = await listV2ModelRequests(
+        const page = await listModelRequests(
           gameId,
           cursor,
           controller.signal,
@@ -294,17 +294,17 @@ function useIncrementalTimeline(
 function emptyTimelineState(gameId: string) {
   return {
     error: null as unknown,
-    events: [] as V2GameRecordEvent[],
+    events: [] as GameRecordEvent[],
     gameId,
     hydrated: false,
-    modelRequests: [] as V2ModelRequestSummary[],
+    modelRequests: [] as ModelRequestSummary[],
     syncedRecordSeq: 0,
   };
 }
 
 function mergeEvents(
-  current: V2GameRecordEvent[],
-  incoming: V2GameRecordEvent[],
+  current: GameRecordEvent[],
+  incoming: GameRecordEvent[],
 ) {
   const merged = new Map(current.map((item) => [item.event_id, item]));
   for (const item of incoming) merged.set(item.event_id, item);
@@ -314,8 +314,8 @@ function mergeEvents(
 }
 
 function mergeModelRequests(
-  current: V2ModelRequestSummary[],
-  incoming: V2ModelRequestSummary[],
+  current: ModelRequestSummary[],
+  incoming: ModelRequestSummary[],
 ) {
   const merged = new Map(current.map((item) => [item.attempt_id, item]));
   for (const item of incoming) merged.set(item.attempt_id, item);
@@ -324,13 +324,13 @@ function mergeModelRequests(
   );
 }
 
-function V2GameRecordWorkspace({
+function GameRecordWorkspace({
   game,
   isRefreshing,
   onBack,
   refreshedAt,
 }: {
-  game: V2GameRecordDetail;
+  game: GameRecordDetail;
   isRefreshing: boolean;
   onBack: () => void;
   refreshedAt: number;
@@ -338,10 +338,10 @@ function V2GameRecordWorkspace({
   const { notification } = AntApp.useApp();
   const queryClient = useQueryClient();
   const { session } = useAdminSession();
-  const timeline = useMemo(() => buildV2Timeline(game), [game]);
+  const timeline = useMemo(() => buildTimeline(game), [game]);
   const roundSummaries = useMemo(
     () =>
-      buildV2RoundSummaries(
+      buildRoundSummaries(
         game.events,
         game.player_identities,
         game.status,
@@ -349,7 +349,7 @@ function V2GameRecordWorkspace({
     [game.events, game.player_identities, game.status],
   );
   const phases = useMemo(
-    () => groupV2Phases(timeline, game.phase_id),
+    () => groupPhases(timeline, game.phase_id),
     [game.phase_id, timeline],
   );
   const [selectedId, setSelectedId] = useState("");
@@ -368,7 +368,7 @@ function V2GameRecordWorkspace({
   const [retryReason, setRetryReason] = useState(DEFAULT_RETRY_REASON);
   const stopMutation = useMutation({
     mutationFn: () =>
-      stopV2Game(
+      stopGame(
         game.game_id,
         stopReason.trim(),
         session?.csrf_token ?? "",
@@ -386,16 +386,16 @@ function V2GameRecordWorkspace({
       setStopDialogOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: v2GameRecordKeys.detail(game.game_id),
+          queryKey: gameRecordKeys.detail(game.game_id),
         }),
-        queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
+        queryClient.invalidateQueries({ queryKey: gameRecordKeys.all }),
       ]);
       notification.success({ title: "V2 对局打断请求已提交" });
     },
   });
   const retryMutation = useMutation({
     mutationFn: () =>
-      retryV2ModelAction(
+      retryModelAction(
         game.game_id,
         retryReason.trim(),
         session?.csrf_token ?? "",
@@ -413,9 +413,9 @@ function V2GameRecordWorkspace({
       setRetryDialogOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: v2GameRecordKeys.detail(game.game_id),
+          queryKey: gameRecordKeys.detail(game.game_id),
         }),
-        queryClient.invalidateQueries({ queryKey: v2GameRecordKeys.all }),
+        queryClient.invalidateQueries({ queryKey: gameRecordKeys.all }),
       ]);
       notification.success({ title: "已恢复同一冻结动作" });
     },
@@ -505,7 +505,7 @@ function V2GameRecordWorkspace({
     session?.permissions.includes("runs.control");
   const canStop =
     canControl &&
-    isLiveV2StatusActive(game.status) &&
+    isLiveStatusActive(game.status) &&
     run?.stop_requested_at === null;
   const canRetry =
     canControl &&
@@ -642,7 +642,7 @@ function V2GameRecordWorkspace({
         />
       ) : null}
 
-      <V2OmniscientSituationPanel
+      <OmniscientSituationPanel
         game={game}
         isRefreshing={isRefreshing}
         onOpenDetails={(id) => {
@@ -840,7 +840,7 @@ function PhaseRail({
   onSelect,
 }: {
   gameStatus: string;
-  phases: ReturnType<typeof groupV2Phases>;
+  phases: ReturnType<typeof groupPhases>;
   selectedPhaseId: string;
   onSelect: (phaseId: string) => void;
 }) {
@@ -887,12 +887,12 @@ function ActionTimeline({
   selectedId,
   onSelect,
 }: {
-  items: V2TimelineItem[];
+  items: TimelineItem[];
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
   const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
-  const columns = useMemo<ColumnsType<V2TimelineItem>>(
+  const columns = useMemo<ColumnsType<TimelineItem>>(
     () => [
       {
         dataIndex: "startedAt",
@@ -934,7 +934,7 @@ function ActionTimeline({
       },
       {
         dataIndex: "status",
-        render: (_value: V2TimelineItem["status"], item) => {
+        render: (_value: TimelineItem["status"], item) => {
           const status = timelineDisplayStatus(item);
           return (
             <span className={`v2-action-status is-${status}`}>
@@ -987,7 +987,7 @@ function ActionTimeline({
         </Typography.Text>
       </header>
       {items.length ? (
-        <Table<V2TimelineItem>
+        <Table<TimelineItem>
           className="v2-action-table"
           columns={columns}
           dataSource={items}
@@ -1016,7 +1016,7 @@ function ActionTimeline({
   );
 }
 
-function LifecycleStrip({ item }: { item: V2TimelineItem }) {
+function LifecycleStrip({ item }: { item: TimelineItem }) {
   const requestStarts = item.events.filter(
     (event) => event.event_type === "model_request_started",
   );
@@ -1103,7 +1103,7 @@ function RequestDetailsDrawer({
   onClose,
 }: {
   gameId: string;
-  item: V2TimelineItem | null;
+  item: TimelineItem | null;
   open: boolean;
   onClose: () => void;
 }) {
@@ -1157,15 +1157,15 @@ function RequestDetailsContent({
   item,
 }: {
   gameId: string;
-  item: V2TimelineItem;
+  item: TimelineItem;
 }) {
   const attemptId = item.modelRequest?.attempt_id ?? "";
   const requestQuery = useQuery({
     enabled: Boolean(attemptId),
     gcTime: 0,
     queryFn: ({ signal }) =>
-      readV2ModelRequest(gameId, attemptId, signal),
-    queryKey: v2GameRecordKeys.modelRequest(gameId, attemptId),
+      readModelRequest(gameId, attemptId, signal),
+    queryKey: gameRecordKeys.modelRequest(gameId, attemptId),
     refetchInterval: (currentQuery) =>
       currentQuery.state.data?.status === "running" ? 1_000 : false,
     refetchIntervalInBackground: false,
@@ -1242,7 +1242,7 @@ function ModelRequestPayload({
 }: {
   error: Error | null;
   isPending: boolean;
-  request: V2ModelRequest | null;
+  request: ModelRequest | null;
   view: "input" | "output";
 }) {
   if (isPending) {
@@ -1267,7 +1267,7 @@ function ModelRequestPayload({
   );
 }
 
-function InspectorOverview({ item }: { item: V2TimelineItem }) {
+function InspectorOverview({ item }: { item: TimelineItem }) {
   const request = item.modelRequest;
   const template = item.templateRender?.payload;
   const responseHeaders = request?.response_headers ?? null;
@@ -1970,7 +1970,7 @@ function InspectorOverview({ item }: { item: V2TimelineItem }) {
   );
 }
 
-function ReadableTemplateRender({ event }: { event: V2GameRecordEvent }) {
+function ReadableTemplateRender({ event }: { event: GameRecordEvent }) {
   const payload = event.payload;
   return (
     <div className="v2-inspector-panel">
@@ -2020,7 +2020,7 @@ function RawDataDrawer({
   open,
   onClose,
 }: {
-  game: V2GameRecordDetail;
+  game: GameRecordDetail;
   open: boolean;
   onClose: () => void;
 }) {
@@ -2162,7 +2162,7 @@ function StatusIcon({
 }
 
 function modelRequestDisplayStatus(
-  request: V2ModelRequestSummary,
+  request: ModelRequestSummary,
 ): DisplayStatus {
   if (request.status === "canceled") return "canceled";
   if (
@@ -2175,7 +2175,7 @@ function modelRequestDisplayStatus(
   return request.status;
 }
 
-function timelineDisplayStatus(item: V2TimelineItem): DisplayStatus {
+function timelineDisplayStatus(item: TimelineItem): DisplayStatus {
   if (item.status !== "failed") return item.status;
   const requestStatus = item.modelRequest
     ? modelRequestDisplayStatus(item.modelRequest)
@@ -2202,8 +2202,8 @@ function audienceDiagnosticLabel(audience: string) {
   return `${audienceLabel(audience)}（${audience}）`;
 }
 
-function audienceSourceLabel(source: V2ModelRequestAudienceSource) {
-  const labels: Record<V2ModelRequestAudienceSource, string> = {
+function audienceSourceLabel(source: ModelRequestAudienceSource) {
+  const labels: Record<ModelRequestAudienceSource, string> = {
     event_contract: "事件契约",
     event_contract_narrowed: "事件契约（按执行者收窄）",
     presentation: "历史播报记录",
@@ -2221,10 +2221,10 @@ function firstTokenKindLabel(kind: string | null) {
   return kind;
 }
 
-function finishReasonLabel(reason: V2ModelRequestSummary["finish_reason"]) {
+function finishReasonLabel(reason: ModelRequestSummary["finish_reason"]) {
   if (reason === null) return "—";
   const labels: Record<
-    NonNullable<V2ModelRequestSummary["finish_reason"]>,
+    NonNullable<ModelRequestSummary["finish_reason"]>,
     string
   > = {
     completed: "Provider 完成（completed）",
@@ -2238,7 +2238,7 @@ function finishReasonLabel(reason: V2ModelRequestSummary["finish_reason"]) {
   return labels[reason];
 }
 
-function streamDeltaLabel(request: V2ModelRequestSummary | null) {
+function streamDeltaLabel(request: ModelRequestSummary | null) {
   if (
     request === null ||
     (request.reasoning_delta_count === null &&
@@ -2251,7 +2251,7 @@ function streamDeltaLabel(request: V2ModelRequestSummary | null) {
   }`;
 }
 
-function automaticRetryDecisionLabel(request: V2ModelRequestSummary | null) {
+function automaticRetryDecisionLabel(request: ModelRequestSummary | null) {
   if (request === null) return "—";
   if (request.automatic_retry_scheduled === true) return "已安排";
   const reason = request.automatic_retry_stop_reason;
@@ -2270,11 +2270,11 @@ function automaticRetryDecisionLabel(request: V2ModelRequestSummary | null) {
 }
 
 function failureResolutionLabel(
-  resolution: V2ModelRequestSummary["failure_resolution"],
+  resolution: ModelRequestSummary["failure_resolution"],
 ) {
   if (resolution === null) return "—";
   const labels: Record<
-    NonNullable<V2ModelRequestSummary["failure_resolution"]>,
+    NonNullable<ModelRequestSummary["failure_resolution"]>,
     string
   > = {
     automatic_retry_success: "自动重试成功",
@@ -2292,11 +2292,11 @@ function failureResolutionLabel(
 }
 
 function failureImpactLabel(
-  impact: V2ModelRequestSummary["failure_impact"],
+  impact: ModelRequestSummary["failure_impact"],
 ) {
   if (impact === null) return "—";
   const labels: Record<
-    NonNullable<V2ModelRequestSummary["failure_impact"]>,
+    NonNullable<ModelRequestSummary["failure_impact"]>,
     string
   > = {
     expected_control_flow: "预期控制流，不计入有效失败",
@@ -2326,8 +2326,8 @@ function timeoutScopeLabel(scope: string | null) {
   return scope;
 }
 
-function retryScopeLabel(scope: V2ModelRequestSummary["retry_scope"]) {
-  const labels: Record<V2ModelRequestSummary["retry_scope"], string> = {
+function retryScopeLabel(scope: ModelRequestSummary["retry_scope"]) {
+  const labels: Record<ModelRequestSummary["retry_scope"], string> = {
     action: "普通动作（action）",
     same_action: "同动作自动重试（same_action）",
     batch_initial: "批次初始（batch_initial）",
@@ -2352,7 +2352,7 @@ function voteBatchStageLabel(stage: string | null) {
 }
 
 function automaticMachineFormatProgressLabel(
-  requests: V2ModelRequestSummary[],
+  requests: ModelRequestSummary[],
   decisionFamilyId: string | null,
 ) {
   const scopedRequests =
@@ -2378,7 +2378,7 @@ function automaticMachineFormatProgressLabel(
 }
 
 function automaticOutputBudgetProgressLabel(
-  requests: V2ModelRequestSummary[],
+  requests: ModelRequestSummary[],
   decisionFamilyId: string | null,
 ) {
   const scopedRequests =
@@ -2404,7 +2404,7 @@ function automaticOutputBudgetProgressLabel(
 }
 
 function generationPolicyContractStatusLabel(
-  status: V2ModelRequestSummary["model_generation_policy_contract_status"],
+  status: ModelRequestSummary["model_generation_policy_contract_status"],
 ) {
   if (status === "supported") return "支持（supported）";
   if (status === "legacy_disabled") return "旧局禁用（legacy_disabled）";
@@ -2412,7 +2412,7 @@ function generationPolicyContractStatusLabel(
 }
 
 function generationPolicyProfileSourceLabel(
-  source: V2ModelRequestSummary["model_generation_policy_profile_source"],
+  source: ModelRequestSummary["model_generation_policy_profile_source"],
 ) {
   if (source === "explicit_action_profile") return "显式动作分类";
   if (source === "default_profile") return "默认 Profile";
@@ -2421,7 +2421,7 @@ function generationPolicyProfileSourceLabel(
 }
 
 function generationPolicyEnforcementLabel(
-  enforcement: V2ModelRequestSummary["model_generation_policy_enforcement"],
+  enforcement: ModelRequestSummary["model_generation_policy_enforcement"],
 ) {
   if (enforcement === "observe_only") return "仅观测（observe_only）";
   if (enforcement === "disabled") return "禁用（disabled）";
@@ -2429,7 +2429,7 @@ function generationPolicyEnforcementLabel(
 }
 
 function generationPolicyReasoningModeLabel(
-  mode: V2ModelRequestSummary["model_generation_policy_reasoning_parameter_mode"],
+  mode: ModelRequestSummary["model_generation_policy_reasoning_parameter_mode"],
 ) {
   if (mode === "inherit_frozen_model_configuration") {
     return "继承冻结模型配置";
@@ -2538,7 +2538,7 @@ function phaseStatus(
   if (!isCurrent) return "succeeded";
   if (gameStatus === "failed") return "failed";
   if (gameStatus === "canceled") return "canceled";
-  return isLiveV2StatusActive(gameStatus) ? "running" : "succeeded";
+  return isLiveStatusActive(gameStatus) ? "running" : "succeeded";
 }
 
 function phaseStepStatus(

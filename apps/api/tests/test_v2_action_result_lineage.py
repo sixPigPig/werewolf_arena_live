@@ -7,25 +7,25 @@ from typing import Any
 
 import pytest
 
-import app.v2.action_engine as action_engine_module
+import app.match.action_engine as action_engine_module
 from app.judge_configuration import RuntimeJudgeConfiguration
-from app.v2.action_engine import (
-    V2ActionEngine,
-    V2ActionFailure,
-    V2ActionResult,
-    V2DecisionContract,
-    V2SpeechSpec,
+from app.match.action_engine import (
+    ActionEngine,
+    ActionFailure,
+    ActionResult,
+    DecisionContract,
+    SpeechSpec,
 )
-from app.v2.model_client import V2ModelDecision, V2ModelError, V2ModelTarget
-from app.v2.model_context import V2ProjectedModelContext
-from app.v2.model_context_contract import current_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.model_client import ModelDecision, ModelError, ModelTarget
+from app.match.model_context import ProjectedModelContext
+from app.match.model_context_contract import current_model_context_contract
+from app.match.model_generation_policy_contract import (
     current_model_generation_policy_contract,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ExecutionOwnershipLost,
-    V2PresentationIdentity,
+from app.match.repository import (
+    ActionClaim,
+    ExecutionOwnershipLost,
+    PresentationIdentity,
 )
 
 
@@ -46,8 +46,8 @@ class _Repository:
         self.completed_silently = False
         self.completed_text = False
 
-    def claim_action(self, **values: Any) -> V2ActionClaim:
-        return V2ActionClaim(
+    def claim_action(self, **values: Any) -> ActionClaim:
+        return ActionClaim(
             game_id=values["game_id"],
             run_id="v2_run_action_lineage",
             action_id=values["action_id"],
@@ -81,9 +81,9 @@ class _Repository:
         self._record_seq += 1
         return self._record_seq
 
-    def open_presentation(self, **values: Any) -> V2PresentationIdentity:
+    def open_presentation(self, **values: Any) -> PresentationIdentity:
         claim = values["claim"]
-        return V2PresentationIdentity(
+        return PresentationIdentity(
             game_id=claim.game_id,
             run_id=claim.run_id,
             action_id=claim.action_id,
@@ -116,8 +116,8 @@ class _ModelClient:
     def __init__(
         self,
         *,
-        decision: V2ModelDecision | None = None,
-        error: V2ModelError | None = None,
+        decision: ModelDecision | None = None,
+        error: ModelError | None = None,
     ) -> None:
         self.decision = decision
         self.error = error
@@ -131,8 +131,8 @@ class _ModelClient:
         model_id: str,
         model_supports_thinking: bool,
         model_parameters: dict[str, Any],
-    ) -> V2ModelTarget:
-        return V2ModelTarget(
+    ) -> ModelTarget:
+        return ModelTarget(
             provider=model_provider,
             model_id=model_id,
             supports_thinking=model_supports_thinking,
@@ -156,7 +156,7 @@ class _ModelClient:
         check_cancellation: Any = None,
         admission_mode: str = "normal",
         **_values: Any,
-    ) -> V2ModelDecision:
+    ) -> ModelDecision:
         if check_cancellation is not None:
             check_cancellation()
         self.admission_modes.append(admission_mode)
@@ -168,7 +168,7 @@ class _ModelClient:
 
 
 class _SequenceModelClient(_ModelClient):
-    def __init__(self, outcomes: list[V2ModelDecision | V2ModelError]) -> None:
+    def __init__(self, outcomes: list[ModelDecision | ModelError]) -> None:
         super().__init__()
         self.outcomes = list(outcomes)
 
@@ -178,13 +178,13 @@ class _SequenceModelClient(_ModelClient):
         check_cancellation: Any = None,
         admission_mode: str = "normal",
         **_values: Any,
-    ) -> V2ModelDecision:
+    ) -> ModelDecision:
         if check_cancellation is not None:
             check_cancellation()
         self.admission_modes.append(admission_mode)
         self.calls += 1
         outcome = self.outcomes.pop(0)
-        if isinstance(outcome, V2ModelError):
+        if isinstance(outcome, ModelError):
             raise outcome
         return outcome
 
@@ -200,7 +200,7 @@ class _BlockingModelClient(_ModelClient):
         check_cancellation: Any = None,
         admission_mode: str = "normal",
         **_values: Any,
-    ) -> V2ModelDecision:
+    ) -> ModelDecision:
         if check_cancellation is not None:
             check_cancellation()
         self.admission_modes.append(admission_mode)
@@ -226,7 +226,7 @@ def projected_model_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         action_engine_module,
         "project_model_action_context_with_metadata",
-        lambda *_args, **_kwargs: V2ProjectedModelContext(
+        lambda *_args, **_kwargs: ProjectedModelContext(
             context={
                 "model_context_schema_version": 12,
                 "prompt_template_version": 5,
@@ -245,7 +245,7 @@ def projected_model_context(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_generation_result_carries_exact_model_response_record_seq(tmp_path: Path) -> None:
     repository = _Repository()
     model_client = _ModelClient(
-        decision=V2ModelDecision(
+        decision=ModelDecision(
             target_player_id=None,
             speech="提前生成的第二位玩家发言。",
             provider_request_id="provider-prefetch-success",
@@ -281,7 +281,7 @@ def test_precomputed_presentation_has_no_model_response_record_seq(tmp_path: Pat
     repository = _Repository()
     model_client = _ModelClient()
     engine = _engine(repository, model_client, tmp_path)
-    spec = V2SpeechSpec(
+    spec = SpeechSpec(
         action_type="day_debate_speech",
         phase_id="day_1",
         required_phase_state="public_discussion_open",
@@ -303,7 +303,7 @@ def test_precomputed_presentation_has_no_model_response_record_seq(tmp_path: Pat
             game_id="v2_game_action_lineage",
             broadcaster=_Broadcaster(),
             spec=spec,
-            decision=V2ModelDecision(
+            decision=ModelDecision(
                 target_player_id=None,
                 speech="直接展示此前生成的发言。",
                 provider_request_id="provider-prefetch-source",
@@ -330,7 +330,7 @@ def test_foreground_player_entrypoints_forward_presentation_opened_callback(
 ) -> None:
     repository = _Repository()
     model_client = _ModelClient(
-        decision=V2ModelDecision(
+        decision=ModelDecision(
             target_player_id=None,
             speech="当前顺序生成并公开展示的发言。",
             provider_request_id="provider-foreground-success",
@@ -339,7 +339,7 @@ def test_foreground_player_entrypoints_forward_presentation_opened_callback(
         )
     )
     engine = _engine(repository, model_client, tmp_path)
-    opened: list[V2PresentationIdentity] = []
+    opened: list[PresentationIdentity] = []
     arguments = {
         "game_id": "v2_game_action_lineage",
         "broadcaster": _Broadcaster(),
@@ -369,7 +369,7 @@ def test_foreground_player_entrypoints_forward_presentation_opened_callback(
 def test_isolated_failure_carries_action_failed_record_seq(tmp_path: Path) -> None:
     repository = _Repository(fail_action_result=777)
     model_client = _ModelClient(
-        error=V2ModelError(
+        error=ModelError(
             "model_prefetch_capacity_unavailable",
             retryable=False,
             failure_stage="provider_admission",
@@ -419,7 +419,7 @@ def test_pipeline_technical_skip_uses_fixed_judge_cue_without_player_model_reque
             version=1,
         ),
     )
-    source_failure = V2ActionFailure(
+    source_failure = ActionFailure(
         code="model_output_budget_exhausted",
         category="output_budget",
         terminal_attempt_id="v2_model_source_failure",
@@ -473,13 +473,13 @@ def test_prefetch_empty_stream_retries_once_inside_same_action_while_predecessor
     repository = _Repository()
     model_client = _SequenceModelClient(
         [
-            V2ModelError(
+            ModelError(
                 "model_empty_stream",
                 retryable=True,
                 failure_stage="stream",
                 first_token_seen=True,
             ),
-            V2ModelDecision(
+            ModelDecision(
                 target_player_id=None,
                 speech="隐藏重试成功的发言。",
                 provider_request_id="provider-hidden-retry-success",
@@ -534,7 +534,7 @@ def test_prefetch_empty_stream_does_not_retry_after_predecessor_closed(tmp_path:
     repository = _Repository(fail_action_result=778)
     model_client = _SequenceModelClient(
         [
-            V2ModelError(
+            ModelError(
                 "model_empty_stream",
                 retryable=True,
                 failure_stage="stream",
@@ -575,7 +575,7 @@ def test_prefetch_empty_stream_does_not_retry_after_predecessor_closed(tmp_path:
 
 def test_pipeline_retry_mode_never_retries_output_budget_exhaustion(tmp_path: Path) -> None:
     class _LegacyGenerationPolicyRepository(_Repository):
-        def claim_action(self, **values: Any) -> V2ActionClaim:
+        def claim_action(self, **values: Any) -> ActionClaim:
             return replace(
                 super().claim_action(**values),
                 model_generation_policy_contract=None,
@@ -584,13 +584,13 @@ def test_pipeline_retry_mode_never_retries_output_budget_exhaustion(tmp_path: Pa
     repository = _LegacyGenerationPolicyRepository()
     model_client = _SequenceModelClient(
         [
-            V2ModelError(
+            ModelError(
                 "model_output_budget_exhausted",
                 retryable=True,
                 failure_stage="stream",
                 first_token_seen=True,
             ),
-            V2ModelDecision(
+            ModelDecision(
                 target_player_id=None,
                 speech=None,
                 provider_request_id="must-not-run-same-budget-retry",
@@ -635,7 +635,7 @@ def test_pipeline_retry_mode_never_retries_output_budget_exhaustion(tmp_path: Pa
 def test_prefetch_post_close_deadline_terminalizes_attempt_action_and_result(
     tmp_path: Path,
 ) -> None:
-    async def scenario() -> tuple[V2ActionResult, _Repository, _BlockingModelClient]:
+    async def scenario() -> tuple[ActionResult, _Repository, _BlockingModelClient]:
         repository = _Repository(fail_action_result=779)
         model_client = _BlockingModelClient()
         engine = _engine(repository, model_client, tmp_path)
@@ -682,7 +682,7 @@ def test_prefetch_post_close_deadline_terminalizes_attempt_action_and_result(
 @pytest.mark.parametrize(
     ("secondary_failure", "expect_original_cancel"),
     [
-        (V2ExecutionOwnershipLost("v2_run_execution_lease_lost"), False),
+        (ExecutionOwnershipLost("v2_run_execution_lease_lost"), False),
         (asyncio.CancelledError("stop_requested"), True),
     ],
 )
@@ -698,7 +698,7 @@ def test_prefetch_cancellation_is_durable_without_masking_original_cancel(
     )
     engine = _engine(repository, _ModelClient(), tmp_path)
 
-    expected_type = asyncio.CancelledError if expect_original_cancel else V2ExecutionOwnershipLost
+    expected_type = asyncio.CancelledError if expect_original_cancel else ExecutionOwnershipLost
     with pytest.raises(expected_type) as captured:
         asyncio.run(
             engine.run_player_decision_result(
@@ -719,7 +719,7 @@ def test_prefetch_cancellation_is_durable_without_masking_original_cancel(
 @pytest.mark.parametrize("field_name", ["model_response_record_seq", "terminal_event_record_seq"])
 def test_action_result_record_sequences_must_be_positive(field_name: str) -> None:
     with pytest.raises(ValueError, match=f"{field_name} must be a positive integer"):
-        V2ActionResult(action_id="v2_action_invalid_seq", **{field_name: 0})
+        ActionResult(action_id="v2_action_invalid_seq", **{field_name: 0})
 
 
 def _engine(
@@ -728,8 +728,8 @@ def _engine(
     voice_root: Path,
     *,
     judge_configuration: RuntimeJudgeConfiguration | None = None,
-) -> V2ActionEngine:
-    return V2ActionEngine(
+) -> ActionEngine:
+    return ActionEngine(
         repository=repository,  # type: ignore[arg-type]
         model_client=model_client,
         tts_client=None,
@@ -741,8 +741,8 @@ def _engine(
     )
 
 
-def _generation_spec() -> V2SpeechSpec:
-    return V2SpeechSpec(
+def _generation_spec() -> SpeechSpec:
+    return SpeechSpec(
         action_type="day_debate_speech",
         phase_id="day_1",
         required_phase_state="public_discussion_open",
@@ -766,8 +766,8 @@ def _generation_spec() -> V2SpeechSpec:
     )
 
 
-def _foreground_spec() -> V2SpeechSpec:
-    return V2SpeechSpec(
+def _foreground_spec() -> SpeechSpec:
+    return SpeechSpec(
         action_type="day_debate_speech",
         phase_id="day_1",
         required_phase_state="public_discussion_open",
@@ -783,8 +783,8 @@ def _foreground_spec() -> V2SpeechSpec:
     )
 
 
-def _pre_exile_self_explosion_generation_spec() -> V2SpeechSpec:
-    return V2SpeechSpec(
+def _pre_exile_self_explosion_generation_spec() -> SpeechSpec:
+    return SpeechSpec(
         action_type="werewolf_self_explosion",
         phase_id="day_1",
         required_phase_state="public_discussion_open",
@@ -799,7 +799,7 @@ def _pre_exile_self_explosion_generation_spec() -> V2SpeechSpec:
         model_supports_thinking=False,
         model_parameters=_model_parameters(),
         output_kind="private_decision",
-        decision_contract=V2DecisionContract(
+        decision_contract=DecisionContract(
             kind="boolean",
             boolean_field="explode",
             speech_mode="forbidden",

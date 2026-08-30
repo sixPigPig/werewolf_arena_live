@@ -13,7 +13,7 @@ NODE_IMAGE ?= public.ecr.aws/docker/library/node:22-alpine
 NGINX_IMAGE ?= public.ecr.aws/docker/library/nginx:1.27-alpine
 PYTHON_IMAGE ?= public.ecr.aws/docker/library/python:3.12-slim
 
-.PHONY: install dev api mobile-web mobile-e2e admin-web admin-e2e voice-worker live-voice-materializer live-run-reaper db-up db-down stack-up stack-down container-build lint test build format release-check
+.PHONY: install dev api mobile-web mobile-e2e admin-web admin-e2e voice-worker db-up db-down stack-up stack-down container-build lint test build format release-check
 
 install:
 	cd apps/api && uv sync
@@ -24,7 +24,7 @@ dev:
 	@printf "API: http://127.0.0.1:8000\n"
 	@printf "Mobile Web: http://127.0.0.1:5174\n"
 	@printf "Admin Web: http://127.0.0.1:5175\n"
-	@printf "Additional workers: make voice-worker / make live-run-reaper (make api includes live voice materializer)\n"
+	@printf "Additional workers: make voice-worker\n"
 	@printf "LAN Mobile Web: http://$(LAN_HOST):5174\n"
 
 api:
@@ -45,12 +45,6 @@ admin-e2e:
 
 voice-worker:
 	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-judge-voice-worker
-
-live-voice-materializer:
-	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-live-voice-materializer
-
-live-run-reaper:
-	cd apps/api && $(API_LOCAL_ENV) .venv/bin/python -m app.cli run-live-run-reaper
 
 db-up:
 	docker compose up -d db

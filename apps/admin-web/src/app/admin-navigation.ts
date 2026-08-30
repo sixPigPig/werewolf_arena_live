@@ -4,6 +4,7 @@ export type AdminPermission =
   | "games.read"
   | "games.delete"
   | "runs.read"
+  | "runs.control"
   | "voice.read"
   | "voice.generate_missing"
   | "voice.regenerate_all"
@@ -64,22 +65,6 @@ export const adminNavigation: AdminNavSection[] = [
         href: "/v2/operations/games",
         marker: "V2",
         permission: "v2_games.read",
-      },
-      {
-        id: "runs",
-        label: "运行监控",
-        description: "实时状态与安全诊断",
-        href: "/operations/runs",
-        marker: "运",
-        permission: "runs.read",
-      },
-      {
-        id: "games",
-        label: "对局记录",
-        description: "结果、运行与错误诊断",
-        href: "/operations/games",
-        marker: "局",
-        permission: "games.read",
       },
     ],
   },

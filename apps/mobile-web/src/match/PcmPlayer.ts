@@ -1,8 +1,8 @@
-import type { V2AudioFrame, V2Presentation } from "./contracts";
+import type { AudioFrame, Presentation } from "./contracts";
 
-export class V2PcmPlayer {
+export class PcmPlayer {
   private readonly context: AudioContext;
-  private presentation: V2Presentation | null = null;
+  private presentation: Presentation | null = null;
   private expectedChunk: number | null = null;
   private expectedSample = 0;
   private nextStartTime: number | null = null;
@@ -16,14 +16,14 @@ export class V2PcmPlayer {
     await this.context.resume();
   }
 
-  begin(presentation: V2Presentation): void {
+  begin(presentation: Presentation): void {
     if (this.presentation?.presentation_id === presentation.presentation_id) return;
     this.stop();
     this.presentation = presentation;
     this.expectedSample = presentation.join_sample_cursor;
   }
 
-  push(frame: V2AudioFrame): void {
+  push(frame: AudioFrame): void {
     const presentation = this.presentation;
     if (!presentation) throw new Error("收到没有展示归属的 V2 音频");
     const header = frame.header;

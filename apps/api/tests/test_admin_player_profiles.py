@@ -29,25 +29,19 @@ from app.model_catalog.defaults import (
     reasoning_policy_for_model,
 )
 from app.models.admin import AuditEvent
-from app.models.live import (
-    LiveEventRecord,
-    VoiceAudioChunkRecord,
-    VoiceMaterializationJobRecord,
-    VoiceUtteranceRecord,
-)
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
 from app.player_profiles.errors import PlayerProfileVersionConflict
 from app.player_profiles.service import update_player_profile
-from app.werewolf.providers import configured_model_options
-from app.werewolf.player_avatar_assets import create_avatar_asset
-from app.werewolf.tts_speaker_catalog import (
+from app.shared.providers import configured_model_options
+from app.shared.player_avatar_assets import create_avatar_asset
+from app.shared.tts_speaker_catalog import (
     TtsDialectOption,
     TtsSpeakerCatalogUnavailable,
     TtsSpeakerOption,
     tts_speaker_catalog,
 )
-from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.shared.volcengine_tts import VolcengineTtsConfig
 
 
 @dataclass(frozen=True)
@@ -1016,12 +1010,6 @@ def test_admin_voice_preview_compiles_safe_delivery_without_live_artifacts(
             "dialect": "sichuan",
         }
     ]
-
-    with context.session_factory() as db:
-        assert list(db.scalars(select(LiveEventRecord))) == []
-        assert list(db.scalars(select(VoiceMaterializationJobRecord))) == []
-        assert list(db.scalars(select(VoiceUtteranceRecord))) == []
-        assert list(db.scalars(select(VoiceAudioChunkRecord))) == []
 
 
 def test_admin_voice_preview_requires_session_write_permission_and_csrf(

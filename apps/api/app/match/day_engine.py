@@ -10,30 +10,30 @@ import json
 import logging
 from typing import Any, Literal
 
-from app.v2.action_engine import (
-    V2ActionEngine,
-    V2ActionFailure,
-    V2ActionResult,
-    V2BroadcastPort,
-    V2DecisionContract,
-    V2PreflightPauseFailure,
-    V2SpeechSpec,
+from app.match.action_engine import (
+    ActionEngine,
+    ActionFailure,
+    ActionResult,
+    BroadcastPort,
+    DecisionContract,
+    PreflightPauseFailure,
+    SpeechSpec,
 )
-from app.v2.day_speech_pipeline_repository import (
-    V2DaySpeechPipelineRepository,
-    V2DaySpeechSlotSnapshot,
+from app.match.day_speech_pipeline_repository import (
+    DaySpeechPipelineRepository,
+    DaySpeechSlotSnapshot,
 )
-from app.v2.match_repository import (
-    V2DayVoteCommit,
-    V2ExileResult,
-    V2MatchPlayer,
-    V2MatchRepository,
-    V2MatchSnapshot,
-    V2PrivateRoundMemoryCommit,
+from app.match.match_repository import (
+    DayVoteCommit,
+    ExileResult,
+    MatchPlayer,
+    MatchRepository,
+    MatchSnapshot,
+    PrivateRoundMemoryCommit,
     private_round_memory_source_refs_sha256,
 )
-from app.v2.model_context import (
-    V2ModelPlayerReference,
+from app.match.model_context import (
+    ModelPlayerReference,
     build_actor_information,
     build_private_round_memory_source_context,
     build_public_match_state,
@@ -41,24 +41,24 @@ from app.v2.model_context import (
     private_round_memory_objective,
     private_authoritative_facts,
 )
-from app.v2.model_context_contract import is_supported_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.model_context_contract import is_supported_model_context_contract
+from app.match.model_generation_policy_contract import (
     resolve_model_generation_action_policy,
 )
-from app.v2.model_client import V2ModelDecision, V2ModelError, V2ProviderAdmissionMode
-from app.v2.protocol import (
+from app.match.model_client import ModelDecision, ModelError, ProviderAdmissionMode
+from app.match.protocol import (
     day_progress,
     game_phase_changed,
     live_state,
     match_state_changed,
     player_state_changed,
 )
-from app.v2.pre_exile_pipeline_contract import pre_exile_context_sha256
-from app.v2.pre_exile_pipeline_repository import V2PreExilePipelineRepository
-from app.v2.repository import (
-    V2ExecutionOwnershipLost,
-    V2PhaseTransition,
-    V2PresentationIdentity,
+from app.match.pre_exile_pipeline_contract import pre_exile_context_sha256
+from app.match.pre_exile_pipeline_repository import PreExilePipelineRepository
+from app.match.repository import (
+    ExecutionOwnershipLost,
+    PhaseTransition,
+    PresentationIdentity,
 )
 
 
@@ -100,8 +100,8 @@ def _vote_decision_family_id(
     *,
     batch_id: str,
     action_type: str,
-    voter: V2MatchPlayer,
-    candidates: list[V2MatchPlayer],
+    voter: MatchPlayer,
+    candidates: list[MatchPlayer],
     projection_at_seq: int,
     model_context_contract: dict[str, Any] | None,
 ) -> str:
@@ -128,21 +128,21 @@ _DECISION_NOTE_MAX_CHARS = 80
 _DAY_SPEECH_PREFETCH_POST_CLOSE_DEADLINE = "day_speech_prefetch_post_close_deadline"
 
 
-class V2DayRuntimeError(RuntimeError):
+class DayRuntimeError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
 class _PreparedDaySpeech:
-    slot: V2DaySpeechSlotSnapshot
-    decision: V2ModelDecision
+    slot: DaySpeechSlotSnapshot
+    decision: ModelDecision
 
 
 @dataclass(frozen=True)
 class _FailedDaySpeechPrefetch:
-    slot: V2DaySpeechSlotSnapshot
+    slot: DaySpeechSlotSnapshot
     source_action_id: str | None
-    failure: V2ActionFailure
+    failure: ActionFailure
     terminal_event_record_seq: int | None
 
 
@@ -151,7 +151,7 @@ _DaySpeechPrefetchOutcome = _PreparedDaySpeech | _FailedDaySpeechPrefetch
 
 @dataclass
 class _DaySpeechPrefetchLaunch:
-    slot: V2DaySpeechSlotSnapshot | None = None
+    slot: DaySpeechSlotSnapshot | None = None
     task: asyncio.Task[None] | None = None
     outcome: _DaySpeechPrefetchOutcome | None = None
     fatal: BaseException | None = None
@@ -172,9 +172,9 @@ class _PreExileLaunch:
 class _PreparedPreExileVote:
     pipeline_id: str
     run_fence: Any | None
-    frozen_state: V2MatchSnapshot
+    frozen_state: MatchSnapshot
     public_history_cutoff_record_seq: int
-    initial_results_by_voter: dict[str, V2ActionResult]
+    initial_results_by_voter: dict[str, ActionResult]
     frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]]
 
 
@@ -192,17 +192,17 @@ class _PublicDiscussionResult:
 
 
 def _prepared_day_speech_from_slot(
-    slot: V2DaySpeechSlotSnapshot,
+    slot: DaySpeechSlotSnapshot,
 ) -> _PreparedDaySpeech:
     decision = slot.decision if isinstance(slot.decision, dict) else {}
     speech = decision.get("speech")
     if not isinstance(speech, str) or not speech.strip():
-        raise V2DayRuntimeError("ready day speech slot has no reusable speech")
+        raise DayRuntimeError("ready day speech slot has no reusable speech")
     target_player_id = decision.get("target_player_id")
     decision_note = decision.get("decision_note")
     return _PreparedDaySpeech(
         slot=slot,
-        decision=V2ModelDecision(
+        decision=ModelDecision(
             target_player_id=(target_player_id if isinstance(target_player_id, str) else None),
             speech=speech,
             provider_request_id=(
@@ -216,7 +216,7 @@ def _prepared_day_speech_from_slot(
 
 
 def _failed_day_speech_prefetch_from_slot(
-    slot: V2DaySpeechSlotSnapshot,
+    slot: DaySpeechSlotSnapshot,
 ) -> _FailedDaySpeechPrefetch:
     persisted = slot.failure if isinstance(slot.failure, dict) else {}
     action_failed = persisted.get("action_failed")
@@ -247,7 +247,7 @@ def _failed_day_speech_prefetch_from_slot(
     return _FailedDaySpeechPrefetch(
         slot=slot,
         source_action_id=source_action_id,
-        failure=V2ActionFailure(
+        failure=ActionFailure(
             code=failure_code,
             category=failure_category,
             terminal_attempt_id=slot.generation_attempt_id,
@@ -258,37 +258,37 @@ def _failed_day_speech_prefetch_from_slot(
 
 
 def speech_order_from_start(
-    alive_by_seat: Iterable[V2MatchPlayer],
+    alive_by_seat: Iterable[MatchPlayer],
     sheriff_player_id: str,
     start_player_id: str,
 ) -> list[str]:
     alive = sorted(tuple(alive_by_seat), key=lambda item: item.seat)
     alive_ids = [item.player_id for item in alive]
     if len(alive) < 2 or sheriff_player_id not in alive_ids:
-        raise V2DayRuntimeError("sheriff_speech_order_invalid_state")
+        raise DayRuntimeError("sheriff_speech_order_invalid_state")
     sheriff_index = alive_ids.index(sheriff_player_id)
     left = alive[(sheriff_index - 1) % len(alive)]
     right = alive[(sheriff_index + 1) % len(alive)]
     if start_player_id not in {left.player_id, right.player_id}:
-        raise V2DayRuntimeError("sheriff_speech_order_invalid_start")
+        raise DayRuntimeError("sheriff_speech_order_invalid_start")
     if start_player_id == right.player_id:
         ordered = alive[sheriff_index + 1 :] + alive[: sheriff_index + 1]
     else:
         ordered = list(reversed(alive[:sheriff_index])) + list(reversed(alive[sheriff_index:]))
     result = [item.player_id for item in ordered]
     if result[-1] != sheriff_player_id or set(result) != set(alive_ids):
-        raise V2DayRuntimeError("sheriff_speech_order_invalid_result")
+        raise DayRuntimeError("sheriff_speech_order_invalid_result")
     return result
 
 
-class V2DayEngine:
+class DayEngine:
     def __init__(
         self,
         *,
-        repository: V2MatchRepository,
-        action_engine: V2ActionEngine,
-        day_speech_pipeline_repository: V2DaySpeechPipelineRepository | None = None,
-        pre_exile_pipeline_repository: V2PreExilePipelineRepository | None = None,
+        repository: MatchRepository,
+        action_engine: ActionEngine,
+        day_speech_pipeline_repository: DaySpeechPipelineRepository | None = None,
+        pre_exile_pipeline_repository: PreExilePipelineRepository | None = None,
     ) -> None:
         self._repository = repository
         self._actions = action_engine
@@ -299,7 +299,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         """Resolve public death consequences left by the preceding night."""
         self._actions.check_cancellation(game_id)
@@ -309,13 +309,13 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         actions = set(state.rule.get("day_actions") or [])
         if not self._should_run_sheriff_election(state, actions):
-            raise V2DayRuntimeError("pre_dawn_sheriff_election_not_configured")
+            raise DayRuntimeError("pre_dawn_sheriff_election_not_configured")
         await self._open_day_window(
             state=state,
             broadcaster=broadcaster,
@@ -330,7 +330,7 @@ class V2DayEngine:
         *,
         game_id: str,
         player_ids: tuple[str, ...],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         state = self._repository.snapshot(game_id)
         for player_id in sorted(player_ids, key=lambda value: state.player(value).seat):
@@ -352,8 +352,8 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-    ) -> V2PhaseTransition | None:
+        broadcaster: BroadcastPort,
+    ) -> PhaseTransition | None:
         try:
             self._actions.check_cancellation(game_id)
             state = self._repository.snapshot(game_id)
@@ -368,7 +368,7 @@ class V2DayEngine:
             actions = set(state.rule.get("day_actions") or [])
             unknown_actions = actions - _SUPPORTED_DAY_ACTIONS
             if unknown_actions:
-                raise V2DayRuntimeError(
+                raise DayRuntimeError(
                     "unsupported_day_actions:" + ",".join(sorted(unknown_actions))
                 )
             if self._should_run_sheriff_election(state, actions):
@@ -490,7 +490,7 @@ class V2DayEngine:
                 reason="day_actions_completed",
                 summarize="summarize" in actions,
             )
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except Exception as exc:
             logger.warning(
@@ -519,7 +519,7 @@ class V2DayEngine:
 
     def _should_run_sheriff_election(
         self,
-        state: V2MatchSnapshot,
+        state: MatchSnapshot,
         actions: set[str],
     ) -> bool:
         return (
@@ -531,8 +531,8 @@ class V2DayEngine:
     async def _open_day_window(
         self,
         *,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
         opening_state: str,
         action_type: str,
         objective: str,
@@ -547,7 +547,7 @@ class V2DayEngine:
             context={"round_no": state.round_no},
         )
         if not ok:
-            raise V2DayRuntimeError(f"{action_type}_failed")
+            raise DayRuntimeError(f"{action_type}_failed")
         self._actions.check_cancellation(state.game_id)
         transition = self._repository.record_phase_state(
             game_id=state.game_id,
@@ -559,7 +559,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
@@ -728,9 +728,9 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        state: V2MatchSnapshot,
-        players: list[V2MatchPlayer],
+        broadcaster: BroadcastPort,
+        state: MatchSnapshot,
+        players: list[MatchPlayer],
         action_type: str,
         objective: str,
         output_kind: str,
@@ -744,7 +744,7 @@ class V2DayEngine:
         public_cutoff_record_seq = state.last_record_seq
         batch_id = f"{state.phase_id}:{action_type}:{public_cutoff_record_seq}:boolean"
 
-        async def request_decision(player: V2MatchPlayer) -> V2ModelDecision | None:
+        async def request_decision(player: MatchPlayer) -> ModelDecision | None:
             return await self._player_action(
                 game_id=game_id,
                 player=player,
@@ -754,7 +754,7 @@ class V2DayEngine:
                 candidates=[],
                 target_optional=None,
                 output_kind=output_kind,
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="boolean",
                     boolean_field=boolean_field,
                     speech_mode="forbidden",
@@ -779,7 +779,7 @@ class V2DayEngine:
         failed_player_ids: list[str] = []
         for player, decision in zip(ordered, decisions, strict=True):
             if decision is not None and not isinstance(decision.boolean_value, bool):
-                raise V2DayRuntimeError(f"{action_type}_invalid_decision")
+                raise DayRuntimeError(f"{action_type}_invalid_decision")
             if decision is None:
                 failed_player_ids.append(player.player_id)
             resolved[player.player_id] = bool(decision and decision.boolean_value)
@@ -841,7 +841,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> _PublicDiscussionResult | bool:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
@@ -931,7 +931,7 @@ class V2DayEngine:
                                 reason_code="predecessor_presentation_failed",
                             )
                         raise
-                    assert isinstance(decision, V2ModelDecision)
+                    assert isinstance(decision, ModelDecision)
                     try:
                         self._record_speech(current, player, decision, "day_debate")
                     except BaseException:
@@ -1007,7 +1007,7 @@ class V2DayEngine:
             return False
         return _PublicDiscussionResult(exploded=False, pre_exile_launch=pre_exile_launch)
 
-    def _day_speech_pipeline_enabled(self, state: V2MatchSnapshot) -> bool:
+    def _day_speech_pipeline_enabled(self, state: MatchSnapshot) -> bool:
         return bool(
             self._day_speech_pipeline is not None
             and state.audio_mode == "tts"
@@ -1015,7 +1015,7 @@ class V2DayEngine:
             and state.day_speech_pipeline_contract.enables("day_debate_speech")
         )
 
-    def _pre_exile_pipeline_enabled(self, state: V2MatchSnapshot) -> bool:
+    def _pre_exile_pipeline_enabled(self, state: MatchSnapshot) -> bool:
         contract = getattr(state, "pre_exile_pipeline_contract", None)
         return bool(
             self._pre_exile_pipeline is not None
@@ -1032,11 +1032,11 @@ class V2DayEngine:
         self,
         *,
         launch: _PreExileLaunch,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         phase_state: str,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         predecessor_turn_player_id: str | None = None,
     ) -> None:
         pipeline_repository = self._pre_exile_pipeline
@@ -1064,7 +1064,7 @@ class V2DayEngine:
                 or not speech_order
                 or frozen.predecessor_actor_id != speech_order[-1]
             ):
-                raise V2DayRuntimeError("pre_exile_predecessor_is_not_final_public_turn")
+                raise DayRuntimeError("pre_exile_predecessor_is_not_final_public_turn")
             pipeline = pipeline_repository.reserve_pipeline(
                 game_id=identity.game_id,
                 phase_id=identity.phase_id,
@@ -1106,7 +1106,7 @@ class V2DayEngine:
                 ),
                 name=f"pre-exile:{pipeline.pipeline_id}",
             )
-        except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+        except (asyncio.CancelledError, ExecutionOwnershipLost):
             raise
         except BaseException as exc:
             launch.preparation_error = exc
@@ -1150,7 +1150,7 @@ class V2DayEngine:
                 reason_code=reason_code,
                 fence=launch.run_fence,
             )
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except Exception:
             logger.exception(
@@ -1166,14 +1166,14 @@ class V2DayEngine:
         *,
         launch: _PreExileLaunch,
         sealed_private_facts: dict[str, list[dict[str, Any]]],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> _PreExileOutcome:
         pipeline_repository = self._pre_exile_pipeline
         if pipeline_repository is None or launch.pipeline is None or launch.frozen is None:
-            raise V2DayRuntimeError("pre_exile_pipeline_launch_incomplete")
+            raise DayRuntimeError("pre_exile_pipeline_launch_incomplete")
         pipeline = launch.pipeline
         frozen = launch.frozen
-        state: V2MatchSnapshot = frozen.match_snapshot
+        state: MatchSnapshot = frozen.match_snapshot
         self._actions.check_cancellation(state.game_id)
         await broadcaster.broadcast_json(
             day_progress(
@@ -1213,10 +1213,10 @@ class V2DayEngine:
                 for voter in voters
             }
         )
-        vote_results: dict[str, V2ActionResult] = {}
+        vote_results: dict[str, ActionResult] = {}
         vote_private_facts_by_voter: dict[str, list[dict[str, Any]]] = {}
         self_explosion_rows: dict[str, Any] = {}
-        vote_tasks: dict[str, asyncio.Task[tuple[V2ActionResult, Any]]] = {}
+        vote_tasks: dict[str, asyncio.Task[tuple[ActionResult, Any]]] = {}
         discard_votes = asyncio.Event()
         vote_progress_visible = asyncio.Event()
         vote_progress_lock = asyncio.Lock()
@@ -1227,7 +1227,7 @@ class V2DayEngine:
         )
         guarded_self_explosion_retry = self_explosion_hidden_retry_count == 1
 
-        def predecessor_is_still_active(_exc: V2ModelError, _attempt_no: int) -> bool:
+        def predecessor_is_still_active(_exc: ModelError, _attempt_no: int) -> bool:
             return not launch.presentation_closed.is_set()
 
         async def publish_member_terminal(result_kind: str, recorded: Any) -> None:
@@ -1263,14 +1263,14 @@ class V2DayEngine:
 
         async def run_member(
             *,
-            player: V2MatchPlayer,
+            player: MatchPlayer,
             result_kind: Literal["self_explosion", "exile_vote"],
             private_facts: list[dict[str, Any]],
             on_model_admission_pending: Callable[[], None] | None = None,
-        ) -> tuple[V2ActionResult, Any]:
+        ) -> tuple[ActionResult, Any]:
             slot = result_slots[(result_kind, player.player_id)]
             if slot.state != "reserved":
-                raise V2DayRuntimeError(
+                raise DayRuntimeError(
                     f"pre_exile_member_not_resumable:{slot.result_id}:{slot.state}"
                 )
             if result_kind == "self_explosion":
@@ -1284,7 +1284,7 @@ class V2DayEngine:
                     target_optional=None,
                     audience="god_view",
                     output_kind="private_decision",
-                    decision_contract=V2DecisionContract(
+                    decision_contract=DecisionContract(
                         kind="boolean",
                         boolean_field="explode",
                         speech_mode="forbidden",
@@ -1350,7 +1350,7 @@ class V2DayEngine:
                     candidates=candidates,
                     target_optional=False,
                     output_kind="private_vote",
-                    decision_contract=V2DecisionContract(
+                    decision_contract=DecisionContract(
                         kind="target",
                         target_mode="required",
                         speech_mode="forbidden",
@@ -1386,19 +1386,19 @@ class V2DayEngine:
                     pipeline_result_kind="exile_vote",
                     return_result=True,
                 )
-            if not isinstance(action_result, V2ActionResult) or action_result.action_id is None:
-                raise V2DayRuntimeError("pre_exile_member_action_result_missing")
+            if not isinstance(action_result, ActionResult) or action_result.action_id is None:
+                raise DayRuntimeError("pre_exile_member_action_result_missing")
             if (
                 action_result.failure is not None
                 and action_result.failure.category == "canceled"
                 and not discard_votes.is_set()
             ):
                 self._actions.check_cancellation(state.game_id)
-                raise V2DayRuntimeError("pre_exile_member_canceled_without_discard")
+                raise DayRuntimeError("pre_exile_member_canceled_without_discard")
             try:
                 if action_result.failure is not None:
                     if action_result.terminal_event_record_seq is None:
-                        raise V2DayRuntimeError("pre_exile_member_failure_terminal_lineage_missing")
+                        raise DayRuntimeError("pre_exile_member_failure_terminal_lineage_missing")
                     recorded = pipeline_repository.record_failure(
                         pipeline_id=pipeline.pipeline_id,
                         actor_player_id=player.player_id,
@@ -1434,9 +1434,9 @@ class V2DayEngine:
             return action_result, recorded
 
         async def start_vote(
-            player: V2MatchPlayer,
+            player: MatchPlayer,
             private_facts: list[dict[str, Any]],
-        ) -> tuple[V2ActionResult, Any]:
+        ) -> tuple[ActionResult, Any]:
             vote_private_facts_by_voter[player.player_id] = copy.deepcopy(private_facts)
             result, recorded = await run_member(
                 player=player,
@@ -1449,7 +1449,7 @@ class V2DayEngine:
         normal_admission_pending = {wolf.player_id: asyncio.Event() for wolf in wolves}
         normal_batch_admission_ready = asyncio.Event()
 
-        async def run_wolf_chain(wolf: V2MatchPlayer) -> tuple[V2ActionResult, Any]:
+        async def run_wolf_chain(wolf: MatchPlayer) -> tuple[ActionResult, Any]:
             admission_pending = normal_admission_pending[wolf.player_id]
             try:
                 result, recorded = await run_member(
@@ -1567,9 +1567,9 @@ class V2DayEngine:
                 )
             await asyncio.gather(*vote_tasks.values())
             if set(vote_results) != {voter.player_id for voter in voters}:
-                raise V2DayRuntimeError("pre_exile_vote_result_set_incomplete")
+                raise DayRuntimeError("pre_exile_vote_result_set_incomplete")
             if set(vote_private_facts_by_voter) != {voter.player_id for voter in voters}:
-                raise V2DayRuntimeError("pre_exile_vote_private_context_set_incomplete")
+                raise DayRuntimeError("pre_exile_vote_private_context_set_incomplete")
             self._actions.check_cancellation(state.game_id)
             vote_rows = {
                 row.actor_player_id: row
@@ -1577,7 +1577,7 @@ class V2DayEngine:
                 if row.result_kind == "exile_vote"
             }
             if set(vote_rows) != {voter.player_id for voter in voters}:
-                raise V2DayRuntimeError("pre_exile_vote_durable_result_set_incomplete")
+                raise DayRuntimeError("pre_exile_vote_durable_result_set_incomplete")
             for voter_id, row in vote_rows.items():
                 if row.failure is None:
                     continue
@@ -1585,7 +1585,7 @@ class V2DayEngine:
                     continue
                 category = _persisted_pre_exile_failure_category(row.failure)
                 if category != "admission_capacity":
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_failure_not_recoverable:{voter_id}:{category}"
                     )
             has_capacity_recovery = any(
@@ -1630,17 +1630,17 @@ class V2DayEngine:
         self,
         *,
         launch: _PreExileLaunch,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> _PreExileOutcome | None:
         if launch.task is None:
             if launch.pipeline is None:
                 return None
-            raise V2DayRuntimeError("pre_exile_pipeline_reserved_without_task") from (
+            raise DayRuntimeError("pre_exile_pipeline_reserved_without_task") from (
                 launch.preparation_error
             )
         try:
             outcome = await launch.task
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except BaseException:
             if launch.pipeline is not None and self._pre_exile_pipeline is not None:
@@ -1650,7 +1650,7 @@ class V2DayEngine:
                         reason_code="pre_exile_generation_failed",
                         fence=launch.run_fence,
                     )
-                except V2ExecutionOwnershipLost:
+                except ExecutionOwnershipLost:
                     raise
                 except Exception:
                     logger.exception(
@@ -1669,12 +1669,12 @@ class V2DayEngine:
         self,
         *,
         outcome: _PreExileOutcome,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         pipeline_repository = self._pre_exile_pipeline
         selected_id = outcome.selected_explosion_player_id
         if pipeline_repository is None or selected_id is None:
-            raise V2DayRuntimeError("pre_exile_explosion_outcome_incomplete")
+            raise DayRuntimeError("pre_exile_explosion_outcome_incomplete")
         pipeline = pipeline_repository.get_pipeline(outcome.pipeline_id)
         state = self._repository.snapshot(pipeline.game_id)
         self._actions.check_cancellation(state.game_id)
@@ -1684,7 +1684,7 @@ class V2DayEngine:
             or pipeline.selected_explosion_player_id != selected_id
             or selected.alive
         ):
-            raise V2DayRuntimeError("pre_exile_explosion_was_not_atomically_committed")
+            raise DayRuntimeError("pre_exile_explosion_was_not_atomically_committed")
         current = state
         if not await self._judge(
             state=current,
@@ -1700,7 +1700,7 @@ class V2DayEngine:
                 "batch_id": pipeline.pipeline_id,
             },
         ):
-            raise V2DayRuntimeError("self_explosion_announcement_failed")
+            raise DayRuntimeError("self_explosion_announcement_failed")
         await self._broadcast_death(
             state=current,
             player_id=selected.player_id,
@@ -1715,19 +1715,19 @@ class V2DayEngine:
     async def _run_day_speech_pipeline_turn(
         self,
         *,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
+        state: MatchSnapshot,
+        player: MatchPlayer,
         prepared: _DaySpeechPrefetchOutcome | None,
         next_player_id: str | None,
         next_turn_index: int,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         pre_exile_launch: _PreExileLaunch | None = None,
-    ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
+    ) -> tuple[ModelDecision, _DaySpeechPrefetchOutcome | None]:
         pipeline = self._day_speech_pipeline
         if pipeline is None:
-            raise V2DayRuntimeError("day speech pipeline repository is unavailable")
+            raise DayRuntimeError("day speech pipeline repository is unavailable")
         if isinstance(prepared, _FailedDaySpeechPrefetch):
             if self._day_speech_prefetch_requires_technical_skip(state, prepared):
                 return await self._run_day_speech_technical_skip_turn(
@@ -1748,7 +1748,7 @@ class V2DayEngine:
         current_task = asyncio.current_task()
         presentation_closed_at: float | None = None
 
-        def on_presentation_opened(identity: V2PresentationIdentity) -> None:
+        def on_presentation_opened(identity: PresentationIdentity) -> None:
             if prepared is not None:
                 pipeline.mark_presenting(
                     slot_id=prepared.slot.slot_id,
@@ -1779,13 +1779,13 @@ class V2DayEngine:
                     broadcaster=broadcaster,
                 )
 
-        def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
+        def on_presentation_closed(_identity: PresentationIdentity) -> None:
             nonlocal presentation_closed_at
             presentation_closed_at = asyncio.get_running_loop().time()
             if pre_exile_launch is not None:
                 pre_exile_launch.presentation_closed.set()
 
-        action_result: V2ActionResult | None = None
+        action_result: ActionResult | None = None
         body_error: BaseException | None = None
         try:
             async with asyncio.TaskGroup() as task_group:
@@ -1812,8 +1812,8 @@ class V2DayEngine:
                         allow_failure=prepared is not None,
                         return_result=True,
                     )
-                    if not isinstance(candidate_result, V2ActionResult):
-                        body_error = V2DayRuntimeError("day_debate_speech_failed")
+                    if not isinstance(candidate_result, ActionResult):
+                        body_error = DayRuntimeError("day_debate_speech_failed")
                     else:
                         action_result = candidate_result
                         if action_result.failure is not None:
@@ -1825,11 +1825,11 @@ class V2DayEngine:
                                     slot_id=prepared.slot.slot_id,
                                     failure_record_seq=(action_result.terminal_event_record_seq),
                                 )
-                            body_error = V2DayRuntimeError(
+                            body_error = DayRuntimeError(
                                 "day_debate_speech_pipeline_presentation_failed"
                             )
                         elif action_result.decision is None:
-                            body_error = V2DayRuntimeError("day_debate_speech_failed")
+                            body_error = DayRuntimeError("day_debate_speech_failed")
                         elif prepared is not None:
                             pipeline.mark_consumed(slot_id=prepared.slot.slot_id)
                 except BaseException as exc:
@@ -1884,13 +1884,13 @@ class V2DayEngine:
             raise
 
         if action_result is None or action_result.decision is None:
-            raise V2DayRuntimeError("day_debate_speech_failed")
+            raise DayRuntimeError("day_debate_speech_failed")
         return action_result.decision, launch.outcome
 
     async def _await_day_speech_prefetch_after_close(
         self,
         *,
-        state: V2MatchSnapshot,
+        state: MatchSnapshot,
         launch: _DaySpeechPrefetchLaunch,
         presentation_closed_at: float | None,
     ) -> None:
@@ -1933,14 +1933,14 @@ class V2DayEngine:
             ):
                 launch.outcome = _failed_day_speech_prefetch_from_slot(launch.slot)
             else:
-                raise V2DayRuntimeError(
+                raise DayRuntimeError(
                     "day speech prefetch deadline did not durably terminate "
                     f"its slot (cancel_requested={cancel_requested})"
                 )
 
     def _day_speech_prefetch_requires_technical_skip(
         self,
-        state: V2MatchSnapshot,
+        state: MatchSnapshot,
         failed_prefetch: _FailedDaySpeechPrefetch,
     ) -> bool:
         contract = state.day_speech_pipeline_contract
@@ -1963,21 +1963,21 @@ class V2DayEngine:
     async def _run_day_speech_technical_skip_turn(
         self,
         *,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
+        state: MatchSnapshot,
+        player: MatchPlayer,
         failed_prefetch: _FailedDaySpeechPrefetch,
         next_player_id: str | None,
         next_turn_index: int,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         pre_exile_launch: _PreExileLaunch | None = None,
-    ) -> tuple[V2ModelDecision, _DaySpeechPrefetchOutcome | None]:
+    ) -> tuple[ModelDecision, _DaySpeechPrefetchOutcome | None]:
         launch = _DaySpeechPrefetchLaunch()
         current_task = asyncio.current_task()
         presentation_closed_at: float | None = None
 
-        def on_presentation_opened(identity: V2PresentationIdentity) -> None:
+        def on_presentation_opened(identity: PresentationIdentity) -> None:
             if next_player_id is None:
                 if pre_exile_launch is not None:
                     self._launch_pre_exile_pipeline(
@@ -2004,13 +2004,13 @@ class V2DayEngine:
                 predecessor_turn_player_id=player.player_id,
             )
 
-        def on_presentation_closed(_identity: V2PresentationIdentity) -> None:
+        def on_presentation_closed(_identity: PresentationIdentity) -> None:
             nonlocal presentation_closed_at
             presentation_closed_at = asyncio.get_running_loop().time()
             if pre_exile_launch is not None:
                 pre_exile_launch.presentation_closed.set()
 
-        decision: V2ModelDecision | None = None
+        decision: ModelDecision | None = None
         body_error: BaseException | None = None
         try:
             async with asyncio.TaskGroup() as task_group:
@@ -2066,33 +2066,33 @@ class V2DayEngine:
                 )
             raise
         if decision is None:
-            raise V2DayRuntimeError("pipeline technical skip did not complete")
+            raise DayRuntimeError("pipeline technical skip did not complete")
         return decision, launch.outcome
 
     async def _complete_day_speech_technical_skip(
         self,
         *,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
+        state: MatchSnapshot,
+        player: MatchPlayer,
         failed_prefetch: _FailedDaySpeechPrefetch,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-    ) -> V2ModelDecision:
+        broadcaster: BroadcastPort,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+    ) -> ModelDecision:
         complete = getattr(
             self._actions,
             "complete_pipeline_speech_technical_skip",
             None,
         )
         if not callable(complete):
-            raise V2DayRuntimeError("pipeline technical skip is unsupported")
+            raise DayRuntimeError("pipeline technical skip is unsupported")
         if (
             failed_prefetch.source_action_id is None
             or failed_prefetch.terminal_event_record_seq is None
         ):
-            raise V2DayRuntimeError("pipeline technical skip has incomplete source lineage")
+            raise DayRuntimeError("pipeline technical skip has incomplete source lineage")
         result = await complete(
             game_id=state.game_id,
             broadcaster=broadcaster,
@@ -2111,9 +2111,9 @@ class V2DayEngine:
             on_presentation_opened=on_presentation_opened,
             on_presentation_closed=on_presentation_closed,
         )
-        if not isinstance(result, V2ActionResult) or result.failure is not None:
-            raise V2DayRuntimeError("pipeline technical skip cue did not complete")
-        return V2ModelDecision(
+        if not isinstance(result, ActionResult) or result.failure is not None:
+            raise DayRuntimeError("pipeline technical skip cue did not complete")
+        return ModelDecision(
             target_player_id=None,
             speech=None,
             provider_request_id=(
@@ -2129,13 +2129,13 @@ class V2DayEngine:
         launch: _DaySpeechPrefetchLaunch,
         task_group: asyncio.TaskGroup,
         parent_task: asyncio.Task[Any] | None,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         phase_state: str,
         next_player_id: str,
         next_turn_index: int,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         predecessor_turn_player_id: str | None = None,
     ) -> None:
         pipeline = self._day_speech_pipeline
@@ -2148,7 +2148,7 @@ class V2DayEngine:
                 or type(identity.source_record_seq) is not int
                 or identity.source_record_seq <= 0
             ):
-                raise V2DayRuntimeError("day speech predecessor has no durable source lineage")
+                raise DayRuntimeError("day speech predecessor has no durable source lineage")
             frozen = self._repository.snapshot_for_day_speech_prefetch(
                 game_id=identity.game_id,
                 run_id=identity.run_id,
@@ -2163,7 +2163,7 @@ class V2DayEngine:
                 not self._day_speech_pipeline_enabled(frozen.match_snapshot)
                 or frozen.predecessor_source_record_seq != identity.source_record_seq
             ):
-                raise V2DayRuntimeError("day speech prefetch contract or lineage changed")
+                raise DayRuntimeError("day speech prefetch contract or lineage changed")
             next_player = frozen.match_snapshot.player(next_player_id)
             if not next_player.alive:
                 return
@@ -2213,13 +2213,13 @@ class V2DayEngine:
                     )
                 except asyncio.CancelledError:
                     raise
-                except V2ExecutionOwnershipLost as exc:
+                except ExecutionOwnershipLost as exc:
                     launch.fatal = exc
                     if parent_task is not None and not parent_task.done():
                         parent_task.cancel()
 
             launch.task = task_group.create_task(generate_guarded())
-        except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+        except (asyncio.CancelledError, ExecutionOwnershipLost):
             if launch.slot is not None:
                 self._cancel_day_speech_slot(
                     launch.slot.slot_id,
@@ -2248,23 +2248,23 @@ class V2DayEngine:
     async def _generate_prefetched_day_speech(
         self,
         *,
-        frozen_state: V2MatchSnapshot,
-        player: V2MatchPlayer,
-        slot: V2DaySpeechSlotSnapshot,
+        frozen_state: MatchSnapshot,
+        player: MatchPlayer,
+        slot: DaySpeechSlotSnapshot,
         speech_round: int,
         speech_order: list[str],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> _DaySpeechPrefetchOutcome | None:
         pipeline = self._day_speech_pipeline
         if pipeline is None:
             return None
         contract = frozen_state.day_speech_pipeline_contract
         guarded_empty_stream_retry = contract.early_transport_hidden_retry_max_retries == 1
-        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None
+        model_retry_guard: Callable[[ModelError, int], bool] | None = None
         if guarded_empty_stream_retry:
 
             def predecessor_is_still_active(
-                _exc: V2ModelError,
+                _exc: ModelError,
                 _attempt_no: int,
             ) -> bool:
                 return pipeline.predecessor_is_active(slot.slot_id)
@@ -2306,7 +2306,7 @@ class V2DayEngine:
                 model_retry_guard=model_retry_guard,
                 return_result=True,
             )
-            if not isinstance(action_result, V2ActionResult):
+            if not isinstance(action_result, ActionResult):
                 self._cancel_day_speech_slot(
                     slot.slot_id,
                     reason_code="prefetch_generation_not_claimed",
@@ -2357,7 +2357,7 @@ class V2DayEngine:
                 reason_code=cancellation_reason,
             )
             raise
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             self._cancel_day_speech_slot(
                 slot.slot_id,
                 reason_code="prefetch_generation_ownership_lost",
@@ -2398,8 +2398,8 @@ class V2DayEngine:
     async def _speech_order(
         self,
         *,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
     ) -> list[str]:
         self._actions.check_cancellation(state.game_id)
         alive = sorted((item for item in state.players if item.alive), key=lambda item: item.seat)
@@ -2431,7 +2431,7 @@ class V2DayEngine:
         ]
         option_by_start = {str(option["target_player_id"]): option for option in options}
         if not is_supported_model_context_contract(state.model_context_contract):
-            raise V2DayRuntimeError("unsupported_model_context_contract")
+            raise DayRuntimeError("unsupported_model_context_contract")
         decision = await self._player_action(
             game_id=state.game_id,
             player=sheriff,
@@ -2441,7 +2441,7 @@ class V2DayEngine:
             candidates=candidates,
             target_optional=False,
             output_kind="public_decision",
-            decision_contract=V2DecisionContract(
+            decision_contract=DecisionContract(
                 kind="target",
                 target_mode="required",
                 speech_mode="forbidden",
@@ -2464,7 +2464,7 @@ class V2DayEngine:
         start = decision.target_player_id
         selected_option = option_by_start.get(str(start))
         if selected_option is None:
-            raise V2DayRuntimeError("sheriff_speech_order_invalid_start")
+            raise DayRuntimeError("sheriff_speech_order_invalid_start")
         result = selected_option["resulting_speech_order"]
         assert isinstance(result, list)
         self._repository.record_private_action_decision(
@@ -2488,14 +2488,14 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         pre_exile_pipeline_id: str | None = None,
         pre_exile_run_fence: Any | None = None,
-        frozen_state: V2MatchSnapshot | None = None,
+        frozen_state: MatchSnapshot | None = None,
         frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]] | None = None,
-        initial_results_by_voter: dict[str, V2ActionResult] | None = None,
+        initial_results_by_voter: dict[str, ActionResult] | None = None,
         public_history_cutoff_record_seq: int | None = None,
-    ) -> V2ExileResult | None:
+    ) -> ExileResult | None:
         self._actions.check_cancellation(game_id)
         state = frozen_state or self._repository.snapshot(game_id)
         alive = [item for item in state.players if item.alive]
@@ -2578,7 +2578,7 @@ class V2DayEngine:
                 "outcome": result.outcome,
             },
         ):
-            raise V2DayRuntimeError("judge_exile_result_failed")
+            raise DayRuntimeError("judge_exile_result_failed")
         if result.outcome == "eliminated":
             await self._broadcast_death(
                 state=current,
@@ -2592,8 +2592,8 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        exile: V2ExileResult,
-        broadcaster: V2BroadcastPort,
+        exile: ExileResult,
+        broadcaster: BroadcastPort,
     ) -> None:
         self._actions.check_cancellation(game_id)
         if exile.outcome != "eliminated":
@@ -2623,7 +2623,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         self._actions.check_cancellation(game_id)
         resolved_hunters: set[str] = set()
@@ -2653,7 +2653,7 @@ class V2DayEngine:
                 candidates=candidates,
                 target_optional=True,
                 output_kind="private_decision",
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="target",
                     target_mode="optional",
                     speech_mode="forbidden",
@@ -2681,7 +2681,7 @@ class V2DayEngine:
                         "target_player_seat": target.seat,
                     },
                 ):
-                    raise V2DayRuntimeError("hunter_announcement_failed")
+                    raise DayRuntimeError("hunter_announcement_failed")
                 await self._broadcast_death(
                     state=current,
                     player_id=target.player_id,
@@ -2696,7 +2696,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
@@ -2714,7 +2714,7 @@ class V2DayEngine:
             candidates=candidates,
             target_optional=True,
             output_kind="public_death_reaction",
-            decision_contract=V2DecisionContract(
+            decision_contract=DecisionContract(
                 kind="target",
                 target_mode="optional",
                 speech_mode="forbidden",
@@ -2748,24 +2748,24 @@ class V2DayEngine:
                 ),
             },
         ):
-            raise V2DayRuntimeError("sheriff_badge_announcement_failed")
+            raise DayRuntimeError("sheriff_badge_announcement_failed")
         await self._broadcast_match_state(current, broadcaster)
 
     async def _collect_votes(
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         action_type: str,
-        voters: list[V2MatchPlayer],
-        candidates: list[V2MatchPlayer],
+        voters: list[MatchPlayer],
+        candidates: list[MatchPlayer],
         weighted: bool,
         context: dict[str, Any],
         pre_exile_pipeline_id: str | None = None,
         pre_exile_run_fence: Any | None = None,
-        frozen_state: V2MatchSnapshot | None = None,
+        frozen_state: MatchSnapshot | None = None,
         frozen_private_facts_by_voter: dict[str, list[dict[str, Any]]] | None = None,
-        initial_results_by_voter: dict[str, V2ActionResult] | None = None,
+        initial_results_by_voter: dict[str, ActionResult] | None = None,
         public_history_cutoff_record_seq: int | None = None,
     ) -> dict[str, float]:
         self._actions.check_cancellation(game_id)
@@ -2777,9 +2777,9 @@ class V2DayEngine:
             else state.last_record_seq
         )
         if public_cutoff_record_seq != state.last_record_seq:
-            raise V2DayRuntimeError("day_vote_frozen_public_cutoff_mismatch")
+            raise DayRuntimeError("day_vote_frozen_public_cutoff_mismatch")
         batch_id = f"{state.phase_id}:{action_type}:{public_cutoff_record_seq}:vote"
-        prepared: list[tuple[V2MatchPlayer, list[V2MatchPlayer]]] = []
+        prepared: list[tuple[MatchPlayer, list[MatchPlayer]]] = []
         for voter in sorted(voters, key=lambda item: item.seat):
             eligible = [item for item in candidates if item.player_id != voter.player_id]
             if eligible:
@@ -2797,41 +2797,41 @@ class V2DayEngine:
         ]
         machine_format_failure_counts = [0 for _item in prepared]
         output_budget_failure_counts = [0 for _item in prepared]
-        latest_machine_format_failure_results: list[V2ActionResult | None] = [
+        latest_machine_format_failure_results: list[ActionResult | None] = [
             None for _item in prepared
         ]
-        latest_output_budget_failure_results: list[V2ActionResult | None] = [
+        latest_output_budget_failure_results: list[ActionResult | None] = [
             None for _item in prepared
         ]
         machine_format_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
         output_budget_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
         technical_abstain_reasons: list[str | None] = [None for _item in prepared]
-        technical_abstain_results: list[V2ActionResult | None] = [None for _item in prepared]
+        technical_abstain_results: list[ActionResult | None] = [None for _item in prepared]
         pre_exile_vote_rows: dict[str, Any] = {}
         if pre_exile_pipeline_id is not None:
             if self._pre_exile_pipeline is None or initial_results_by_voter is None:
-                raise V2DayRuntimeError("pre_exile_vote_recovery_context_missing")
+                raise DayRuntimeError("pre_exile_vote_recovery_context_missing")
             pre_exile_vote_rows = {
                 row.actor_player_id: row
                 for row in self._pre_exile_pipeline.list_results(pre_exile_pipeline_id)
                 if row.result_kind == "exile_vote"
             }
             if set(pre_exile_vote_rows) != {voter.player_id for voter, _eligible in prepared}:
-                raise V2DayRuntimeError("pre_exile_vote_durable_result_set_changed")
+                raise DayRuntimeError("pre_exile_vote_durable_result_set_changed")
 
         async def request_vote(
             index: int,
-            voter: V2MatchPlayer,
-            eligible: list[V2MatchPlayer],
+            voter: MatchPlayer,
+            eligible: list[MatchPlayer],
             *,
             stage: Literal[
                 "concurrent_initial",
                 "concurrent_recovery",
                 "sequential_recovery",
             ],
-            preflight_pause_failure: V2PreflightPauseFailure | None = None,
+            preflight_pause_failure: PreflightPauseFailure | None = None,
             pre_exile_recovery: dict[str, Any] | None = None,
-        ) -> V2ActionResult:
+        ) -> ActionResult:
             isolated = stage != "sequential_recovery"
             result = await self._player_action(
                 game_id=game_id,
@@ -2842,7 +2842,7 @@ class V2DayEngine:
                 candidates=eligible,
                 target_optional=False,
                 output_kind="private_vote",
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="target",
                     target_mode="required",
                     speech_mode="forbidden",
@@ -2885,11 +2885,11 @@ class V2DayEngine:
                 target_exhaustion_outcome="technical_abstain",
                 return_result=True,
             )
-            if not isinstance(result, V2ActionResult):
-                return V2ActionResult(decision=result)
+            if not isinstance(result, ActionResult):
+                return ActionResult(decision=result)
             return result
 
-        def observe_failure(index: int, result: V2ActionResult) -> None:
+        def observe_failure(index: int, result: ActionResult) -> None:
             failure = result.failure
             if failure is None:
                 return
@@ -2916,7 +2916,7 @@ class V2DayEngine:
                         failure.failure_episode_id
                     )
 
-        def observe_technical_outcome(index: int, result: V2ActionResult) -> bool:
+        def observe_technical_outcome(index: int, result: ActionResult) -> bool:
             outcome = result.technical_outcome
             if outcome is None:
                 return False
@@ -2927,7 +2927,7 @@ class V2DayEngine:
                 or not outcome.failure.code
                 or not outcome.failure.failure_episode_id
             ):
-                raise V2DayRuntimeError("day_vote_technical_outcome_invalid")
+                raise DayRuntimeError("day_vote_technical_outcome_invalid")
             technical_abstain_reasons[index] = outcome.failure.code
             technical_abstain_results[index] = result
             return True
@@ -2953,7 +2953,7 @@ class V2DayEngine:
                 if voter.player_id not in initial_results_by_voter
             ]
             if missing_voter_ids:
-                raise V2DayRuntimeError(
+                raise DayRuntimeError(
                     "pre_exile_vote_results_incomplete:" + ",".join(missing_voter_ids)
                 )
             initial_results = [
@@ -2972,7 +2972,7 @@ class V2DayEngine:
         if failed_indexes and pre_exile_pipeline_id is not None:
             pipeline_repository = self._pre_exile_pipeline
             if pipeline_repository is None:
-                raise V2DayRuntimeError("pre_exile_pipeline_repository_missing")
+                raise DayRuntimeError("pre_exile_pipeline_repository_missing")
             if (
                 getattr(
                     state.pre_exile_pipeline_contract,
@@ -2981,7 +2981,7 @@ class V2DayEngine:
                 )
                 != "normal_batch_after_close_once"
             ):
-                raise V2DayRuntimeError("pre_exile_capacity_recovery_contract_unsupported")
+                raise DayRuntimeError("pre_exile_capacity_recovery_contract_unsupported")
             recovery_inputs: list[tuple[int, dict[str, Any]]] = []
             for index in failed_indexes:
                 voter = prepared[index][0]
@@ -2992,7 +2992,7 @@ class V2DayEngine:
                     or not isinstance(row.action_id, str)
                     or not row.action_id
                 ):
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_failure_not_recoverable:{voter.player_id}:{category}"
                     )
                 recovery_inputs.append(
@@ -3043,13 +3043,13 @@ class V2DayEngine:
                 voter = prepared[index][0]
                 source = pre_exile_vote_rows[voter.player_id]
                 if result.action_id is None:
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_recovery_action_missing:{voter.player_id}"
                     )
                 if result.failure is not None:
                     if result.failure.category == "canceled":
                         self._actions.check_cancellation(game_id)
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_recovery_failed:{voter.player_id}:{result.failure.code}"
                     )
                 adopted = pipeline_repository.adopt_vote_recovery_result(
@@ -3071,14 +3071,14 @@ class V2DayEngine:
                     fence=pre_exile_run_fence,
                 )
                 if adopted.action_id != source.action_id:
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_recovery_source_changed:{voter.player_id}"
                     )
                 decisions[index] = result.decision
                 if observe_technical_outcome(index, result):
                     technical_voter_ids.append(voter.player_id)
                 elif result.decision is None:
-                    raise V2DayRuntimeError(
+                    raise DayRuntimeError(
                         f"pre_exile_vote_recovery_result_missing:{voter.player_id}"
                     )
                 else:
@@ -3202,8 +3202,8 @@ class V2DayEngine:
                         or latest_failure.last_machine_format_failure_code is None
                         or not machine_format_failure_episode_ids_by_voter[index]
                     ):
-                        raise V2DayRuntimeError("decision_family_retry_lineage_missing")
-                    preflight_pause_failure = V2PreflightPauseFailure(
+                        raise DayRuntimeError("decision_family_retry_lineage_missing")
+                    preflight_pause_failure = PreflightPauseFailure(
                         failure_code=(latest_failure.last_machine_format_failure_code),
                         failure_category="machine_format",
                         source_action_id=latest_failure_result.action_id,
@@ -3229,8 +3229,8 @@ class V2DayEngine:
                         or latest_failure.last_output_budget_failure_code is None
                         or not output_budget_failure_episode_ids_by_voter[index]
                     ):
-                        raise V2DayRuntimeError("decision_family_retry_lineage_missing")
-                    preflight_pause_failure = V2PreflightPauseFailure(
+                        raise DayRuntimeError("decision_family_retry_lineage_missing")
+                    preflight_pause_failure = PreflightPauseFailure(
                         failure_code=(latest_failure.last_output_budget_failure_code),
                         failure_category="output_budget",
                         source_action_id=latest_failure_result.action_id,
@@ -3281,7 +3281,7 @@ class V2DayEngine:
                 payload=recovery_payload,
             )
 
-        committed: list[V2DayVoteCommit] = []
+        committed: list[DayVoteCommit] = []
         for index, ((voter, eligible), decision) in enumerate(
             zip(prepared, decisions, strict=True)
         ):
@@ -3298,9 +3298,9 @@ class V2DayEngine:
                     or technical_outcome is None
                     or technical_outcome.failure.failure_episode_id is None
                 ):
-                    raise V2DayRuntimeError("day_vote_technical_outcome_invalid")
+                    raise DayRuntimeError("day_vote_technical_outcome_invalid")
                 committed.append(
-                    V2DayVoteCommit(
+                    DayVoteCommit(
                         voter_player_id=voter.player_id,
                         target_player_id=None,
                         weight=0.0,
@@ -3315,10 +3315,10 @@ class V2DayEngine:
                 )
                 continue
             if decision is None:
-                raise V2DayRuntimeError(f"{action_type}_vote_batch_incomplete")
+                raise DayRuntimeError(f"{action_type}_vote_batch_incomplete")
             target_id = _required_target(decision)
             if target_id not in {candidate.player_id for candidate in eligible}:
-                raise V2DayRuntimeError(f"{action_type}_vote_target_invalid")
+                raise DayRuntimeError(f"{action_type}_vote_target_invalid")
             weight = (
                 float(state.rule.get("sheriff_vote_weight") or 1)
                 if weighted and voter.player_id == state.sheriff_player_id
@@ -3326,7 +3326,7 @@ class V2DayEngine:
             )
             totals[target_id] += weight
             committed.append(
-                V2DayVoteCommit(
+                DayVoteCommit(
                     voter_player_id=voter.player_id,
                     target_player_id=target_id,
                     weight=weight,
@@ -3400,7 +3400,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> bool:
         return await self._offer_all_wolves_explosion(
             game_id=game_id,
@@ -3413,7 +3413,7 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         stage: str,
         pre_sheriff: bool = False,
         public_window_context: dict[str, Any] | None = None,
@@ -3436,7 +3436,7 @@ class V2DayEngine:
         public_cutoff_record_seq = state.last_record_seq
         batch_id = f"{state.phase_id}:{stage}:{public_cutoff_record_seq}:werewolf_self_explosion"
 
-        async def request_decision(wolf: V2MatchPlayer) -> V2ModelDecision | None:
+        async def request_decision(wolf: MatchPlayer) -> ModelDecision | None:
             return await self._player_action(
                 game_id=game_id,
                 player=wolf,
@@ -3447,7 +3447,7 @@ class V2DayEngine:
                 target_optional=None,
                 audience="god_view",
                 output_kind="private_decision",
-                decision_contract=V2DecisionContract(
+                decision_contract=DecisionContract(
                     kind="boolean",
                     boolean_field="explode",
                     speech_mode="forbidden",
@@ -3471,11 +3471,11 @@ class V2DayEngine:
             )
 
         decisions = await asyncio.gather(*(request_decision(wolf) for wolf in wolves))
-        affirmative: list[V2MatchPlayer] = []
+        affirmative: list[MatchPlayer] = []
         failed_player_ids: list[str] = []
         for wolf, decision in zip(wolves, decisions, strict=True):
             if decision is not None and not isinstance(decision.boolean_value, bool):
-                raise V2DayRuntimeError("werewolf_self_explosion_invalid_decision")
+                raise DayRuntimeError("werewolf_self_explosion_invalid_decision")
             if decision is None:
                 failed_player_ids.append(wolf.player_id)
             elif decision.boolean_value:
@@ -3566,7 +3566,7 @@ class V2DayEngine:
                 "batch_id": batch_id,
             },
         ):
-            raise V2DayRuntimeError("self_explosion_announcement_failed")
+            raise DayRuntimeError("self_explosion_announcement_failed")
         await self._broadcast_death(
             state=current,
             player_id=selected.player_id,
@@ -3580,8 +3580,8 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        player: V2MatchPlayer,
-        broadcaster: V2BroadcastPort,
+        player: MatchPlayer,
+        broadcaster: BroadcastPort,
         reason: str,
     ) -> None:
         self._actions.check_cancellation(game_id)
@@ -3599,14 +3599,14 @@ class V2DayEngine:
                 "reason": reason,
             },
         ):
-            raise V2DayRuntimeError("sheriff_elected_announcement_failed")
+            raise DayRuntimeError("sheriff_elected_announcement_failed")
         await self._broadcast_match_state(state, broadcaster)
 
     async def _destroy_badge(
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         reason: str,
     ) -> None:
         self._actions.check_cancellation(game_id)
@@ -3620,14 +3620,14 @@ class V2DayEngine:
             success_phase_state=state.phase_state,
             context={"reason": reason},
         ):
-            raise V2DayRuntimeError("sheriff_badge_destroyed_announcement_failed")
+            raise DayRuntimeError("sheriff_badge_destroyed_announcement_failed")
         await self._broadcast_match_state(state, broadcaster)
 
     async def _announce_no_exile(
         self,
         *,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
         reason: str,
     ) -> None:
         self._actions.check_cancellation(state.game_id)
@@ -3640,16 +3640,16 @@ class V2DayEngine:
             success_phase_state=current.phase_state,
             context={"reason": reason},
         ):
-            raise V2DayRuntimeError("no_exile_announcement_failed")
+            raise DayRuntimeError("no_exile_announcement_failed")
 
     async def _close_day(
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         reason: str,
         summarize: bool,
-    ) -> V2PhaseTransition:
+    ) -> PhaseTransition:
         self._actions.check_cancellation(game_id)
         state = self._repository.snapshot(game_id)
         winner = self._repository.current_winner(game_id)
@@ -3662,7 +3662,7 @@ class V2DayEngine:
             await self._actions.run_judge_speech(
                 game_id=game_id,
                 broadcaster=broadcaster,
-                spec=V2SpeechSpec(
+                spec=SpeechSpec(
                     action_type="judge_game_completed",
                     phase_id=current.phase_id,
                     required_phase_state="game_completed",
@@ -3686,7 +3686,7 @@ class V2DayEngine:
                 state=state,
                 broadcaster=broadcaster,
             ):
-                raise V2DayRuntimeError("day_summary_failed")
+                raise DayRuntimeError("day_summary_failed")
         self._actions.check_cancellation(game_id)
         transition = self._repository.finish_day(game_id=game_id, reason=reason)
         await broadcaster.broadcast_json(game_phase_changed(transition))
@@ -3714,11 +3714,11 @@ class V2DayEngine:
     async def _run_day_summary_and_private_memories(
         self,
         *,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
     ) -> bool:
         if not is_supported_model_context_contract(state.model_context_contract):
-            raise V2DayRuntimeError("unsupported_model_context_contract")
+            raise DayRuntimeError("unsupported_model_context_contract")
 
         players = tuple(
             sorted(
@@ -3856,7 +3856,7 @@ class V2DayEngine:
             return False
 
         committed: list[dict[str, Any]] = []
-        pending_commits: list[V2PrivateRoundMemoryCommit] = []
+        pending_commits: list[PrivateRoundMemoryCommit] = []
         for commit_index, player in enumerate(players, start=1):
             action_result = memory_tasks[player.player_id].result()
             decision = action_result.decision if action_result is not None else None
@@ -3880,7 +3880,7 @@ class V2DayEngine:
                 or action_result.projected_known_event_refs is None
                 or action_result.projected_known_events_sha256 is None
             ):
-                raise V2DayRuntimeError("private_round_memory_lineage_missing")
+                raise DayRuntimeError("private_round_memory_lineage_missing")
             normalized_memory = memory[:_PRIVATE_ROUND_MEMORY_MAX_CHARS].rstrip()
             if normalized_memory != memory:
                 self._repository.append_event(
@@ -3898,7 +3898,7 @@ class V2DayEngine:
                     },
                 )
             pending_commits.append(
-                V2PrivateRoundMemoryCommit(
+                PrivateRoundMemoryCommit(
                     player_id=player.player_id,
                     memory=normalized_memory,
                     commit_index=commit_index,
@@ -3968,15 +3968,15 @@ class V2DayEngine:
     async def _generate_private_round_memory(
         self,
         *,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        player: MatchPlayer,
+        broadcaster: BroadcastPort,
         batch_id: str,
         request_started: asyncio.Event,
         sources: dict[str, Any],
-        memory_state: V2MatchSnapshot,
+        memory_state: MatchSnapshot,
         frozen_private_facts: list[dict[str, Any]],
-    ) -> V2ActionResult | None:
+    ) -> ActionResult | None:
         request_started.set()
         canonical_source_context = build_private_round_memory_source_context(
             round_no=state.round_no,
@@ -4017,7 +4017,7 @@ class V2DayEngine:
             candidates=[],
             target_optional=None,
             output_kind="private_round_memory",
-            decision_contract=V2DecisionContract(
+            decision_contract=DecisionContract(
                 kind="speech",
                 speech_mode="required",
                 speech_max_chars=_PRIVATE_ROUND_MEMORY_MAX_CHARS,
@@ -4052,8 +4052,8 @@ class V2DayEngine:
     def _rolling_private_memory_sources(
         self,
         *,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
+        state: MatchSnapshot,
+        player: MatchPlayer,
     ) -> dict[str, Any]:
         private_facts = self._repository.private_knowledge(
             game_id=state.game_id,
@@ -4119,11 +4119,11 @@ class V2DayEngine:
     @staticmethod
     def _rolling_private_memory_state(
         *,
-        state: V2MatchSnapshot,
+        state: MatchSnapshot,
         previous_source_cutoff_record_seq: int | None,
-    ) -> V2MatchSnapshot:
+    ) -> MatchSnapshot:
         cutoff = previous_source_cutoff_record_seq or 0
-        return V2MatchSnapshot(
+        return MatchSnapshot(
             **{
                 **state.__dict__,
                 "public_history": tuple(
@@ -4138,8 +4138,8 @@ class V2DayEngine:
     async def _judge(
         self,
         *,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
         action_type: str,
         objective: str,
         success_phase_state: str,
@@ -4149,7 +4149,7 @@ class V2DayEngine:
         return await self._actions.run_judge_speech(
             game_id=state.game_id,
             broadcaster=broadcaster,
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type=action_type,
                 phase_id=state.phase_id,
                 required_phase_state=state.phase_state,
@@ -4164,17 +4164,17 @@ class V2DayEngine:
         self,
         *,
         game_id: str,
-        player: V2MatchPlayer,
-        broadcaster: V2BroadcastPort,
+        player: MatchPlayer,
+        broadcaster: BroadcastPort,
         action_type: str,
         objective: str,
-        candidates: list[V2MatchPlayer],
+        candidates: list[MatchPlayer],
         target_optional: bool | None,
         output_kind: str,
-        decision_contract: V2DecisionContract | None = None,
+        decision_contract: DecisionContract | None = None,
         audience: str = "all",
         extra_context: dict[str, Any] | None = None,
-        frozen_state: V2MatchSnapshot | None = None,
+        frozen_state: MatchSnapshot | None = None,
         frozen_private_facts: list[dict[str, Any]] | None = None,
         projection_at_seq: int | None = None,
         defer_presentation: bool = False,
@@ -4186,12 +4186,12 @@ class V2DayEngine:
         automatic_machine_format_budget: int | None = None,
         prior_output_budget_failures: int = 0,
         automatic_output_budget_budget: int | None = None,
-        preflight_pause_failure: V2PreflightPauseFailure | None = None,
+        preflight_pause_failure: PreflightPauseFailure | None = None,
         target_exhaustion_outcome: Literal["technical_abstain"] | None = None,
-        precomputed_decision: V2ModelDecision | None = None,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-        model_admission_mode: V2ProviderAdmissionMode = "normal",
+        precomputed_decision: ModelDecision | None = None,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+        model_admission_mode: ProviderAdmissionMode = "normal",
         pipeline_slot_id: str | None = None,
         pipeline_stage: Literal["generation", "presentation"] | None = None,
         pipeline_kind: Literal["pre_exile"] | None = None,
@@ -4201,16 +4201,16 @@ class V2DayEngine:
             "disabled",
             "empty_stream_once_while_predecessor_active",
         ] = "disabled",
-        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        model_retry_guard: Callable[[ModelError, int], bool] | None = None,
         on_model_admission_pending: Callable[[], None] | None = None,
         return_result: bool = False,
-    ) -> V2ModelDecision | V2ActionResult | None:
+    ) -> ModelDecision | ActionResult | None:
         self._actions.check_cancellation(game_id)
         state = frozen_state or self._repository.snapshot(game_id)
         if projection_at_seq is not None and (
             frozen_state is None or projection_at_seq != frozen_state.last_record_seq
         ):
-            raise V2DayRuntimeError(
+            raise DayRuntimeError(
                 "projection_at_seq must equal the explicitly frozen state cutoff"
             )
         private_facts = (
@@ -4248,21 +4248,21 @@ class V2DayEngine:
             else {}
         )
         resolved_contract = decision_contract or (
-            V2DecisionContract(
+            DecisionContract(
                 kind="speech",
                 speech_max_chars=_PUBLIC_SPEECH_MAX_CHARS.get(action_type),
             )
             if output_kind == "public_speech"
-            else V2DecisionContract(
+            else DecisionContract(
                 kind="target",
                 target_mode="optional" if target_optional else "required",
             )
         )
         if resolved_contract.kind == "target" and target_optional is None:
-            raise V2DayRuntimeError("target action requires target_optional")
+            raise DayRuntimeError("target action requires target_optional")
         if resolved_contract.kind != "target" and target_optional is not None:
-            raise V2DayRuntimeError("non-target action cannot set target_optional")
-        spec = V2SpeechSpec(
+            raise DayRuntimeError("non-target action cannot set target_optional")
+        spec = SpeechSpec(
             action_type=action_type,
             phase_id=state.phase_id,
             required_phase_state=state.phase_state,
@@ -4286,7 +4286,7 @@ class V2DayEngine:
                 else None
             ),
             model_players=tuple(
-                V2ModelPlayerReference(
+                ModelPlayerReference(
                     player_id=item.player_id,
                     seat=item.seat,
                     display_name=item.display_name,
@@ -4357,7 +4357,7 @@ class V2DayEngine:
         if precomputed_decision is not None:
             present_result = getattr(self._actions, "present_player_decision_result", None)
             if not callable(present_result):
-                raise V2DayRuntimeError("pipeline presentation is unsupported")
+                raise DayRuntimeError("pipeline presentation is unsupported")
             result = await present_result(
                 game_id=game_id,
                 broadcaster=broadcaster,
@@ -4393,23 +4393,23 @@ class V2DayEngine:
             if on_presentation_closed is not None:
                 decision_kwargs["on_presentation_closed"] = on_presentation_closed
             decision = await self._actions.run_player_decision(**decision_kwargs)
-            result = V2ActionResult(decision=decision)
+            result = ActionResult(decision=decision)
         decision = result.decision if result is not None else None
         if (
             decision is None
             and not allow_failure
             and (result is None or result.technical_outcome is None)
         ):
-            raise V2DayRuntimeError(f"{action_type}_failed")
+            raise DayRuntimeError(f"{action_type}_failed")
         if return_result:
             return result
         return decision
 
     def _record_speech(
         self,
-        state: V2MatchSnapshot,
-        player: V2MatchPlayer,
-        decision: V2ModelDecision,
+        state: MatchSnapshot,
+        player: MatchPlayer,
+        decision: ModelDecision,
         stage: str,
     ) -> None:
         if not decision.speech:
@@ -4429,10 +4429,10 @@ class V2DayEngine:
     async def _broadcast_death(
         self,
         *,
-        state: V2MatchSnapshot,
+        state: MatchSnapshot,
         player_id: str,
         cause: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         await broadcaster.broadcast_json(
             player_state_changed(
@@ -4457,8 +4457,8 @@ class V2DayEngine:
 
     async def _broadcast_match_state(
         self,
-        state: V2MatchSnapshot,
-        broadcaster: V2BroadcastPort,
+        state: MatchSnapshot,
+        broadcaster: BroadcastPort,
     ) -> None:
         match = match_state_changed(
             game_id=state.game_id,
@@ -4482,7 +4482,7 @@ def _leaders(totals: dict[str, float]) -> list[str]:
 
 def _self_explosion_action_effect(
     *,
-    state: V2MatchSnapshot,
+    state: MatchSnapshot,
     stage: str,
     pre_sheriff: bool,
 ) -> dict[str, Any]:
@@ -4522,9 +4522,9 @@ def _self_explosion_action_effect(
     }
 
 
-def _required_target(decision: V2ModelDecision) -> str:
+def _required_target(decision: ModelDecision) -> str:
     if decision.target_player_id is None:
-        raise V2DayRuntimeError("required vote target is missing")
+        raise DayRuntimeError("required vote target is missing")
     return decision.target_player_id
 
 
@@ -4568,14 +4568,14 @@ def _pre_exile_wolf_vote_private_facts(
         or type(private_fact_record_seq) is not int
         or private_fact_record_seq <= public_cutoff_record_seq
     ):
-        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
+        raise DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
     own = [
         copy.deepcopy(fact)
         for fact in owner_facts
         if fact.get("knowledge_fact_id") == private_fact_id
     ]
     if len(own) != 1:
-        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
+        raise DayRuntimeError("pre_exile_wolf_false_private_fact_missing")
     fact = own[0]
     payload = fact.get("payload")
     decision = payload.get("decision") if isinstance(payload, dict) else None
@@ -4596,7 +4596,7 @@ def _pre_exile_wolf_vote_private_facts(
         or not isinstance(decision, dict)
         or decision.get("explode") is not False
     ):
-        raise V2DayRuntimeError("pre_exile_wolf_false_private_fact_invalid")
+        raise DayRuntimeError("pre_exile_wolf_false_private_fact_invalid")
     return [*copy.deepcopy(base), fact]
 
 

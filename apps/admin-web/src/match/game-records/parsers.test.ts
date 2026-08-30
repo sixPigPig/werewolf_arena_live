@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  parseV2GameEventPage,
-  parseV2GameControlResult,
-  parseV2GameRecordList,
-  parseV2GameRecordSummary,
-  parseV2ModelActionRetryResult,
-  parseV2ModelRequest,
-  parseV2ModelRequestPage,
-} from "@/v2/game-records/parsers";
+  parseGameEventPage,
+  parseGameControlResult,
+  parseGameRecordList,
+  parseGameRecordSummary,
+  parseModelActionRetryResult,
+  parseModelRequest,
+  parseModelRequestPage,
+} from "@/match/game-records/parsers";
 
 const item = {
   game_id: "v2_game_0123456789abcdef",
@@ -33,7 +33,7 @@ const item = {
 
 describe("V2 game record parsers", () => {
   it("parses the independent V2 list contract", () => {
-    const result = parseV2GameRecordList({
+    const result = parseGameRecordList({
       items: [item],
       pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
     });
@@ -51,7 +51,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("keeps terminal, stale and legacy delivery states explicit", () => {
-    const result = parseV2GameRecordList({
+    const result = parseGameRecordList({
       items: [
         {
           ...item,
@@ -277,20 +277,20 @@ describe("V2 game record parsers", () => {
       effect_intents: [],
       knowledge_facts: [],
     };
-    const result = parseV2GameRecordSummary(value);
-    const eventPage = parseV2GameEventPage({
+    const result = parseGameRecordSummary(value);
+    const eventPage = parseGameEventPage({
       after_record_seq: 0,
       has_more: false,
       items: value.events,
       next_after_record_seq: 2,
     });
-    const modelRequestPage = parseV2ModelRequestPage({
+    const modelRequestPage = parseModelRequestPage({
       after_record_seq: 0,
       has_more: false,
       items: value.model_requests,
       next_after_record_seq: 2,
     });
-    const modelRequest = parseV2ModelRequest(value.model_requests[0]);
+    const modelRequest = parseModelRequest(value.model_requests[0]);
 
     expect(eventPage.items[0].record_seq).toBe(2);
     expect(result.player_identities[0]).toMatchObject({
@@ -451,7 +451,7 @@ describe("V2 game record parsers", () => {
       started_at: item.created_at,
       completed_at: item.updated_at,
     };
-    const request = parseV2ModelRequest(rawRequest);
+    const request = parseModelRequest(rawRequest);
 
     expect(request.prompt_projection).toMatchObject({
       ledger_schema_version: 5,
@@ -512,7 +512,7 @@ describe("V2 game record parsers", () => {
       canonical_sha256: "a".repeat(64),
       round_trip_verified: true,
     };
-    const v12Request = parseV2ModelRequest({
+    const v12Request = parseModelRequest({
       ...rawRequest,
       model_context_schema_version: 12,
       prompt_template_version: 5,
@@ -541,7 +541,7 @@ describe("V2 game record parsers", () => {
       relations: [],
     });
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         model_context_schema_version: 12,
         prompt_template_version: 5,
@@ -549,7 +549,7 @@ describe("V2 game record parsers", () => {
       }).prompt_projection,
     ).toMatchObject({ compaction_ratio: "0.625" });
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         model_context_schema_version: 12,
         prompt_template_version: 5,
@@ -565,7 +565,7 @@ describe("V2 game record parsers", () => {
       compaction_ratio: "hybrid-contract-raw",
     });
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         model_context_schema_version: 99,
         prompt_projection: { compaction_ratio: "unknown-contract-raw" },
@@ -611,7 +611,7 @@ describe("V2 game record parsers", () => {
         omitted_type_counts: { player_statement: 1 },
       },
     };
-    const v13Request = parseV2ModelRequest({
+    const v13Request = parseModelRequest({
       ...rawRequest,
       prompt_schema_version: 13,
       model_context_schema_version: 13,
@@ -632,7 +632,7 @@ describe("V2 game record parsers", () => {
       },
     });
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         prompt_schema_version: 13,
         model_context_schema_version: 13,
@@ -645,7 +645,7 @@ describe("V2 game record parsers", () => {
       }),
     ).toThrow("V2 对局记录数据不完整或格式错误");
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         known_events_expansion_status: "guessed",
       }),
@@ -654,7 +654,7 @@ describe("V2 game record parsers", () => {
 
   it("parses an idempotent V2 stop result", () => {
     expect(
-      parseV2GameControlResult({
+      parseGameControlResult({
         action: "stop",
         game_id: item.game_id,
         run_id: item.current_run_id,
@@ -673,7 +673,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("parses model retry telemetry and the operator retry result", () => {
-    const request = parseV2ModelRequestPage({
+    const request = parseModelRequestPage({
       after_record_seq: 10,
       has_more: false,
       items: [
@@ -771,7 +771,7 @@ describe("V2 game record parsers", () => {
       model_binding_recovered_after_failures: null,
     });
     expect(
-      parseV2ModelActionRetryResult({
+      parseModelActionRetryResult({
         action: "retry_model_action",
         game_id: item.game_id,
         run_id: item.current_run_id,
@@ -881,10 +881,10 @@ describe("V2 game record parsers", () => {
       passive_observations: [],
     };
 
-    const request = parseV2ModelRequest(rawRequest);
+    const request = parseModelRequest(rawRequest);
 
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         failure_impact: undefined,
         counts_as_failure: undefined,
@@ -896,7 +896,7 @@ describe("V2 game record parsers", () => {
     });
     for (const status of ["skipped", "canceled"] as const) {
       expect(
-        parseV2ModelRequest({
+        parseModelRequest({
           ...rawRequest,
           status,
           failure_impact: undefined,
@@ -953,14 +953,14 @@ describe("V2 game record parsers", () => {
       resolution_updated_at_record_seq: 44,
     });
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         failure_episode_id: undefined,
         failure_resolution: undefined,
       }).failure_resolution,
     ).toBe("legacy_unavailable");
     expect(
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         failure_code: "model_prefetch_capacity_unavailable",
         failure_impact: "expected_control_flow",
@@ -972,25 +972,25 @@ describe("V2 game record parsers", () => {
       counts_as_failure: false,
     });
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         provider_usage: { output_tokens: -1 },
       }),
     ).toThrow("V2 对局记录数据不完整或格式错误");
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         automatic_output_budget_attempt_count: -1,
       }),
     ).toThrow("V2 对局记录数据不完整或格式错误");
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         shadow_would_timeout: "true",
       }),
     ).toThrow("V2 对局记录数据不完整或格式错误");
     expect(() =>
-      parseV2ModelRequest({
+      parseModelRequest({
         ...rawRequest,
         model_generation_policy_schema_version: 0,
       }),
@@ -999,7 +999,7 @@ describe("V2 game record parsers", () => {
 
   it("rejects a malformed sequence", () => {
     expect(() =>
-      parseV2GameRecordList({
+      parseGameRecordList({
         items: [{ ...item, last_record_seq: -1 }],
         pagination: { page: 1, page_size: 20, total: 1, pages: 1 },
       }),
@@ -1007,7 +1007,7 @@ describe("V2 game record parsers", () => {
   });
 
   it("accepts a run that has been created but not formally started", () => {
-    const result = parseV2GameRecordSummary({
+    const result = parseGameRecordSummary({
       ...item,
       status: "waiting_to_start",
       match_status: "waiting",

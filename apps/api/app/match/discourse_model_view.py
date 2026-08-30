@@ -4,8 +4,8 @@ from collections import defaultdict
 import json
 from typing import Any
 
-from app.v2.discourse_ledger import speech_matches_question_topic
-from app.v2.model_context_contract import DISCOURSE_MODEL_VIEW_SCHEMA_VERSION
+from app.match.discourse_ledger import speech_matches_question_topic
+from app.match.model_context_contract import DISCOURSE_MODEL_VIEW_SCHEMA_VERSION
 
 
 def build_discourse_model_view(

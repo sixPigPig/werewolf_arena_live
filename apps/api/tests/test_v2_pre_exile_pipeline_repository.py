@@ -11,46 +11,46 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers referenced users table
-from app.v2.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
-from app.v2.execution import V2RunFence, bind_v2_run_fence
-from app.v2.match_repository import (
-    V2DayVoteCommit,
-    V2MatchRepository,
+from app.match.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
+from app.match.execution import RunFence, bind_run_fence
+from app.match.match_repository import (
+    DayVoteCommit,
+    MatchRepository,
 )
-from app.v2.model_context_contract import freeze_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.model_context_contract import freeze_model_context_contract
+from app.match.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
-from app.v2.model_failure_episode import derive_failure_episodes
-from app.v2.models import (
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2MatchState,
-    V2PlayerState,
-    V2PreExilePipeline,
-    V2PreExileResult,
-    V2RoleAssignment,
-    V2RoleAssignmentBatch,
+from app.match.model_failure_episode import derive_failure_episodes
+from app.match.models import (
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    MatchState,
+    PlayerState,
+    PreExilePipeline,
+    PreExileResult,
+    RoleAssignment,
+    RoleAssignmentBatch,
 )
-from app.v2.pre_exile_pipeline_contract import (
-    V2PreExilePipelineContractError,
+from app.match.pre_exile_pipeline_contract import (
+    PreExilePipelineContractError,
     current_pre_exile_pipeline_contract,
     freeze_pre_exile_pipeline_contract,
     pre_exile_pipeline_contract_summary,
     pre_exile_context_sha256,
     resolve_pre_exile_pipeline_contract,
 )
-from app.v2.pre_exile_pipeline_repository import (
-    V2PreExilePipelineRepository,
-    V2PreExilePipelineRepositoryError,
-    V2PreExilePipelineSnapshot,
+from app.match.pre_exile_pipeline_repository import (
+    PreExilePipelineRepository,
+    PreExilePipelineRepositoryError,
+    PreExilePipelineSnapshot,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ActionRepository,
-    V2PresentationIdentity,
-    V2RepositoryError,
+from app.match.repository import (
+    ActionClaim,
+    ActionRepository,
+    PresentationIdentity,
+    RepositoryError,
 )
 
 
@@ -68,12 +68,12 @@ WOLVES = ("wolf_1", "wolf_2")
 @dataclass(frozen=True)
 class _Harness:
     factory: sessionmaker[Session]
-    actions: V2ActionRepository
-    pipelines: V2PreExilePipelineRepository
-    matches: V2MatchRepository
-    fence: V2RunFence
-    predecessor: V2PresentationIdentity
-    pipeline: V2PreExilePipelineSnapshot
+    actions: ActionRepository
+    pipelines: PreExilePipelineRepository
+    matches: MatchRepository
+    fence: RunFence
+    predecessor: PresentationIdentity
+    pipeline: PreExilePipelineSnapshot
     public_history: tuple[dict[str, Any], ...]
     public_skip_record_seq: int | None = None
 
@@ -84,7 +84,7 @@ class _Harness:
             next_phase_state=PHASE_STATE,
         )
         if commit_canonical_speech and self.public_skip_record_seq is None:
-            with bind_v2_run_fence(self.fence):
+            with bind_run_fence(self.fence):
                 self.actions.append_event(
                     game_id=GAME_ID,
                     event_type="day_speech_committed",
@@ -190,7 +190,7 @@ def test_contract_is_exact_and_legacy_missing_stays_sequential() -> None:
     ]
     for malformed in malformed_contracts:
         with pytest.raises(
-            V2PreExilePipelineContractError,
+            PreExilePipelineContractError,
             match="unsupported_pre_exile_pipeline_contract",
         ):
             resolve_pre_exile_pipeline_contract({"pre_exile_pipeline_contract": malformed})
@@ -206,9 +206,9 @@ def test_normal_and_technical_skip_last_speech_lineage_is_strict(
 
     with technical_skip_harness.factory.begin() as db:
         event = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.record_seq == technical_skip_harness.public_skip_record_seq,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.record_seq == technical_skip_harness.public_skip_record_seq,
             )
         )
         assert event is not None
@@ -218,7 +218,7 @@ def test_normal_and_technical_skip_last_speech_lineage_is_strict(
         }
 
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="technical-skip predecessor has no public skip fact",
     ):
         _reserve_again(technical_skip_harness)
@@ -254,17 +254,17 @@ def test_pre_exile_generation_claim_allows_finalizing_with_active_predecessor(
     assert claim.non_blocking is True
     with harness.factory() as db:
         result = db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == "wolf_1",
-                V2PreExileResult.result_kind == "exile_vote",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                PreExileResult.actor_player_id == "wolf_1",
+                PreExileResult.result_kind == "exile_vote",
             )
         )
         opened = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "action_opened",
-                V2GameRecordEvent.payload["action_id"].as_string() == action_id,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "action_opened",
+                GameRecordEvent.payload["action_id"].as_string() == action_id,
             )
         )
     assert result is not None and result.action_id == action_id
@@ -289,7 +289,7 @@ def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecesso
     )
 
     action_id = "v2_action_finalizing_without_active_predecessor"
-    with pytest.raises(V2RepositoryError, match="pre-exile predecessor is no longer active"):
+    with pytest.raises(RepositoryError, match="pre-exile predecessor is no longer active"):
         _claim_initial(
             harness,
             actor_id="villager_3",
@@ -299,17 +299,17 @@ def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecesso
 
     with harness.factory() as db:
         result = db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == "villager_3",
-                V2PreExileResult.result_kind == "exile_vote",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                PreExileResult.actor_player_id == "villager_3",
+                PreExileResult.result_kind == "exile_vote",
             )
         )
         opened = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "action_opened",
-                V2GameRecordEvent.payload["action_id"].as_string() == action_id,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "action_opened",
+                GameRecordEvent.payload["action_id"].as_string() == action_id,
             )
         )
     assert result is not None and result.action_id is None
@@ -327,9 +327,9 @@ def test_schema_v2_self_explosion_requires_retry_metadata_and_exile_vote_forbids
     )
     self_action_id = "v2_action_schema_v2_self_retry"
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="pre-exile pipeline generation claim is not isolated",
         ),
     ):
@@ -378,9 +378,9 @@ def test_schema_v2_self_explosion_requires_retry_metadata_and_exile_vote_forbids
         }
     )
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="pre-exile pipeline generation claim is not isolated",
         ),
     ):
@@ -414,9 +414,9 @@ def test_schema_v1_self_explosion_preserves_legacy_pipeline_context() -> None:
         )
         action_id = "v2_action_schema_v1_self_legacy"
         with (
-            bind_v2_run_fence(harness.fence),
+            bind_run_fence(harness.fence),
             pytest.raises(
-                V2RepositoryError,
+                RepositoryError,
                 match="pre-exile pipeline generation claim is not isolated",
             ),
         ):
@@ -435,7 +435,7 @@ def test_schema_v1_self_explosion_preserves_legacy_pipeline_context() -> None:
                 context_audience="god_view",
                 non_blocking=True,
             )
-        with bind_v2_run_fence(harness.fence):
+        with bind_run_fence(harness.fence):
             claim = harness.actions.claim_action(
                 game_id=GAME_ID,
                 action_id=action_id,
@@ -484,9 +484,9 @@ def test_day_speech_generation_claim_remains_rejected_while_finalizing(
         },
     }
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="day speech pipeline generation requires an active broadcast",
         ),
     ):
@@ -512,17 +512,17 @@ def test_arbiter_requires_player_canonical_commit_but_not_technical_skip_commit(
 
     with technical_skip_harness.factory.begin() as db:
         row = db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == technical_skip_harness.pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == "wolf_1",
-                V2PreExileResult.result_kind == "self_explosion",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == technical_skip_harness.pipeline.pipeline_id,
+                PreExileResult.actor_player_id == "wolf_1",
+                PreExileResult.result_kind == "self_explosion",
             )
         )
         assert row is not None and row.private_fact_record_seq is not None
         recorded = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.record_seq == row.private_fact_record_seq,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.record_seq == row.private_fact_record_seq,
             )
         )
         assert recorded is not None
@@ -530,9 +530,9 @@ def test_arbiter_requires_player_canonical_commit_but_not_technical_skip_commit(
 
     harness.close_predecessor(commit_canonical_speech=False)
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="canonical day speech is not committed",
         ),
     ):
@@ -543,7 +543,7 @@ def test_arbiter_requires_player_canonical_commit_but_not_technical_skip_commit(
         )
 
     technical_skip_harness.close_predecessor()
-    with bind_v2_run_fence(technical_skip_harness.fence):
+    with bind_run_fence(technical_skip_harness.fence):
         resolved = technical_skip_harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=technical_skip_harness.pipeline.pipeline_id,
@@ -553,9 +553,9 @@ def test_arbiter_requires_player_canonical_commit_but_not_technical_skip_commit(
     with technical_skip_harness.factory() as db:
         commits = list(
             db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type == "day_speech_committed",
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type == "day_speech_committed",
                 )
             )
         )
@@ -567,7 +567,7 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
 ) -> None:
     wolf_1 = _record_self_result(harness, actor_id="wolf_1", technical_false=True)
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="different durable success lineage",
     ):
         harness.pipelines.record_result(
@@ -594,7 +594,7 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
         initial_rows[actor_id] = _record_capacity_failure(harness, actor_id=actor_id)
 
     harness.close_predecessor()
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         resolved = harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=harness.pipeline.pipeline_id,
@@ -611,7 +611,7 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
     assert committed_private[0]["source_event_type"] == ("pre_exile_private_fact_committed")
     assert committed_private[0]["known_at_seq"] > int(wolf_1.private_fact_record_seq or 0)
 
-    recoveries: dict[str, V2ActionClaim] = {}
+    recoveries: dict[str, ActionClaim] = {}
     for actor_id, target_id in (
         ("villager_3", "wolf_1"),
         ("villager_4", "wolf_2"),
@@ -623,15 +623,15 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
         )
 
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
         assert game is not None and run is not None
         assert game.status == run.status == "ready"
         bound = list(
             db.scalars(
-                select(V2PreExileResult).where(
-                    V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
-                    V2PreExileResult.result_kind == "exile_vote",
+                select(PreExileResult).where(
+                    PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                    PreExileResult.result_kind == "exile_vote",
                 )
             )
         )
@@ -661,8 +661,8 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
         assert adopted[actor_id].recovery_terminal_record_seq is not None
 
     votes = (
-        V2DayVoteCommit("villager_3", "wolf_1", 1.0, None),
-        V2DayVoteCommit("villager_4", "wolf_2", 1.0, None),
+        DayVoteCommit("villager_3", "wolf_1", 1.0, None),
+        DayVoteCommit("villager_4", "wolf_2", 1.0, None),
     )
     resolution = _resolution_payload(harness, votes=votes)
     self_terminal_before = {
@@ -670,7 +670,7 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
         for row in harness.pipelines.list_results(harness.pipeline.pipeline_id)
         if row.result_kind == "self_explosion"
     }
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.matches.finalize_day_vote_batch(
             game_id=GAME_ID,
             phase_id=PHASE_ID,
@@ -708,9 +708,9 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
         )
 
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="retry changed a committed private vote",
         ),
     ):
@@ -724,7 +724,7 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
             public_cutoff_record_seq=harness.pipeline.public_cutoff_record_seq,
             expected_voter_ids=("villager_3", "villager_4"),
             votes=(
-                V2DayVoteCommit("villager_3", "wolf_1", 1.0, "tampered"),
+                DayVoteCommit("villager_3", "wolf_1", 1.0, "tampered"),
                 votes[1],
             ),
             decision_context={
@@ -735,9 +735,9 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
             pre_exile_pipeline_id=harness.pipeline.pipeline_id,
         )
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="retry changed an already committed vote batch",
         ),
     ):
@@ -759,9 +759,9 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
             pre_exile_pipeline_id=harness.pipeline.pipeline_id,
         )
     with (
-        bind_v2_run_fence(harness.fence),
+        bind_run_fence(harness.fence),
         pytest.raises(
-            V2RepositoryError,
+            RepositoryError,
             match="different durable output",
         ),
     ):
@@ -796,9 +796,9 @@ def test_false_path_capacity_batch_adoption_and_vote_consume_are_atomic(
     with harness.factory() as db:
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     assert len([event for event in events if event.event_type == "day_vote_committed"]) == 2
@@ -824,7 +824,7 @@ def test_true_path_atomically_kills_discards_votes_and_is_idempotent(
     )
     harness.close_predecessor()
 
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         resolved = harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=harness.pipeline.pipeline_id,
@@ -841,17 +841,17 @@ def test_true_path_atomically_kills_discards_votes_and_is_idempotent(
     assert resolved.failed_player_ids == ("wolf_2",)
 
     with harness.factory() as db:
-        pipeline = db.get(V2PreExilePipeline, harness.pipeline.pipeline_id)
-        wolf = db.get(V2PlayerState, (GAME_ID, "wolf_1"))
+        pipeline = db.get(PreExilePipeline, harness.pipeline.pipeline_id)
+        wolf = db.get(PlayerState, (GAME_ID, "wolf_1"))
         results = list(
             db.scalars(
-                select(V2PreExileResult).where(
-                    V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id
+                select(PreExileResult).where(
+                    PreExileResult.pipeline_id == harness.pipeline.pipeline_id
                 )
             )
         )
         events = list(
-            db.scalars(select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == GAME_ID))
+            db.scalars(select(GameRecordEvent).where(GameRecordEvent.game_id == GAME_ID))
         )
     assert pipeline is not None and pipeline.state == "explosion_selected"
     assert wolf is not None and not wolf.alive and wolf.death_cause == "werewolf_self_explosion"
@@ -875,7 +875,7 @@ def test_true_path_atomically_kills_discards_votes_and_is_idempotent(
         harness.pipelines.invalidate_pipeline,
     ):
         with pytest.raises(
-            V2PreExilePipelineRepositoryError,
+            PreExilePipelineRepositoryError,
             match="pipeline is terminal",
         ):
             terminalizer(
@@ -904,7 +904,7 @@ def test_capacity_recovery_allows_queued_but_rejects_admitted_source(
         admission_event_type="model_request_admitted",
     )
     harness.close_predecessor()
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=harness.pipeline.pipeline_id,
@@ -922,7 +922,7 @@ def test_capacity_recovery_allows_queued_but_rejects_admitted_source(
         claim=queued_claim,
         parsed_output={"target_player_id": "wolf_1", "decision_note": None},
     )
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         forged_response_seq = harness.actions.append_event(
             game_id=GAME_ID,
             event_type="model_response_received",
@@ -938,7 +938,7 @@ def test_capacity_recovery_allows_queued_but_rejects_admitted_source(
             },
         )
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="recovery result is invalid",
     ):
         harness.pipelines.adopt_vote_recovery_result(
@@ -950,7 +950,7 @@ def test_capacity_recovery_allows_queued_but_rejects_admitted_source(
             fence=harness.fence,
         )
     with pytest.raises(
-        V2RepositoryError,
+        RepositoryError,
         match="reached the provider and cannot be repeated",
     ):
         _claim_recovery(
@@ -964,7 +964,7 @@ def test_fail_runtime_flushes_synthetic_episode_before_run_terminal(
     harness: _Harness,
 ) -> None:
     _record_open_vote_attempt(harness, actor_id="villager_3")
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.matches.fail_runtime(
             game_id=GAME_ID,
             failure_code="pre_exile_test_runtime_failure",
@@ -972,17 +972,17 @@ def test_fail_runtime_flushes_synthetic_episode_before_run_terminal(
     with harness.factory() as db:
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
-        pipeline = db.get(V2PreExilePipeline, harness.pipeline.pipeline_id)
+        pipeline = db.get(PreExilePipeline, harness.pipeline.pipeline_id)
         result = db.scalar(
-            select(V2PreExileResult).where(
-                V2PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
-                V2PreExileResult.actor_player_id == "villager_3",
-                V2PreExileResult.result_kind == "exile_vote",
+            select(PreExileResult).where(
+                PreExileResult.pipeline_id == harness.pipeline.pipeline_id,
+                PreExileResult.actor_player_id == "villager_3",
+                PreExileResult.result_kind == "exile_vote",
             )
         )
     episodes = derive_failure_episodes(events)
@@ -1001,7 +1001,7 @@ def test_recovery_adoption_rejects_technical_fact_forged_after_terminal(
     _record_self_result(harness, actor_id="wolf_2", explode=False)
     source = _record_capacity_failure(harness, actor_id="villager_3")
     harness.close_predecessor()
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=harness.pipeline.pipeline_id,
@@ -1013,10 +1013,10 @@ def test_recovery_adoption_rejects_technical_fact_forged_after_terminal(
         source_row=source,
     )
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         forged_technical_seq = game.last_record_seq + 2
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.actions.complete_silent_action(
             claim=claim,
             next_live_state="ready",
@@ -1043,7 +1043,7 @@ def test_recovery_adoption_rejects_technical_fact_forged_after_terminal(
         )
     assert actual_technical_seq == forged_technical_seq
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="recovery technical outcome is invalid",
     ):
         harness.pipelines.adopt_vote_recovery_result(
@@ -1074,7 +1074,7 @@ def test_late_wolf_vote_claim_uses_committed_false_fact_and_rejects_later_public
         fence=harness.fence,
     )
     harness.close_predecessor()
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.matches.resolve_pre_exile_self_explosions(
             game_id=GAME_ID,
             pipeline_id=harness.pipeline.pipeline_id,
@@ -1097,7 +1097,7 @@ def test_late_wolf_vote_claim_uses_committed_false_fact_and_rejects_later_public
     )
     assert claim.non_blocking
 
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.actions.append_event(
             game_id=GAME_ID,
             event_type="speech_segment_committed",
@@ -1110,7 +1110,7 @@ def test_late_wolf_vote_claim_uses_committed_false_fact_and_rejects_later_public
                 "text": "不应跨过这条公开边界。",
             },
         )
-    with pytest.raises(V2RepositoryError, match="crossed a public boundary"):
+    with pytest.raises(RepositoryError, match="crossed a public boundary"):
         _claim_initial(
             harness,
             actor_id="wolf_2",
@@ -1134,7 +1134,7 @@ def test_cancelled_pipeline_hides_provisional_fact_and_non_atomic_mutators_fail(
     assert canceled.state == "canceled"
     assert harness.matches.private_knowledge(game_id=GAME_ID, player_id="wolf_1") == []
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="provisional_self_explosion_fact_unavailable",
     ):
         harness.pipelines.get_provisional_self_explosion_fact(
@@ -1144,7 +1144,7 @@ def test_cancelled_pipeline_hides_provisional_fact_and_non_atomic_mutators_fail(
             fence=harness.fence,
         )
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="pre_exile_atomic_arbiter_required",
     ):
         harness.pipelines.resolve_self_explosions(
@@ -1153,7 +1153,7 @@ def test_cancelled_pipeline_hides_provisional_fact_and_non_atomic_mutators_fail(
             fence=harness.fence,
         )
     with pytest.raises(
-        V2PreExilePipelineRepositoryError,
+        PreExilePipelineRepositoryError,
         match="pre_exile_atomic_vote_commit_required",
     ):
         harness.pipelines.accept_votes(
@@ -1199,7 +1199,7 @@ def _build_harness(
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=GAME_ID,
                 title="pre exile repository test",
                 status="ready",
@@ -1232,7 +1232,7 @@ def _build_harness(
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=RUN_ID,
                 game_id=GAME_ID,
                 attempt_no=1,
@@ -1243,9 +1243,9 @@ def _build_harness(
                 fence_token=7,
             )
         )
-        db.add(V2MatchState(game_id=GAME_ID, round_no=1, sheriff_badge_state="disabled"))
+        db.add(MatchState(game_id=GAME_ID, round_no=1, sheriff_badge_state="disabled"))
         db.add(
-            V2RoleAssignmentBatch(
+            RoleAssignmentBatch(
                 assignment_id="v2_roles_pre_exile_repo",
                 game_id=GAME_ID,
                 seed_hex="a" * 64,
@@ -1256,7 +1256,7 @@ def _build_harness(
         for seat, player_id in enumerate(PLAYERS, start=1):
             is_wolf = player_id.startswith("wolf_")
             db.add(
-                V2PlayerState(
+                PlayerState(
                     game_id=GAME_ID,
                     player_id=player_id,
                     seat=seat,
@@ -1265,7 +1265,7 @@ def _build_harness(
                 )
             )
             db.add(
-                V2RoleAssignment(
+                RoleAssignment(
                     game_id=GAME_ID,
                     seat=seat,
                     assignment_id="v2_roles_pre_exile_repo",
@@ -1275,12 +1275,12 @@ def _build_harness(
                     team="wolves" if is_wolf else "village",
                 )
             )
-    fence = V2RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=7)
-    actions = V2ActionRepository(factory, enforce_execution_fence=True)
-    pipelines = V2PreExilePipelineRepository(factory)
-    matches = V2MatchRepository(factory, enforce_execution_fence=True)
+    fence = RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=7)
+    actions = ActionRepository(factory, enforce_execution_fence=True)
+    pipelines = PreExilePipelineRepository(factory)
+    matches = MatchRepository(factory, enforce_execution_fence=True)
     public_skip_record_seq: int | None = None
-    with bind_v2_run_fence(fence):
+    with bind_run_fence(fence):
         if technical_skip:
             public_skip_record_seq = actions.append_event(
                 game_id=GAME_ID,
@@ -1325,18 +1325,18 @@ def _build_harness(
         actor_id="judge" if technical_skip else "villager_4",
     )
     with factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         sealed = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "speech_sealed",
-                V2GameRecordEvent.payload["action_id"].as_string() == PREDECESSOR_ACTION_ID,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "speech_sealed",
+                GameRecordEvent.payload["action_id"].as_string() == PREDECESSOR_ACTION_ID,
             )
         )
         assert game is not None and sealed is not None
         cutoff = game.last_record_seq
         sealed_seq = sealed.record_seq
-    with bind_v2_run_fence(fence):
+    with bind_run_fence(fence):
         frozen = matches.snapshot_for_pre_exile_pipeline(
             game_id=GAME_ID,
             run_id=RUN_ID,
@@ -1374,7 +1374,7 @@ def _build_harness(
     )
 
 
-def _reserve_again(harness: _Harness) -> V2PreExilePipelineSnapshot:
+def _reserve_again(harness: _Harness) -> PreExilePipelineSnapshot:
     return harness.pipelines.reserve_pipeline(
         game_id=GAME_ID,
         phase_id=PHASE_ID,
@@ -1484,8 +1484,8 @@ def _claim_initial(
     result_kind: str,
     action_id: str,
     self_explosion_retry: bool = True,
-) -> V2ActionClaim:
-    with bind_v2_run_fence(harness.fence):
+) -> ActionClaim:
+    with bind_run_fence(harness.fence):
         claim = harness.actions.claim_action(
             game_id=GAME_ID,
             action_id=action_id,
@@ -1509,10 +1509,10 @@ def _claim_initial(
 def _complete_success(
     harness: _Harness,
     *,
-    claim: V2ActionClaim,
+    claim: ActionClaim,
     parsed_output: dict[str, Any],
 ) -> None:
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.actions.append_event(
             game_id=GAME_ID,
             event_type="model_response_received",
@@ -1552,7 +1552,7 @@ def _record_self_result(
         action_id=action_id,
     )
     if technical_false:
-        with bind_v2_run_fence(harness.fence):
+        with bind_run_fence(harness.fence):
             technical_seq = harness.actions.append_event(
                 game_id=GAME_ID,
                 event_type="technical_fallback_applied",
@@ -1630,7 +1630,7 @@ def _record_open_vote_attempt(
     harness: _Harness,
     *,
     actor_id: str,
-) -> V2ActionClaim:
+) -> ActionClaim:
     harness.pipelines.reserve_result(
         pipeline_id=harness.pipeline.pipeline_id,
         actor_player_id=actor_id,
@@ -1644,7 +1644,7 @@ def _record_open_vote_attempt(
         result_kind="exile_vote",
         action_id=action_id,
     )
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         harness.actions.append_event(
             game_id=GAME_ID,
             event_type="model_request_started",
@@ -1680,7 +1680,7 @@ def _record_capacity_failure(
         result_kind="exile_vote",
         action_id=action_id,
     )
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         if admission_event_type is not None:
             harness.actions.append_event(
                 game_id=GAME_ID,
@@ -1735,7 +1735,7 @@ def _claim_recovery(
     *,
     actor_id: str,
     source_row: Any,
-) -> V2ActionClaim:
+) -> ActionClaim:
     action_id = f"v2_action_recovery_{actor_id}"
     context = {
         "schema_version": 1,
@@ -1766,7 +1766,7 @@ def _claim_recovery(
             "model_admission_mode": "normal",
         },
     }
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         claim = harness.actions.claim_action(
             game_id=GAME_ID,
             action_id=action_id,
@@ -1829,7 +1829,7 @@ def _private_facts_for_action(
 def _resolution_payload(
     harness: _Harness,
     *,
-    votes: tuple[V2DayVoteCommit, ...],
+    votes: tuple[DayVoteCommit, ...],
 ) -> dict[str, Any]:
     totals: dict[str, float] = {}
     weights: dict[str, float] = {}

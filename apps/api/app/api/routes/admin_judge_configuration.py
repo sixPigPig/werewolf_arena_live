@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.judge_configuration import JUDGE_CONFIGURATION_ID, runtime_judge_configuration
 from app.models.judge_configuration import JudgeConfigurationRecord
-from app.werewolf.tts_speaker_catalog import (
+from app.shared.tts_speaker_catalog import (
     TtsSpeakerCatalogUnavailable,
     VolcengineTtsSpeakerCatalog,
     tts_speaker_catalog,

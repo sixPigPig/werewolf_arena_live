@@ -7,17 +7,17 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_context_compaction import encode_known_events_v7
-from app.v2.model_context_contract import (
+from app.match.model_context_compaction import encode_known_events_v7
+from app.match.model_context_contract import (
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.model_client import (
-    V2ModelClient,
-    V2ModelDecision,
-    V2ModelError,
-    V2ModelProgress,
-    V2QualityError,
+from app.match.model_client import (
+    ModelClient,
+    ModelDecision,
+    ModelError,
+    ModelProgress,
+    QualityError,
     build_model_request_payload,
     model_failure_disposition,
     request_payload_matches_model_context,
@@ -37,8 +37,8 @@ def _client(
     deepseek_max_in_flight: int = 32,
     agent_plan_supports_strict_json_schema: bool = False,
     deepseek_supports_strict_json_schema: bool = False,
-) -> V2ModelClient:
-    return V2ModelClient(
+) -> ModelClient:
+    return ModelClient(
         agent_plan_api_key=agent_plan_api_key,
         agent_plan_base_url="https://ark.example.test/api/plan/v3",
         ark_api_key="ark-standard-key",
@@ -257,7 +257,7 @@ def test_model_client_rejects_every_non_v11_prompt_contract(
     context["model_context_schema_version"] = model_context_schema_version
     context["prompt_template_version"] = prompt_template_version
 
-    with pytest.raises(V2ModelError, match="model_prompt_template_unsupported"):
+    with pytest.raises(ModelError, match="model_prompt_template_unsupported"):
         build_model_request_payload(
             context,
             decision=True,
@@ -388,7 +388,7 @@ def test_chat_completions_strict_schema_uses_protocol_native_wrapper() -> None:
 def test_model_target_rejects_legacy_frozen_parameter_schema() -> None:
     client = _client(lambda _request: httpx.Response(500))
 
-    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+    with pytest.raises(ModelError, match="model_parameters_invalid"):
         client.resolve_model_target(
             model_supports_thinking=True,
             model_provider="agent_plan",
@@ -439,7 +439,7 @@ def test_model_target_rejects_policy_inconsistent_frozen_parameters(
 ) -> None:
     client = _client(lambda _request: httpx.Response(500))
 
-    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+    with pytest.raises(ModelError, match="model_parameters_invalid"):
         client.resolve_model_target(
             model_supports_thinking=True,
             model_provider="agent_plan",
@@ -520,7 +520,7 @@ def test_call_budget_caps_frozen_model_output_budget() -> None:
 
 
 def test_request_payload_rejects_missing_output_budget() -> None:
-    with pytest.raises(V2ModelError, match="model_parameters_invalid"):
+    with pytest.raises(ModelError, match="model_parameters_invalid"):
         build_model_request_payload(
             _target_action_context(),
             decision=True,
@@ -593,7 +593,7 @@ def test_model_client_disables_environment_proxy(
         )
 
     monkeypatch.setattr(
-        "app.v2.model_client.httpx.AsyncClient",
+        "app.match.model_client.httpx.AsyncClient",
         direct_async_client,
     )
     client = _client(handler)
@@ -609,7 +609,7 @@ def test_model_client_disables_environment_proxy(
         },
     )
 
-    async def run_twice() -> tuple[V2ModelDecision, V2ModelDecision]:
+    async def run_twice() -> tuple[ModelDecision, ModelDecision]:
         first = await client.generate_action_decision(
             action_context=_action_context(),
             attempt_id="v2_model_direct_transport",
@@ -881,7 +881,7 @@ def test_model_client_ambiguous_duplicate_json_keeps_exact_raw_response() -> Non
     )
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_ambiguous_multiple_objects",
     ) as caught:
         asyncio.run(
@@ -936,7 +936,7 @@ def test_model_client_rejects_non_string_target_in_duplicate_json() -> None:
         },
     )
 
-    with pytest.raises(V2QualityError, match="model_decision_invalid_target") as caught:
+    with pytest.raises(QualityError, match="model_decision_invalid_target") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context={
@@ -987,7 +987,7 @@ def test_model_client_treats_different_extra_payload_fields_as_ambiguous() -> No
     )
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_ambiguous_multiple_objects",
     ) as caught:
         asyncio.run(
@@ -1038,7 +1038,7 @@ def test_model_client_rejects_truncated_second_speech_object_without_fragment_fa
     )
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_invalid_json_document",
     ) as caught:
         asyncio.run(
@@ -1411,7 +1411,7 @@ def test_canceled_provider_queue_wait_returns_the_permit() -> None:
             ),
         )
 
-    async def run_requests() -> tuple[V2ModelDecision, V2ModelDecision]:
+    async def run_requests() -> tuple[ModelDecision, ModelDecision]:
         client = _client(handler, agent_plan_max_in_flight=1)
         target = client.resolve_model_target(
             model_supports_thinking=True,
@@ -1552,7 +1552,7 @@ def test_whitespace_text_delta_starts_token_clock_but_not_visible_text_clock() -
             "max_tokens": 16_384,
         },
     )
-    progress: list[V2ModelProgress] = []
+    progress: list[ModelProgress] = []
 
     decision = asyncio.run(
         client.generate_action_decision_with_progress(
@@ -1608,7 +1608,7 @@ def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_stream_idle_timeout") as caught:
+    with pytest.raises(ModelError, match="model_stream_idle_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -1653,7 +1653,7 @@ def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -1708,7 +1708,7 @@ def test_model_progress_reports_headers_reasoning_token_and_first_visible_text()
             "max_tokens": 2048,
         },
     )
-    progress: list[V2ModelProgress] = []
+    progress: list[ModelProgress] = []
 
     decision = asyncio.run(
         client.generate_action_decision_with_progress(
@@ -1808,12 +1808,12 @@ def test_cancelled_stream_force_flushes_cumulative_progress_diagnostics() -> Non
             "max_tokens": 2048,
         },
     )
-    progress: list[V2ModelProgress] = []
+    progress: list[ModelProgress] = []
 
     async def run_and_cancel() -> None:
         first_text_seen = asyncio.Event()
 
-        def on_progress(item: V2ModelProgress) -> None:
+        def on_progress(item: ModelProgress) -> None:
             progress.append(item)
             if item.stage == "first_text":
                 first_text_seen.set()
@@ -1948,7 +1948,7 @@ def test_sheriff_withdraw_quality_error_keeps_exact_raw_response() -> None:
     )
 
     with pytest.raises(
-        V2QualityError,
+        QualityError,
         match="model_decision_invalid_speech",
     ) as caught:
         asyncio.run(
@@ -1983,7 +1983,7 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
 
     client = _client(handler, deepseek_api_key="")
 
-    with pytest.raises(V2ModelError, match="model_provider_credentials_missing"):
+    with pytest.raises(ModelError, match="model_provider_credentials_missing"):
         client.resolve_model_target(
             model_supports_thinking=True,
             model_provider="deepseek",
@@ -1991,7 +1991,7 @@ def test_provider_credentials_are_required_without_cross_provider_fallback() -> 
             model_parameters={},
         )
 
-    with pytest.raises(V2ModelError, match="model_provider_not_configured"):
+    with pytest.raises(ModelError, match="model_provider_not_configured"):
         client.resolve_model_target(
             model_supports_thinking=True,
             model_provider="unknown",
@@ -2020,7 +2020,7 @@ def test_transport_reset_preserves_retry_diagnostics() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_transport_failed") as caught:
+    with pytest.raises(ModelError, match="model_transport_failed") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2060,7 +2060,7 @@ def test_first_token_timeout_includes_response_header_wait() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_first_token_timeout") as caught:
+    with pytest.raises(ModelError, match="model_first_token_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2097,7 +2097,7 @@ def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2141,7 +2141,7 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2189,7 +2189,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
         _run_with_uvloop(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2230,7 +2230,7 @@ def test_only_transient_http_statuses_are_retryable(
         },
     )
 
-    with pytest.raises(V2ModelError, match=f"model_http_{status_code}") as caught:
+    with pytest.raises(ModelError, match=f"model_http_{status_code}") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2265,7 +2265,7 @@ def test_rate_limit_preserves_retry_after_delay() -> None:
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_http_429") as caught:
+    with pytest.raises(ModelError, match="model_http_429") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2312,7 +2312,7 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_output_budget_exhausted") as caught:
+    with pytest.raises(ModelError, match="model_output_budget_exhausted") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2380,7 +2380,7 @@ def test_length_after_visible_text_remains_machine_format_failure() -> None:
         },
     )
 
-    with pytest.raises(V2QualityError) as caught:
+    with pytest.raises(QualityError) as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2428,7 +2428,7 @@ def test_responses_incomplete_max_output_tokens_preserves_usage_diagnostics() ->
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_output_budget_exhausted") as caught:
+    with pytest.raises(ModelError, match="model_output_budget_exhausted") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2582,7 +2582,7 @@ def test_empty_stream_preserves_terminal_headers_usage_and_elapsed_diagnostics()
         },
     )
 
-    with pytest.raises(V2ModelError, match="model_empty_stream") as caught:
+    with pytest.raises(ModelError, match="model_empty_stream") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),

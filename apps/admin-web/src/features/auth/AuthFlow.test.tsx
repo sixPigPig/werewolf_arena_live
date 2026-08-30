@@ -168,12 +168,12 @@ describe("admin session flow", () => {
       }),
     );
 
-    renderAuthenticatedRoute("/operations/runs?status=running");
+    renderAuthenticatedRoute("/v2/operations/games?status=running");
 
     const link = await screen.findByRole("link", { name: "使用企业账号登录" });
     expect(link).toHaveAttribute(
       "href",
-      "/api/v1/admin/oidc/start?return_to=%2Foperations%2Fruns%3Fstatus%3Drunning",
+      "/api/v1/admin/oidc/start?return_to=%2Fv2%2Foperations%2Fgames%3Fstatus%3Drunning",
     );
     expect(screen.queryByRole("button", { name: "使用开发身份登录" })).toBeNull();
   });
@@ -193,7 +193,7 @@ describe("admin session flow", () => {
     );
 
     renderAuthenticatedRoute(
-      "/login?oidcError=admin_oidc_account_not_provisioned&returnTo=%2Foperations%2Fruns",
+      "/login?oidcError=admin_oidc_account_not_provisioned&returnTo=%2Fv2%2Foperations%2Fgames",
     );
 
     const notification = await expectAdminNotification("企业账号登录失败");

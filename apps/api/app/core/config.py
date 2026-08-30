@@ -216,7 +216,6 @@ class Settings(BaseSettings):
     quality_evaluation_backoff_seconds: float = Field(default=5.0, ge=1.0, le=3600.0)
     quality_evaluation_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     quality_evaluation_probe_max_age_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
-    quality_evaluation_retention_days: int = Field(default=90, ge=7, le=3650)
     live_run_lease_seconds: float = Field(default=15.0, ge=5.0, le=120.0)
     live_run_heartbeat_seconds: float = Field(default=3.0, ge=0.5, le=30.0)
     live_run_event_poll_seconds: float = Field(default=0.25, ge=0.05, le=5.0)

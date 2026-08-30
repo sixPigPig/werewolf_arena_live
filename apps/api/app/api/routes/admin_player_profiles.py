@@ -68,27 +68,27 @@ from app.player_profiles.snapshots import (
     admin_player_profile_snapshot,
     audit_player_profile_snapshot,
 )
-from app.werewolf.player_avatar_assets import SYSTEM_AVATAR_ASSET_IDS, avatar_asset_url
-from app.werewolf.player_presets import (
+from app.shared.player_avatar_assets import SYSTEM_AVATAR_ASSET_IDS, avatar_asset_url
+from app.shared.player_presets import (
     APPEARANCE_PRESETS,
     PERSONALITY_PRESETS,
     STRATEGY_LABELS,
     STRATEGY_PRESETS,
 )
-from app.werewolf.speech_delivery import (
+from app.shared.speech_delivery import (
     DELIVERY_MAPPING_VERSION,
     compile_context_texts,
     normalize_delivery,
 )
-from app.werewolf.tts_speaker_catalog import (
+from app.shared.tts_speaker_catalog import (
     TtsSpeakerCatalogUnavailable,
     VolcengineTtsSpeakerCatalog,
     dialects_for_tts_speaker,
     gender_for_tts_speaker,
     tts_speaker_catalog,
 )
-from app.werewolf.voice import chunk_text_for_tts
-from app.werewolf.volcengine_tts import (
+from app.shared.tts_text import chunk_text_for_tts
+from app.shared.volcengine_tts import (
     TtsSynthesisItem,
     VolcengineTtsClient,
     VolcengineTtsConfig,

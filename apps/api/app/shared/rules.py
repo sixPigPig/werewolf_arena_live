@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.werewolf.config import GUARD
+from app.shared.config import GUARD
 
 
 TEAM_VILLAGERS = "villagers"
@@ -58,13 +58,6 @@ DEFAULT_WEREWOLF_ATTACK_RESOLUTION = (
 )
 LEGACY_WEREWOLF_ATTACK_RESOLUTION = (
     WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK
-)
-WEREWOLF_ATTACK_RESOLUTIONS = frozenset(
-    {
-        WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK,
-        WEREWOLF_ATTACK_RESOLUTION_PLURALITY_SEEDED_RANDOM,
-        WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK,
-    }
 )
 
 ROLE_CATEGORY_WEREWOLF = "werewolf"

@@ -5,13 +5,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from app.v2.model_client import build_model_request_payload
-from app.v2.model_context_compaction import expand_known_events_v7
-from app.v2.model_context import (
-    V2ModelPlayerReference,
+from app.match.model_client import build_model_request_payload
+from app.match.model_context_compaction import expand_known_events_v7
+from app.match.model_context import (
+    ModelPlayerReference,
     project_model_action_context_with_metadata,
 )
-from app.v2.model_context_contract import current_model_context_contract
+from app.match.model_context_contract import current_model_context_contract
 
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "v2_model_context_v8_eval.json"
@@ -26,7 +26,7 @@ def _cases() -> dict[str, dict[str, Any]]:
 def _complete_v11_context(
     context: dict[str, Any],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> dict[str, Any]:
     prepared = deepcopy(context)
     round_no = prepared.get("round_no") or 1
@@ -53,7 +53,7 @@ def _complete_v11_context(
 def test_t01_private_action_and_public_speech_share_one_model_visible_clock() -> None:
     case = _cases()["T01_private_action_before_public_speech"]
     players = tuple(
-        V2ModelPlayerReference(
+        ModelPlayerReference(
             player_id=item["player_id"],
             seat=item["seat"],
             display_name=f"{item['seat']}号",
@@ -117,8 +117,8 @@ def test_t02_old_ordinary_history_is_projected_into_player_memory() -> None:
         for index in range(1, case["history_count"] + 1)
     ]
     players = (
-        V2ModelPlayerReference("system-player-07", 1, "1号"),
-        V2ModelPlayerReference("system-player-01", 2, "2号"),
+        ModelPlayerReference("system-player-07", 1, "1号"),
+        ModelPlayerReference("system-player-01", 2, "2号"),
     )
     projection = project_model_action_context_with_metadata(
         _complete_v11_context(

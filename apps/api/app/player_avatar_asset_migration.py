@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.player_avatar_assets import (
+from app.shared.player_avatar_assets import (
     avatar_asset_url,
     avatar_content_type_for_filename,
     create_avatar_asset,

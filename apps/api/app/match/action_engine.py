@@ -13,39 +13,39 @@ from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from app.judge_configuration import RuntimeJudgeConfiguration
-from app.v2.director_projection import project_director_scene
-from app.v2.event_contract import model_event_audience
-from app.v2.judge_speech import V2JudgeTemplateError, render_judge_speech
-from app.v2.model_context import (
-    V2ModelContextProjectionInvariantError,
-    V2ModelPlayerReference,
+from app.match.director_projection import project_director_scene
+from app.match.event_contract import model_event_audience
+from app.match.judge_speech import JudgeTemplateError, render_judge_speech
+from app.match.model_context import (
+    ModelContextProjectionInvariantError,
+    ModelPlayerReference,
     model_prompt_metadata,
     project_model_action_context_with_metadata,
     resolve_model_target,
     sanitize_model_speech,
 )
-from app.v2.model_client import (
-    V2FailureDisposition,
-    V2ModelDecision,
-    V2ModelError,
-    V2ModelProgress,
-    V2ProviderAdmissionMode,
-    V2ModelTarget,
-    V2QualityError,
-    V2UsageConsistency,
+from app.match.model_client import (
+    FailureDisposition,
+    ModelDecision,
+    ModelError,
+    ModelProgress,
+    ProviderAdmissionMode,
+    ModelTarget,
+    QualityError,
+    UsageConsistency,
     model_failure_disposition,
 )
-from app.v2.model_failure_episode import stable_failure_episode_id
-from app.v2.model_generation_policy_contract import (
+from app.match.model_failure_episode import stable_failure_episode_id
+from app.match.model_generation_policy_contract import (
     MODEL_GENERATION_POLICY_SCHEMA_VERSION,
-    V2RequiredTargetExhaustionFailureMode,
-    V2RequiredTargetTechnicalOutcome,
-    V2ResolvedModelGenerationPolicy,
+    RequiredTargetExhaustionFailureMode,
+    RequiredTargetTechnicalOutcome,
+    ResolvedModelGenerationPolicy,
     resolve_model_generation_action_policy,
 )
-from app.v2.model_observation import observe_model_speech
-from app.v2.protocol import (
-    V2LiveProtocolError,
+from app.match.model_observation import observe_model_speech
+from app.match.protocol import (
+    LiveProtocolError,
     audio_frame,
     director_scene_changed,
     live_state,
@@ -55,21 +55,21 @@ from app.v2.protocol import (
     presentation_opened,
     segment_committed,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ActionRepository,
-    V2ExecutionOwnershipLost,
-    V2PresentationIdentity,
-    V2RepositoryError,
+from app.match.repository import (
+    ActionClaim,
+    ActionRepository,
+    ExecutionOwnershipLost,
+    PresentationIdentity,
+    RepositoryError,
 )
-from app.v2.tts_client import V2TtsError
-from app.v2.voice_recorder import V2VoiceRecorder, V2VoiceRecordingError
+from app.match.tts_client import TtsError
+from app.match.voice_recorder import VoiceRecorder, VoiceRecordingError
 
 
 logger = logging.getLogger(__name__)
 
 
-class V2ModelPort(Protocol):
+class ModelPort(Protocol):
     def resolve_model_target(
         self,
         *,
@@ -77,14 +77,14 @@ class V2ModelPort(Protocol):
         model_id: str,
         model_supports_thinking: bool,
         model_parameters: dict[str, Any],
-    ) -> V2ModelTarget: ...
+    ) -> ModelTarget: ...
 
     def build_request_payload(
         self,
         *,
         action_context: dict[str, Any],
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
     ) -> dict[str, Any]: ...
 
     def output_enforcement_metadata(
@@ -92,7 +92,7 @@ class V2ModelPort(Protocol):
         *,
         action_context: dict[str, Any],
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
     ) -> dict[str, str | int | None]: ...
 
     async def generate_action_decision(
@@ -100,13 +100,13 @@ class V2ModelPort(Protocol):
         *,
         action_context: dict[str, Any],
         attempt_id: str | None,
-        target: V2ModelTarget,
+        target: ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
-        admission_mode: V2ProviderAdmissionMode = "normal",
-    ) -> V2ModelDecision: ...
+        admission_mode: ProviderAdmissionMode = "normal",
+    ) -> ModelDecision: ...
 
 
-class V2TtsPort(Protocol):
+class TtsPort(Protocol):
     def synthesize(
         self,
         *,
@@ -118,7 +118,7 @@ class V2TtsPort(Protocol):
     ) -> AsyncIterator[bytes]: ...
 
 
-class V2BroadcastPort(Protocol):
+class BroadcastPort(Protocol):
     async def broadcast_json(
         self,
         value: dict[str, Any],
@@ -132,14 +132,14 @@ class V2BroadcastPort(Protocol):
         self,
         value: bytes,
         *,
-        identity: V2PresentationIdentity,
+        identity: PresentationIdentity,
         next_sample_cursor: int,
         audience: str = "all",
     ) -> None: ...
 
     async def set_current(
         self,
-        identity: V2PresentationIdentity | None,
+        identity: PresentationIdentity | None,
         sample_cursor: int,
         *,
         audience: str = "all",
@@ -147,7 +147,7 @@ class V2BroadcastPort(Protocol):
 
 
 @dataclass(frozen=True)
-class V2DecisionContract:
+class DecisionContract:
     kind: Literal["speech", "target", "boolean"]
     speech_mode: Literal[
         "required",
@@ -166,7 +166,7 @@ class V2DecisionContract:
 
 
 @dataclass(frozen=True)
-class V2SpeechSpec:
+class SpeechSpec:
     action_type: str
     phase_id: str
     required_phase_state: str
@@ -184,11 +184,11 @@ class V2SpeechSpec:
     model_parameters: dict[str, Any] | None = None
     activation_id: str | None = None
     output_kind: str = "public_speech"
-    decision_contract: V2DecisionContract = V2DecisionContract(kind="speech")
-    target_exhaustion_outcome: V2RequiredTargetTechnicalOutcome | None = None
+    decision_contract: DecisionContract = DecisionContract(kind="speech")
+    target_exhaustion_outcome: RequiredTargetTechnicalOutcome | None = None
     context: dict[str, Any] | None = None
     allowed_target_ids: tuple[str, ...] | None = None
-    model_players: tuple[V2ModelPlayerReference, ...] = ()
+    model_players: tuple[ModelPlayerReference, ...] = ()
     best_effort: bool = False
     defer_presentation: bool = False
     isolated_failure: bool = False
@@ -199,8 +199,8 @@ class V2SpeechSpec:
     automatic_machine_format_budget: int | None = None
     prior_output_budget_failures: int = 0
     automatic_output_budget_budget: int | None = None
-    preflight_pause_failure: V2PreflightPauseFailure | None = None
-    model_admission_mode: V2ProviderAdmissionMode = "normal"
+    preflight_pause_failure: PreflightPauseFailure | None = None
+    model_admission_mode: ProviderAdmissionMode = "normal"
     pipeline_slot_id: str | None = None
     pipeline_stage: Literal["generation", "presentation"] | None = None
     pipeline_kind: Literal["pre_exile"] | None = None
@@ -299,7 +299,7 @@ class V2SpeechSpec:
 
 
 @dataclass(frozen=True)
-class V2PreflightPauseFailure:
+class PreflightPauseFailure:
     failure_code: str
     failure_category: str
     source_action_id: str
@@ -310,7 +310,7 @@ class V2PreflightPauseFailure:
 
 
 @dataclass(frozen=True)
-class V2ActionFailure:
+class ActionFailure:
     code: str
     category: str | None
     terminal_attempt_id: str | None
@@ -338,10 +338,10 @@ class V2ActionFailure:
 
 
 @dataclass(frozen=True)
-class V2ActionTechnicalOutcome:
-    kind: V2RequiredTargetTechnicalOutcome
-    failure_mode: V2RequiredTargetExhaustionFailureMode
-    failure: V2ActionFailure
+class ActionTechnicalOutcome:
+    kind: RequiredTargetTechnicalOutcome
+    failure_mode: RequiredTargetExhaustionFailureMode
+    failure: ActionFailure
     supporting_event_record_seq: int
 
     def __post_init__(self) -> None:
@@ -359,11 +359,11 @@ class V2ActionTechnicalOutcome:
 
 
 @dataclass(frozen=True)
-class V2ActionResult:
+class ActionResult:
     action_id: str | None = None
-    decision: V2ModelDecision | None = None
-    failure: V2ActionFailure | None = None
-    technical_outcome: V2ActionTechnicalOutcome | None = None
+    decision: ModelDecision | None = None
+    failure: ActionFailure | None = None
+    technical_outcome: ActionTechnicalOutcome | None = None
     model_response_record_seq: int | None = None
     terminal_event_record_seq: int | None = None
     model_attempt_id: str | None = None
@@ -413,7 +413,7 @@ class V2ActionResult:
 
 
 @dataclass(frozen=True)
-class V2ModelRetryPolicy:
+class ModelRetryPolicy:
     max_attempts: int = 3
     attempt_total_seconds: float = 180.0
     action_total_seconds: float = 300.0
@@ -431,7 +431,7 @@ class V2ModelRetryPolicy:
             raise ValueError("retry delays must not be negative")
 
 
-def _is_blocking_required_target(spec: V2SpeechSpec) -> bool:
+def _is_blocking_required_target(spec: SpeechSpec) -> bool:
     contract = spec.decision_contract
     return (
         contract.kind == "target"
@@ -444,11 +444,11 @@ def _is_blocking_required_target(spec: V2SpeechSpec) -> bool:
 
 def _effective_model_attempt_limit(
     *,
-    spec: V2SpeechSpec,
-    exc: V2ModelError,
-    disposition: V2FailureDisposition,
-    policy: V2ModelRetryPolicy,
-    generation_policy: V2ResolvedModelGenerationPolicy | None = None,
+    spec: SpeechSpec,
+    exc: ModelError,
+    disposition: FailureDisposition,
+    policy: ModelRetryPolicy,
+    generation_policy: ResolvedModelGenerationPolicy | None = None,
 ) -> int:
     if generation_policy is not None and generation_policy.automatic_retry_enforcement == "enforce":
         required_target = _is_blocking_required_target(spec)
@@ -523,14 +523,14 @@ class _ModelAttemptProgressTrace:
     provider_usage: dict[str, int] | None = None
     usage_update_count: int = 0
     usage_conflict_observed: bool = False
-    usage_consistency: V2UsageConsistency = "unavailable"
+    usage_consistency: UsageConsistency = "unavailable"
     queued_recorded: bool = False
     admitted_recorded: bool = False
     response_headers_recorded: bool = False
     first_token_recorded: bool = False
     first_text_recorded: bool = False
 
-    def accept(self, progress: V2ModelProgress) -> tuple[str, dict[str, Any]] | None:
+    def accept(self, progress: ModelProgress) -> tuple[str, dict[str, Any]] | None:
         self.provider_request_id = progress.provider_request_id
         if progress.stage == "queued":
             if self.queued_recorded:
@@ -696,19 +696,19 @@ class _ModelAttemptProgressTrace:
         return "response_headers"
 
 
-class V2ActionEngine:
+class ActionEngine:
     def __init__(
         self,
         *,
-        repository: V2ActionRepository,
-        model_client: V2ModelPort,
-        tts_client: V2TtsPort | None,
-        tts_client_factory: Callable[[], V2TtsPort] | None,
+        repository: ActionRepository,
+        model_client: ModelPort,
+        tts_client: TtsPort | None,
+        tts_client_factory: Callable[[], TtsPort] | None,
         tts_capability_enabled: bool,
         voice_root: Path,
         sample_rate: int,
         judge_configuration_provider: Callable[[str], RuntimeJudgeConfiguration],
-        model_retry_policy: V2ModelRetryPolicy = V2ModelRetryPolicy(),
+        model_retry_policy: ModelRetryPolicy = ModelRetryPolicy(),
     ) -> None:
         self._repository = repository
         self._model_client = model_client
@@ -722,19 +722,19 @@ class V2ActionEngine:
         self._paused_model_actions: dict[str, _PausedModelActionWaiter] = {}
         self._paused_model_actions_lock = asyncio.Lock()
 
-    def _tts_client_for_claim(self, claim: V2ActionClaim) -> V2TtsPort | None:
+    def _tts_client_for_claim(self, claim: ActionClaim) -> TtsPort | None:
         if claim.audio_mode == "text_only":
             return None
         if claim.audio_mode != "tts":
-            raise V2RepositoryError("v2_audio_mode_unknown")
+            raise RepositoryError("v2_audio_mode_unknown")
         if not self._tts_capability_enabled:
-            raise V2RepositoryError("v2_audio_mode_unavailable")
+            raise RepositoryError("v2_audio_mode_unavailable")
         if self._tts_client is None:
             if self._tts_client_factory is None:
-                raise V2RepositoryError("v2_audio_mode_unavailable")
+                raise RepositoryError("v2_audio_mode_unavailable")
             self._tts_client = self._tts_client_factory()
         if not bool(getattr(self._tts_client, "enabled", True)):
-            raise V2RepositoryError("v2_audio_mode_unavailable")
+            raise RepositoryError("v2_audio_mode_unavailable")
         return self._tts_client
 
     def check_cancellation(self, game_id: str) -> None:
@@ -764,11 +764,11 @@ class V2ActionEngine:
     async def _pause_for_model_retry(
         self,
         *,
-        claim: V2ActionClaim,
+        claim: ActionClaim,
         attempt_id: str | None,
         failure_code: str,
         recovery: dict[str, Any],
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         audience: str,
         failure_episode_id: str | None = None,
         source_failure_episode_ids: tuple[str, ...] = (),
@@ -781,7 +781,7 @@ class V2ActionEngine:
         )
         async with self._paused_model_actions_lock:
             if claim.game_id in self._paused_model_actions:
-                raise V2RepositoryError("model action is already paused")
+                raise RepositoryError("model action is already paused")
             self._paused_model_actions[claim.game_id] = waiter
         try:
             self._repository.pause_model_action(
@@ -818,7 +818,7 @@ class V2ActionEngine:
                 except TimeoutError:
                     continue
             if waiter.control_request_id is None:
-                raise V2RepositoryError("model retry has no control request")
+                raise RepositoryError("model retry has no control request")
             self._repository.resume_model_action(
                 claim=claim,
                 control_request_id=waiter.control_request_id,
@@ -842,7 +842,7 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         opening_completed = await self._run_judge_sentence(
             game_id=game_id,
@@ -853,7 +853,7 @@ class V2ActionEngine:
             return
         try:
             transition = self._repository.transition_to_first_night(game_id=game_id)
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except Exception as exc:
             failure_kind, failure_code = _failure(exc)
@@ -894,8 +894,8 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
     ) -> bool:
         return (
             await self._run_model_action(
@@ -911,7 +911,7 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         player_id: str,
         player_seat: int,
         action_type: str,
@@ -922,11 +922,11 @@ class V2ActionEngine:
         speech_order: list[str],
         source_slot_id: str,
         source_action_id: str,
-        source_failure: V2ActionFailure,
+        source_failure: ActionFailure,
         source_terminal_event_record_seq: int,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-    ) -> V2ActionResult | None:
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+    ) -> ActionResult | None:
         """Commit and announce a prefetched public-speech technical skip.
 
         The source model action is already terminal. This method never opens a
@@ -987,7 +987,7 @@ class V2ActionEngine:
         return await self._run_model_action(
             game_id=game_id,
             broadcaster=broadcaster,
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type="judge_day_speech_technical_skip",
                 phase_id=phase_id,
                 required_phase_state=required_phase_state,
@@ -1016,13 +1016,13 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[ModelError, int], bool] | None = None,
         on_model_admission_pending: Callable[[], None] | None = None,
-    ) -> V2ModelDecision | None:
+    ) -> ModelDecision | None:
         result = await self.run_player_decision_result(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1038,13 +1038,13 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[ModelError, int], bool] | None = None,
         on_model_admission_pending: Callable[[], None] | None = None,
-    ) -> V2ActionResult | None:
+    ) -> ActionResult | None:
         return await self._run_model_action(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1060,11 +1060,11 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
-        decision: V2ModelDecision,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
+        decision: ModelDecision,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
     ) -> bool:
         return (
             await self.present_player_decision_result(
@@ -1082,12 +1082,12 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
-        decision: V2ModelDecision,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-    ) -> V2ActionResult | None:
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
+        decision: ModelDecision,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+    ) -> ActionResult | None:
         return await self._run_model_action(
             game_id=game_id,
             broadcaster=broadcaster,
@@ -1102,8 +1102,8 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
     ) -> bool:
         return await self.run_judge_speech(
             game_id=game_id,
@@ -1115,15 +1115,15 @@ class V2ActionEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-        spec: V2SpeechSpec,
+        broadcaster: BroadcastPort,
+        spec: SpeechSpec,
         decision: bool,
-        precomputed_decision: V2ModelDecision | None = None,
-        on_presentation_opened: Callable[[V2PresentationIdentity], None] | None = None,
-        on_presentation_closed: Callable[[V2PresentationIdentity], None] | None = None,
-        model_retry_guard: Callable[[V2ModelError, int], bool] | None = None,
+        precomputed_decision: ModelDecision | None = None,
+        on_presentation_opened: Callable[[PresentationIdentity], None] | None = None,
+        on_presentation_closed: Callable[[PresentationIdentity], None] | None = None,
+        model_retry_guard: Callable[[ModelError, int], bool] | None = None,
         on_model_admission_pending: Callable[[], None] | None = None,
-    ) -> V2ActionResult | None:
+    ) -> ActionResult | None:
         action_id = f"v2_action_{uuid4().hex[:16]}"
         judge_configuration = None
         if spec.actor_kind == "judge":
@@ -1166,8 +1166,8 @@ class V2ActionEngine:
         def check_cancellation() -> None:
             self._repository.check_cancellation(claim.game_id)
 
-        identity: V2PresentationIdentity | None = None
-        recorder: V2VoiceRecorder | None = None
+        identity: PresentationIdentity | None = None
+        recorder: VoiceRecorder | None = None
         model_attempt_id: str | None = None
         model_attempt_no: int | None = None
         current_cycle_attempt_no: int | None = None
@@ -1181,7 +1181,7 @@ class V2ActionEngine:
         projected_known_events_sha256: str | None = None
         model_failure_recorded = False
         active_failure_episode_id: str | None = None
-        resolved_generation_policy: V2ResolvedModelGenerationPolicy | None = None
+        resolved_generation_policy: ResolvedModelGenerationPolicy | None = None
         resolved_model_provider = spec.model_provider
         resolved_model_id = spec.model_id
         machine_format_failure_count = 0
@@ -1226,7 +1226,7 @@ class V2ActionEngine:
                     ),
                     audience=spec.audience,
                 )
-            model_decision: V2ModelDecision | None = None
+            model_decision: ModelDecision | None = None
             if precomputed_decision is not None:
                 model_decision = precomputed_decision
                 speech_text = precomputed_decision.speech
@@ -1257,9 +1257,9 @@ class V2ActionEngine:
                 model_attempt_id = f"v2_model_{uuid4().hex[:16]}"
                 model_attempt_no = 1
                 if model_provider is None or model_id is None:
-                    raise V2ModelError("model_not_configured")
+                    raise ModelError("model_not_configured")
                 if not isinstance(spec.model_supports_thinking, bool):
-                    raise V2ModelError("model_parameters_invalid")
+                    raise ModelError("model_parameters_invalid")
                 model_parameters, thinking_source = _action_model_parameters(spec)
                 model_target = self._model_client.resolve_model_target(
                     model_provider=model_provider,
@@ -1461,7 +1461,7 @@ class V2ActionEngine:
                         progress_capable = callable(progress_method)
 
                         def persist_model_progress(
-                            progress: V2ModelProgress,
+                            progress: ModelProgress,
                             *,
                             observed_attempt_id: str = attempt_id,
                         ) -> None:
@@ -1640,7 +1640,7 @@ class V2ActionEngine:
                         remaining = model_deadline - time.monotonic()
                         try:
                             if remaining <= 0:
-                                raise V2ModelError(
+                                raise ModelError(
                                     "model_total_timeout",
                                     failure_stage="action_budget",
                                     elapsed_ms=0,
@@ -1656,7 +1656,7 @@ class V2ActionEngine:
                             )
                             try:
 
-                                async def generate_once() -> V2ModelDecision:
+                                async def generate_once() -> ModelDecision:
                                     nonlocal model_admission_pending_notified
                                     if (
                                         on_model_admission_pending is not None
@@ -1711,7 +1711,7 @@ class V2ActionEngine:
                                 observed_timeout_stage = (
                                     "action_budget" if manages_attempt_timeout else timeout_stage
                                 )
-                                raise V2ModelError(
+                                raise ModelError(
                                     "model_total_timeout",
                                     retryable=observed_timeout_stage == "attempt_budget",
                                     failure_stage=(
@@ -1733,7 +1733,7 @@ class V2ActionEngine:
                                         (time.monotonic() - attempt_started_at) * 1000
                                     ),
                                 ) from exc
-                        except V2ModelError as exc:
+                        except ModelError as exc:
                             _enrich_model_error_from_progress(
                                 exc,
                                 attempt_progress,
@@ -1839,7 +1839,7 @@ class V2ActionEngine:
                                         pipeline_retry_guard_allowed = bool(
                                             model_retry_guard(exc, cycle_attempt_no)
                                         )
-                                    except (asyncio.CancelledError, V2ExecutionOwnershipLost):
+                                    except (asyncio.CancelledError, ExecutionOwnershipLost):
                                         raise
                                     except Exception:
                                         pipeline_retry_guard_error = True
@@ -2181,12 +2181,12 @@ class V2ActionEngine:
                                         ),
                                         audience=spec.audience,
                                     )
-                                return V2ActionResult(
+                                return ActionResult(
                                     action_id=claim.action_id,
-                                    technical_outcome=V2ActionTechnicalOutcome(
+                                    technical_outcome=ActionTechnicalOutcome(
                                         kind=target_outcome_kind,
                                         failure_mode=target_failure_mode,
-                                        failure=V2ActionFailure(
+                                        failure=ActionFailure(
                                             code=exc.code,
                                             category=disposition.category,
                                             terminal_attempt_id=model_attempt_id,
@@ -2242,7 +2242,7 @@ class V2ActionEngine:
                                         "failure_category": disposition.category,
                                         "raw_response_preserved": isinstance(
                                             exc,
-                                            V2QualityError,
+                                            QualityError,
                                         )
                                         and exc.raw_response is not None,
                                     },
@@ -2266,7 +2266,7 @@ class V2ActionEngine:
                                         ),
                                         audience=spec.audience,
                                     )
-                                return V2ActionResult(
+                                return ActionResult(
                                     action_id=claim.action_id,
                                     decision=technical_decision,
                                     model_response_record_seq=model_response_record_seq,
@@ -2306,7 +2306,7 @@ class V2ActionEngine:
                         break
                     if resumed_after_pause:
                         continue
-                    raise V2ModelError("model_attempt_cycle_incomplete")
+                    raise ModelError("model_attempt_cycle_incomplete")
                 raw_model_speech = model_decision.speech
                 original_target = model_decision.target_player_id
                 resolved_target = (
@@ -2561,19 +2561,19 @@ class V2ActionEngine:
                         normalization_reason = "targetless_action"
                 elif original_target is not None and resolved_target is None:
                     if spec.decision_contract.target_mode == "required":
-                        raise V2RepositoryError(
+                        raise RepositoryError(
                             "required model target became invalid after validation"
                         )
                     normalized_target = None
                     normalization_reason = "target_not_allowed"
                 elif normalized_target is None:
                     if spec.decision_contract.target_mode == "required":
-                        raise V2RepositoryError(
+                        raise RepositoryError(
                             "required model target disappeared after validation"
                         )
                 elif normalized_target not in (spec.allowed_target_ids or ()):
                     if spec.decision_contract.target_mode == "required":
-                        raise V2RepositoryError(
+                        raise RepositoryError(
                             "required model target left the frozen candidate set"
                         )
                     normalized_target = None
@@ -2623,7 +2623,7 @@ class V2ActionEngine:
                         ),
                         audience=spec.audience,
                     )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=claim.action_id,
                     decision=model_decision,
                     model_response_record_seq=model_response_record_seq,
@@ -2701,7 +2701,7 @@ class V2ActionEngine:
                         ),
                         audience=spec.audience,
                     )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=claim.action_id,
                     decision=model_decision,
                     model_response_record_seq=model_response_record_seq,
@@ -2713,7 +2713,7 @@ class V2ActionEngine:
                     projected_known_events_sha256=projected_known_events_sha256,
                 )
             if identity.voice_asset_id is None:
-                raise V2RepositoryError("enabled TTS action has no voice asset")
+                raise RepositoryError("enabled TTS action has no voice asset")
             tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
             self._repository.append_event(
                 game_id=claim.game_id,
@@ -2732,7 +2732,7 @@ class V2ActionEngine:
                     ),
                 },
             )
-            recorder = V2VoiceRecorder(
+            recorder = VoiceRecorder(
                 root=self._voice_root,
                 storage_key=identity.storage_key,
                 sample_rate=self._sample_rate,
@@ -2793,7 +2793,7 @@ class V2ActionEngine:
                 sample_cursor = next_sample_cursor
                 chunk_index += 1
             if first_chunk or official_end is None:
-                raise V2TtsError("tts_empty_audio")
+                raise TtsError("tts_empty_audio")
             check_cancellation()
             self._repository.mark_finalizing(
                 identity=identity,
@@ -2814,7 +2814,7 @@ class V2ActionEngine:
             if recorded.sample_count != sample_cursor:
                 recorder.discard_finalized()
                 recorder = None
-                raise V2VoiceRecordingError("recorded sample count differs from broadcast")
+                raise VoiceRecordingError("recorded sample count differs from broadcast")
             self._repository.mark_voice_ready(
                 identity=identity,
                 tts_attempt_id=tts_attempt_id,
@@ -2863,7 +2863,7 @@ class V2ActionEngine:
                     ),
                     audience=spec.audience,
                 )
-            return V2ActionResult(
+            return ActionResult(
                 action_id=claim.action_id,
                 decision=model_decision,
                 model_response_record_seq=model_response_record_seq,
@@ -2965,7 +2965,7 @@ class V2ActionEngine:
                         and persisted_terminal_record_seq > 0
                     ):
                         cancellation_terminal_record_seq = persisted_terminal_record_seq
-                except V2ExecutionOwnershipLost:
+                except ExecutionOwnershipLost:
                     raise
                 except BaseException:
                     # A stop request or secondary persistence error must never
@@ -2978,10 +2978,10 @@ class V2ActionEngine:
                 if cancellation_terminal_record_seq is not None and (
                     cancellation_kind == "timeout" or spec.pipeline_kind == "pre_exile"
                 ):
-                    return V2ActionResult(
+                    return ActionResult(
                         action_id=claim.action_id,
                         terminal_event_record_seq=cancellation_terminal_record_seq,
-                        failure=V2ActionFailure(
+                        failure=ActionFailure(
                             code=cancellation_code,
                             category=("timeout" if cancellation_kind == "timeout" else "canceled"),
                             terminal_attempt_id=model_attempt_id,
@@ -2995,7 +2995,7 @@ class V2ActionEngine:
                         ),
                     )
             raise
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             if recorder is not None:
                 try:
                     recorder.discard_finalized()
@@ -3016,7 +3016,7 @@ class V2ActionEngine:
                 and not model_failure_recorded
                 and isinstance(
                     exc,
-                    (V2ModelError, V2ModelContextProjectionInvariantError),
+                    (ModelError, ModelContextProjectionInvariantError),
                 )
             ):
                 try:
@@ -3039,7 +3039,7 @@ class V2ActionEngine:
                         "failure_code": failure_code,
                         "failure_category": (
                             model_failure_disposition(exc).category
-                            if isinstance(exc, V2ModelError)
+                            if isinstance(exc, ModelError)
                             else "internal_invariant"
                         ),
                         "failure_episode_id": failure_episode_id,
@@ -3061,27 +3061,27 @@ class V2ActionEngine:
                                 model_id=resolved_model_id,
                                 explicit_reasoning_only_elapsed_ms=(
                                     exc.reasoning_only_elapsed_ms
-                                    if isinstance(exc, V2ModelError)
+                                    if isinstance(exc, ModelError)
                                     else None
                                 ),
                                 first_token_ms=(
-                                    exc.first_token_ms if isinstance(exc, V2ModelError) else None
+                                    exc.first_token_ms if isinstance(exc, ModelError) else None
                                 ),
                                 first_visible_text_ms=(
                                     exc.first_visible_text_ms
-                                    if isinstance(exc, V2ModelError)
+                                    if isinstance(exc, ModelError)
                                     else None
                                 ),
                                 terminal_elapsed_ms=(
-                                    exc.elapsed_ms if isinstance(exc, V2ModelError) else None
+                                    exc.elapsed_ms if isinstance(exc, ModelError) else None
                                 ),
                             )
                         )
-                    if isinstance(exc, V2QualityError):
+                    if isinstance(exc, QualityError):
                         failure_payload["application_validation_result"] = "rejected"
                         if exc.raw_response is not None:
                             failure_payload["raw_response"] = exc.raw_response
-                    if isinstance(exc, V2ModelContextProjectionInvariantError):
+                    if isinstance(exc, ModelContextProjectionInvariantError):
                         failure_payload["invariant_code"] = exc.invariant_code
                     self._repository.append_event(
                         game_id=claim.game_id,
@@ -3151,14 +3151,14 @@ class V2ActionEngine:
             if spec.isolated_failure:
                 failure_category = (
                     model_failure_disposition(exc).category
-                    if isinstance(exc, V2ModelError)
+                    if isinstance(exc, ModelError)
                     else None
                 )
-                return V2ActionResult(
+                return ActionResult(
                     action_id=claim.action_id,
                     model_response_record_seq=model_response_record_seq,
                     terminal_event_record_seq=terminal_event_record_seq,
-                    failure=V2ActionFailure(
+                    failure=ActionFailure(
                         code=failure_code,
                         category=failure_category,
                         terminal_attempt_id=model_attempt_id,
@@ -3174,7 +3174,7 @@ class V2ActionEngine:
             return None
 
 
-_OPENING_SPEECH = V2SpeechSpec(
+_OPENING_SPEECH = SpeechSpec(
     action_type="judge_opening_speech",
     phase_id="opening",
     required_phase_state="opening_ready",
@@ -3183,7 +3183,7 @@ _OPENING_SPEECH = V2SpeechSpec(
     success_phase_state="opening_speech_closed",
 )
 
-_NIGHTFALL_ANNOUNCEMENT = V2SpeechSpec(
+_NIGHTFALL_ANNOUNCEMENT = SpeechSpec(
     action_type="judge_nightfall_announcement",
     phase_id="first_night",
     required_phase_state="nightfall_ready",
@@ -3197,7 +3197,7 @@ def _action_context(
     *,
     game_id: str,
     action_id: str,
-    spec: V2SpeechSpec,
+    spec: SpeechSpec,
 ) -> dict[str, Any]:
     output_contract = _output_contract(spec)
     return {
@@ -3273,12 +3273,12 @@ def _action_context(
 
 
 def _action_model_parameters(
-    spec: V2SpeechSpec,
+    spec: SpeechSpec,
 ) -> tuple[dict[str, Any], str]:
     return dict(spec.model_parameters or {}), "model_configuration"
 
 
-def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
+def _output_contract(spec: SpeechSpec) -> dict[str, Any]:
     contract = spec.decision_contract
     speech: dict[str, Any] = {
         "type": "string",
@@ -3307,9 +3307,9 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
         return output
     if contract.kind == "target":
         if contract.target_mode == "none":
-            raise V2LiveProtocolError("target contract requires a target mode")
+            raise LiveProtocolError("target contract requires a target mode")
         if contract.target_mode == "required" and not spec.allowed_target_ids:
-            raise V2LiveProtocolError("required target contract requires allowed targets")
+            raise LiveProtocolError("required target contract requires allowed targets")
         output["target_field"] = "target_player_id"
         output["target_policy"] = {
             "mode": contract.target_mode,
@@ -3321,7 +3321,7 @@ def _output_contract(spec: V2SpeechSpec) -> dict[str, Any]:
         ]
         return output
     if not contract.boolean_field:
-        raise V2LiveProtocolError("boolean contract requires a semantic field")
+        raise LiveProtocolError("boolean contract requires a semantic field")
     output["field"] = contract.boolean_field
     output["required_fields"] = [
         contract.boolean_field,
@@ -3438,14 +3438,14 @@ def _speech_prefix(text: str, *, max_chars: int) -> str:
     return "".join(accepted)
 
 
-def _can_pause_for_model_failure(exc: V2ModelError) -> bool:
+def _can_pause_for_model_failure(exc: ModelError) -> bool:
     return model_failure_disposition(exc).pausable
 
 
 def _validate_model_target_decision(
-    decision: V2ModelDecision,
+    decision: ModelDecision,
     *,
-    spec: V2SpeechSpec,
+    spec: SpeechSpec,
 ) -> None:
     contract = spec.decision_contract
     if contract.kind != "target":
@@ -3459,7 +3459,7 @@ def _validate_model_target_decision(
     if resolved_target is not None and resolved_target not in (spec.allowed_target_ids or ()):
         resolved_target = None
     if contract.target_mode == "required" and resolved_target is None:
-        raise V2QualityError(
+        raise QualityError(
             "model_decision_required_target_missing",
             raw_response=decision.raw_response,
         )
@@ -3467,8 +3467,8 @@ def _validate_model_target_decision(
 
 def _model_action_recovery_snapshot(
     *,
-    spec: V2SpeechSpec,
-    target: V2ModelTarget,
+    spec: SpeechSpec,
+    target: ModelTarget,
     request_payload: dict[str, Any],
     model_context: dict[str, Any],
     failure_category: str,
@@ -3561,10 +3561,10 @@ _TECHNICAL_FALSE_FALLBACK_ACTION_TYPES = frozenset(
 
 def _technical_target_exhaustion_outcome(
     *,
-    spec: V2SpeechSpec,
-    exc: V2ModelError,
-    generation_policy: V2ResolvedModelGenerationPolicy,
-) -> tuple[V2RequiredTargetTechnicalOutcome, V2RequiredTargetExhaustionFailureMode] | None:
+    spec: SpeechSpec,
+    exc: ModelError,
+    generation_policy: ResolvedModelGenerationPolicy,
+) -> tuple[RequiredTargetTechnicalOutcome, RequiredTargetExhaustionFailureMode] | None:
     target_policy = generation_policy.required_target_exhaustion
     if (
         generation_policy.schema_version != MODEL_GENERATION_POLICY_SCHEMA_VERSION
@@ -3588,8 +3588,8 @@ def _technical_target_exhaustion_outcome(
 
 
 def _required_target_exhaustion_failure_mode(
-    exc: V2ModelError,
-) -> V2RequiredTargetExhaustionFailureMode | None:
+    exc: ModelError,
+) -> RequiredTargetExhaustionFailureMode | None:
     if exc.code == "model_output_budget_exhausted":
         return "output_budget_exhausted"
     if exc.code == "model_attempt_hard_timeout" or exc.timeout_scope == "attempt_hard":
@@ -3603,10 +3603,10 @@ def _required_target_exhaustion_failure_mode(
 
 def _technical_exhaustion_outcome(
     *,
-    spec: V2SpeechSpec,
-    exc: V2ModelError,
+    spec: SpeechSpec,
+    exc: ModelError,
     attempt_id: str,
-) -> tuple[V2ModelDecision, str] | None:
+) -> tuple[ModelDecision, str] | None:
     # A prefetched turn is not yet public.  Its failure must stay private and
     # fall back to the normal foreground turn instead of publishing a skip
     # while the predecessor is still speaking.
@@ -3616,7 +3616,7 @@ def _technical_exhaustion_outcome(
         return None
     if spec.action_type in _TECHNICAL_SKIP_ACTION_TYPES and spec.decision_contract.kind == "speech":
         return (
-            V2ModelDecision(
+            ModelDecision(
                 target_player_id=None,
                 speech=None,
                 provider_request_id=attempt_id,
@@ -3631,7 +3631,7 @@ def _technical_exhaustion_outcome(
         and spec.decision_contract.boolean_field is not None
     ):
         return (
-            V2ModelDecision(
+            ModelDecision(
                 target_player_id=None,
                 speech=None,
                 provider_request_id=attempt_id,
@@ -3647,7 +3647,7 @@ def _technical_exhaustion_outcome(
 
 def _model_generation_policy_audit_payload(
     *,
-    policy: V2ResolvedModelGenerationPolicy,
+    policy: ResolvedModelGenerationPolicy,
     action_type: str,
     model_provider: str | None,
     model_id: str | None,
@@ -3752,7 +3752,7 @@ def _model_failure_payload(
     max_attempts: int,
     retry_cycle: int,
     cycle_attempt_no: int,
-    exc: V2ModelError,
+    exc: ModelError,
     failure_category: str,
     retryable: bool,
     action_recoverable: bool,
@@ -3819,7 +3819,7 @@ def _model_failure_payload(
         "usage_consistency": exc.usage_consistency,
         "reasoning_only_elapsed_ms": exc.reasoning_only_elapsed_ms,
     }
-    if isinstance(exc, V2QualityError):
+    if isinstance(exc, QualityError):
         payload["application_validation_result"] = "rejected"
         if exc.raw_response is not None:
             payload["raw_response"] = exc.raw_response
@@ -3836,10 +3836,10 @@ def _model_binding_health_status(consecutive_failure_count: int) -> str:
 
 def _required_retry_window_seconds(
     *,
-    spec: V2SpeechSpec,
-    disposition: V2FailureDisposition,
-    exc: V2ModelError,
-    policy: V2ModelRetryPolicy,
+    spec: SpeechSpec,
+    disposition: FailureDisposition,
+    exc: ModelError,
+    policy: ModelRetryPolicy,
     cycle_output_budget_failure_count: int = 0,
 ) -> float:
     if disposition.category == "output_budget":
@@ -3876,7 +3876,7 @@ def _required_retry_window_seconds(
 
 
 def _enrich_model_error_from_progress(
-    exc: V2ModelError,
+    exc: ModelError,
     progress: _ModelAttemptProgressTrace,
     *,
     progress_capable: bool,
@@ -3936,8 +3936,8 @@ def _enrich_model_error_from_progress(
 
 
 def _enrich_model_error_from_decision(
-    exc: V2ModelError,
-    decision: V2ModelDecision,
+    exc: ModelError,
+    decision: ModelDecision,
 ) -> None:
     """Preserve terminal stream diagnostics when application validation rejects."""
 
@@ -3975,10 +3975,10 @@ def _enrich_model_error_from_decision(
 
 def _model_retry_delay_seconds(
     *,
-    disposition: V2FailureDisposition,
-    exc: V2ModelError,
+    disposition: FailureDisposition,
+    exc: ModelError,
     cycle_attempt_no: int,
-    policy: V2ModelRetryPolicy,
+    policy: ModelRetryPolicy,
 ) -> float:
     if disposition.category == "timeout":
         return 0.0
@@ -4009,20 +4009,20 @@ async def _sleep_with_cancellation(
 
 
 def _failure(exc: Exception) -> tuple[str, str]:
-    if isinstance(exc, V2JudgeTemplateError):
+    if isinstance(exc, JudgeTemplateError):
         return "quality", "judge_template_invalid"
-    if isinstance(exc, V2QualityError):
+    if isinstance(exc, QualityError):
         return "quality", exc.code
-    if isinstance(exc, V2ModelContextProjectionInvariantError):
+    if isinstance(exc, ModelContextProjectionInvariantError):
         return "model", "model_context_projection_invariant_failed"
-    if isinstance(exc, V2ModelError):
+    if isinstance(exc, ModelError):
         return "model", exc.code
-    if isinstance(exc, V2TtsError):
+    if isinstance(exc, TtsError):
         return "tts", exc.code
-    if isinstance(exc, V2VoiceRecordingError):
+    if isinstance(exc, VoiceRecordingError):
         return "recording", "voice_recording_failed"
-    if isinstance(exc, V2LiveProtocolError):
+    if isinstance(exc, LiveProtocolError):
         return "protocol", str(exc)
-    if isinstance(exc, V2RepositoryError):
+    if isinstance(exc, RepositoryError):
         return "protocol", "repository_state_conflict"
     return "protocol", "unexpected_action_failure"

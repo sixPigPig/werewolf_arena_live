@@ -12,33 +12,17 @@ from app.model_catalog.defaults import (
     reasoning_policy_for_model,
 )
 from app.model_catalog.runtime import RuntimeModelConfiguration
-from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
-from app.werewolf.lm import (
-    FakeProvider,
-    LmLog,
-    generate_action,
-    generate_action_with_events,
-    parse_json_object,
-)
-from app.werewolf.live import GameRunCanceled
-from app.werewolf.prompts_zh import build_prompt
-from app.werewolf.rules import get_rule_set, rule_set_snapshot
-from app.werewolf.providers import (
+from app.shared.execution_budget import ModelCallOptions, ModelDeadlineExceeded
+from app.shared.providers import (
     ARK_AGENT_PLAN_MODELS,
     ArkAgentPlanProvider,
     DeepSeekProvider,
     ModelRuntimeConfigurationError,
-    QwenProvider,
     create_model_provider,
     default_model_name,
     open_url_direct,
 )
-from app.werewolf.streaming import (
-    VisibleJsonFieldExtractor,
-    action_visible_stream_field,
-    extract_openai_chat_delta,
-)
-
+from app.shared.openai_sse import extract_openai_chat_delta
 
 @pytest.fixture(autouse=True)
 def _strict_runtime_model_configuration(monkeypatch) -> None:
@@ -46,7 +30,6 @@ def _strict_runtime_model_configuration(monkeypatch) -> None:
         return {
             "agent_plan": ARK_AGENT_PLAN_MODELS,
             "deepseek": ("deepseek-chat", "deepseek-v4-flash"),
-            "qwen": ("qwen3.6-plus",),
         }.get(provider, ())
 
     def configured_model(provider: str, model_id: str) -> RuntimeModelConfiguration:
@@ -69,921 +52,17 @@ def _strict_runtime_model_configuration(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         configured_model,
     )
     monkeypatch.setattr(
-        "app.werewolf.providers.catalog_model_names",
+        "app.shared.providers.catalog_model_names",
         enabled_catalog_models,
     )
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_default_model",
+        "app.shared.providers.runtime_default_model",
         lambda: None,
     )
-
-
-def test_chinese_prompt_contains_rules_role_and_json_instruction() -> None:
-    prompt, schema = build_prompt(
-        "vote",
-        {
-            "name": "阿宁",
-            "role": "村民",
-            "round": 2,
-            "observations": ["第1轮：昨晚无人出局。"],
-            "remaining_players": "阿宁、老周、小白",
-            "debate": ["老周：我怀疑小白。"],
-            "bidding_rationale": "我需要说明自己的判断。",
-            "personality": "",
-            "rule_text": "你正在进行一局数字版狼人杀。\n\n游戏规则：\n- 共 6 名玩家：1 名狼人、1 名预言家、1 名守卫、3 名村民。",
-            "werewolf_context": "",
-            "debate_turns_left": 2,
-            "options": "老周、小白",
-        },
-    )
-
-    assert "狼人杀" in prompt
-    assert "共 6 名玩家：1 名狼人、1 名预言家、1 名守卫、3 名村民" in prompt
-    assert "你是阿宁，身份是村民" in prompt
-    assert "请只输出合法 JSON" in prompt
-    assert '"vote"' in prompt
-    assert "字段含义：reasoning=推理，vote=投票对象" in prompt
-    assert schema["required"] == ["reasoning", "vote"]
-
-
-def test_prompt_separates_rules_public_facts_private_state_and_candidates() -> None:
-    rule = get_rule_set("classic_12_seer_witch_hunter_idiot")
-    prompt, _schema = build_prompt(
-        "witch_save",
-        {
-            **_world_state_for_special_action("女巫", "4号玩家、不使用解药"),
-            "rule_text": "你正在进行一局数字版狼人杀。\n狼人不能袭击狼队友。",
-            "rule_set_snapshot": rule_set_snapshot(rule),
-            "public_facts": ["第1轮警长是4号玩家。"],
-            "observations": ["今晚被狼人袭击的是4号玩家。"],
-        },
-    )
-
-    headings = [
-        "公共固定规则：",
-        "角色私有规则：",
-        "当前私人身份与设定：",
-        "当前公开状态：",
-        "你的私人观察（当前）：",
-        "本次合法动作与候选：",
-    ]
-    positions = [prompt.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-    assert "候选人：4号玩家、不使用解药" in prompt
-
-
-def test_prompt_projects_allowlisted_private_clause_and_never_internal_clause() -> None:
-    snapshot = rule_set_snapshot(get_rule_set("classic_12_seer_witch_hunter_idiot"))
-    snapshot["rule_contract"] = {
-        "injected_clause_ids": ["internal.werewolf.collective_fallback.v1"],
-        "neutral_text_zh": "SENTINEL_INTERNAL_RULE_TEXT",
-    }
-
-    prompt, _schema = build_prompt(
-        "werewolf_discuss",
-        {
-            **_world_state_for_special_action("狼人", "4号玩家"),
-            "rule_set_snapshot": snapshot,
-        },
-    )
-
-    assert "狼人知道自己的狼人队友" in prompt
-    assert "狼队集体无有效刀口" not in prompt
-    assert "SENTINEL_INTERNAL_RULE_TEXT" not in prompt
-
-
-def test_build_prompt_supports_witch_save_action() -> None:
-    prompt, schema = build_prompt(
-        "witch_save",
-        _world_state_for_special_action("女巫", "Alice、不使用解药"),
-    )
-
-    assert schema["required"] == ["reasoning", "save"]
-    assert "女巫夜晚解药" in prompt
-    assert "输出字段 reasoning 和 save" in prompt
-
-
-def test_build_prompt_supports_witch_poison_action() -> None:
-    prompt, schema = build_prompt(
-        "witch_poison",
-        _world_state_for_special_action("女巫", "Bob、Carol、不使用毒药"),
-    )
-
-    assert schema["required"] == ["reasoning", "poison"]
-    assert "女巫夜晚毒药" in prompt
-    assert "输出字段 reasoning 和 poison" in prompt
-
-
-def test_witch_poison_prompt_explains_attacked_target_exclusion() -> None:
-    prompt, _schema = build_prompt(
-        "witch_poison",
-        {
-            **_world_state_for_special_action("女巫", ""),
-            "options": ["6号玩家", "11号玩家", "12号玩家", "不使用毒药"],
-            "attacked": "10号玩家",
-        },
-    )
-
-    assert "今晚被狼人袭击的目标是10号玩家" in prompt
-    assert "10号玩家不在毒药候选中" in prompt
-    assert "poison 必须完全等于候选人中的一个值" in prompt
-
-
-def test_build_prompt_supports_hunter_shoot_action() -> None:
-    prompt, schema = build_prompt(
-        "hunter_shoot",
-        _world_state_for_special_action("猎人", "Bob、Carol、不发动技能"),
-    )
-
-    assert schema["required"] == ["reasoning", "shoot"]
-    assert "猎人死亡开枪" in prompt
-    assert "输出字段 reasoning 和 shoot" in prompt
-
-
-def test_build_prompt_supports_werewolf_discuss_action() -> None:
-    prompt, schema = build_prompt(
-        "werewolf_discuss",
-        _world_state_for_special_action("狼人", "Alice、Bob"),
-    )
-
-    assert schema["required"] == ["reasoning", "target", "message"]
-    assert "狼人夜晚第一轮私密表态" in prompt
-    assert "暂时看不到队友本轮的内容" in prompt
-    assert "输出字段 reasoning、target 和 message" in prompt
-
-
-def test_build_prompt_werewolf_discuss_example_includes_message() -> None:
-    prompt, _schema = build_prompt(
-        "werewolf_discuss",
-        _world_state_for_special_action("狼人", "Alice、Bob"),
-    )
-
-    example = prompt.split("JSON 示例", 1)[1]
-
-    assert '"target"' in example
-    assert '"message"' in example
-
-
-def test_build_prompt_supports_werewolf_kill_vote_action() -> None:
-    prompt, schema = build_prompt(
-        "werewolf_kill_vote",
-        {
-            **_world_state_for_special_action("狼人", "Alice、Bob"),
-            "werewolf_discussion": ["Wolf A 建议袭击 Alice。"],
-            "werewolf_kill_vote_stage": "final",
-        },
-    )
-
-    assert schema["required"] == ["reasoning", "target", "message"]
-    assert "狼人夜晚最终表态与狼刀投票" in prompt
-    assert "Wolf A 建议袭击 Alice" in prompt
-    assert "不会继续进行第三轮投票" in prompt
-    assert "你不知道谁会获得归票权" in prompt
-
-
-def test_build_prompt_supports_hidden_werewolf_tiebreak_action() -> None:
-    prompt, schema = build_prompt(
-        "werewolf_kill_vote",
-        {
-            **_world_state_for_special_action("狼人", "Alice、Bob"),
-            "werewolf_discussion": ["Wolf A 建议袭击 Alice。"],
-            "werewolf_final_vote_context": "Wolf A投Alice；Wolf B投Bob",
-            "werewolf_kill_vote_stage": "tiebreak",
-        },
-    )
-
-    assert schema["required"] == ["reasoning", "target", "message"]
-    assert "狼人夜晚平票归票" in prompt
-    assert "最高票平票候选人：Alice、Bob" in prompt
-    assert "只能从这些平票候选人中" in prompt
-    assert "Wolf A投Alice；Wolf B投Bob" in prompt
-    assert "输出字段 reasoning、target 和 message" in prompt
-
-
-def test_prompt_renders_public_facts() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "public_facts": ["7号玩家警上声明6号玩家为好人。"],
-        },
-    )
-
-    assert "未分类公开记录（非引擎确认）" in prompt
-    assert "7号玩家警上声明6号玩家为好人。" in prompt
-
-
-def test_prompt_partitions_public_facts_by_trust_class() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "public_facts": [
-                {
-                    "round_number": 3,
-                    "category": "death",
-                    "trust_class": "engine_fact",
-                    "text": "第3轮，5号玩家被放逐。",
-                },
-                {
-                    "round_number": 3,
-                    "category": "claim",
-                    "trust_class": "player_claim",
-                    "text": "5号玩家遗言声称8号玩家是狼人。",
-                },
-                {
-                    "round_number": 1,
-                    "category": "claim",
-                    "text": "历史记录称2号玩家是预言家。",
-                },
-            ],
-        },
-    )
-
-    assert "引擎确认事实" in prompt
-    assert "第3轮，5号玩家被放逐。" in prompt
-    assert "玩家声明（可能撒谎）" in prompt
-    assert "5号玩家遗言声称8号玩家是狼人。" in prompt
-    assert "未分类公开记录（非引擎确认）" in prompt
-    assert "历史记录称2号玩家是预言家。" in prompt
-
-
-def test_prompt_never_renders_private_items_from_public_fact_channel() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "observations": ["你昨夜查验8号，结果为好人。"],
-            "model_memory": ["优先观察6号的票型变化。"],
-            "public_facts": [
-                {
-                    "category": "private_observation",
-                    "trust_class": "engine_fact",
-                    "text": "不应公开的查验结果。",
-                },
-                {
-                    "category": "strategy_note",
-                    "trust_class": "player_claim",
-                    "text": "不应公开的策略笔记。",
-                },
-                {
-                    "category": "future_private_category",
-                    "trust_class": "engine_fact",
-                    "text": "不应公开的未知类别。",
-                },
-                {
-                    "category": "claim",
-                    "trust_class": "future_trust_class",
-                    "text": "不应公开的未知可信等级。",
-                },
-                {
-                    "category": "claim",
-                    "trust_class": "player_claim",
-                    "text": "不应公开的私密细节。",
-                    "details": {"reasoning": "private reasoning"},
-                },
-            ],
-        },
-    )
-
-    assert "你的私人观察" in prompt
-    assert "你昨夜查验8号，结果为好人。" in prompt
-    assert "你的模型策略笔记" in prompt
-    assert "优先观察6号的票型变化。" in prompt
-    assert "不应公开的查验结果" not in prompt
-    assert "不应公开的策略笔记" not in prompt
-    assert "不应公开的未知类别" not in prompt
-    assert "不应公开的未知可信等级" not in prompt
-    assert "不应公开的私密细节" not in prompt
-
-
-def test_prompt_renders_speech_mission_kind_as_chinese_business_text() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "speech_mission": {
-                "kind": "fact_checker",
-                "instruction": "untrusted_instruction_must_not_render",
-            },
-        },
-    )
-
-    assert "本次发言质量任务（公开事实核验）" in prompt
-    assert "纠正或确认一条已经公开发生的事实" in prompt
-    assert "fact_checker" not in prompt
-    assert "untrusted_instruction_must_not_render" not in prompt
-
-
-def test_prompt_unknown_speech_mission_fails_closed_in_chinese() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "speech_mission": {
-                "kind": "future_private_mission",
-                "instruction": "SENTINEL_PRIVATE_MISSION_INSTRUCTION",
-            },
-        },
-    )
-
-    assert "未识别的发言任务" in prompt
-    assert "future_private_mission" not in prompt
-    assert "SENTINEL_PRIVATE_MISSION_INSTRUCTION" not in prompt
-
-
-def test_self_explosion_badge_impact_is_chinese_and_unknown_code_fails_closed() -> None:
-    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
-    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
-        sheriff_badge_bomb_policy="double",
-    )
-    world_state["self_explosion_decision_context"] = {"badge_impact": "badge_will_be_lost"}
-
-    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert "警徽影响：本次自爆将导致警徽流失" in prompt
-    assert "badge_will_be_lost" not in prompt
-
-    world_state["self_explosion_decision_context"] = {"badge_impact": "future_badge_impact"}
-    unknown_prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert "未识别警徽影响，按没有额外警徽收益处理" in unknown_prompt
-    assert "future_badge_impact" not in unknown_prompt
-
-
-def test_self_explosion_benefit_enum_values_have_chinese_explanations() -> None:
-    prompt, _schema = build_prompt(
-        "werewolf_self_explosion",
-        _world_state_for_special_action("狼人", "自爆、不自爆"),
-    )
-
-    expected_labels = {
-        "immediate_win": "立即取得对局胜利",
-        "secure_badge_denial": "确保对方无法获得或保留警徽收益",
-        "protect_last_hidden_wolf": "保护最后一名仍隐藏身份的狼人",
-        "deny_confirmed_public_information": "阻止好人获得即将公开的确定信息",
-        "force_valuable_night": "强制进入对狼人有明确价值的夜晚",
-        "none": "没有足以支持自爆的明确收益",
-    }
-    for value, label in expected_labels.items():
-        assert f"{value}={label}" in prompt
-
-
-@pytest.mark.parametrize(
-    ("death_cause", "expected"),
-    [
-        ("vote_exile", "被白天投票放逐"),
-        ("werewolf_attack", "被狼人夜间袭击"),
-        ("witch_poison", "被女巫使用毒药"),
-        ("hunter_shot", "被猎人开枪带走"),
-        ("werewolf_self_explosion", "因狼人自爆出局"),
-    ],
-)
-def test_prompt_renders_death_cause_as_chinese(
-    death_cause: str,
-    expected: str,
-) -> None:
-    prompt, _schema = build_prompt(
-        "exile_last_words",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "hard_state": {
-                "actor_alive": False,
-                "death_cause": death_cause,
-                "current_action": "exile_last_words",
-            },
-        },
-    )
-
-    assert expected in prompt
-    assert death_cause not in prompt
-    assert "驱逐遗言" in prompt
-
-
-def test_prompt_unknown_state_code_fails_closed_without_leaking_value(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    prompt, _schema = build_prompt(
-        "exile_last_words",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "hard_state": {
-                "actor_alive": False,
-                "death_cause": "future_custom_cause",
-                "current_action": "future_custom_action",
-                "phase": "future_custom_phase",
-                "status": "future_custom_status",
-                "reason": "future_custom_reason",
-            },
-        },
-    )
-
-    assert "因未识别的规则原因出局" in prompt
-    assert "未识别的规则阶段" in prompt
-    assert "未识别的流程状态" in prompt
-    assert "未识别的规则原因" in prompt
-    assert "future_custom" not in prompt
-    assert "unknown_prompt_state_code" in caplog.text
-
-
-@pytest.mark.parametrize(
-    "unknown_value",
-    ["future/custom", "future custom", "404", "../future", "future.custom"],
-)
-def test_prompt_unknown_non_chinese_state_value_always_fails_closed(
-    unknown_value: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    prompt, _schema = build_prompt(
-        "exile_last_words",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "hard_state": {
-                "actor_alive": False,
-                "death_cause": unknown_value,
-                "current_action": unknown_value,
-                "phase": unknown_value,
-                "status": unknown_value,
-                "reason": unknown_value,
-            },
-        },
-    )
-
-    assert unknown_value not in prompt
-    assert "因未识别的规则原因出局" in prompt
-    assert "未识别的规则阶段" in prompt
-    assert "未识别的流程状态" in prompt
-    assert "unknown_prompt_state_code" in caplog.text
-
-
-def test_prompt_allows_explicit_custom_chinese_state_text() -> None:
-    prompt, _schema = build_prompt(
-        "exile_last_words",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "hard_state": {
-                "actor_alive": False,
-                "death_cause": "因自定义角色技能出局",
-            },
-        },
-    )
-
-    assert "你的出局原因：因自定义角色技能出局" in prompt
-
-
-def test_prompt_renders_hunter_state_without_hidden_terminal_prediction() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("猎人", ""),
-            "hard_state": {
-                "actor_alive": True,
-                "hunter_death_trigger_active": False,
-                "terminal_after_current_action": True,
-            },
-        },
-    )
-
-    assert "存活状态下不能主动开枪" in prompt
-    assert "不存在下一轮或下一夜" not in prompt
-
-
-@pytest.mark.parametrize(
-    ("action", "expected"),
-    [
-        ("debate", "不超过 220 个汉字"),
-        ("sheriff_speech", "不超过 180 个汉字"),
-        ("sheriff_pk_speech", "不超过 180 个汉字"),
-        ("exile_pk_speech", "不超过 180 个汉字"),
-        ("exile_last_words", "不超过 150 个汉字"),
-        ("werewolf_kill_vote", "不超过 60 个汉字"),
-    ],
-)
-def test_prompt_states_the_reviewed_speech_budget(action: str, expected: str) -> None:
-    prompt, _schema = build_prompt(
-        action,
-        _world_state_for_special_action("狼人", "Alice、Bob"),
-    )
-
-    assert expected in prompt
-
-
-def test_prompt_renders_public_self_history() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("预言家", ""),
-            "public_self_history": ["第1轮警长PK发言：5号玩家：我5号，预言家，昨晚验6号好人。"],
-        },
-    )
-
-    assert "你的公开发言历史" in prompt
-    assert "第1轮警长PK发言" in prompt
-    assert "昨晚验6号好人" in prompt
-
-
-def test_debate_prompt_renders_turn_guidance_and_quality_feedback() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "debate": ["票台换票：我先盘票型。第一轮全票挂警徽定狼。"],
-            "debate_guidance": [
-                "你是本轮第 2/3 位发言。",
-                "你是中置位：选择一个前置位观点进行赞同或反驳，并给出新的理由。",
-                "避免复用这些已出现或个人口癖表达：我先盘票型。",
-            ],
-            "quality_feedback": "上次发言重复了我先盘票型，请换表达并新增反问。",
-        },
-    )
-
-    assert "本轮发言任务" in prompt
-    assert "你是本轮第 2/3 位发言。" in prompt
-    assert "避免复用这些已出现或个人口癖表达：我先盘票型。" in prompt
-    assert "质量反馈" in prompt
-    assert "上次发言重复了我先盘票型" in prompt
-
-
-def test_vote_prompt_omits_debate_guidance() -> None:
-    prompt, _schema = build_prompt(
-        "vote",
-        {
-            **_world_state_for_special_action("村民", "Bob、Carol"),
-            "debate_guidance": ["你是本轮第 2/3 位发言。"],
-        },
-    )
-
-    assert "本轮发言任务" not in prompt
-
-
-def _prompt_rule_snapshot(**overrides: object) -> dict[str, object]:
-    snapshot: dict[str, object] = {
-        "sheriff_enabled": True,
-        "sheriff_vote_weight": 1.5,
-        "sheriff_badge_bomb_policy": "double",
-        "werewolf_self_explosion_enabled": True,
-    }
-    snapshot.update(overrides)
-    return snapshot
-
-
-def test_werewolf_self_explosion_prompt_keeps_facts_without_strategy_coaching() -> None:
-    prompt, _schema = build_prompt(
-        "werewolf_self_explosion",
-        {
-            **_world_state_for_special_action("狼人", ""),
-            "public_facts": [
-                "第1轮：2号玩家自爆为狼人，白天立即结束。",
-                "第2轮：7号玩家自爆为狼人，白天立即结束。",
-            ],
-        },
-    )
-
-    assert "第1轮：2号玩家自爆为狼人" in prompt
-    assert "第2轮：7号玩家自爆为狼人" in prompt
-    assert "收益不明确时选择不自爆" not in prompt
-    assert "默认选择不自爆" not in prompt
-
-
-def test_self_explosion_prompt_ignores_hidden_terminal_prediction() -> None:
-    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
-    world_state["self_explosion_decision_context"] = {
-        "explosion_would_end_game": True,
-    }
-
-    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert "按当前人数和屠边条件" not in prompt
-    assert "必须明确胜负方向" not in prompt
-
-
-@pytest.mark.parametrize("weight", [1.0, 1.5, 2.0])
-def test_sheriff_vote_prompt_uses_pinned_vote_weight(weight: float) -> None:
-    world_state = _world_state_for_special_action("村民", "Bob、Carol")
-    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
-        sheriff_vote_weight=weight,
-    )
-
-    prompt, _schema = build_prompt("sheriff_vote", world_state)
-
-    assert f"当选警长在白天放逐投票中计为 {weight:g} 票" in prompt
-
-
-@pytest.mark.parametrize(
-    ("snapshot", "sheriff", "election_open", "expected", "forbidden"),
-    [
-        (
-            _prompt_rule_snapshot(sheriff_enabled=False),
-            None,
-            False,
-            "本局不设警长，也没有警徽",
-            "吞警徽",
-        ),
-        (
-            _prompt_rule_snapshot(sheriff_badge_bomb_policy="none"),
-            None,
-            True,
-            "多次自爆不会累计造成警徽流失",
-            "吞警徽",
-        ),
-        (
-            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
-            None,
-            True,
-            "第二次警长产生前自爆会导致警徽流失",
-            None,
-        ),
-        (
-            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
-            "Bob",
-            False,
-            "当前警长是Bob",
-            "吞警徽",
-        ),
-        (
-            _prompt_rule_snapshot(sheriff_badge_bomb_policy="double"),
-            None,
-            False,
-            "警长竞选已经结束，当前没有可用警徽",
-            "吞警徽",
-        ),
-        (
-            _prompt_rule_snapshot(werewolf_self_explosion_enabled=False),
-            None,
-            False,
-            "锁定规则未确认启用狼人自爆",
-            "吞警徽",
-        ),
-    ],
-)
-def test_self_explosion_prompt_uses_pinned_sheriff_policy(
-    snapshot: dict[str, object],
-    sheriff: str | None,
-    election_open: bool,
-    expected: str,
-    forbidden: str | None,
-) -> None:
-    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
-    world_state.update(
-        {
-            "rule_set_snapshot": snapshot,
-            "sheriff": sheriff,
-            "sheriff_election_open": election_open,
-            "sheriff_pre_election_bomb_count": 1,
-        }
-    )
-
-    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert expected in prompt
-    if forbidden is not None:
-        assert forbidden not in prompt
-
-
-@pytest.mark.parametrize(
-    "malformed_weight",
-    [3, 10**1_000, float("inf"), float("nan"), True, "1.5", []],
-)
-def test_prompt_rejects_malformed_sheriff_vote_weights(malformed_weight: object) -> None:
-    world_state = _world_state_for_special_action("村民", "Bob、Carol")
-    world_state["rule_set_snapshot"] = _prompt_rule_snapshot(
-        sheriff_vote_weight=malformed_weight,
-    )
-
-    prompt, _schema = build_prompt("sheriff_vote", world_state)
-
-    assert "当选警长在白天放逐投票中计为 1 票" in prompt
-
-
-@pytest.mark.parametrize("malformed_policy", [[], {}, 1, True, "double-ish"])
-def test_prompt_rejects_malformed_badge_policies(malformed_policy: object) -> None:
-    world_state = _world_state_for_special_action("狼人", "自爆、不自爆")
-    world_state.update(
-        {
-            "rule_set_snapshot": _prompt_rule_snapshot(
-                sheriff_badge_bomb_policy=malformed_policy,
-            ),
-            "sheriff": None,
-            "sheriff_election_open": True,
-        }
-    )
-
-    prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert "多次自爆不会累计造成警徽流失" in prompt
-    assert "吞警徽" not in prompt
-
-
-def test_prompt_rule_settings_fail_closed_and_do_not_dump_snapshot_description() -> None:
-    marker = "RULE_DESCRIPTION_MUST_NOT_REACH_PROMPT"
-    world_state = _world_state_for_special_action("村民", "Bob、Carol")
-    world_state["rule_set_snapshot"] = {
-        "sheriff_enabled": "yes",
-        "sheriff_vote_weight": "1.5",
-        "sheriff_badge_bomb_policy": "double-ish",
-        "werewolf_self_explosion_enabled": "yes",
-        "description": marker,
-    }
-
-    vote_prompt, _schema = build_prompt("sheriff_vote", world_state)
-    explosion_prompt, _schema = build_prompt("werewolf_self_explosion", world_state)
-
-    assert "当选警长在白天放逐投票中计为 1 票" in vote_prompt
-    assert "本局不设警长，也没有警徽" in explosion_prompt
-    assert marker not in vote_prompt
-    assert marker not in explosion_prompt
-
-
-def test_prompt_renders_endgame_context() -> None:
-    prompt, _schema = build_prompt(
-        "debate",
-        {
-            **_world_state_for_special_action("村民", ""),
-            "endgame_context": [
-                "当前存活 4 人，公开已出 3 名狼人，最多可能还剩 1 狼。",
-                "本轮错误放逐可能导致狼人夜晚获胜。",
-            ],
-        },
-    )
-
-    assert "残局压力" in prompt
-    assert "本轮错误放逐可能导致狼人夜晚获胜。" in prompt
-
-
-def test_hunter_prompt_requires_candidate_comparison() -> None:
-    prompt, _schema = build_prompt(
-        "hunter_shoot",
-        _world_state_for_special_action("猎人", "10号玩家、12号玩家、不发动技能"),
-    )
-
-    assert "候选嫌疑对比" in prompt
-    assert "随机" in prompt
-
-
-def test_witch_poison_prompt_requires_reason_to_hold_poison() -> None:
-    prompt, _schema = build_prompt(
-        "witch_poison",
-        _world_state_for_special_action("女巫", "10号玩家、不使用毒药"),
-    )
-
-    assert "如果不使用毒药" in prompt
-    assert "保留毒药仍有收益" in prompt
-
-
-def test_bid_prompt_is_no_longer_supported() -> None:
-    with pytest.raises(ValueError, match="Unsupported action: bid"):
-        build_prompt("bid", _world_state_for_special_action("村民", "Alice、Bob"))
-
-
-def _world_state_for_special_action(role: str, options: str) -> dict[str, object]:
-    return {
-        "name": "Alice",
-        "role": role,
-        "round": 1,
-        "observations": [],
-        "remaining_players": "Alice、Bob、Carol",
-        "debate": [],
-        "bidding_rationale": "",
-        "personality": "",
-        "rule_text": "你正在进行一局数字版狼人杀。",
-        "werewolf_context": "",
-        "debate_turns_left": 0,
-        "options": options,
-    }
-
-
-class CapturingLmEventSink:
-    def __init__(self) -> None:
-        self.events: list[dict[str, object]] = []
-
-    def publish(self, event_type: str, **kwargs: object) -> None:
-        self.events.append({"type": event_type, **kwargs})
-
-
-class StreamingFakeProvider:
-    def __init__(self, chunks: list[str]) -> None:
-        self.chunks = chunks
-        self.calls = 0
-
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, prompt, temperature
-        self.calls += 1
-        return "".join(self.chunks)
-
-    def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-        del model, prompt, temperature
-        self.calls += 1
-        return self.chunks
-
-
-class CompleteOnlyFakeProvider:
-    def __init__(self, response: str) -> None:
-        self.response = response
-        self.calls = 0
-
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, prompt, temperature
-        self.calls += 1
-        return self.response
-
-
-class FailingStreamProvider:
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, prompt, temperature
-        raise AssertionError("stream_json should be preferred")
-
-    def stream_json(self, *, model: str, prompt: str, temperature: float):
-        del model, prompt, temperature
-        yield '{"reasoning":"试探","say":"已输出'
-        raise RuntimeError("partial boom")
-
-
-class StreamFallbackProvider:
-    def __init__(self) -> None:
-        self.stream_calls = 0
-        self.complete_calls = 0
-
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, prompt, temperature
-        self.complete_calls += 1
-        return '{"reasoning":"完整响应","say":"流式失败后完整返回"}'
-
-    def stream_json(self, *, model: str, prompt: str, temperature: float):
-        del model, prompt, temperature
-        self.stream_calls += 1
-        raise RuntimeError("stream unsupported")
-
-
-class FailingCompleteOnlyProvider:
-    def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-        del model, prompt, temperature
-        raise RuntimeError("boom")
-
-
-def test_parse_json_object_accepts_fenced_json() -> None:
-    parsed = parse_json_object('```json\n{"reasoning":"观察发言","vote":"老周"}\n```')
-
-    assert parsed == {"reasoning": "观察发言", "vote": "老周"}
-
-
-def test_parse_json_object_accepts_unescaped_newline_inside_string() -> None:
-    parsed = parse_json_object('{"reasoning":"观察发言","summary":"第一行\n第二行"}')
-
-    assert parsed == {"reasoning": "观察发言", "summary": "第一行\n第二行"}
-
-
-def test_visible_json_field_extractor_streams_only_new_public_text() -> None:
-    extractor = VisibleJsonFieldExtractor("say")
-
-    assert extractor.update('{"reasoning":"先观察",') == ""
-    assert extractor.update('{"reasoning":"先观察","say":"我') == "我"
-    assert extractor.update('{"reasoning":"先观察","say":"我不是') == "不是"
-    assert extractor.update('{"reasoning":"先观察","say":"我不是狼"}') == "狼"
-    assert extractor.update('{"reasoning":"先观察","say":"我不是狼"}') == ""
-
-
-def test_visible_json_field_extractor_decodes_escaped_text() -> None:
-    extractor = VisibleJsonFieldExtractor("summary")
-
-    assert extractor.update('{"summary":"第一行\\n') == "第一行\n"
-    assert extractor.update('{"summary":"第一行\\n第二行"}') == "第二行"
-
-
-def test_visible_json_field_extractor_decodes_unescaped_newline() -> None:
-    extractor = VisibleJsonFieldExtractor("summary")
-
-    assert extractor.update('{"summary":"第一行\n') == "第一行\n"
-    assert extractor.update('{"summary":"第一行\n第二行"}') == "第二行"
-
-
-def test_visible_json_field_extractor_waits_for_complete_unicode_surrogate_pair() -> None:
-    extractor = VisibleJsonFieldExtractor("say")
-
-    assert extractor.update('{"say":"\\ud83d') == ""
-    delta = extractor.update('{"say":"\\ud83d\\ude00')
-
-    assert delta == "😀"
-    assert delta.encode("utf-8") == b"\xf0\x9f\x98\x80"
-
-
-def test_visible_json_field_extractor_decodes_complete_bmp_unicode_boundary() -> None:
-    extractor = VisibleJsonFieldExtractor("say")
-
-    assert extractor.update('{"say":"\\u6211') == "我"
-
-
-def test_action_visible_stream_field_only_allows_public_actions() -> None:
-    assert action_visible_stream_field("debate") == "say"
-    assert action_visible_stream_field("sheriff_speech") == "say"
-    assert action_visible_stream_field("sheriff_pk_speech") == "say"
-    assert action_visible_stream_field("summarize") is None
-    assert action_visible_stream_field("vote") is None
-    assert action_visible_stream_field("remove") is None
-
 
 def test_extract_openai_chat_delta_reads_compatible_sse_chunks() -> None:
     chunk = ('data: {"choices":[{"delta":{"content":"我不是狼"}}]}\n\n').encode("utf-8")
@@ -991,7 +70,6 @@ def test_extract_openai_chat_delta_reads_compatible_sse_chunks() -> None:
     assert extract_openai_chat_delta(chunk) == "我不是狼"
     assert extract_openai_chat_delta(b"data: [DONE]\n\n") is None
     assert extract_openai_chat_delta(b": heartbeat\n\n") is None
-
 
 def test_extract_openai_chat_delta_skips_role_only_events_in_same_chunk() -> None:
     chunk = (
@@ -1001,12 +79,10 @@ def test_extract_openai_chat_delta_skips_role_only_events_in_same_chunk() -> Non
 
     assert extract_openai_chat_delta(chunk) == "你好"
 
-
 def test_extract_openai_chat_delta_skips_leading_comment_in_same_chunk() -> None:
     chunk = (': heartbeat\n\ndata: {"choices":[{"delta":{"content":"继续"}}]}\n\n').encode("utf-8")
 
     assert extract_openai_chat_delta(chunk) == "继续"
-
 
 def test_extract_openai_chat_delta_joins_multiple_content_events_in_same_chunk() -> None:
     chunk = (
@@ -1016,660 +92,12 @@ def test_extract_openai_chat_delta_joins_multiple_content_events_in_same_chunk()
 
     assert extract_openai_chat_delta(chunk) == "你好"
 
-
 def test_extract_openai_chat_delta_preserves_content_before_done_in_same_chunk() -> None:
     chunk = ('data: {"choices":[{"delta":{"content":"结束前"}}]}\n\ndata: [DONE]\n\n').encode(
         "utf-8"
     )
 
     assert extract_openai_chat_delta(chunk) == "结束前"
-
-
-def test_generate_action_with_events_streams_public_visible_text() -> None:
-    sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(['{"reasoning":"试探",', '"say":"我', "不是", '狼"}'])
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=_world_state_for_special_action("村民", ""),
-        model="deepseek-chat",
-        allowed_values=None,
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        request_id_factory=lambda: "req_public",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "我不是狼"
-    assert log.raw_response == '{"reasoning":"试探","say":"我不是狼"}'
-    assert log.request_id == "req_public"
-    delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
-    assert len(delta_events) == 1
-    assert delta_events[0]["payload"] == {
-        "request_id": "req_public",
-        "model": "deepseek-chat",
-        "delta": "我不是狼",
-        "visible_text": "我不是狼",
-        "field": "say",
-        "is_public": True,
-    }
-
-
-def test_generate_action_with_events_streams_public_text_with_unescaped_newline() -> None:
-    sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(['{"reasoning":"试探",', '"say":"第一句\n', '第二句"}'])
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=_world_state_for_special_action("村民", ""),
-        model="deepseek-chat",
-        allowed_values=None,
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        request_id_factory=lambda: "req_public_newline",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "第一句\n第二句"
-    assert log.raw_response == '{"reasoning":"试探","say":"第一句\n第二句"}'
-    delta_events = [event for event in sink.events if event["type"] == "model_response_delta"]
-    assert [event["payload"]["visible_text"] for event in delta_events] == ["第一句\n第二句"]
-    assert [event["type"] for event in sink.events].count("model_request_failed") == 0
-
-
-def test_generate_action_with_events_suppresses_private_action_deltas() -> None:
-    sink = CapturingLmEventSink()
-    provider = StreamingFakeProvider(['{"reasoning":"夜晚决策",', '"remove":"Bob"}'])
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="remove",
-        world_state=_world_state_for_special_action("狼人", "Bob、Carol"),
-        model="deepseek-chat",
-        allowed_values=["Bob", "Carol"],
-        result_key="remove",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "night",
-            "actor": "Alice",
-            "action": "remove",
-        },
-        request_id_factory=lambda: "req_private",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "Bob"
-    assert log.result == {"reasoning": "夜晚决策", "remove": "Bob"}
-    assert log.request_id == "req_private"
-    assert [event["type"] for event in sink.events].count("model_response_delta") == 0
-
-
-def test_operator_stop_closes_private_model_stream_without_fallback_request() -> None:
-    class InterruptingSink(CapturingLmEventSink):
-        def __init__(self) -> None:
-            super().__init__()
-            self.checks = 0
-
-        def check_cancellation(self) -> None:
-            self.checks += 1
-            if self.checks >= 3:
-                raise GameRunCanceled("operator stop")
-
-    class ClosableStreamingProvider:
-        def __init__(self) -> None:
-            self.closed = False
-            self.complete_calls = 0
-
-        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            del model, prompt, temperature
-            self.complete_calls += 1
-            return '{"reasoning":"不应回退","remove":"Bob"}'
-
-        def stream_json(self, *, model: str, prompt: str, temperature: float):
-            del model, prompt, temperature
-            try:
-                yield '{"reasoning":"夜晚决策",'
-                yield '"remove":"Bob"}'
-            finally:
-                self.closed = True
-
-    sink = InterruptingSink()
-    provider = ClosableStreamingProvider()
-
-    with pytest.raises(GameRunCanceled, match="operator stop"):
-        generate_action_with_events(
-            provider=provider,
-            action="remove",
-            world_state=_world_state_for_special_action("狼人", "Bob、Carol"),
-            model="deepseek-chat",
-            allowed_values=["Bob", "Carol"],
-            result_key="remove",
-            event_sink=sink,
-            event_context={
-                "round_number": 1,
-                "phase": "night",
-                "actor": "Alice",
-                "action": "remove",
-            },
-            request_id_factory=lambda: "req_operator_stop",
-            enable_progress_ticks=False,
-        )
-
-    assert provider.closed is True
-    assert provider.complete_calls == 0
-    assert [event["type"] for event in sink.events] == ["model_request_started"]
-
-
-def test_generate_action_with_events_does_not_schedule_retry_on_final_invalid_attempt() -> None:
-    sink = CapturingLmEventSink()
-    provider = FakeProvider([{"reasoning": "想毒10", "poison": "10号玩家"}])
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="witch_poison",
-        world_state={
-            **_world_state_for_special_action("女巫", ""),
-            "options": ["6号玩家", "12号玩家", "不使用毒药"],
-        },
-        model="deepseek-chat",
-        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
-        result_key="poison",
-        retries=1,
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "night",
-            "actor": "Alice",
-            "action": "witch_poison",
-        },
-        action_id_factory=lambda: "act_final_invalid",
-        request_id_factory=lambda: "req_final_invalid",
-        enable_progress_ticks=False,
-    )
-
-    assert value is None
-    assert log.invalid_attempts == [
-        {
-            "value": "10号玩家",
-            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
-            "result_key": "poison",
-            "action_id": "act_final_invalid",
-            "request_id": "req_final_invalid",
-        }
-    ]
-    assert [event["type"] for event in sink.events] == [
-        "model_request_started",
-        "model_attempt_completed",
-    ]
-
-
-def test_generate_action_with_events_classifies_empty_content_and_retries_safely() -> None:
-    sink = CapturingLmEventSink()
-    provider = FakeProvider(["", {"reasoning": "补充发言", "say": "我会继续观察票型。"}])
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=_world_state_for_special_action("村民", ""),
-        model="deepseek-chat",
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        enable_progress_ticks=False,
-    )
-
-    assert value == "我会继续观察票型。"
-    assert log.invalid_attempts[0]["reason_code"] == "empty_content"
-    retry = next(event for event in sink.events if event["type"] == "model_retry_scheduled")
-    assert retry["payload"]["reason_code"] == "empty_content"
-    assert "raw_response" not in retry["payload"]
-
-
-def test_generate_action_with_events_publishes_sanitized_started_before_model_output() -> None:
-    sink = CapturingLmEventSink()
-    world_state = _world_state_for_special_action("村民", "")
-    world_state["observations"] = ["第一条观察"]
-    world_state["seen"] = {"Alice", "Bob"}
-
-    class EventOrderProvider:
-        def __init__(self) -> None:
-            self.event_types_seen_before_output: list[str] = []
-
-        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            del model, prompt, temperature
-            raise AssertionError("stream_json should be preferred")
-
-        def stream_json(self, *, model: str, prompt: str, temperature: float) -> list[str]:
-            del model, prompt, temperature
-            self.event_types_seen_before_output = [event["type"] for event in sink.events]
-            return ['{"reasoning":"试探","say":"我是好人"}']
-
-    provider = EventOrderProvider()
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=world_state,
-        model="deepseek-chat",
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        action_id_factory=lambda: "act_started",
-        request_id_factory=lambda: "req_started",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "我是好人"
-    assert log.request_id == "req_started"
-    assert provider.event_types_seen_before_output == ["model_request_started"]
-    started = sink.events[0]
-    assert started["type"] == "model_request_started"
-    assert started["payload"] == {
-        "action_id": "act_started",
-        "request_id": "req_started",
-        "model": "deepseek-chat",
-        "message": "玩家正在组织公开发言...",
-        "stream_field": "say",
-        "is_public": True,
-    }
-    assert "world_state" not in started["payload"]
-    assert "prompt" not in started["payload"]
-
-
-def test_generate_action_with_events_falls_back_to_complete_json_without_stream() -> None:
-    sink = CapturingLmEventSink()
-    provider = CompleteOnlyFakeProvider('{"reasoning":"完整响应","say":"我从完整响应返回"}')
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=_world_state_for_special_action("村民", ""),
-        model="deepseek-chat",
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        request_id_factory=lambda: "req_complete",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "我从完整响应返回"
-    assert log.raw_response == '{"reasoning":"完整响应","say":"我从完整响应返回"}'
-    assert log.request_id == "req_complete"
-    assert provider.calls == 1
-    assert [event["type"] for event in sink.events].count("model_response_delta") == 0
-
-
-def test_generate_action_with_events_falls_back_when_stream_fails_before_output() -> None:
-    sink = CapturingLmEventSink()
-    provider = StreamFallbackProvider()
-
-    value, log = generate_action_with_events(
-        provider=provider,
-        action="debate",
-        world_state=_world_state_for_special_action("村民", ""),
-        model="deepseek-chat",
-        result_key="say",
-        event_sink=sink,
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "debate",
-        },
-        action_id_factory=lambda: "act_stream_fallback",
-        request_id_factory=lambda: "req_stream_fallback",
-        enable_progress_ticks=False,
-    )
-
-    assert value == "流式失败后完整返回"
-    assert log.raw_response == '{"reasoning":"完整响应","say":"流式失败后完整返回"}'
-    assert provider.stream_calls == 1
-    assert provider.complete_calls == 1
-    assert [event["type"] for event in sink.events] == [
-        "model_request_started",
-        "model_attempt_completed",
-    ]
-
-
-def test_generate_action_with_events_publishes_failure_and_stops_progress_on_partial_stream_error(
-    monkeypatch,
-) -> None:
-    class FakeProgress:
-        instances = []
-
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            self.started = False
-            self.stopped = False
-            FakeProgress.instances.append(self)
-
-        def start(self):
-            self.started = True
-
-        def stop(self):
-            self.stopped = True
-
-        def record_delta(self):
-            pass
-
-    monkeypatch.setattr("app.werewolf.lm.ModelRequestProgress", FakeProgress)
-
-    class FailureOrderSink(CapturingLmEventSink):
-        def publish(self, event_type: str, **kwargs: object) -> None:
-            if event_type == "model_request_failed":
-                assert FakeProgress.instances[0].stopped is True
-            super().publish(event_type, **kwargs)
-
-    sink = FailureOrderSink()
-
-    with pytest.raises(RuntimeError, match="partial boom"):
-        generate_action_with_events(
-            provider=FailingStreamProvider(),
-            action="debate",
-            world_state=_world_state_for_special_action("村民", ""),
-            model="deepseek-chat",
-            result_key="say",
-            event_sink=sink,
-            event_context={
-                "round_number": 1,
-                "phase": "day",
-                "actor": "Alice",
-                "action": "debate",
-            },
-            action_id_factory=lambda: "act_stream_fail",
-            request_id_factory=lambda: "req_stream_fail",
-        )
-
-    assert len(FakeProgress.instances) == 1
-    assert FakeProgress.instances[0].started is True
-    assert FakeProgress.instances[0].stopped is True
-    failed_events = [event for event in sink.events if event["type"] == "model_request_failed"]
-    assert len(failed_events) == 1
-    assert failed_events[0]["payload"] == {
-        "action_id": "act_stream_fail",
-        "request_id": "req_stream_fail",
-        "model": "deepseek-chat",
-        "message": "模型请求失败，正在中止本次行动",
-        "attempt_result": "transport_failed",
-    }
-
-
-def test_generate_action_with_events_sanitizes_public_failure_error() -> None:
-    class LeakyErrorProvider:
-        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            del model, prompt, temperature
-            raise RuntimeError("upstream body echoed prompt world_state raw_response reasoning")
-
-    sink = CapturingLmEventSink()
-
-    with pytest.raises(RuntimeError, match="upstream body echoed"):
-        generate_action_with_events(
-            provider=LeakyErrorProvider(),
-            action="debate",
-            world_state=_world_state_for_special_action("村民", ""),
-            model="deepseek-chat",
-            result_key="say",
-            event_sink=sink,
-            event_context={
-                "round_number": 1,
-                "phase": "day",
-                "actor": "Alice",
-                "action": "debate",
-            },
-            action_id_factory=lambda: "act_leaky_fail",
-            request_id_factory=lambda: "req_leaky_fail",
-            enable_progress_ticks=False,
-        )
-
-    failed_event = next(event for event in sink.events if event["type"] == "model_request_failed")
-    assert failed_event["payload"] == {
-        "action_id": "act_leaky_fail",
-        "request_id": "req_leaky_fail",
-        "model": "deepseek-chat",
-        "message": "模型请求失败，正在中止本次行动",
-        "attempt_result": "transport_failed",
-    }
-    public_payload = json.dumps(failed_event["payload"], ensure_ascii=False)
-    assert "prompt" not in public_payload
-    assert "world_state" not in public_payload
-    assert "raw_response" not in public_payload
-    assert "reasoning" not in public_payload
-
-
-def test_generate_action_with_events_publishes_failure_on_complete_error() -> None:
-    sink = CapturingLmEventSink()
-
-    with pytest.raises(RuntimeError, match="boom"):
-        generate_action_with_events(
-            provider=FailingCompleteOnlyProvider(),
-            action="debate",
-            world_state=_world_state_for_special_action("村民", ""),
-            model="deepseek-chat",
-            result_key="say",
-            event_sink=sink,
-            event_context={
-                "round_number": 1,
-                "phase": "day",
-                "actor": "Alice",
-                "action": "debate",
-            },
-            action_id_factory=lambda: "act_complete_fail",
-            request_id_factory=lambda: "req_complete_fail",
-            enable_progress_ticks=False,
-        )
-
-    assert [event["type"] for event in sink.events] == [
-        "model_request_started",
-        "model_request_failed",
-    ]
-    assert sink.events[1]["payload"] == {
-        "action_id": "act_complete_fail",
-        "request_id": "req_complete_fail",
-        "model": "deepseek-chat",
-        "message": "模型请求失败，正在中止本次行动",
-        "attempt_result": "transport_failed",
-    }
-
-
-def test_generate_action_retries_until_allowed_value() -> None:
-    provider = FakeProvider(
-        [
-            {"reasoning": "先试探", "vote": "不存在的玩家"},
-            {"reasoning": "改投合法目标", "vote": "老周"},
-        ]
-    )
-
-    value, log = generate_action(
-        provider=provider,
-        action="vote",
-        world_state={
-            "name": "阿宁",
-            "role": "村民",
-            "round": 1,
-            "observations": [],
-            "remaining_players": "阿宁、老周、小白",
-            "debate": [],
-            "bidding_rationale": "",
-            "personality": "",
-            "rule_text": "你正在进行一局数字版狼人杀。",
-            "werewolf_context": "",
-            "debate_turns_left": 2,
-            "options": "老周、小白",
-        },
-        model="deepseek-chat",
-        allowed_values=["老周", "小白"],
-        result_key="vote",
-    )
-
-    assert value == "老周"
-    assert isinstance(log, LmLog)
-    assert log.result == {"reasoning": "改投合法目标", "vote": "老周"}
-    assert provider.calls == 2
-
-
-def test_generate_action_retries_with_invalid_allowed_value_feedback() -> None:
-    class CapturingProvider:
-        def __init__(self) -> None:
-            self.prompts: list[str] = []
-            self.responses = [
-                '{"reasoning":"想毒10","poison":"10号玩家"}',
-                '{"reasoning":"改毒12","poison":"12号玩家"}',
-            ]
-
-        def complete_json(self, *, model: str, prompt: str, temperature: float) -> str:
-            del model, temperature
-            self.prompts.append(prompt)
-            return self.responses[len(self.prompts) - 1]
-
-    provider = CapturingProvider()
-
-    value, lm_log = generate_action(
-        provider=provider,
-        action="witch_poison",
-        world_state={
-            **_world_state_for_special_action("女巫", ""),
-            "options": ["6号玩家", "12号玩家", "不使用毒药"],
-        },
-        model="deepseek-v4-flash",
-        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
-        result_key="poison",
-        retries=2,
-    )
-
-    assert value == "12号玩家"
-    assert len(provider.prompts) == 2
-    assert "上次输出的 poison 为“10号玩家”" in provider.prompts[1]
-    assert "6号玩家、12号玩家、不使用毒药" in provider.prompts[1]
-    assert lm_log.invalid_attempts == [
-        {
-            "value": "10号玩家",
-            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
-            "result_key": "poison",
-        }
-    ]
-
-
-def test_generate_action_returns_invalid_attempts_after_exhausting_retries() -> None:
-    provider = FakeProvider(
-        [
-            {"reasoning": "想毒10", "poison": "10号玩家"},
-            {"reasoning": "仍毒10", "poison": "10号玩家"},
-        ]
-    )
-
-    value, lm_log = generate_action(
-        provider=provider,
-        action="witch_poison",
-        world_state={
-            **_world_state_for_special_action("女巫", ""),
-            "options": ["6号玩家", "12号玩家", "不使用毒药"],
-        },
-        model="deepseek-v4-flash",
-        allowed_values=["6号玩家", "12号玩家", "不使用毒药"],
-        result_key="poison",
-        retries=2,
-    )
-
-    assert value is None
-    assert lm_log.result == {"reasoning": "仍毒10", "poison": "10号玩家"}
-    assert lm_log.invalid_attempts == [
-        {
-            "value": "10号玩家",
-            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
-            "result_key": "poison",
-        },
-        {
-            "value": "10号玩家",
-            "allowed_values": ["6号玩家", "12号玩家", "不使用毒药"],
-            "result_key": "poison",
-        },
-    ]
-    assert "retry" in lm_log.raw_response
-
-
-def test_generate_action_accepts_numeric_value_for_string_allowed_values() -> None:
-    provider = FakeProvider([{"reasoning": "我选择 2 号", "vote": 2}])
-
-    value, log = generate_action(
-        provider=provider,
-        action="vote",
-        world_state={
-            "name": "阿宁",
-            "role": "村民",
-            "round": 1,
-            "observations": [],
-            "remaining_players": "阿宁、老周、小白",
-            "debate": [],
-            "bidding_rationale": "",
-            "personality": "",
-            "rule_text": "你正在进行一局数字版狼人杀。",
-            "werewolf_context": "",
-            "debate_turns_left": 2,
-            "options": "1、2",
-        },
-        model="deepseek-chat",
-        allowed_values=["1", "2"],
-        result_key="vote",
-    )
-
-    assert value == "2"
-    assert log.result == {"reasoning": "我选择 2 号", "vote": 2}
-    assert log.raw_choice == 2
-    assert log.choice_normalization_kind == "string_exact"
-
-
-@pytest.mark.parametrize("raw_choice", [5, "5", "05", "5号", "玩家5号"])
-def test_generate_action_normalizes_seat_alias_without_retry(raw_choice: object) -> None:
-    provider = FakeProvider([{"reasoning": "选择五号", "shoot": raw_choice}])
-
-    value, log = generate_action(
-        provider=provider,
-        action="hunter_shoot",
-        world_state=_world_state_for_special_action(
-            "猎人",
-            "3号玩家、5号玩家、不发动技能",
-        ),
-        model="deepseek-chat",
-        allowed_values=["3号玩家", "5号玩家", "不发动技能"],
-        result_key="shoot",
-    )
-
-    assert value == "5号玩家"
-    assert provider.calls == 1
-    assert log.raw_choice == raw_choice
-    assert log.choice_normalization_kind == "seat_alias"
-    assert log.invalid_attempts == []
-
 
 def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> None:
     requests = []
@@ -1696,7 +124,6 @@ def test_deepseek_provider_uses_env_and_json_response_format(monkeypatch) -> Non
     assert requests[0]["headers"]["Authorization"] == "Bearer test-key"
     assert requests[0]["payload"]["model"] == "deepseek-chat"
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
-
 
 def test_provider_applies_remaining_budget_and_max_output_tokens(monkeypatch) -> None:
     requests = []
@@ -1739,94 +166,6 @@ def test_provider_applies_remaining_budget_and_max_output_tokens(monkeypatch) ->
     assert applied.deadline_at_monotonic == options.deadline_at_monotonic
     assert requests[0]["payload"]["max_tokens"] == 96
 
-
-def test_format_retries_share_one_model_deadline() -> None:
-    class DeadlineCapturingProvider:
-        def __init__(self) -> None:
-            self.calls = 0
-            self.options: list[ModelCallOptions | None] = []
-
-        def complete_json(
-            self,
-            *,
-            model: str,
-            prompt: str,
-            temperature: float,
-            call_options: ModelCallOptions | None = None,
-        ) -> str:
-            del model, prompt, temperature
-            self.calls += 1
-            self.options.append(call_options)
-            choice = "9号玩家" if self.calls == 1 else "2号玩家"
-            return json.dumps({"reasoning": "test", "vote": choice})
-
-    provider = DeadlineCapturingProvider()
-    deadline = time.monotonic() + 5
-
-    value, _log = generate_action(
-        provider=provider,
-        action="vote",
-        world_state=_world_state_for_special_action("村民", "1号玩家、2号玩家"),
-        model="test-model",
-        allowed_values=["1号玩家", "2号玩家"],
-        result_key="vote",
-        call_options=ModelCallOptions(
-            deadline_at_monotonic=deadline,
-            request_timeout_seconds=4,
-        ),
-    )
-
-    assert value == "2号玩家"
-    assert provider.calls == 2
-    assert all(option is not None for option in provider.options)
-    assert {option.deadline_at_monotonic for option in provider.options if option} == {deadline}
-
-
-def test_expired_model_deadline_fails_before_provider_call() -> None:
-    provider = FakeProvider([{"reasoning": "test", "vote": "1号玩家"}])
-
-    with pytest.raises(ModelDeadlineExceeded):
-        generate_action(
-            provider=provider,
-            action="vote",
-            world_state=_world_state_for_special_action("村民", "1号玩家"),
-            model="test-model",
-            allowed_values=["1号玩家"],
-            result_key="vote",
-            call_options=ModelCallOptions(
-                deadline_at_monotonic=0,
-                request_timeout_seconds=1,
-            ),
-        )
-
-    assert provider.calls == 0
-
-
-def test_non_stream_first_token_timing_uses_monotonic_clock(monkeypatch) -> None:
-    moments = iter([0.0, 10.0, 10.125])
-    monkeypatch.setattr("app.werewolf.lm.time.monotonic", lambda: next(moments))
-
-    value, log = generate_action_with_events(
-        provider=FakeProvider([{"reasoning": "test", "vote": "1号玩家"}]),
-        action="vote",
-        world_state=_world_state_for_special_action("村民", "1号玩家"),
-        model="test-model",
-        allowed_values=["1号玩家"],
-        result_key="vote",
-        event_sink=CapturingLmEventSink(),
-        event_context={
-            "round_number": 1,
-            "phase": "day",
-            "actor": "Alice",
-            "action": "vote",
-        },
-        enable_progress_ticks=False,
-    )
-
-    assert value == "1号玩家"
-    assert log.first_token_ms == 125
-
-
 def test_provider_transport_timeout_becomes_action_deadline(monkeypatch) -> None:
     def timeout_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
         del url, headers, payload
@@ -1845,7 +184,6 @@ def test_provider_transport_timeout_becomes_action_deadline(monkeypatch) -> None
                 request_timeout_seconds=1,
             ),
         )
-
 
 def test_openai_compatible_provider_streams_chat_deltas(monkeypatch) -> None:
     requests = []
@@ -1872,7 +210,6 @@ def test_openai_compatible_provider_streams_chat_deltas(monkeypatch) -> None:
     assert requests[0]["payload"]["model"] == "deepseek-chat"
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
 
-
 def test_openai_compatible_provider_stream_wraps_http_error_with_guidance(monkeypatch) -> None:
     def failing_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
         del headers, payload
@@ -1889,7 +226,6 @@ def test_openai_compatible_provider_stream_wraps_http_error_with_guidance(monkey
 
     with pytest.raises(RuntimeError, match="ARK_AGENT_PLAN_BASE_URL"):
         list(provider.stream_json(model="minimax-m3", prompt="{}", temperature=0.3))
-
 
 def test_openai_compatible_provider_stream_retries_pre_yield_network_error(monkeypatch) -> None:
     attempts = []
@@ -1914,7 +250,6 @@ def test_openai_compatible_provider_stream_retries_pre_yield_network_error(monke
     assert len(attempts) == 2
     assert sleep_calls == [0.25]
 
-
 def test_openai_compatible_provider_stream_does_not_retry_after_yield(monkeypatch) -> None:
     attempts = []
 
@@ -1936,7 +271,6 @@ def test_openai_compatible_provider_stream_does_not_retry_after_yield(monkeypatc
     ):
         next(chunks)
     assert len(attempts) == 1
-
 
 def test_urlopen_stream_transport_yields_sse_deltas(monkeypatch) -> None:
     requests = []
@@ -1962,14 +296,13 @@ def test_urlopen_stream_transport_yields_sse_deltas(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr("app.werewolf.providers.open_url_direct", fake_urlopen)
+    monkeypatch.setattr("app.shared.providers.open_url_direct", fake_urlopen)
     provider = DeepSeekProvider()
 
     chunks = list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
 
     assert chunks == ["我", "不是狼"]
     assert requests[0]["timeout"] == 30
-
 
 def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
     monkeypatch,
@@ -1993,9 +326,9 @@ def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
         return FakeResponse()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr("app.werewolf.providers.open_url_direct", fake_urlopen)
+    monkeypatch.setattr("app.shared.providers.open_url_direct", fake_urlopen)
     monkeypatch.setattr(
-        "app.werewolf.providers.time.monotonic",
+        "app.shared.providers.time.monotonic",
         lambda: next(monotonic_values),
     )
     provider = DeepSeekProvider(max_retries=3)
@@ -2003,7 +336,6 @@ def test_urlopen_stream_transport_times_out_when_stream_has_no_content(
     with pytest.raises(RuntimeError, match="no content"):
         list(provider.stream_json(model="deepseek-chat", prompt="{}", temperature=0.3))
     assert len(requests) == 1
-
 
 def test_open_url_direct_uses_an_empty_proxy_handler(monkeypatch) -> None:
     opened: list[dict[str, object]] = []
@@ -2036,14 +368,12 @@ def test_open_url_direct_uses_an_empty_proxy_handler(monkeypatch) -> None:
     assert isinstance(handlers[0], urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
 
-
 def test_deepseek_provider_requires_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
         DeepSeekProvider()
-
 
 def test_deepseek_provider_loads_key_from_dotenv(tmp_path, monkeypatch) -> None:
     requests = []
@@ -2072,7 +402,6 @@ def test_deepseek_provider_loads_key_from_dotenv(tmp_path, monkeypatch) -> None:
     assert requests[0]["url"] == "https://example.deepseek.test/chat/completions"
     assert requests[0]["headers"]["Authorization"] == "Bearer dotenv-key"
 
-
 def test_deepseek_provider_retries_connection_reset(monkeypatch) -> None:
     attempts = []
 
@@ -2098,7 +427,6 @@ def test_deepseek_provider_retries_connection_reset(monkeypatch) -> None:
     assert json.loads(raw) == {"reasoning": "重试成功", "vote": "老周"}
     assert len(attempts) == 2
 
-
 def test_deepseek_provider_raises_clear_error_after_network_retries(monkeypatch) -> None:
     def failing_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
         del url, headers, payload
@@ -2117,7 +445,6 @@ def test_deepseek_provider_raises_clear_error_after_network_retries(monkeypatch)
             prompt='请输出 json：{"vote":"老周"}',
             temperature=0.3,
         )
-
 
 def test_ark_agent_plan_provider_uses_plan_endpoint_and_model_name(
     tmp_path,
@@ -2153,7 +480,6 @@ def test_ark_agent_plan_provider_uses_plan_endpoint_and_model_name(
     assert "reasoning_split" not in requests[0]["payload"]
     assert "response_format" not in requests[0]["payload"]
 
-
 def test_ark_agent_plan_provider_accepts_standard_ark_key_and_api_host(monkeypatch) -> None:
     requests = []
 
@@ -2179,7 +505,6 @@ def test_ark_agent_plan_provider_accepts_standard_ark_key_and_api_host(monkeypat
 
     assert requests[0]["url"] == ("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions")
 
-
 def test_ark_agent_plan_provider_explains_invalid_plan_key(monkeypatch) -> None:
     def failing_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
         del url, headers, payload
@@ -2196,66 +521,6 @@ def test_ark_agent_plan_provider_explains_invalid_plan_key(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="ARK_AGENT_PLAN_BASE_URL"):
         provider.complete_json(model="minimax-m3", prompt="{}", temperature=0.3)
-
-
-def test_qwen_provider_uses_dashscope_env_and_model_alias(tmp_path, monkeypatch) -> None:
-    requests = []
-
-    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
-        requests.append({"url": url, "headers": headers, "payload": payload})
-        return {
-            "choices": [
-                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
-            ]
-        }
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
-    monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
-    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
-    provider = QwenProvider(transport=fake_transport)
-
-    raw = provider.complete_json(
-        model="Qwen3.6-Plus",
-        prompt='请输出 json：{"vote":"老周"}',
-        temperature=0.3,
-    )
-
-    assert json.loads(raw) == {"reasoning": "按格式返回", "vote": "老周"}
-    assert (
-        requests[0]["url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    )
-    assert requests[0]["headers"]["Authorization"] == "Bearer dashscope-key"
-    assert requests[0]["payload"]["model"] == "qwen3.6-plus"
-
-
-def test_qwen_provider_accepts_dashscope_api_host(tmp_path, monkeypatch) -> None:
-    requests = []
-
-    def fake_transport(url: str, headers: dict[str, str], payload: dict) -> dict:
-        requests.append({"url": url, "headers": headers, "payload": payload})
-        return {
-            "choices": [
-                {"message": {"content": json.dumps({"reasoning": "按格式返回", "vote": "老周"})}}
-            ]
-        }
-
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
-    monkeypatch.setenv("DASHSCOPE_API_HOST", "https://dashscope-intl.aliyuncs.com")
-    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
-    monkeypatch.chdir(tmp_path)
-    provider = QwenProvider(transport=fake_transport)
-
-    provider.complete_json(
-        model="qwen3.6-plus",
-        prompt='请输出 json：{"vote":"老周"}',
-        temperature=0.3,
-    )
-
-    assert requests[0]["url"] == (
-        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-    )
-
 
 def test_model_provider_router_routes_all_agent_plan_models(tmp_path, monkeypatch) -> None:
     requests = []
@@ -2279,7 +544,6 @@ def test_model_provider_router_routes_all_agent_plan_models(tmp_path, monkeypatc
         "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions"
     }
 
-
 def test_model_provider_router_rejects_removed_agent_plan_model(
     tmp_path,
     monkeypatch,
@@ -2294,35 +558,12 @@ def test_model_provider_router_rejects_removed_agent_plan_model(
     with pytest.raises(RuntimeError, match="No provider registered"):
         provider.complete_json(model="MiniMax-M2.7", prompt="{}", temperature=0.3)
 
-
-def test_model_provider_router_rejects_qwen_without_catalog_entry(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
-    monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-key")
-    monkeypatch.delenv("DASHSCOPE_API_HOST", raising=False)
-    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
-
-    provider = create_model_provider(transport=lambda _url, _headers, _payload: {})
-
-    with pytest.raises(RuntimeError, match="No provider registered for model Qwen3.6-Plus"):
-        provider.complete_json(
-            model="Qwen3.6-Plus",
-            prompt='请输出 json：{"vote":"老周"}',
-            temperature=0.3,
-        )
-
-
 def test_model_provider_router_does_not_use_prefix_when_catalog_is_empty(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
     monkeypatch.setattr(
-        "app.werewolf.providers.catalog_model_names",
+        "app.shared.providers.catalog_model_names",
         lambda _provider: (),
     )
 
@@ -2330,7 +571,6 @@ def test_model_provider_router_does_not_use_prefix_when_catalog_is_empty(
 
     with pytest.raises(RuntimeError, match="No provider registered for model deepseek-chat"):
         provider.complete_json(model="deepseek-chat", prompt="{}", temperature=0.3)
-
 
 def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
     requests = []
@@ -2356,7 +596,6 @@ def test_model_provider_router_routes_deepseek_models(monkeypatch) -> None:
     assert requests[0]["headers"]["Authorization"] == "Bearer deepseek-key"
     assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
 
-
 def test_model_provider_router_exposes_stream_json(monkeypatch) -> None:
     def fake_stream_transport(url: str, headers: dict[str, str], payload: dict) -> list[str]:
         del url, headers, payload
@@ -2369,7 +608,6 @@ def test_model_provider_router_exposes_stream_json(monkeypatch) -> None:
         '{"reasoning":"x","say":"你好"}'
     ]
 
-
 def test_model_provider_router_reports_unknown_models(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
 
@@ -2378,7 +616,6 @@ def test_model_provider_router_reports_unknown_models(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="No provider registered for model unknown-model"):
         provider.complete_json(model="unknown-model", prompt="{}", temperature=0.3)
 
-
 def test_model_provider_router_stream_reports_unknown_models(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
 
@@ -2386,7 +623,6 @@ def test_model_provider_router_stream_reports_unknown_models(monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="No provider registered for model unknown-model"):
         provider.stream_json(model="unknown-model", prompt="{}", temperature=0.3)
-
 
 def test_default_model_name_uses_agent_plan_lite_when_plan_key_is_configured(
     tmp_path,
@@ -2406,8 +642,7 @@ def test_default_model_name_uses_agent_plan_lite_when_plan_key_is_configured(
 
     assert default_model_name() == "doubao-seed-2-0-lite-260215"
 
-
-def test_default_model_name_does_not_use_qwen_without_catalog_entry(
+def test_default_model_name_ignores_unregistered_dashscope_key(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -2423,11 +658,9 @@ def test_default_model_name_does_not_use_qwen_without_catalog_entry(
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
     monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     with pytest.raises(ModelRuntimeConfigurationError, match="no_enabled_model_configuration"):
         default_model_name()
-
 
 def test_default_model_name_rejects_missing_configured_keys(
     tmp_path,
@@ -2438,11 +671,9 @@ def test_default_model_name_rejects_missing_configured_keys(
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
     monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     with pytest.raises(ModelRuntimeConfigurationError, match="no_enabled_model_configuration"):
         default_model_name()
-
 
 def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     example = os.path.join(os.path.dirname(__file__), "..", ".env.example")
@@ -2457,4 +688,5 @@ def test_environment_example_uses_empty_deepseek_key_placeholder() -> None:
     assert "DEEPSEEK_API_KEY=\n" in contents
     assert "DEEPSEEK_MODEL=deepseek-v4-flash\n" in contents
     assert "MINIMAX_API_KEY" not in contents
-    assert "DASHSCOPE_API_KEY=\n" in contents
+    assert "DASHSCOPE_API_KEY" not in contents
+

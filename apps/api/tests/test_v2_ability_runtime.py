@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.v2.ability_runtime import (
-    V2AbilityConfigurationError,
+from app.match.ability_runtime import (
+    AbilityConfigurationError,
     ability_snapshot_hash,
     compile_ability_runtime_snapshot,
     resolve_first_night,
@@ -109,13 +109,13 @@ def test_frozen_werewolf_attack_policy_is_compiled_into_ability_snapshot() -> No
 
 
 def test_unknown_or_role_mismatched_night_action_fails_closed() -> None:
-    with pytest.raises(V2AbilityConfigurationError, match="unknown night actions"):
+    with pytest.raises(AbilityConfigurationError, match="unknown night actions"):
         _compile(
             roles=[("werewolf", "werewolves", 2), ("villager", "villagers", 6)],
             night_actions=["remove", "dream"],
         )
 
-    with pytest.raises(V2AbilityConfigurationError, match="do not match assigned roles"):
+    with pytest.raises(AbilityConfigurationError, match="do not match assigned roles"):
         _compile(
             roles=[("werewolf", "werewolves", 2), ("villager", "villagers", 6)],
             night_actions=["remove", "protect"],

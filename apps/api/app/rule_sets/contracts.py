@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 from app.rule_sets.types import RuleValidationIssue
-from app.werewolf.rules import (
+from app.shared.rules import (
     ACTION_EXILE_LAST_WORDS,
     ACTION_HUNTER_SHOOT,
     ACTION_REMOVE,

@@ -7,9 +7,7 @@
     ".": "./src/index.ts",
     "./api": "./src/api/index.ts",
     "./lineup": "./src/lineup/index.ts",
-    "./live": "./src/live/index.ts",
-    "./profile": "./src/profile/index.ts",
-    "./replay": "./src/replay/index.ts"
+    "./profile": "./src/profile/index.ts"
   },
   "scripts": {
     "test": "vitest",

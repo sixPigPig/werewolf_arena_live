@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.v2.contracts import V2DirectorSceneResponse
+from app.match.contracts import DirectorSceneResponse
 
 
 def project_director_scene(
@@ -10,7 +10,7 @@ def project_director_scene(
     phase_id: str,
     phase_state: str,
     action_context: dict[str, Any] | None = None,
-) -> V2DirectorSceneResponse:
+) -> DirectorSceneResponse:
     action_type = _optional_text(
         action_context.get("action_type") if action_context is not None else None
     )
@@ -24,7 +24,7 @@ def project_director_scene(
     actor = action_context.get("actor") if action_context is not None else None
     if isinstance(actor, dict) and actor.get("kind") == "player":
         actor_player_id = _optional_text(actor.get("id"))
-    return V2DirectorSceneResponse(
+    return DirectorSceneResponse(
         scene_kind=_scene_kind(
             phase_id=phase_id,
             phase_state=phase_state,

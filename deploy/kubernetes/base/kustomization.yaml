@@ -3,10 +3,7 @@ kind: Kustomization
 namespace: werewolf
 resources:
   - api-deployment.yaml
-  - reaper-deployment.yaml
   - judge-voice-worker-deployment.yaml
-  - live-voice-materializer-deployment.yaml
-  - quality-evaluator-deployment.yaml
   - mobile-deployment.yaml
   - admin-deployment.yaml
   - services.yaml

@@ -7,7 +7,6 @@ from threading import Lock
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.game_session import GameSessionRecord
 from app.models.rule_set import RuleSetRecord
 
 
@@ -94,29 +93,6 @@ def record_legacy_rule_create(rule_set_id: str, revision_no: int | None) -> None
 
 
 def render_rule_set_metrics(db: Session) -> str:
-    game_counts: Counter[tuple[str, str, str]] = Counter()
-    rows = db.execute(
-        select(
-            GameSessionRecord.rule_set_id,
-            GameSessionRecord.rule_set_revision_no,
-            GameSessionRecord.status,
-            func.count(),
-        ).group_by(
-            GameSessionRecord.rule_set_id,
-            GameSessionRecord.rule_set_revision_no,
-            GameSessionRecord.status,
-        )
-    ).all()
-    for rule_set_id, revision_no, status, count in rows:
-        game_counts[
-            (
-                _stable_rule_set_id(rule_set_id),
-                _revision_label(revision_no),
-                status if type(status) is str and status in _GAME_STATUSES else "other",
-            )
-        ] += int(count)
-    failure_rate_deltas = _game_failure_rate_deltas(game_counts)
-
     published_defaults = int(
         db.scalar(
             select(func.count())
@@ -179,29 +155,8 @@ def render_rule_set_metrics(db: Session) -> str:
         (
             "# HELP werewolf_rule_games Persisted games grouped by pinned rule revision and status.",
             "# TYPE werewolf_rule_games gauge",
-        )
-    )
-    for key, count in sorted(game_counts.items()):
-        lines.append(
-            _sample("werewolf_rule_games", ("rule_set_id", "revision_no", "status"), key, count)
-        )
-    lines.extend(
-        (
             "# HELP werewolf_rule_game_failure_ratio_delta Partial-game ratio minus the preceding revision ratio.",
             "# TYPE werewolf_rule_game_failure_ratio_delta gauge",
-        )
-    )
-    for key, delta in sorted(failure_rate_deltas.items()):
-        lines.append(
-            _sample(
-                "werewolf_rule_game_failure_ratio_delta",
-                ("rule_set_id", "revision_no"),
-                key,
-                delta,
-            )
-        )
-    lines.extend(
-        (
             "# HELP werewolf_rule_published_defaults Published non-archived default rule sets.",
             "# TYPE werewolf_rule_published_defaults gauge",
             f"werewolf_rule_published_defaults {published_defaults}",

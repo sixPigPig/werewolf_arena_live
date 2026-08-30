@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.v2.action_engine import _observe_model_output_fields
-from app.v2.model_observation import _vote_claims, observe_model_speech
+from app.match.action_engine import _observe_model_output_fields
+from app.match.model_observation import _vote_claims, observe_model_speech
 
 
 @pytest.mark.parametrize(
@@ -823,7 +823,7 @@ def test_detector_failure_is_reported_without_raising(
         raise RuntimeError("detector exploded")
 
     monkeypatch.setattr(
-        "app.v2.model_observation._observe_public_vote_facts",
+        "app.match.model_observation._observe_public_vote_facts",
         fail_detector,
     )
 
@@ -2062,7 +2062,7 @@ def test_action_engine_output_field_wrapper_is_fail_open_per_field(
         )
 
     monkeypatch.setattr(
-        "app.v2.action_engine.observe_model_speech",
+        "app.match.action_engine.observe_model_speech",
         fail_decision_note,
     )
     observations = _observe_model_output_fields(
@@ -2091,7 +2091,7 @@ def test_action_engine_output_field_wrapper_tolerates_malformed_observer_return(
         return [None] if text == "bad shape" else []
 
     monkeypatch.setattr(
-        "app.v2.action_engine.observe_model_speech",
+        "app.match.action_engine.observe_model_speech",
         malformed_decision_note,
     )
     observations = _observe_model_output_fields(

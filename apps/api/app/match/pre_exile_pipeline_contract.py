@@ -36,12 +36,12 @@ _CONTRACT_KEYS_V2 = frozenset(
 )
 
 
-class V2PreExilePipelineContractError(ValueError):
+class PreExilePipelineContractError(ValueError):
     pass
 
 
 @dataclass(frozen=True)
-class V2ResolvedPreExilePipelineContract:
+class ResolvedPreExilePipelineContract:
     status: Literal["supported", "legacy_sequential"]
     mode: Literal["sealed_last_speech_overlap", "sequential"]
     source: Literal["frozen_contract", "legacy_missing_contract"]
@@ -131,11 +131,11 @@ def freeze_pre_exile_pipeline_contract(
 
 def resolve_pre_exile_pipeline_contract(
     rule_snapshot: dict[str, Any] | None,
-) -> V2ResolvedPreExilePipelineContract:
+) -> ResolvedPreExilePipelineContract:
     """Resolve a frozen contract; missing legacy contracts stay sequential."""
 
     if not isinstance(rule_snapshot, dict) or _CONTRACT_KEY not in rule_snapshot:
-        return V2ResolvedPreExilePipelineContract(
+        return ResolvedPreExilePipelineContract(
             status="legacy_sequential",
             mode="sequential",
             source="legacy_missing_contract",
@@ -156,7 +156,7 @@ def resolve_pre_exile_pipeline_contract(
         )
     contract = validate_pre_exile_pipeline_contract(rule_snapshot[_CONTRACT_KEY])
     schema_version = contract["schema_version"]
-    return V2ResolvedPreExilePipelineContract(
+    return ResolvedPreExilePipelineContract(
         status="supported",
         mode="sealed_last_speech_overlap",
         source="frozen_contract",
@@ -240,4 +240,4 @@ def pre_exile_pipeline_contract_summary(
 
 
 def _raise_unsupported() -> None:
-    raise V2PreExilePipelineContractError(_UNSUPPORTED_ERROR)
+    raise PreExilePipelineContractError(_UNSUPPORTED_ERROR)

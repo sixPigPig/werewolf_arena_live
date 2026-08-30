@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.werewolf.speech_delivery import (
+from app.shared.speech_delivery import (
     AFFECT_DELIVERY_MAPPING_VERSION,
     DELIVERY_MAPPING_VERSION,
     compile_affect_delivery_v2,

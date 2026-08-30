@@ -99,9 +99,7 @@ describe("admin app routes", () => {
     ["/content/judge", "法官配置"],
     ["/content/voice-assets", "法官语音资产"],
     ["/content/models", "模型管理"],
-    ["/operations/games", "对局记录"],
     ["/v2/operations/games", "V2 对局记录"],
-    ["/operations/runs", "运行监控"],
     ["/system/settings", "运行设置"],
   ])("keeps the existing route %s connected", async (path, heading) => {
     renderRoute(path);

@@ -9,7 +9,7 @@ const ACTIVE_STATES = new Set([
   "running",
 ]);
 
-export function isLiveV2StatusActive(status: string | undefined): boolean {
+export function isLiveStatusActive(status: string | undefined): boolean {
   return Boolean(status && ACTIVE_STATES.has(status));
 }
 
@@ -17,7 +17,7 @@ export function liveRefreshInterval(
   status: string | undefined,
   executionState?: string,
 ) {
-  return isLiveV2StatusActive(status) ||
+  return isLiveStatusActive(status) ||
     executionState === "owned" ||
     executionState === "stale"
     ? 2_000

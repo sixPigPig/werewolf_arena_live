@@ -8,12 +8,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from app.werewolf.voice import (
+from app.shared.tts_text import (
     USED_STATIC_JUDGE_VOICE_ASSET_IDS,
     USED_STATIC_JUDGE_VOICE_ASSET_TEMPLATE_IDS,
     chunk_text_for_tts,
 )
-from app.werewolf.volcengine_tts import (
+from app.shared.volcengine_tts import (
     TtsSubtitleTiming,
     TtsSynthesisItem,
     VolcengineTtsClient,

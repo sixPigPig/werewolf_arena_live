@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from app.v2.model_context_compaction import (
-    V2ModelContextCompactionError,
+from app.match.model_context_compaction import (
+    ModelContextCompactionError,
     build_known_events_v6_compaction_metadata,
     canonical_known_events_v5_sha256,
     encode_known_events_v6,
@@ -468,7 +468,7 @@ def test_known_events_v6_rejects_explicit_null_event_ref() -> None:
     compact = encode_known_events_v6(_canonical_known_events_v5())
     compact["events"][0]["event_ref"] = None
 
-    with pytest.raises(V2ModelContextCompactionError) as exc_info:
+    with pytest.raises(ModelContextCompactionError) as exc_info:
         expand_known_events_v6(compact)
 
     assert exc_info.value.code == "known_events_v6_event_ref"
@@ -478,7 +478,7 @@ def test_known_events_v6_missing_canonical_kind_fails_closed() -> None:
     canonical = _canonical_known_events_v5()
     canonical["events"][0].pop("kind")
 
-    with pytest.raises(V2ModelContextCompactionError) as exc_info:
+    with pytest.raises(ModelContextCompactionError) as exc_info:
         encode_known_events_v6(canonical)
 
     assert exc_info.value.code == "known_events_v5_kind"
@@ -637,7 +637,7 @@ def test_known_events_v6_bad_references_fail_closed(mutate, expected_code: str) 
     compact = encode_known_events_v6(_canonical_known_events_v5())
     mutate(compact)
 
-    with pytest.raises(V2ModelContextCompactionError) as exc_info:
+    with pytest.raises(ModelContextCompactionError) as exc_info:
         expand_known_events_v6(compact)
 
     assert exc_info.value.code == expected_code
@@ -647,7 +647,7 @@ def test_known_events_v6_duplicate_event_ref_fails_closed() -> None:
     compact = encode_known_events_v6(_canonical_known_events_v5())
     compact["events"][0]["event_ref"] = "legacy_vote_result"
 
-    with pytest.raises(V2ModelContextCompactionError) as exc_info:
+    with pytest.raises(ModelContextCompactionError) as exc_info:
         expand_known_events_v6(compact)
 
     assert exc_info.value.code == "duplicate_event_ref"
@@ -666,7 +666,7 @@ def test_known_events_v6_catalog_key_collision_fails_closed() -> None:
     )
     canonical["events"].append(private_event)
 
-    with pytest.raises(V2ModelContextCompactionError) as exc_info:
+    with pytest.raises(ModelContextCompactionError) as exc_info:
         encode_known_events_v6(canonical)
 
     assert exc_info.value.code == "compact_catalog_key_collision"
@@ -678,12 +678,12 @@ def test_known_events_v6_rejects_non_chronological_and_non_finite_canonical_inpu
         non_chronological["events"][1],
         non_chronological["events"][0],
     )
-    with pytest.raises(V2ModelContextCompactionError) as chronology_error:
+    with pytest.raises(ModelContextCompactionError) as chronology_error:
         encode_known_events_v6(non_chronological)
     assert chronology_error.value.code == "known_events_not_chronological"
 
     non_finite = _canonical_known_events_v5()
     non_finite["events"][1]["weight"] = float("nan")
-    with pytest.raises(V2ModelContextCompactionError) as json_error:
+    with pytest.raises(ModelContextCompactionError) as json_error:
         canonical_known_events_v5_sha256(non_finite)
     assert json_error.value.code == "canonical_json_non_finite_number"

@@ -10,7 +10,7 @@ import { Link } from "react-router-dom";
 import { searchAdminResources } from "@/features/dashboard/api";
 import type { AdminRuntimeMode } from "@/features/auth/types";
 
-const TYPE_LABELS = { run: "运行", game: "对局", player: "玩家", job: "任务" };
+const TYPE_LABELS = { player: "玩家", job: "任务" };
 
 export function GlobalAdminSearch({ runtimeMode }: { runtimeMode: AdminRuntimeMode }) {
   const [input, setInput] = useState("");
@@ -32,7 +32,7 @@ export function GlobalAdminSearch({ runtimeMode }: { runtimeMode: AdminRuntimeMo
         allowClear
         aria-label="全局 ID 搜索"
         onChange={(event) => setInput(event.target.value)}
-        placeholder="搜索 Run / Session / 玩家 / 任务"
+        placeholder="搜索玩家 / 任务"
         prefix={<SearchOutlined />}
         value={input}
       />

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from app.werewolf.player_configs import PlayerConfig
+from app.shared.player_configs import PlayerConfig
 
 
 LineupQualityMode = Literal["observe", "repair", "enforce"]

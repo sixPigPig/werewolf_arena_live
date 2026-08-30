@@ -17,7 +17,7 @@ _ORDINARY_OLD_KINDS = {
 
 
 @dataclass(frozen=True)
-class V2KnownEventsSelection:
+class KnownEventsSelection:
     events: list[dict[str, Any]]
     audit: dict[str, Any]
 
@@ -31,7 +31,7 @@ def select_known_events_v13(
     model_view: dict[str, Any],
     rolling_memory_cutoff_seq: int | None = None,
     future_filtered: list[dict[str, Any]] | None = None,
-) -> V2KnownEventsSelection:
+) -> KnownEventsSelection:
     """Project full visible history into deterministic player working memory.
 
     This selector never derives alignments, wolf teams, or an action answer. It
@@ -205,7 +205,7 @@ def select_known_events_v13(
         audit["retained_count"] + audit["omitted_count"] + audit["future_filtered_count"]
     ):
         raise ValueError("model_context_selector_count_mismatch")
-    return V2KnownEventsSelection(events=selected_events, audit=audit)
+    return KnownEventsSelection(events=selected_events, audit=audit)
 
 
 def _is_actor_memory(event: dict[str, Any]) -> bool:

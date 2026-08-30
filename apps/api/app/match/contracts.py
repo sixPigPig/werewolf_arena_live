@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing_extensions import TypedDict
 
 
-V2LiveState = Literal[
+LiveState = Literal[
     "waiting_to_start",
     "ready",
     "generating",
@@ -18,13 +18,13 @@ V2LiveState = Literal[
     "canceled",
     "failed",
 ]
-V2RequestedAudioMode = Literal["tts", "text_only"]
-V2AudioMode = Literal["tts", "text_only", "legacy_unknown"]
-V2MatchStatus = Literal["waiting", "running", "completed", "failed", "canceled"]
-V2ExecutionState = Literal["unowned", "owned", "stale", "stopped"]
-V2GamePhaseId = str
-V2GamePhaseState = str
-V2DirectorSceneKind = Literal[
+RequestedAudioMode = Literal["tts", "text_only"]
+AudioMode = Literal["tts", "text_only", "legacy_unknown"]
+MatchStatus = Literal["waiting", "running", "completed", "failed", "canceled"]
+ExecutionState = Literal["unowned", "owned", "stale", "stopped"]
+GamePhaseId = str
+GamePhaseState = str
+DirectorSceneKind = Literal[
     "opening",
     "public_stage",
     "nightfall",
@@ -38,12 +38,12 @@ V2DirectorSceneKind = Literal[
 ]
 
 
-class V2ApiMetaResponse(BaseModel):
+class ApiMetaResponse(BaseModel):
     api_version: Literal["v2"] = "v2"
     status: Literal["realtime_complete_match"] = "realtime_complete_match"
 
 
-class V2LobbyRoleSnapshot(BaseModel):
+class LobbyRoleSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = Field(min_length=1, max_length=80)
@@ -53,7 +53,7 @@ class V2LobbyRoleSnapshot(BaseModel):
     category: str | None = Field(default=None, max_length=40)
 
 
-class V2LobbyWerewolfAttackPolicy(BaseModel):
+class LobbyWerewolfAttackPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     resolution: Literal[
@@ -65,7 +65,7 @@ class V2LobbyWerewolfAttackPolicy(BaseModel):
     allow_wolf_target: bool
 
 
-class V2LobbyRuleSnapshot(BaseModel):
+class LobbyRuleSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=80)
@@ -73,7 +73,7 @@ class V2LobbyRuleSnapshot(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
     player_count: int = Field(ge=1, le=24)
-    roles: list[V2LobbyRoleSnapshot] = Field(min_length=1, max_length=24)
+    roles: list[LobbyRoleSnapshot] = Field(min_length=1, max_length=24)
     night_actions: list[str] | None = Field(default=None, max_length=40)
     day_actions: list[str] | None = Field(default=None, max_length=40)
     win_condition: str | None = Field(default=None, max_length=500)
@@ -90,7 +90,7 @@ class V2LobbyRuleSnapshot(BaseModel):
     exile_last_words_enabled: bool | None = None
     first_night_last_words_enabled: bool | None = None
     sheriff_badge_bomb_policy: str | None = Field(default=None, max_length=80)
-    werewolf_attack_policy: V2LobbyWerewolfAttackPolicy | None = None
+    werewolf_attack_policy: LobbyWerewolfAttackPolicy | None = None
     revision_id: str | None = Field(default=None, max_length=80)
     revision_no: int | None = Field(default=None, ge=1)
     schema_version: int | None = Field(default=None, ge=1)
@@ -98,7 +98,7 @@ class V2LobbyRuleSnapshot(BaseModel):
     is_default: bool | None = None
 
     @model_validator(mode="after")
-    def validate_role_composition(self) -> "V2LobbyRuleSnapshot":
+    def validate_role_composition(self) -> "LobbyRuleSnapshot":
         role_names = [item.role for item in self.roles]
         if len(role_names) != len(set(role_names)):
             raise ValueError("rule roles must be unique")
@@ -107,7 +107,7 @@ class V2LobbyRuleSnapshot(BaseModel):
         return self
 
 
-class V2LobbyPlayerSnapshot(BaseModel):
+class LobbyPlayerSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     seat: int = Field(ge=1, le=24)
@@ -132,7 +132,7 @@ class V2LobbyPlayerSnapshot(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=20)
 
 
-class V2LobbyQualityViolation(BaseModel):
+class LobbyQualityViolation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     code: str = Field(min_length=1, max_length=120)
@@ -143,7 +143,7 @@ class V2LobbyQualityViolation(BaseModel):
     seat_numbers: list[int] = Field(default_factory=list, max_length=24)
 
 
-class V2LobbyQualitySnapshot(BaseModel):
+class LobbyQualitySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1]
@@ -154,24 +154,24 @@ class V2LobbyQualitySnapshot(BaseModel):
     was_repaired: bool
     style_bucket_count: int = Field(ge=0)
     required_style_bucket_count: int = Field(ge=0)
-    violations: list[V2LobbyQualityViolation] = Field(default_factory=list, max_length=50)
+    violations: list[LobbyQualityViolation] = Field(default_factory=list, max_length=50)
 
 
-class V2LobbyCreateSnapshot(BaseModel):
+class LobbyCreateSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1]
     model_binding_mode: Literal["explicit_snapshot", "profile_library"] = "explicit_snapshot"
-    rule_set: V2LobbyRuleSnapshot
+    rule_set: LobbyRuleSnapshot
     rule_set_revision_id: str | None = Field(default=None, max_length=80)
     seed: int | None = None
     max_rounds: int = Field(ge=1, le=20)
-    player_configs: list[V2LobbyPlayerSnapshot] = Field(min_length=1, max_length=24)
-    lineup_quality_report: V2LobbyQualitySnapshot
+    player_configs: list[LobbyPlayerSnapshot] = Field(min_length=1, max_length=24)
+    lineup_quality_report: LobbyQualitySnapshot
     allow_lineup_quality_warnings: bool = False
 
     @model_validator(mode="after")
-    def validate_complete_lineup(self) -> "V2LobbyCreateSnapshot":
+    def validate_complete_lineup(self) -> "LobbyCreateSnapshot":
         if self.model_binding_mode == "profile_library" and (
             self.rule_set_revision_id is None or self.rule_set.revision_id is None
         ):
@@ -202,12 +202,12 @@ class V2LobbyCreateSnapshot(BaseModel):
         return self
 
 
-class V2GameCreateRequest(BaseModel):
+class GameCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(default="Live V2 实时对局", min_length=1, max_length=120)
-    audio_mode: V2RequestedAudioMode | None = None
-    lobby_snapshot: V2LobbyCreateSnapshot
+    audio_mode: RequestedAudioMode | None = None
+    lobby_snapshot: LobbyCreateSnapshot
 
     @field_validator("title")
     @classmethod
@@ -218,20 +218,20 @@ class V2GameCreateRequest(BaseModel):
         return normalized
 
 
-class V2ActorResponse(BaseModel):
+class ActorResponse(BaseModel):
     kind: Literal["judge", "player"]
     id: str
 
 
-class V2GamePhaseResponse(BaseModel):
+class GamePhaseResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     phase_seq: int = Field(ge=0)
-    phase_id: V2GamePhaseId
-    phase_state: V2GamePhaseState
+    phase_id: GamePhaseId
+    phase_state: GamePhaseState
 
 
-class V2MatchStateResponse(BaseModel):
+class MatchStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     round_no: int = Field(ge=1, le=20)
@@ -240,19 +240,19 @@ class V2MatchStateResponse(BaseModel):
     winner: Literal["villagers", "werewolves"] | None = None
 
 
-class V2CurrentPresentationResponse(BaseModel):
+class CurrentPresentationResponse(BaseModel):
     action_id: str
     presentation_seq: int = Field(ge=1)
     presentation_id: str
     phase_id: str
-    actor: V2ActorResponse
+    actor: ActorResponse
     speech_id: str
     segment_index: int = Field(ge=0)
     subtitle_text: str
     join_sample_cursor: int = Field(ge=0)
 
 
-class V2PublicPlayerSeatResponse(BaseModel):
+class PublicPlayerSeatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     seat: int = Field(ge=1, le=24)
@@ -262,21 +262,21 @@ class V2PublicPlayerSeatResponse(BaseModel):
     alive: bool = True
 
 
-class V2PublicRoleCountResponse(BaseModel):
+class PublicRoleCountResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = Field(min_length=1, max_length=80)
     count: int = Field(ge=1, le=24)
 
 
-class V2PublicRuleSnapshotResponse(BaseModel):
+class PublicRuleSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rule_id: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=120)
     version: str = Field(min_length=1, max_length=40)
     player_count: int = Field(ge=1, le=24)
-    roles: list[V2PublicRoleCountResponse] = Field(min_length=1, max_length=24)
+    roles: list[PublicRoleCountResponse] = Field(min_length=1, max_length=24)
     max_rounds: int = Field(ge=1, le=20)
     sheriff_enabled: bool | None
     werewolf_self_explosion_enabled: bool | None
@@ -284,14 +284,14 @@ class V2PublicRuleSnapshotResponse(BaseModel):
     first_night_last_words_enabled: bool | None
 
 
-class V2PublicRoleAssignmentStatusResponse(BaseModel):
+class PublicRoleAssignmentStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: Literal["sealed", "unavailable"]
     assigned_count: int = Field(ge=0, le=24)
 
     @model_validator(mode="after")
-    def validate_state_count(self) -> "V2PublicRoleAssignmentStatusResponse":
+    def validate_state_count(self) -> "PublicRoleAssignmentStatusResponse":
         if self.state == "sealed" and self.assigned_count == 0:
             raise ValueError("sealed role assignments require players")
         if self.state == "unavailable" and self.assigned_count != 0:
@@ -299,31 +299,31 @@ class V2PublicRoleAssignmentStatusResponse(BaseModel):
         return self
 
 
-class V2LiveSnapshotResponse(BaseModel):
+class LiveSnapshotResponse(BaseModel):
     protocol_version: Literal[1] = 1
     type: Literal["live.snapshot"] = "live.snapshot"
     api_version: Literal["v2"] = "v2"
     audience: Literal["player_public"]
     game_id: str
     run_id: str
-    live_state: V2LiveState
-    audio_mode: V2AudioMode
-    match_status: V2MatchStatus
-    execution_state: V2ExecutionState
+    live_state: LiveState
+    audio_mode: AudioMode
+    match_status: MatchStatus
+    execution_state: ExecutionState
     winner: Literal["villagers", "werewolves"] | None
     completion_reason: str | None
     completed_at: datetime | None
-    game_phase: V2GamePhaseResponse
-    match_state: V2MatchStateResponse | None
+    game_phase: GamePhaseResponse
+    match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
-    public_rule: V2PublicRuleSnapshotResponse | None
-    public_players: list[V2PublicPlayerSeatResponse] = Field(max_length=24)
-    public_role_assignment: V2PublicRoleAssignmentStatusResponse
-    current_presentation: V2CurrentPresentationResponse | None
+    public_rule: PublicRuleSnapshotResponse | None
+    public_players: list[PublicPlayerSeatResponse] = Field(max_length=24)
+    public_role_assignment: PublicRoleAssignmentStatusResponse
+    current_presentation: CurrentPresentationResponse | None
 
 
-class V2GodViewPlayerIdentityResponse(BaseModel):
+class GodViewPlayerIdentityResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     seat: int = Field(ge=1, le=24)
@@ -336,17 +336,17 @@ class V2GodViewPlayerIdentityResponse(BaseModel):
     death_cause: str | None = Field(default=None, max_length=40)
 
 
-class V2DirectorSceneResponse(BaseModel):
+class DirectorSceneResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    scene_kind: V2DirectorSceneKind
+    scene_kind: DirectorSceneKind
     action_id: str | None = Field(default=None, max_length=40)
     action_type: str | None = Field(default=None, max_length=120)
     ability_id: str | None = Field(default=None, max_length=120)
     actor_player_id: str | None = Field(default=None, max_length=80)
 
 
-class V2DirectorLiveSnapshotResponse(BaseModel):
+class DirectorLiveSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     protocol_version: Literal[1] = 1
@@ -355,24 +355,24 @@ class V2DirectorLiveSnapshotResponse(BaseModel):
     audience: Literal["spectator_directed"] = "spectator_directed"
     game_id: str
     run_id: str
-    live_state: V2LiveState
-    audio_mode: V2AudioMode
-    match_status: V2MatchStatus
-    execution_state: V2ExecutionState
+    live_state: LiveState
+    audio_mode: AudioMode
+    match_status: MatchStatus
+    execution_state: ExecutionState
     winner: Literal["villagers", "werewolves"] | None
     completion_reason: str | None
     completed_at: datetime | None
-    game_phase: V2GamePhaseResponse
-    match_state: V2MatchStateResponse | None
+    game_phase: GamePhaseResponse
+    match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
-    rule: V2PublicRuleSnapshotResponse | None
-    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
-    current_scene: V2DirectorSceneResponse
-    current_presentation: V2CurrentPresentationResponse | None
+    rule: PublicRuleSnapshotResponse | None
+    players: list[GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
+    current_scene: DirectorSceneResponse
+    current_presentation: CurrentPresentationResponse | None
 
 
-class V2GodViewIdentitySnapshotResponse(BaseModel):
+class GodViewIdentitySnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     protocol_version: Literal[1] = 1
@@ -381,21 +381,21 @@ class V2GodViewIdentitySnapshotResponse(BaseModel):
     audience: Literal["spectator_god_view"] = "spectator_god_view"
     game_id: str
     run_id: str
-    live_state: V2LiveState
-    audio_mode: V2AudioMode
-    match_status: V2MatchStatus
-    execution_state: V2ExecutionState
+    live_state: LiveState
+    audio_mode: AudioMode
+    match_status: MatchStatus
+    execution_state: ExecutionState
     winner: Literal["villagers", "werewolves"] | None
     completion_reason: str | None
     completed_at: datetime | None
-    game_phase: V2GamePhaseResponse
-    match_state: V2MatchStateResponse | None
+    game_phase: GamePhaseResponse
+    match_state: MatchStateResponse | None
     server_time: datetime
-    rule: V2PublicRuleSnapshotResponse | None
-    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
+    rule: PublicRuleSnapshotResponse | None
+    players: list[GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
 
 
-class V2GodViewLiveSnapshotResponse(BaseModel):
+class GodViewLiveSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     protocol_version: Literal[1] = 1
@@ -404,29 +404,29 @@ class V2GodViewLiveSnapshotResponse(BaseModel):
     audience: Literal["spectator_god_view"] = "spectator_god_view"
     game_id: str
     run_id: str
-    live_state: V2LiveState
-    audio_mode: V2AudioMode
-    match_status: V2MatchStatus
-    execution_state: V2ExecutionState
+    live_state: LiveState
+    audio_mode: AudioMode
+    match_status: MatchStatus
+    execution_state: ExecutionState
     winner: Literal["villagers", "werewolves"] | None
     completion_reason: str | None
     completed_at: datetime | None
-    game_phase: V2GamePhaseResponse
-    match_state: V2MatchStateResponse | None
+    game_phase: GamePhaseResponse
+    match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
     server_time: datetime
-    rule: V2PublicRuleSnapshotResponse | None
-    players: list[V2GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
-    current_presentation: V2CurrentPresentationResponse | None
+    rule: PublicRuleSnapshotResponse | None
+    players: list[GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
+    current_presentation: CurrentPresentationResponse | None
 
 
-class V2GameCreateResponse(BaseModel):
+class GameCreateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     game_id: str
     run_id: str
     status: Literal["waiting_to_start"]
-    audio_mode: V2RequestedAudioMode
+    audio_mode: RequestedAudioMode
     snapshot_url: str
     websocket_url: str
     director_snapshot_url: str
@@ -436,7 +436,7 @@ class V2GameCreateResponse(BaseModel):
     god_view_access_token: str = Field(min_length=32, max_length=128)
 
 
-class AdminV2GameListItem(BaseModel):
+class AdminGameListItem(BaseModel):
     game_id: str
     title: str
     status: str
@@ -447,9 +447,9 @@ class AdminV2GameListItem(BaseModel):
     phase_seq: int
     phase_id: str
     phase_state: str
-    audio_mode: V2AudioMode
-    match_status: V2MatchStatus
-    execution_state: V2ExecutionState
+    audio_mode: AudioMode
+    match_status: MatchStatus
+    execution_state: ExecutionState
     winner: Literal["villagers", "werewolves"] | None
     completion_reason: str | None
     completed_at: datetime | None
@@ -457,19 +457,19 @@ class AdminV2GameListItem(BaseModel):
     updated_at: datetime
 
 
-class AdminV2Pagination(BaseModel):
+class AdminPagination(BaseModel):
     page: int
     page_size: int
     total: int
     pages: int
 
 
-class AdminV2GameListResponse(BaseModel):
-    items: list[AdminV2GameListItem]
-    pagination: AdminV2Pagination
+class AdminGameListResponse(BaseModel):
+    items: list[AdminGameListItem]
+    pagination: AdminPagination
 
 
-class AdminV2RunResponse(BaseModel):
+class AdminRunResponse(BaseModel):
     run_id: str
     attempt_no: int
     status: str
@@ -482,7 +482,7 @@ class AdminV2RunResponse(BaseModel):
     fence_token: int = Field(ge=0)
 
 
-class AdminV2GameControlRequest(BaseModel):
+class AdminGameControlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=3, max_length=500)
@@ -496,7 +496,7 @@ class AdminV2GameControlRequest(BaseModel):
         return normalized
 
 
-class AdminV2GameControlResponse(BaseModel):
+class AdminGameControlResponse(BaseModel):
     action: Literal["stop"]
     game_id: str
     run_id: str
@@ -505,7 +505,7 @@ class AdminV2GameControlResponse(BaseModel):
     replayed: bool
 
 
-class AdminV2ModelActionRetryResponse(BaseModel):
+class AdminModelActionRetryResponse(BaseModel):
     action: Literal["retry_model_action"]
     game_id: str
     run_id: str
@@ -514,7 +514,7 @@ class AdminV2ModelActionRetryResponse(BaseModel):
     replayed: bool
 
 
-class AdminV2EventResponse(BaseModel):
+class AdminEventResponse(BaseModel):
     event_id: int
     record_seq: int
     run_id: str
@@ -524,14 +524,14 @@ class AdminV2EventResponse(BaseModel):
     created_at: datetime
 
 
-class AdminV2EventPageResponse(BaseModel):
-    items: list[AdminV2EventResponse]
+class AdminEventPageResponse(BaseModel):
+    items: list[AdminEventResponse]
     after_record_seq: int
     next_after_record_seq: int
     has_more: bool
 
 
-class AdminV2PresentationResponse(BaseModel):
+class AdminPresentationResponse(BaseModel):
     presentation_seq: int
     presentation_id: str
     action_id: str | None
@@ -551,7 +551,7 @@ class AdminV2PresentationResponse(BaseModel):
     closed_at: datetime | None
 
 
-class AdminV2VoiceAssetResponse(BaseModel):
+class AdminVoiceAssetResponse(BaseModel):
     voice_asset_id: str
     action_id: str
     activation_id: str | None
@@ -572,14 +572,14 @@ class AdminV2VoiceAssetResponse(BaseModel):
     completed_at: datetime | None
 
 
-class AdminV2OutputEnforcementResponse(BaseModel):
+class AdminOutputEnforcementResponse(BaseModel):
     requested: str | None
     actual: str | None
     schema_name: str | None
     schema_version: int | None
 
 
-class AdminV2ProviderUsageResponse(TypedDict, total=False):
+class AdminProviderUsageResponse(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
@@ -587,13 +587,13 @@ class AdminV2ProviderUsageResponse(TypedDict, total=False):
     cached_input_tokens: int
 
 
-class AdminV2FailureEpisodeEventRefResponse(BaseModel):
+class AdminFailureEpisodeEventRefResponse(BaseModel):
     event_type: str
     event_id: int | str | None
     record_seq: int
 
 
-class AdminV2ModelRequestSummaryResponse(BaseModel):
+class AdminModelRequestSummaryResponse(BaseModel):
     attempt_id: str
     decision_family_id: str | None
     retry_scope: Literal[
@@ -643,7 +643,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     prompt_template_version: int | None
     model_view_selector_version: int | None
     prompt_projection: dict[str, Any] | None
-    output_enforcement: AdminV2OutputEnforcementResponse | None
+    output_enforcement: AdminOutputEnforcementResponse | None
     status: Literal["running", "succeeded", "failed", "skipped", "canceled"]
     input_source: Literal["persisted", "reconstructed", "unavailable"]
     passive_observation_count: int
@@ -687,7 +687,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
         ]
         | None
     )
-    provider_usage: AdminV2ProviderUsageResponse | None
+    provider_usage: AdminProviderUsageResponse | None
     usage_update_count: int | None
     usage_conflict_observed: bool | None
     usage_consistency: (
@@ -769,8 +769,8 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
         | None
     )
     failure_episode_source_attempt_ids: list[str] | None
-    failure_episode_source_event_refs: list[AdminV2FailureEpisodeEventRefResponse] | None
-    failure_episode_terminal_event_refs: list[AdminV2FailureEpisodeEventRefResponse] | None
+    failure_episode_source_event_refs: list[AdminFailureEpisodeEventRefResponse] | None
+    failure_episode_terminal_event_refs: list[AdminFailureEpisodeEventRefResponse] | None
     resolution_event_type: str | None
     resolution_event_id: int | None
     resolution_event_record_seq: int | None
@@ -786,7 +786,7 @@ class AdminV2ModelRequestSummaryResponse(BaseModel):
     completed_at: datetime | None
 
 
-class AdminV2ModelRequestResponse(AdminV2ModelRequestSummaryResponse):
+class AdminModelRequestResponse(AdminModelRequestSummaryResponse):
     request_payload: dict[str, Any] | None
     expanded_known_events: dict[str, Any] | None
     known_events_expansion_status: Literal[
@@ -808,24 +808,24 @@ class AdminV2ModelRequestResponse(AdminV2ModelRequestSummaryResponse):
     stream_progress_updated_at: datetime | None
 
 
-class AdminV2ModelRequestPageResponse(BaseModel):
-    items: list[AdminV2ModelRequestSummaryResponse]
+class AdminModelRequestPageResponse(BaseModel):
+    items: list[AdminModelRequestSummaryResponse]
     after_record_seq: int
     next_after_record_seq: int
     has_more: bool
 
 
-class AdminV2GameDetailResponse(AdminV2GameListItem):
+class AdminGameDetailResponse(AdminGameListItem):
     rule_snapshot: dict[str, Any]
     players_snapshot: list[dict[str, Any]]
     judge_voice_snapshot: dict[str, Any]
     delivery_snapshot: dict[str, Any] | None
     ability_snapshot: dict[str, Any]
     match_state: dict[str, Any] | None
-    player_identities: list[V2GodViewPlayerIdentityResponse]
-    runs: list[AdminV2RunResponse]
-    presentations: list[AdminV2PresentationResponse]
-    voice_assets: list[AdminV2VoiceAssetResponse]
+    player_identities: list[GodViewPlayerIdentityResponse]
+    runs: list[AdminRunResponse]
+    presentations: list[AdminPresentationResponse]
+    voice_assets: list[AdminVoiceAssetResponse]
     player_states: list[dict[str, Any]]
     action_windows: list[dict[str, Any]]
     ability_instances: list[dict[str, Any]]

@@ -11,7 +11,7 @@ from app.api.routes.judge_voice_assets import (
 )
 from app.core.config import settings
 from app.main import app
-from app.werewolf.volcengine_tts import VolcengineTtsConfig
+from app.shared.volcengine_tts import VolcengineTtsConfig
 
 
 BASE_CONFIG = VolcengineTtsConfig(

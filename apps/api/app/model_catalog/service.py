@@ -21,7 +21,7 @@ from app.model_catalog.defaults import (
 )
 from app.models.model_configuration import ModelConfigurationRecord
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.providers import (
+from app.shared.providers import (
     ARK_AGENT_PLAN_CONFIG,
     DEEPSEEK_CONFIG,
     OpenAICompatibleProvider,

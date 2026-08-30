@@ -11,56 +11,56 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.v2.day_speech_pipeline_contract import (
-    V2ResolvedDaySpeechPipelineContract,
+from app.match.day_speech_pipeline_contract import (
+    ResolvedDaySpeechPipelineContract,
     resolve_day_speech_pipeline_contract,
 )
-from app.v2.knowledge_timeline import player_private_knowledge
-from app.v2.execution import V2RunFenceRejected, require_v2_run_fence
-from app.v2.event_contract import canonical_event_payload
-from app.v2.model_context_contract import frozen_model_context_contract
-from app.v2.model_context_compaction import expand_known_events_v7
-from app.v2.model_context import (
-    V2ModelPlayerReference,
+from app.match.knowledge_timeline import player_private_knowledge
+from app.match.execution import RunFenceRejected, require_run_fence
+from app.match.event_contract import canonical_event_payload
+from app.match.model_context_contract import frozen_model_context_contract
+from app.match.model_context_compaction import expand_known_events_v7
+from app.match.model_context import (
+    ModelPlayerReference,
     build_private_round_memory_action_context,
     project_model_action_context_with_metadata,
 )
-from app.v2.model_generation_policy_contract import (
+from app.match.model_generation_policy_contract import (
     MODEL_GENERATION_POLICY_SCHEMA_VERSION,
     resolve_model_generation_policy_contract,
 )
-from app.v2.model_parameters import (
-    V2FrozenModelParametersError,
+from app.match.model_parameters import (
+    FrozenModelParametersError,
     frozen_player_model_configuration,
 )
-from app.v2.model_client import request_payload_matches_model_context
-from app.v2.pre_exile_pipeline_contract import (
-    V2ResolvedPreExilePipelineContract,
+from app.match.model_client import request_payload_matches_model_context
+from app.match.pre_exile_pipeline_contract import (
+    ResolvedPreExilePipelineContract,
     pre_exile_context_sha256,
     resolve_pre_exile_pipeline_contract,
 )
-from app.v2.models import (
-    V2DaySpeechSlot,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2KnowledgeFact,
-    V2LivePresentation,
-    V2MatchState,
-    V2PlayerState,
-    V2PreExilePipeline,
-    V2PreExileResult,
-    V2RoleAssignment,
+from app.match.models import (
+    DaySpeechSlot,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    KnowledgeFact,
+    LivePresentation,
+    MatchState,
+    PlayerState,
+    PreExilePipeline,
+    PreExileResult,
+    RoleAssignment,
 )
-from app.v2.repository import (
-    V2ExecutionOwnershipLost,
-    V2GameCanceled,
-    V2PhaseTransition,
-    V2RepositoryError,
+from app.match.repository import (
+    ExecutionOwnershipLost,
+    GameCanceled,
+    PhaseTransition,
+    RepositoryError,
     _open_failure_episode_ids_for_locked_run,
 )
-from app.v2.runtime_state import V2AudioMode, delivery_audio_mode
-from app.v2.win_conditions import (
+from app.match.runtime_state import AudioMode, delivery_audio_mode
+from app.match.win_conditions import (
     hunter_settlement_can_change_winner,
     winner_from_alive_roles,
 )
@@ -80,7 +80,7 @@ _NONTERMINAL_PRE_EXILE_PIPELINE_STATES = (
 
 
 @dataclass(frozen=True)
-class V2MatchPlayer:
+class MatchPlayer:
     player_id: str
     seat: int
     display_name: str
@@ -98,7 +98,7 @@ class V2MatchPlayer:
 
 
 @dataclass(frozen=True)
-class V2MatchSnapshot:
+class MatchSnapshot:
     game_id: str
     run_id: str
     last_record_seq: int
@@ -112,23 +112,23 @@ class V2MatchSnapshot:
     max_rounds: int
     model_context_contract: dict[str, Any]
     model_generation_policy_contract: dict[str, Any] | None
-    day_speech_pipeline_contract: V2ResolvedDaySpeechPipelineContract
-    audio_mode: V2AudioMode
-    players: tuple[V2MatchPlayer, ...]
+    day_speech_pipeline_contract: ResolvedDaySpeechPipelineContract
+    audio_mode: AudioMode
+    players: tuple[MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
-    pre_exile_pipeline_contract: V2ResolvedPreExilePipelineContract = field(
+    pre_exile_pipeline_contract: ResolvedPreExilePipelineContract = field(
         default_factory=lambda: resolve_pre_exile_pipeline_contract({})
     )
 
-    def player(self, player_id: str) -> V2MatchPlayer:
+    def player(self, player_id: str) -> MatchPlayer:
         for player in self.players:
             if player.player_id == player_id:
                 return player
-        raise V2RepositoryError(f"unknown V2 player {player_id}")
+        raise RepositoryError(f"unknown V2 player {player_id}")
 
 
 @dataclass(frozen=True)
-class V2PrivateRoundMemoryCommit:
+class PrivateRoundMemoryCommit:
     player_id: str
     memory: str
     commit_index: int
@@ -147,8 +147,8 @@ class V2PrivateRoundMemoryCommit:
 
 
 @dataclass(frozen=True)
-class V2DaySpeechPrefetchSnapshot:
-    match_snapshot: V2MatchSnapshot
+class DaySpeechPrefetchSnapshot:
+    match_snapshot: MatchSnapshot
     public_cutoff_record_seq: int
     predecessor_presentation_id: str
     predecessor_action_id: str
@@ -159,8 +159,8 @@ class V2DaySpeechPrefetchSnapshot:
 
 
 @dataclass(frozen=True)
-class V2PreExilePrefetchSnapshot:
-    match_snapshot: V2MatchSnapshot
+class PreExilePrefetchSnapshot:
+    match_snapshot: MatchSnapshot
     public_cutoff_record_seq: int
     predecessor_presentation_id: str
     predecessor_action_id: str
@@ -171,21 +171,21 @@ class V2PreExilePrefetchSnapshot:
 
 
 @dataclass(frozen=True)
-class V2ExileResult:
+class ExileResult:
     player_id: str
     outcome: str
     winner_after_exile: str | None
 
 
 @dataclass(frozen=True)
-class V2PreExileExplosionCommit:
+class PreExileExplosionCommit:
     outcome: Literal["no_explosion", "explosion_selected"]
     selected_player_id: str | None
     failed_player_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class V2DayVoteCommit:
+class DayVoteCommit:
     voter_player_id: str
     target_player_id: str | None
     weight: float
@@ -205,7 +205,7 @@ class V2DayVoteCommit:
     ) = None
 
 
-class V2MatchRepository:
+class MatchRepository:
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -215,13 +215,13 @@ class V2MatchRepository:
         self._session_factory = session_factory
         self._enforce_execution_fence = enforce_execution_fence
 
-    def snapshot(self, game_id: str) -> V2MatchSnapshot:
+    def snapshot(self, game_id: str) -> MatchSnapshot:
         self._ensure_state(game_id)
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
-            match = db.get(V2MatchState, game_id)
+            game = db.get(GameRecord, game_id)
+            match = db.get(MatchState, game_id)
             if game is None or match is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return _match_snapshot(
                 db,
                 game=game,
@@ -240,7 +240,7 @@ class V2MatchRepository:
         predecessor_action_id: str,
         predecessor_source_event_id: int,
         predecessor_turn_player_id: str | None = None,
-    ) -> V2DaySpeechPrefetchSnapshot:
+    ) -> DaySpeechPrefetchSnapshot:
         """Freeze model context containing one active, sealed public predecessor.
 
         The regular snapshot remains closed-presentation-only. This projection is
@@ -257,36 +257,36 @@ class V2MatchRepository:
                 or game.phase_state != phase_state
                 or not phase_id.startswith("day_")
             ):
-                raise V2RepositoryError("day speech prefetch game/run/phase changed")
+                raise RepositoryError("day speech prefetch game/run/phase changed")
             run = _run(db, run_id)
             if (
                 run.game_id != game_id
                 or game.status not in {"broadcasting", "finalizing"}
                 or run.status != game.status
             ):
-                raise V2RepositoryError("day speech prefetch predecessor is not presenting")
+                raise RepositoryError("day speech prefetch predecessor is not presenting")
             match = _match(db, game)
             cutoff = game.last_record_seq
             latest_record_seq = db.scalar(
-                select(V2GameRecordEvent.record_seq)
-                .where(V2GameRecordEvent.game_id == game_id)
-                .order_by(V2GameRecordEvent.record_seq.desc())
+                select(GameRecordEvent.record_seq)
+                .where(GameRecordEvent.game_id == game_id)
+                .order_by(GameRecordEvent.record_seq.desc())
                 .limit(1)
             )
             if latest_record_seq != cutoff:
-                raise V2RepositoryError("day speech prefetch record cutoff is inconsistent")
+                raise RepositoryError("day speech prefetch record cutoff is inconsistent")
             active_presentations = list(
                 db.scalars(
-                    select(V2LivePresentation)
+                    select(LivePresentation)
                     .where(
-                        V2LivePresentation.game_id == game_id,
-                        V2LivePresentation.state == "active",
+                        LivePresentation.game_id == game_id,
+                        LivePresentation.state == "active",
                     )
-                    .order_by(V2LivePresentation.presentation_seq)
+                    .order_by(LivePresentation.presentation_seq)
                 )
             )
             if len(active_presentations) != 1:
-                raise V2RepositoryError(
+                raise RepositoryError(
                     "day speech prefetch predecessor is not the unique active presentation"
                 )
             predecessor = active_presentations[0]
@@ -294,7 +294,7 @@ class V2MatchRepository:
             if technical_skip_predecessor and resolve_day_speech_pipeline_contract(
                 game.rule_snapshot
             ).schema_version not in {2, 3}:
-                raise V2RepositoryError(
+                raise RepositoryError(
                     "technical skip prefetch predecessor requires pipeline schema v2 or v3"
                 )
             if (
@@ -308,21 +308,21 @@ class V2MatchRepository:
                 or predecessor.audience != "all"
                 or predecessor.closed_at is not None
             ):
-                raise V2RepositoryError("day speech prefetch predecessor identity is invalid")
+                raise RepositoryError("day speech prefetch predecessor identity is invalid")
             latest_presentation_seq = db.scalar(
-                select(V2LivePresentation.presentation_seq)
-                .where(V2LivePresentation.game_id == game_id)
-                .order_by(V2LivePresentation.presentation_seq.desc())
+                select(LivePresentation.presentation_seq)
+                .where(LivePresentation.game_id == game_id)
+                .order_by(LivePresentation.presentation_seq.desc())
                 .limit(1)
             )
             if (
                 latest_presentation_seq != predecessor.presentation_seq
                 or game.last_presentation_seq != predecessor.presentation_seq
             ):
-                raise V2RepositoryError("day speech prefetch predecessor is not latest")
+                raise RepositoryError("day speech prefetch predecessor is not latest")
 
             source = db.get(
-                V2GameRecordEvent,
+                GameRecordEvent,
                 (game_id, predecessor_source_event_id),
             )
             source_payload = source.payload if source is not None else None
@@ -340,16 +340,16 @@ class V2MatchRepository:
                 or source_payload.get("text") != predecessor.subtitle_text
                 or not predecessor.subtitle_text.strip()
             ):
-                raise V2RepositoryError("day speech prefetch predecessor source is invalid")
+                raise RepositoryError("day speech prefetch predecessor source is invalid")
 
             lineage = list(
                 db.scalars(
-                    select(V2GameRecordEvent)
+                    select(GameRecordEvent)
                     .where(
-                        V2GameRecordEvent.game_id == game_id,
-                        V2GameRecordEvent.run_id == run_id,
-                        V2GameRecordEvent.record_seq <= cutoff,
-                        V2GameRecordEvent.event_type.in_(
+                        GameRecordEvent.game_id == game_id,
+                        GameRecordEvent.run_id == run_id,
+                        GameRecordEvent.record_seq <= cutoff,
+                        GameRecordEvent.event_type.in_(
                             {
                                 "action_opened",
                                 "action_succeeded",
@@ -362,7 +362,7 @@ class V2MatchRepository:
                             }
                         ),
                     )
-                    .order_by(V2GameRecordEvent.record_seq)
+                    .order_by(GameRecordEvent.record_seq)
                 )
             )
             opened_actions = [
@@ -372,7 +372,7 @@ class V2MatchRepository:
                 and event.payload.get("action_id") == predecessor_action_id
             ]
             if len(opened_actions) != 1:
-                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+                raise RepositoryError("day speech prefetch predecessor action is invalid")
             opened = opened_actions[0]
             action_context = opened.payload.get("context")
             if (
@@ -384,7 +384,7 @@ class V2MatchRepository:
                 or action_context.get("phase_id") != phase_id
                 or action_context.get("action_record_seq") != opened.record_seq
             ):
-                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+                raise RepositoryError("day speech prefetch predecessor action is invalid")
             predecessor_turn_actor_id = predecessor.actor_id
             if technical_skip_predecessor:
                 speech_order = action_context.get("speech_order")
@@ -401,15 +401,15 @@ class V2MatchRepository:
                     or public_skip_record_seq <= 0
                     or public_skip_record_seq >= opened.record_seq
                 ):
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         "day speech technical skip predecessor action is invalid"
                     )
                 public_skip = db.scalar(
-                    select(V2GameRecordEvent).where(
-                        V2GameRecordEvent.game_id == game_id,
-                        V2GameRecordEvent.run_id == run_id,
-                        V2GameRecordEvent.record_seq == public_skip_record_seq,
-                        V2GameRecordEvent.event_type == "action_skipped_technical",
+                    select(GameRecordEvent).where(
+                        GameRecordEvent.game_id == game_id,
+                        GameRecordEvent.run_id == run_id,
+                        GameRecordEvent.record_seq == public_skip_record_seq,
+                        GameRecordEvent.event_type == "action_skipped_technical",
                     )
                 )
                 public_skip_payload = public_skip.payload if public_skip is not None else None
@@ -421,14 +421,14 @@ class V2MatchRepository:
                     or public_skip_payload.get("action_type") != "day_debate_speech"
                     or public_skip_payload.get("actor_id") != predecessor_turn_player_id
                 ):
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         "day speech technical skip predecessor has no public fact"
                     )
                 predecessor_turn_actor_id = predecessor_turn_player_id
             elif action_context.get("action_type") != "day_debate_speech" or action_context.get(
                 "actor"
             ) != {"kind": "player", "id": predecessor.actor_id}:
-                raise V2RepositoryError("day speech prefetch predecessor action is invalid")
+                raise RepositoryError("day speech prefetch predecessor action is invalid")
             speech_events = [
                 event
                 for event in lineage
@@ -473,7 +473,7 @@ class V2MatchRepository:
                     for event in (*speech_opened, *segments, *sealed)
                 )
             ):
-                raise V2RepositoryError("day speech prefetch predecessor is not sealed")
+                raise RepositoryError("day speech prefetch predecessor is not sealed")
 
             public_history = list(
                 _public_history(
@@ -484,7 +484,7 @@ class V2MatchRepository:
             )
             if not technical_skip_predecessor:
                 if any(int(item["record_seq"]) == source.record_seq for item in public_history):
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         "day speech prefetch history would duplicate predecessor"
                     )
                 public_history.append(
@@ -510,7 +510,7 @@ class V2MatchRepository:
                 last_record_seq=cutoff,
                 public_history=tuple(public_history),
             )
-            return V2DaySpeechPrefetchSnapshot(
+            return DaySpeechPrefetchSnapshot(
                 match_snapshot=snapshot,
                 public_cutoff_record_seq=cutoff,
                 predecessor_presentation_id=predecessor_presentation_id,
@@ -532,7 +532,7 @@ class V2MatchRepository:
         predecessor_action_id: str,
         predecessor_source_event_id: int,
         predecessor_turn_player_id: str | None = None,
-    ) -> V2PreExilePrefetchSnapshot:
+    ) -> PreExilePrefetchSnapshot:
         """Freeze the final sealed speech without publishing it before close."""
 
         frozen = self.snapshot_for_day_speech_prefetch(
@@ -550,8 +550,8 @@ class V2MatchRepository:
             contract.enables(action_type)
             for action_type in ("werewolf_self_explosion", "exile_vote")
         ):
-            raise V2RepositoryError("pre_exile_pipeline_contract_disabled")
-        return V2PreExilePrefetchSnapshot(
+            raise RepositoryError("pre_exile_pipeline_contract_disabled")
+        return PreExilePrefetchSnapshot(
             match_snapshot=frozen.match_snapshot,
             public_cutoff_record_seq=frozen.public_cutoff_record_seq,
             predecessor_presentation_id=frozen.predecessor_presentation_id,
@@ -606,7 +606,7 @@ class V2MatchRepository:
                 or match.round_no != round_no
                 or not phase_id.startswith("day_")
             ):
-                raise V2RepositoryError("private round memory batch phase changed")
+                raise RepositoryError("private round memory batch phase changed")
             terminal = _private_round_memory_batch_terminal_event(
                 db,
                 game_id=game_id,
@@ -622,10 +622,10 @@ class V2MatchRepository:
                 or payload.get("phase_state") != phase_state
                 or payload.get("private_round_memory_mode") != private_round_memory_mode
             ):
-                raise V2RepositoryError("private round memory batch terminal is inconsistent")
+                raise RepositoryError("private round memory batch terminal is inconsistent")
             status = payload.get("public_summary_status")
             if status not in {"completed", "failed"}:
-                raise V2RepositoryError("private round memory batch terminal status is invalid")
+                raise RepositoryError("private round memory batch terminal status is invalid")
             source_cutoff = _positive_int(payload.get("source_cutoff_record_seq"))
             commit_order = payload.get("commit_order")
             memories = payload.get("memories")
@@ -637,28 +637,28 @@ class V2MatchRepository:
                 or len(commit_order) != len(set(commit_order))
                 or not isinstance(memories, list)
             ):
-                raise V2RepositoryError("private round memory batch terminal is incomplete")
+                raise RepositoryError("private round memory batch terminal is incomplete")
             memory_by_owner = {
                 item.get("player_id"): item
                 for item in memories
                 if isinstance(item, dict) and isinstance(item.get("player_id"), str)
             }
             if set(memory_by_owner) != set(commit_order):
-                raise V2RepositoryError("private round memory batch terminal is incomplete")
+                raise RepositoryError("private round memory batch terminal is incomplete")
             fact_ids = {
                 item.get("knowledge_fact_id")
                 for item in memory_by_owner.values()
                 if item.get("status") in {"committed", "reused"}
             }
             if any(not isinstance(fact_id, str) or not fact_id for fact_id in fact_ids):
-                raise V2RepositoryError("private round memory batch terminal is incomplete")
+                raise RepositoryError("private round memory batch terminal is incomplete")
             durable_fact_ids = set(
                 db.scalars(
-                    select(V2KnowledgeFact.knowledge_fact_id).where(
-                        V2KnowledgeFact.game_id == game_id,
-                        V2KnowledgeFact.owner_scope == "player",
-                        V2KnowledgeFact.fact_type == "private_round_memory",
-                        V2KnowledgeFact.knowledge_fact_id.in_(fact_ids),
+                    select(KnowledgeFact.knowledge_fact_id).where(
+                        KnowledgeFact.game_id == game_id,
+                        KnowledgeFact.owner_scope == "player",
+                        KnowledgeFact.fact_type == "private_round_memory",
+                        KnowledgeFact.knowledge_fact_id.in_(fact_ids),
                     )
                 )
             )
@@ -666,7 +666,7 @@ class V2MatchRepository:
                 item.get("status") not in {"committed", "reused", "generation_failed"}
                 for item in memory_by_owner.values()
             ):
-                raise V2RepositoryError("private round memory batch terminal is incomplete")
+                raise RepositoryError("private round memory batch terminal is incomplete")
             return status
 
     def record_private_action_decision(
@@ -687,10 +687,10 @@ class V2MatchRepository:
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if match.round_no != round_no or not game.phase_id.startswith("day_"):
-                raise V2RepositoryError("private action decision phase changed before commit")
-            player = db.get(V2PlayerState, (game_id, player_id))
+                raise RepositoryError("private action decision phase changed before commit")
+            player = db.get(PlayerState, (game_id, player_id))
             if player is None or not player.alive:
-                raise V2RepositoryError("private action decision owner must be alive")
+                raise RepositoryError("private action decision owner must be alive")
             return _add_private_action_decision(
                 db,
                 game=game,
@@ -713,7 +713,7 @@ class V2MatchRepository:
         batch_id: str,
         public_cutoff_record_seq: int,
         expected_voter_ids: tuple[str, ...],
-        votes: tuple[V2DayVoteCommit, ...],
+        votes: tuple[DayVoteCommit, ...],
         decision_context: dict[str, Any],
         resolution_payload: dict[str, Any],
         pre_exile_pipeline_id: str | None = None,
@@ -722,25 +722,25 @@ class V2MatchRepository:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
-            pre_exile_pipeline: V2PreExilePipeline | None = None
-            pre_exile_all_results: list[V2PreExileResult] = []
-            pre_exile_self_results: list[V2PreExileResult] = []
-            pre_exile_results: list[V2PreExileResult] = []
+            pre_exile_pipeline: PreExilePipeline | None = None
+            pre_exile_all_results: list[PreExileResult] = []
+            pre_exile_self_results: list[PreExileResult] = []
+            pre_exile_results: list[PreExileResult] = []
             if pre_exile_pipeline_id is not None:
                 pre_exile_pipeline = db.scalar(
-                    select(V2PreExilePipeline)
-                    .where(V2PreExilePipeline.pipeline_id == pre_exile_pipeline_id)
+                    select(PreExilePipeline)
+                    .where(PreExilePipeline.pipeline_id == pre_exile_pipeline_id)
                     .with_for_update()
                 )
                 if pre_exile_pipeline is None:
-                    raise V2RepositoryError("unknown pre-exile pipeline")
+                    raise RepositoryError("unknown pre-exile pipeline")
                 pre_exile_all_results = list(
                     db.scalars(
-                        select(V2PreExileResult)
-                        .where(V2PreExileResult.pipeline_id == pre_exile_pipeline_id)
+                        select(PreExileResult)
+                        .where(PreExileResult.pipeline_id == pre_exile_pipeline_id)
                         .order_by(
-                            V2PreExileResult.result_kind,
-                            V2PreExileResult.actor_player_id,
+                            PreExileResult.result_kind,
+                            PreExileResult.actor_player_id,
                         )
                         .with_for_update()
                     )
@@ -901,7 +901,7 @@ class V2MatchRepository:
         round_no: int,
         batch_id: str,
         source_cutoff_record_seq: int,
-        commits: tuple[V2PrivateRoundMemoryCommit, ...],
+        commits: tuple[PrivateRoundMemoryCommit, ...],
         batch_completed_payload: dict[str, Any] | None = None,
     ) -> list[tuple[str, bool]]:
         commit_indexes = tuple(commit.commit_index for commit in commits)
@@ -909,9 +909,9 @@ class V2MatchRepository:
             any(index <= 0 for index in commit_indexes)
             or commit_indexes != tuple(sorted(set(commit_indexes)))
         ):
-            raise V2RepositoryError("private round memory commit order is invalid")
+            raise RepositoryError("private round memory commit order is invalid")
         if len({commit.player_id for commit in commits}) != len(commits):
-            raise V2RepositoryError("private round memory owners are duplicated")
+            raise RepositoryError("private round memory owners are duplicated")
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
@@ -923,7 +923,7 @@ class V2MatchRepository:
                 or game.phase_id != phase_id
                 or game.phase_state != phase_state
             ):
-                raise V2RepositoryError("private round memory phase changed before commit")
+                raise RepositoryError("private round memory phase changed before commit")
             terminal = _private_round_memory_batch_terminal_event(
                 db,
                 game_id=game_id,
@@ -932,33 +932,33 @@ class V2MatchRepository:
             )
             existing_rows = list(
                 db.scalars(
-                    select(V2KnowledgeFact).where(
-                        V2KnowledgeFact.game_id == game_id,
-                        V2KnowledgeFact.owner_scope == "player",
-                        V2KnowledgeFact.fact_type == "private_round_memory",
+                    select(KnowledgeFact).where(
+                        KnowledgeFact.game_id == game_id,
+                        KnowledgeFact.owner_scope == "player",
+                        KnowledgeFact.fact_type == "private_round_memory",
                     )
                 )
             )
             if source_cutoff_record_seq <= 0 or source_cutoff_record_seq > game.last_record_seq:
-                raise V2RepositoryError("private round memory cutoff is invalid")
-            rows_by_owner: dict[str, list[V2KnowledgeFact]] = {}
+                raise RepositoryError("private round memory cutoff is invalid")
+            rows_by_owner: dict[str, list[KnowledgeFact]] = {}
             for row in existing_rows:
                 rows_by_owner.setdefault(row.owner_id, []).append(row)
             prepared: list[
                 tuple[
-                    V2PrivateRoundMemoryCommit,
+                    PrivateRoundMemoryCommit,
                     str,
                     str,
-                    V2KnowledgeFact | None,
+                    KnowledgeFact | None,
                 ]
             ] = []
             for commit in commits:
                 normalized_memory = commit.memory.strip()
                 if not normalized_memory:
-                    raise V2RepositoryError("private round memory cannot be empty")
-                player = db.get(V2PlayerState, (game_id, commit.player_id))
+                    raise RepositoryError("private round memory cannot be empty")
+                player = db.get(PlayerState, (game_id, commit.player_id))
                 if player is None or not player.alive:
-                    raise V2RepositoryError("private round memory owner must be alive")
+                    raise RepositoryError("private round memory owner must be alive")
                 owner_rows = rows_by_owner.get(commit.player_id, [])
                 latest = max(owner_rows, key=_private_round_memory_order, default=None)
                 latest_id = latest.knowledge_fact_id if latest is not None else None
@@ -979,7 +979,7 @@ class V2MatchRepository:
                     or any(not isinstance(item, str) or not item for item in source_refs)
                     or len(source_refs) != len(set(source_refs))
                 ):
-                    raise V2RepositoryError("private round memory source refs are invalid")
+                    raise RepositoryError("private round memory source refs are invalid")
                 expected_hash = private_round_memory_source_refs_sha256(
                     owner_id=commit.player_id,
                     round_no=round_no,
@@ -988,7 +988,7 @@ class V2MatchRepository:
                     source_refs=source_refs,
                 )
                 if commit.source_refs_sha256 != expected_hash:
-                    raise V2RepositoryError("private round memory source hash is invalid")
+                    raise RepositoryError("private round memory source hash is invalid")
                 expected_source_refs = _private_round_memory_source_refs(
                     db,
                     game_id=game_id,
@@ -997,7 +997,7 @@ class V2MatchRepository:
                     previous_snapshot_fact_id=commit.previous_snapshot_fact_id,
                 )
                 if source_refs != expected_source_refs:
-                    raise V2RepositoryError("private round memory source refs do not match facts")
+                    raise RepositoryError("private round memory source refs do not match facts")
                 _validate_private_round_memory_model_lineage(
                     db,
                     game=game,
@@ -1048,15 +1048,15 @@ class V2MatchRepository:
                             != commit.projected_known_events_sha256,
                         )
                     ):
-                        raise V2RepositoryError("private round memory retry changed frozen input")
+                        raise RepositoryError("private round memory retry changed frozen input")
                     prepared.append((commit, normalized_memory, memory_sha256, existing))
                     continue
                 if latest_id != commit.previous_snapshot_fact_id:
-                    raise V2RepositoryError("private round memory predecessor changed before commit")
+                    raise RepositoryError("private round memory predecessor changed before commit")
                 if latest_round is not None and latest_round >= round_no:
-                    raise V2RepositoryError("private round memory round is not monotonic")
+                    raise RepositoryError("private round memory round is not monotonic")
                 if latest_cutoff is not None and source_cutoff_record_seq <= latest_cutoff:
-                    raise V2RepositoryError("private round memory cutoff is not monotonic")
+                    raise RepositoryError("private round memory cutoff is not monotonic")
                 prepared.append(
                     (
                         commit,
@@ -1068,7 +1068,7 @@ class V2MatchRepository:
 
             if terminal is not None:
                 if any(existing is None for _commit, _memory, _hash, existing in prepared):
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         "private round memory terminal exists without committed facts"
                     )
                 results = [
@@ -1078,7 +1078,7 @@ class V2MatchRepository:
                 ]
                 terminal_payload = terminal.payload if isinstance(terminal.payload, dict) else {}
                 if terminal_payload.get("public_summary_status") != "completed":
-                    raise V2RepositoryError("private round memory batch already failed")
+                    raise RepositoryError("private round memory batch already failed")
                 if batch_completed_payload is not None:
                     expected_keys = (
                         "round_no",
@@ -1094,7 +1094,7 @@ class V2MatchRepository:
                         terminal_payload.get(key) != batch_completed_payload.get(key)
                         for key in expected_keys
                     ):
-                        raise V2RepositoryError(
+                        raise RepositoryError(
                             "private round memory retry changed terminal input"
                         )
                     expected_failed = {
@@ -1120,7 +1120,7 @@ class V2MatchRepository:
                             commits, results, strict=True
                         )
                     ):
-                        raise V2RepositoryError(
+                        raise RepositoryError(
                             "private round memory retry changed terminal results"
                         )
                 return results
@@ -1158,7 +1158,7 @@ class V2MatchRepository:
                     ),
                 }
                 db.add(
-                    V2KnowledgeFact(
+                    KnowledgeFact(
                         knowledge_fact_id=fact_id,
                         game_id=game_id,
                         source_activation_id=None,
@@ -1233,11 +1233,11 @@ class V2MatchRepository:
                 payload=payload,
             )
 
-    def record_phase_state(self, *, game_id: str, previous_phase_state: str) -> V2PhaseTransition:
+    def record_phase_state(self, *, game_id: str, previous_phase_state: str) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1272,9 +1272,9 @@ class V2MatchRepository:
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             if player_id is not None:
-                target = db.get(V2PlayerState, (game_id, player_id))
+                target = db.get(PlayerState, (game_id, player_id))
                 if target is None or not target.alive:
-                    raise V2RepositoryError("sheriff target must be alive")
+                    raise RepositoryError("sheriff target must be alive")
                 previous_sheriff_id = match.sheriff_player_id
                 match.sheriff_player_id = player_id
                 match.sheriff_badge_state = "held"
@@ -1359,10 +1359,10 @@ class V2MatchRepository:
         pipeline_id: str,
         expected_wolf_ids: tuple[str, ...],
         stage: str = "before_exile_vote",
-    ) -> V2PreExileExplosionCommit:
+    ) -> PreExileExplosionCommit:
         """Resolve the arbiter and mutate an explosion in one transaction."""
 
-        from app.v2.pre_exile_pipeline_repository import (  # avoids module cycle
+        from app.match.pre_exile_pipeline_repository import (  # avoids module cycle
             _terminalize_result_actions,
             _validate_predecessor_closed,
         )
@@ -1374,15 +1374,15 @@ class V2MatchRepository:
                 not isinstance(player_id, str) or not player_id for player_id in expected_wolf_ids
             )
         ):
-            raise V2RepositoryError("invalid expected pre-exile wolves")
+            raise RepositoryError("invalid expected pre-exile wolves")
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             run = _run(db, game.current_run_id)
             match = _match(db, game)
             pipeline = db.scalar(
-                select(V2PreExilePipeline)
-                .where(V2PreExilePipeline.pipeline_id == pipeline_id)
+                select(PreExilePipeline)
+                .where(PreExilePipeline.pipeline_id == pipeline_id)
                 .with_for_update()
             )
             if (
@@ -1394,20 +1394,20 @@ class V2MatchRepository:
                 or pipeline.phase_id != game.phase_id
                 or pipeline.round_no != match.round_no
             ):
-                raise V2RepositoryError("pre-exile self-explosion gate changed")
+                raise RepositoryError("pre-exile self-explosion gate changed")
             self_results = list(
                 db.scalars(
-                    select(V2PreExileResult)
+                    select(PreExileResult)
                     .where(
-                        V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                        V2PreExileResult.result_kind == "self_explosion",
+                        PreExileResult.pipeline_id == pipeline.pipeline_id,
+                        PreExileResult.result_kind == "self_explosion",
                     )
                     .with_for_update()
                 )
             )
             by_actor = {row.actor_player_id: row for row in self_results}
             if set(by_actor) != set(expected_wolf_ids):
-                raise V2RepositoryError("pre-exile self-explosion batch is incomplete")
+                raise RepositoryError("pre-exile self-explosion batch is incomplete")
             failed = tuple(
                 player_id
                 for player_id in expected_wolf_ids
@@ -1420,26 +1420,26 @@ class V2MatchRepository:
                 "explosion_selected",
             }:
                 if any(row.state != "committed" for row in self_results):
-                    raise V2RepositoryError(
+                    raise RepositoryError(
                         "resolved pre-exile self-explosion result is nonterminal"
                     )
                 selected = pipeline.selected_explosion_player_id
-                return V2PreExileExplosionCommit(
+                return PreExileExplosionCommit(
                     outcome=("explosion_selected" if selected is not None else "no_explosion"),
                     selected_player_id=selected,
                     failed_player_ids=failed,
                 )
             if pipeline.state != "collecting":
-                raise V2RepositoryError(f"cannot resolve pre-exile pipeline from {pipeline.state}")
+                raise RepositoryError(f"cannot resolve pre-exile pipeline from {pipeline.state}")
             if any(row.state not in {"ready", "failed"} for row in self_results):
-                raise V2RepositoryError("pre-exile self-explosion batch is incomplete")
+                raise RepositoryError("pre-exile self-explosion batch is incomplete")
             if any(
                 not isinstance(row.private_fact_id, str)
                 or not row.private_fact_id
                 or type(row.private_fact_record_seq) is not int
                 for row in self_results
             ):
-                raise V2RepositoryError("pre-exile self-explosion private fact is incomplete")
+                raise RepositoryError("pre-exile self-explosion private fact is incomplete")
             for row in self_results:
                 _validate_pre_exile_self_fact_lineage(
                     db,
@@ -1458,24 +1458,24 @@ class V2MatchRepository:
             wolf_rows = list(
                 db.execute(
                     select(
-                        V2RoleAssignment.player_id,
-                        V2RoleAssignment.seat,
-                        V2PlayerState.alive,
+                        RoleAssignment.player_id,
+                        RoleAssignment.seat,
+                        PlayerState.alive,
                     )
                     .join(
-                        V2PlayerState,
-                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                        PlayerState,
+                        (PlayerState.game_id == RoleAssignment.game_id)
+                        & (PlayerState.player_id == RoleAssignment.player_id),
                     )
                     .where(
-                        V2RoleAssignment.game_id == game.game_id,
-                        V2RoleAssignment.role_key == "werewolf",
+                        RoleAssignment.game_id == game.game_id,
+                        RoleAssignment.role_key == "werewolf",
                     )
                 )
             )
             alive_wolves = {player_id: seat for player_id, seat, alive in wolf_rows if alive}
             if set(alive_wolves) != set(expected_wolf_ids):
-                raise V2RepositoryError("pre-exile wolf roster changed")
+                raise RepositoryError("pre-exile wolf roster changed")
             affirmative = sorted(
                 (
                     player_id
@@ -1489,23 +1489,23 @@ class V2MatchRepository:
             if affirmative:
                 selected = affirmative[0]
                 existing_vote_event = db.scalar(
-                    select(V2GameRecordEvent).where(
-                        V2GameRecordEvent.game_id == game.game_id,
-                        V2GameRecordEvent.run_id == game.current_run_id,
-                        V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
-                        V2GameRecordEvent.event_type.in_(
+                    select(GameRecordEvent).where(
+                        GameRecordEvent.game_id == game.game_id,
+                        GameRecordEvent.run_id == game.current_run_id,
+                        GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                        GameRecordEvent.event_type.in_(
                             ("day_vote_committed", "day_vote_resolved")
                         ),
                     )
                 )
                 if existing_vote_event is not None:
-                    raise V2RepositoryError("cannot resolve explosion after public vote commit")
+                    raise RepositoryError("cannot resolve explosion after public vote commit")
                 vote_results = list(
                     db.scalars(
-                        select(V2PreExileResult)
+                        select(PreExileResult)
                         .where(
-                            V2PreExileResult.pipeline_id == pipeline.pipeline_id,
-                            V2PreExileResult.result_kind == "exile_vote",
+                            PreExileResult.pipeline_id == pipeline.pipeline_id,
+                            PreExileResult.result_kind == "exile_vote",
                         )
                         .with_for_update()
                     )
@@ -1588,26 +1588,26 @@ class V2MatchRepository:
                     "commit_mode": "durable_atomic_arbiter",
                 },
             )
-            return V2PreExileExplosionCommit(
+            return PreExileExplosionCommit(
                 outcome=outcome,
                 selected_player_id=selected,
                 failed_player_ids=failed,
             )
 
-    def resolve_exile(self, *, game_id: str, player_id: str) -> V2ExileResult:
+    def resolve_exile(self, *, game_id: str, player_id: str) -> ExileResult:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
             assignment = db.scalar(
-                select(V2RoleAssignment).where(
-                    V2RoleAssignment.game_id == game_id,
-                    V2RoleAssignment.player_id == player_id,
+                select(RoleAssignment).where(
+                    RoleAssignment.game_id == game_id,
+                    RoleAssignment.player_id == player_id,
                 )
             )
-            state = db.get(V2PlayerState, (game_id, player_id))
+            state = db.get(PlayerState, (game_id, player_id))
             if assignment is None or state is None or not state.alive:
-                raise V2RepositoryError("exile target must be alive")
+                raise RepositoryError("exile target must be alive")
             player_state = dict(state.state or {})
             if assignment.role_key == "idiot" and not player_state.get("idiot_revealed"):
                 player_state["idiot_revealed"] = True
@@ -1635,7 +1635,7 @@ class V2MatchRepository:
                     audience="all",
                     payload={"round_no": match.round_no, "player_id": player_id},
                 )
-            return V2ExileResult(
+            return ExileResult(
                 player_id=player_id,
                 outcome=outcome,
                 winner_after_exile=_winner(db, game),
@@ -1652,19 +1652,19 @@ class V2MatchRepository:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             match = _match(db, game)
-            hunter = db.get(V2PlayerState, (game_id, hunter_id))
+            hunter = db.get(PlayerState, (game_id, hunter_id))
             if hunter is None or hunter.alive or hunter.death_cause == "witch_poison":
-                raise V2RepositoryError("hunter response is not eligible")
+                raise RepositoryError("hunter response is not eligible")
             hunter_state = dict(hunter.state or {})
             if hunter_state.get("hunter_response_resolved"):
-                raise V2RepositoryError("hunter response already resolved")
+                raise RepositoryError("hunter response already resolved")
             hunter_state["hunter_response_resolved"] = True
             hunter.state = hunter_state
             if target_player_id is not None:
                 _kill(db, game=game, player_id=target_player_id, cause="hunter_shot")
             knowledge_fact_id = f"v2_fact_{uuid4().hex[:16]}"
             db.add(
-                V2KnowledgeFact(
+                KnowledgeFact(
                     knowledge_fact_id=knowledge_fact_id,
                     game_id=game_id,
                     source_activation_id=None,
@@ -1702,20 +1702,20 @@ class V2MatchRepository:
             rows = list(
                 db.execute(
                     select(
-                        V2RoleAssignment.player_id, V2PlayerState.death_cause, V2PlayerState.state
+                        RoleAssignment.player_id, PlayerState.death_cause, PlayerState.state
                     )
                     .join(
-                        V2PlayerState,
-                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                        PlayerState,
+                        (PlayerState.game_id == RoleAssignment.game_id)
+                        & (PlayerState.player_id == RoleAssignment.player_id),
                     )
                     .where(
-                        V2RoleAssignment.game_id == game_id,
-                        V2RoleAssignment.role_key == "hunter",
-                        V2PlayerState.alive.is_(False),
-                        V2PlayerState.death_cause != "witch_poison",
+                        RoleAssignment.game_id == game_id,
+                        RoleAssignment.role_key == "hunter",
+                        PlayerState.alive.is_(False),
+                        PlayerState.death_cause != "witch_poison",
                     )
-                    .order_by(V2RoleAssignment.seat)
+                    .order_by(RoleAssignment.seat)
                 )
             )
             return tuple(
@@ -1726,25 +1726,25 @@ class V2MatchRepository:
 
     def hunter_settlement_can_change_winner(self, game_id: str) -> bool:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             rows = list(
                 db.execute(
                     select(
-                        V2RoleAssignment.player_id,
-                        V2RoleAssignment.role_key,
-                        V2PlayerState.alive,
-                        V2PlayerState.death_cause,
-                        V2PlayerState.state,
+                        RoleAssignment.player_id,
+                        RoleAssignment.role_key,
+                        PlayerState.alive,
+                        PlayerState.death_cause,
+                        PlayerState.state,
                     )
                     .join(
-                        V2PlayerState,
-                        (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                        & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                        PlayerState,
+                        (PlayerState.game_id == RoleAssignment.game_id)
+                        & (PlayerState.player_id == RoleAssignment.player_id),
                     )
-                    .where(V2RoleAssignment.game_id == game_id)
-                    .order_by(V2RoleAssignment.seat)
+                    .where(RoleAssignment.game_id == game_id)
+                    .order_by(RoleAssignment.seat)
                 )
             )
             return hunter_settlement_can_change_winner(
@@ -1767,36 +1767,36 @@ class V2MatchRepository:
                 ),
             )
 
-    def finish_day(self, *, game_id: str, reason: str) -> V2PhaseTransition:
+    def finish_day(self, *, game_id: str, reason: str) -> PhaseTransition:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
             _raise_if_stop_requested(db, game)
             open_slot_id = db.scalar(
-                select(V2DaySpeechSlot.slot_id)
+                select(DaySpeechSlot.slot_id)
                 .where(
-                    V2DaySpeechSlot.game_id == game.game_id,
-                    V2DaySpeechSlot.run_id == game.current_run_id,
-                    V2DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
+                    DaySpeechSlot.game_id == game.game_id,
+                    DaySpeechSlot.run_id == game.current_run_id,
+                    DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
                 )
-                .order_by(V2DaySpeechSlot.slot_id)
+                .order_by(DaySpeechSlot.slot_id)
                 .limit(1)
                 .with_for_update()
             )
             if open_slot_id is not None:
-                raise V2RepositoryError("cannot finish day with a nonterminal day speech slot")
+                raise RepositoryError("cannot finish day with a nonterminal day speech slot")
             open_pre_exile_pipeline_id = db.scalar(
-                select(V2PreExilePipeline.pipeline_id)
+                select(PreExilePipeline.pipeline_id)
                 .where(
-                    V2PreExilePipeline.game_id == game.game_id,
-                    V2PreExilePipeline.run_id == game.current_run_id,
-                    V2PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
+                    PreExilePipeline.game_id == game.game_id,
+                    PreExilePipeline.run_id == game.current_run_id,
+                    PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
                 )
-                .order_by(V2PreExilePipeline.pipeline_id)
+                .order_by(PreExilePipeline.pipeline_id)
                 .limit(1)
                 .with_for_update()
             )
             if open_pre_exile_pipeline_id is not None:
-                raise V2RepositoryError("cannot finish day with a nonterminal pre-exile pipeline")
+                raise RepositoryError("cannot finish day with a nonterminal pre-exile pipeline")
             match = _match(db, game)
             winner = _winner(db, game)
             previous_phase_id = game.phase_id
@@ -1849,7 +1849,7 @@ class V2MatchRepository:
                 game.phase_state = "nightfall_ready"
                 game.status = "ready"
                 _run(db, game.current_run_id).status = "ready"
-            transition = V2PhaseTransition(
+            transition = PhaseTransition(
                 game_id=game.game_id,
                 run_id=game.current_run_id,
                 phase_seq=game.phase_seq,
@@ -1874,9 +1874,9 @@ class V2MatchRepository:
 
     def current_winner(self, game_id: str) -> str | None:
         with self._session_factory() as db:
-            game = db.get(V2GameRecord, game_id)
+            game = db.get(GameRecord, game_id)
             if game is None:
-                raise V2RepositoryError(f"unknown game {game_id}")
+                raise RepositoryError(f"unknown game {game_id}")
             return _winner(db, game)
 
     def fail_runtime(self, *, game_id: str, failure_code: str) -> str:
@@ -1887,13 +1887,13 @@ class V2MatchRepository:
             failed_at = _now()
             invalidated_slots = list(
                 db.scalars(
-                    select(V2DaySpeechSlot)
+                    select(DaySpeechSlot)
                     .where(
-                        V2DaySpeechSlot.game_id == game.game_id,
-                        V2DaySpeechSlot.run_id == run.run_id,
-                        V2DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
+                        DaySpeechSlot.game_id == game.game_id,
+                        DaySpeechSlot.run_id == run.run_id,
+                        DaySpeechSlot.state.in_(_NONTERMINAL_DAY_SPEECH_SLOT_STATES),
                     )
-                    .order_by(V2DaySpeechSlot.slot_id)
+                    .order_by(DaySpeechSlot.slot_id)
                     .with_for_update()
                 )
             )
@@ -1926,27 +1926,27 @@ class V2MatchRepository:
                 )
             invalidated_pre_exile_pipelines = list(
                 db.scalars(
-                    select(V2PreExilePipeline)
+                    select(PreExilePipeline)
                     .where(
-                        V2PreExilePipeline.game_id == game.game_id,
-                        V2PreExilePipeline.run_id == run.run_id,
-                        V2PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
+                        PreExilePipeline.game_id == game.game_id,
+                        PreExilePipeline.run_id == run.run_id,
+                        PreExilePipeline.state.in_(_NONTERMINAL_PRE_EXILE_PIPELINE_STATES),
                     )
-                    .order_by(V2PreExilePipeline.pipeline_id)
+                    .order_by(PreExilePipeline.pipeline_id)
                     .with_for_update()
                 )
             )
             invalidated_pre_exile_result_count = 0
             if invalidated_pre_exile_pipelines:
-                from app.v2.pre_exile_pipeline_repository import (
+                from app.match.pre_exile_pipeline_repository import (
                     _terminalize_result_actions,
                 )
 
                 for pipeline in invalidated_pre_exile_pipelines:
                     results = list(
                         db.scalars(
-                            select(V2PreExileResult)
-                            .where(V2PreExileResult.pipeline_id == pipeline.pipeline_id)
+                            select(PreExileResult)
+                            .where(PreExileResult.pipeline_id == pipeline.pipeline_id)
                             .with_for_update()
                         )
                     )
@@ -1991,7 +1991,7 @@ class V2MatchRepository:
             game.phase_state = "failed"
             run.status = "failed"
             run.completed_at = failed_at
-            match = db.get(V2MatchState, game_id)
+            match = db.get(MatchState, game_id)
             if match is not None:
                 match.completion_reason = failure_code
             # The session factory disables autoflush. Make the synthetic attempt/action
@@ -2020,13 +2020,13 @@ class V2MatchRepository:
     def _ensure_state(self, game_id: str) -> None:
         with self._session_factory.begin() as db:
             game = _locked_game(db, game_id, require_fence=self._enforce_execution_fence)
-            if db.get(V2MatchState, game_id) is not None:
+            if db.get(MatchState, game_id) is not None:
                 return
             rule = game.rule_snapshot.get("rule_set")
             if not isinstance(rule, dict):
-                raise V2RepositoryError("V2 match has no frozen rule")
+                raise RepositoryError("V2 match has no frozen rule")
             db.add(
-                V2MatchState(
+                MatchState(
                     game_id=game_id,
                     round_no=_round_no(game.phase_id),
                     sheriff_badge_state=(
@@ -2036,12 +2036,12 @@ class V2MatchRepository:
             )
 
 
-def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
+def _players(db: Session, game: GameRecord) -> tuple[MatchPlayer, ...]:
     assignments = list(
         db.scalars(
-            select(V2RoleAssignment)
-            .where(V2RoleAssignment.game_id == game.game_id)
-            .order_by(V2RoleAssignment.seat)
+            select(RoleAssignment)
+            .where(RoleAssignment.game_id == game.game_id)
+            .order_by(RoleAssignment.seat)
         )
     )
     profiles = {
@@ -2049,18 +2049,18 @@ def _players(db: Session, game: V2GameRecord) -> tuple[V2MatchPlayer, ...]:
         for item in game.players_snapshot
         if isinstance(item, dict) and item.get("profile_id")
     }
-    players: list[V2MatchPlayer] = []
+    players: list[MatchPlayer] = []
     for assignment in assignments:
-        state = db.get(V2PlayerState, (game.game_id, assignment.player_id))
+        state = db.get(PlayerState, (game.game_id, assignment.player_id))
         if state is None:
-            raise V2RepositoryError("player state is incomplete")
+            raise RepositoryError("player state is incomplete")
         profile = profiles.get(assignment.player_id, {})
         try:
             frozen_model = frozen_player_model_configuration(profile)
-        except V2FrozenModelParametersError as exc:
-            raise V2RepositoryError("invalid frozen player model configuration") from exc
+        except FrozenModelParametersError as exc:
+            raise RepositoryError("invalid frozen player model configuration") from exc
         players.append(
-            V2MatchPlayer(
+            MatchPlayer(
                 player_id=assignment.player_id,
                 seat=assignment.seat,
                 display_name=str(profile.get("name") or f"{assignment.seat}号玩家"),
@@ -2111,20 +2111,20 @@ _PUBLIC_HISTORY_TYPES = {
 def _match_snapshot(
     db: Session,
     *,
-    game: V2GameRecord,
-    match: V2MatchState,
+    game: GameRecord,
+    match: MatchState,
     public_history: tuple[dict[str, Any], ...],
     last_record_seq: int | None = None,
-) -> V2MatchSnapshot:
+) -> MatchSnapshot:
     rule = game.rule_snapshot.get("rule_set")
     if not isinstance(rule, dict):
-        raise V2RepositoryError("V2 match has no frozen rule")
+        raise RepositoryError("V2 match has no frozen rule")
     compiled_rule = dict(rule)
     compiled_rule["day_actions"] = list(game.ability_snapshot.get("day_actions") or [])
     compiled_rule["ability_policies"] = dict(game.ability_snapshot.get("policies") or {})
     for key, value in dict(game.ability_snapshot.get("day_policies") or {}).items():
         compiled_rule.setdefault(key, value)
-    return V2MatchSnapshot(
+    return MatchSnapshot(
         game_id=game.game_id,
         run_id=game.current_run_id,
         last_record_seq=(game.last_record_seq if last_record_seq is None else last_record_seq),
@@ -2155,16 +2155,16 @@ def _public_history(
     at_or_before_record_seq: int | None = None,
 ) -> tuple[dict[str, Any], ...]:
     event_conditions = [
-        V2GameRecordEvent.game_id == game_id,
-        V2GameRecordEvent.event_type.in_(_PUBLIC_HISTORY_TYPES),
+        GameRecordEvent.game_id == game_id,
+        GameRecordEvent.event_type.in_(_PUBLIC_HISTORY_TYPES),
     ]
     if at_or_before_record_seq is not None:
-        event_conditions.append(V2GameRecordEvent.record_seq <= at_or_before_record_seq)
+        event_conditions.append(GameRecordEvent.record_seq <= at_or_before_record_seq)
     rows = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(*event_conditions)
-            .order_by(V2GameRecordEvent.record_seq.desc())
+            .order_by(GameRecordEvent.record_seq.desc())
         )
     )
     rows.reverse()
@@ -2178,24 +2178,24 @@ def _public_history(
         for row in rows
     ]
     presentation_conditions = [
-        V2LivePresentation.game_id == game_id,
-        V2LivePresentation.actor_kind == "player",
-        V2LivePresentation.audience == "all",
-        V2LivePresentation.state == "closed",
+        LivePresentation.game_id == game_id,
+        LivePresentation.actor_kind == "player",
+        LivePresentation.audience == "all",
+        LivePresentation.state == "closed",
     ]
     presentations = list(
         db.scalars(
-            select(V2LivePresentation)
+            select(LivePresentation)
             .where(*presentation_conditions)
-            .order_by(V2LivePresentation.source_event_id)
+            .order_by(LivePresentation.source_event_id)
         )
     )
     source_events = {
         row.event_id: row
         for row in db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_id.in_({row.source_event_id for row in presentations}),
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.event_id.in_({row.source_event_id for row in presentations}),
             )
         )
     }
@@ -2211,10 +2211,10 @@ def _public_history(
         closed_event_seqs = {
             str(payload.get("presentation_id")): event.record_seq
             for event in db.scalars(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == game_id,
-                    V2GameRecordEvent.event_type.in_({"speech_closed", "presentation_closed"}),
-                    V2GameRecordEvent.record_seq <= at_or_before_record_seq,
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == game_id,
+                    GameRecordEvent.event_type.in_({"speech_closed", "presentation_closed"}),
+                    GameRecordEvent.record_seq <= at_or_before_record_seq,
                 )
             )
             for payload in (event.payload,)
@@ -2258,12 +2258,12 @@ def _action_types_by_id(
     at_or_before_record_seq: int | None = None,
 ) -> dict[str, str]:
     conditions = [
-        V2GameRecordEvent.game_id == game_id,
-        V2GameRecordEvent.event_type == "action_opened",
+        GameRecordEvent.game_id == game_id,
+        GameRecordEvent.event_type == "action_opened",
     ]
     if at_or_before_record_seq is not None:
-        conditions.append(V2GameRecordEvent.record_seq <= at_or_before_record_seq)
-    rows = list(db.scalars(select(V2GameRecordEvent).where(*conditions)))
+        conditions.append(GameRecordEvent.record_seq <= at_or_before_record_seq)
+    rows = list(db.scalars(select(GameRecordEvent).where(*conditions)))
     action_types: dict[str, str] = {}
     for row in rows:
         payload = row.payload if isinstance(row.payload, dict) else {}
@@ -2277,16 +2277,16 @@ def _action_types_by_id(
     return action_types
 
 
-def _winner(db: Session, game: V2GameRecord) -> str | None:
+def _winner(db: Session, game: GameRecord) -> str | None:
     rows = list(
         db.execute(
-            select(V2RoleAssignment.role_key, V2PlayerState.alive)
+            select(RoleAssignment.role_key, PlayerState.alive)
             .join(
-                V2PlayerState,
-                (V2PlayerState.game_id == V2RoleAssignment.game_id)
-                & (V2PlayerState.player_id == V2RoleAssignment.player_id),
+                PlayerState,
+                (PlayerState.game_id == RoleAssignment.game_id)
+                & (PlayerState.player_id == RoleAssignment.player_id),
             )
-            .where(V2RoleAssignment.game_id == game.game_id)
+            .where(RoleAssignment.game_id == game.game_id)
         )
     )
     alive_roles = [role_key for role_key, alive in rows if alive]
@@ -2296,19 +2296,19 @@ def _winner(db: Session, game: V2GameRecord) -> str | None:
     )
 
 
-def _kill(db: Session, *, game: V2GameRecord, player_id: str, cause: str) -> None:
-    state = db.get(V2PlayerState, (game.game_id, player_id))
+def _kill(db: Session, *, game: GameRecord, player_id: str, cause: str) -> None:
+    state = db.get(PlayerState, (game.game_id, player_id))
     if state is None or not state.alive:
-        raise V2RepositoryError("death target must be alive")
+        raise RepositoryError("death target must be alive")
     state.alive = False
     state.death_cause = cause
     state.death_window_seq = None
 
 
-def _match(db: Session, game: V2GameRecord) -> V2MatchState:
-    match = db.get(V2MatchState, game.game_id)
+def _match(db: Session, game: GameRecord) -> MatchState:
+    match = db.get(MatchState, game.game_id)
     if match is None:
-        raise V2RepositoryError("V2 match state is missing")
+        raise RepositoryError("V2 match state is missing")
     return match
 
 
@@ -2317,22 +2317,22 @@ def _locked_game(
     game_id: str,
     *,
     require_fence: bool,
-) -> V2GameRecord:
-    game = db.scalar(select(V2GameRecord).where(V2GameRecord.game_id == game_id).with_for_update())
+) -> GameRecord:
+    game = db.scalar(select(GameRecord).where(GameRecord.game_id == game_id).with_for_update())
     if game is None:
-        raise V2RepositoryError(f"unknown game {game_id}")
+        raise RepositoryError(f"unknown game {game_id}")
     if require_fence:
         try:
-            require_v2_run_fence(db, game)
-        except V2RunFenceRejected as exc:
-            raise V2ExecutionOwnershipLost(str(exc)) from exc
+            require_run_fence(db, game)
+        except RunFenceRejected as exc:
+            raise ExecutionOwnershipLost(str(exc)) from exc
     return game
 
 
-def _run(db: Session, run_id: str) -> V2GameRun:
-    run = db.get(V2GameRun, run_id)
+def _run(db: Session, run_id: str) -> GameRun:
+    run = db.get(GameRun, run_id)
     if run is None:
-        raise V2RepositoryError(f"unknown run {run_id}")
+        raise RepositoryError(f"unknown run {run_id}")
     return run
 
 
@@ -2343,7 +2343,7 @@ def _normalized_decision_note(value: str | None) -> str:
 def _add_private_action_decision(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     player_id: str,
     round_no: int,
     action_type: str,
@@ -2356,7 +2356,7 @@ def _add_private_action_decision(
         return None
     fact_id = f"v2_fact_{uuid4().hex[:16]}"
     db.add(
-        V2KnowledgeFact(
+        KnowledgeFact(
             knowledge_fact_id=fact_id,
             game_id=game.game_id,
             source_activation_id=None,
@@ -2396,22 +2396,22 @@ def _add_private_action_decision(
 def _validate_pre_exile_predecessor_canonical_commit(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
+    pipeline: PreExilePipeline,
     predecessor_closed_record_seq: int,
 ) -> None:
-    game = db.get(V2GameRecord, pipeline.game_id)
+    game = db.get(GameRecord, pipeline.game_id)
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == pipeline.game_id,
-            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == pipeline.game_id,
+            LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
         )
     )
     opened = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == pipeline.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type == "action_opened",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == pipeline.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type == "action_opened",
             )
         )
     )
@@ -2422,10 +2422,10 @@ def _validate_pre_exile_predecessor_canonical_commit(
         and event.payload.get("action_id") == pipeline.predecessor_action_id
     ]
     if presentation is None or len(matching_opened) != 1:
-        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+        raise RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
     context = matching_opened[0].payload.get("context")
     if not isinstance(context, dict):
-        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+        raise RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
     action_type = context.get("action_type")
     technical_skip = action_type == "judge_day_speech_technical_skip"
     speech_order = context.get("speech_order")
@@ -2452,28 +2452,28 @@ def _validate_pre_exile_predecessor_canonical_commit(
         or not isinstance(speech_order, list)
         or speech_order[-1:] != [turn_player_id]
     ):
-        raise V2RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
+        raise RepositoryError("pre-exile predecessor canonical speech lineage is invalid")
     commits = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == pipeline.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type == "day_speech_committed",
-                V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+                GameRecordEvent.game_id == pipeline.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type == "day_speech_committed",
+                GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     if technical_skip:
         public_skip_record_seq = context.get("public_skip_record_seq")
         public_skip = (
             db.scalar(
-                select(V2GameRecordEvent).where(
-                    V2GameRecordEvent.game_id == pipeline.game_id,
-                    V2GameRecordEvent.run_id == pipeline.run_id,
-                    V2GameRecordEvent.record_seq == public_skip_record_seq,
-                    V2GameRecordEvent.event_type == "action_skipped_technical",
+                select(GameRecordEvent).where(
+                    GameRecordEvent.game_id == pipeline.game_id,
+                    GameRecordEvent.run_id == pipeline.run_id,
+                    GameRecordEvent.record_seq == public_skip_record_seq,
+                    GameRecordEvent.event_type == "action_skipped_technical",
                 )
             )
             if type(public_skip_record_seq) is int
@@ -2499,7 +2499,7 @@ def _validate_pre_exile_predecessor_canonical_commit(
             or public_skip_payload.get("reason") != "technical_failure"
             or commits
         ):
-            raise V2RepositoryError("pre-exile technical-skip canonical predecessor changed")
+            raise RepositoryError("pre-exile technical-skip canonical predecessor changed")
         return
     expected_payload = canonical_event_payload(
         {
@@ -2518,16 +2518,16 @@ def _validate_pre_exile_predecessor_canonical_commit(
         or commits[0].record_seq <= predecessor_closed_record_seq
         or commits[0].payload != expected_payload
     ):
-        raise V2RepositoryError("pre-exile predecessor canonical day speech is not committed")
+        raise RepositoryError("pre-exile predecessor canonical day speech is not committed")
 
 
 def _validate_pre_exile_self_fact_lineage(
     db: Session,
     *,
-    pipeline: V2PreExilePipeline,
-    result: V2PreExileResult,
+    pipeline: PreExilePipeline,
+    result: PreExileResult,
 ) -> None:
-    fact = db.get(V2KnowledgeFact, result.private_fact_id)
+    fact = db.get(KnowledgeFact, result.private_fact_id)
     payload = fact.payload if fact is not None and isinstance(fact.payload, dict) else {}
     fact_context = payload.get("context")
     decision = payload.get("decision")
@@ -2535,10 +2535,10 @@ def _validate_pre_exile_self_fact_lineage(
     matching_events = [
         event
         for event in db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == pipeline.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type == "private_knowledge_recorded",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == pipeline.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type == "private_knowledge_recorded",
             )
         )
         if isinstance(event.payload, dict)
@@ -2571,24 +2571,24 @@ def _validate_pre_exile_self_fact_lineage(
         or matching_events[0].payload.get("source_action_id") != result.action_id
         or matching_events[0].payload.get("audience") != "god_view"
     ):
-        raise V2RepositoryError("pre-exile self-explosion private fact lineage changed")
+        raise RepositoryError("pre-exile self-explosion private fact lineage changed")
 
 
 def _validate_pre_exile_vote_commit_gate(
     db: Session,
     *,
-    game: V2GameRecord,
-    match: V2MatchState,
-    pipeline: V2PreExilePipeline,
-    results: list[V2PreExileResult],
-    self_results: list[V2PreExileResult],
+    game: GameRecord,
+    match: MatchState,
+    pipeline: PreExilePipeline,
+    results: list[PreExileResult],
+    self_results: list[PreExileResult],
     phase_id: str,
     phase_state: str,
     round_no: int,
     action_type: str,
     public_cutoff_record_seq: int,
     expected_voter_ids: tuple[str, ...],
-    votes: tuple[V2DayVoteCommit, ...],
+    votes: tuple[DayVoteCommit, ...],
 ) -> None:
     run = _run(db, game.current_run_id)
     if (
@@ -2605,11 +2605,11 @@ def _validate_pre_exile_vote_commit_gate(
         or action_type != "exile_vote"
         or pipeline.public_cutoff_record_seq != public_cutoff_record_seq
     ):
-        raise V2RepositoryError("pre-exile vote commit gate changed")
+        raise RepositoryError("pre-exile vote commit gate changed")
     presentation = db.scalar(
-        select(V2LivePresentation).where(
-            V2LivePresentation.game_id == game.game_id,
-            V2LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        select(LivePresentation).where(
+            LivePresentation.game_id == game.game_id,
+            LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
         )
     )
     if (
@@ -2619,18 +2619,18 @@ def _validate_pre_exile_vote_commit_gate(
         or presentation.state != "closed"
         or presentation.closed_at is None
     ):
-        raise V2RepositoryError("pre-exile votes cannot commit before predecessor close")
+        raise RepositoryError("pre-exile votes cannot commit before predecessor close")
     if not self_results or any(
         result.state != "committed" or result.terminal_at is None for result in self_results
     ):
-        raise V2RepositoryError("pre-exile self-explosion results are not atomically committed")
+        raise RepositoryError("pre-exile self-explosion results are not atomically committed")
     closed_events = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type == "speech_closed",
-                V2GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type == "speech_closed",
+                GameRecordEvent.record_seq > pipeline.predecessor_sealed_record_seq,
             )
         )
     )
@@ -2642,7 +2642,7 @@ def _validate_pre_exile_vote_commit_gate(
         and event.payload.get("presentation_id") == pipeline.predecessor_presentation_id
     ]
     if len(matching_closed) != 1:
-        raise V2RepositoryError("pre-exile predecessor has no unique durable close event")
+        raise RepositoryError("pre-exile predecessor has no unique durable close event")
     _validate_pre_exile_predecessor_canonical_commit(
         db,
         pipeline=pipeline,
@@ -2655,11 +2655,11 @@ def _validate_pre_exile_vote_commit_gate(
         or len(set(expected_voter_ids)) != len(expected_voter_ids)
         or len(votes) != len(expected_voter_ids)
     ):
-        raise V2RepositoryError("pre-exile vote result membership is incomplete")
+        raise RepositoryError("pre-exile vote result membership is incomplete")
     for vote in votes:
         result = by_actor.get(vote.voter_player_id)
         if result is None or result.state not in {"ready", "failed"}:
-            raise V2RepositoryError("pre-exile vote result is not durable")
+            raise RepositoryError("pre-exile vote result is not durable")
         if result.state == "ready":
             decision = result.decision or {}
             if (
@@ -2674,12 +2674,12 @@ def _validate_pre_exile_vote_commit_gate(
                 or decision.get("target_player_id") != vote.target_player_id
                 or decision.get("decision_note") != vote.decision_note
             ):
-                raise V2RepositoryError("pre-exile committed vote changed its speculative result")
+                raise RepositoryError("pre-exile committed vote changed its speculative result")
             continue
         failure = result.failure or {}
         technical = failure.get("technical_outcome")
         if not isinstance(technical, dict):
-            raise V2RepositoryError("pre-exile failed vote has no technical abstention lineage")
+            raise RepositoryError("pre-exile failed vote has no technical abstention lineage")
         if (
             vote.technical_status != "technical_abstain"
             or vote.source_action_id != (result.recovery_action_id or result.action_id)
@@ -2688,15 +2688,15 @@ def _validate_pre_exile_vote_commit_gate(
             or vote.failure_mode != technical.get("target_exhaustion_failure_mode")
             or vote.technical_reason != technical.get("failure_code")
         ):
-            raise V2RepositoryError("pre-exile technical abstention changed its speculative result")
+            raise RepositoryError("pre-exile technical abstention changed its speculative result")
 
 
 def _validate_idempotent_pre_exile_vote_commit(
     db: Session,
     *,
-    game: V2GameRecord,
-    pipeline: V2PreExilePipeline,
-    results: list[V2PreExileResult],
+    game: GameRecord,
+    pipeline: PreExilePipeline,
+    results: list[PreExileResult],
     phase_id: str,
     phase_state: str,
     round_no: int,
@@ -2704,7 +2704,7 @@ def _validate_idempotent_pre_exile_vote_commit(
     batch_id: str,
     public_cutoff_record_seq: int,
     expected_voter_ids: tuple[str, ...],
-    votes: tuple[V2DayVoteCommit, ...],
+    votes: tuple[DayVoteCommit, ...],
     decision_context: dict[str, Any],
     resolution_payload: dict[str, Any],
 ) -> None:
@@ -2724,12 +2724,12 @@ def _validate_idempotent_pre_exile_vote_commit(
         or decision_context.get("public_cutoff_record_seq") != public_cutoff_record_seq
         or pipeline.vote_decision_context_sha256 != pre_exile_context_sha256(decision_context)
     ):
-        raise V2RepositoryError("consumed pre-exile pipeline has different durable output")
+        raise RepositoryError("consumed pre-exile pipeline has different durable output")
     vote_results = {
         result.actor_player_id: result for result in results if result.result_kind == "exile_vote"
     }
     if set(vote_results) != set(expected_voter_ids):
-        raise V2RepositoryError(
+        raise RepositoryError(
             "consumed pre-exile pipeline has different durable result membership"
         )
     for vote in votes:
@@ -2740,7 +2740,7 @@ def _validate_idempotent_pre_exile_vote_commit(
                 decision.get("target_player_id") != vote.target_player_id
                 or decision.get("decision_note") != vote.decision_note
             ):
-                raise V2RepositoryError("pre-exile retry changed a committed private vote")
+                raise RepositoryError("pre-exile retry changed a committed private vote")
         else:
             failure = result.failure or {}
             technical = failure.get("technical_outcome")
@@ -2754,16 +2754,16 @@ def _validate_idempotent_pre_exile_vote_commit(
                 or vote.failure_mode != technical.get("target_exhaustion_failure_mode")
                 or vote.technical_reason != technical.get("failure_code")
             ):
-                raise V2RepositoryError("pre-exile retry changed a committed technical vote")
+                raise RepositoryError("pre-exile retry changed a committed technical vote")
     events = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == pipeline.run_id,
-                V2GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == pipeline.run_id,
+                GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     committed = [
@@ -2781,7 +2781,7 @@ def _validate_idempotent_pre_exile_vote_commit(
         and event.event_type == "day_vote_resolved"
     ]
     if len(committed) != len(votes) or len(resolved) != 1:
-        raise V2RepositoryError("pre-exile vote commit is not idempotent")
+        raise RepositoryError("pre-exile vote commit is not idempotent")
     durable_votes = [
         (
             event.payload.get("voter_player_id"),
@@ -2812,14 +2812,14 @@ def _validate_idempotent_pre_exile_vote_commit(
         or type(resolution_payload) is not dict
         or resolution_payload != durable_resolution
     ):
-        raise V2RepositoryError("pre-exile retry changed an already committed vote batch")
+        raise RepositoryError("pre-exile retry changed an already committed vote batch")
 
 
 def _validate_day_vote_batch(
     db: Session,
     *,
-    game: V2GameRecord,
-    match: V2MatchState,
+    game: GameRecord,
+    match: MatchState,
     phase_id: str,
     phase_state: str,
     round_no: int,
@@ -2827,7 +2827,7 @@ def _validate_day_vote_batch(
     batch_id: str,
     public_cutoff_record_seq: int,
     expected_voter_ids: tuple[str, ...],
-    votes: tuple[V2DayVoteCommit, ...],
+    votes: tuple[DayVoteCommit, ...],
     decision_context: dict[str, Any],
     resolution_payload: dict[str, Any],
 ) -> None:
@@ -2837,27 +2837,27 @@ def _validate_day_vote_batch(
         or not phase_id.startswith("day_")
         or match.round_no != round_no
     ):
-        raise V2RepositoryError("day vote phase changed before batch commit")
+        raise RepositoryError("day vote phase changed before batch commit")
     expected_batch_id = f"{phase_id}:{action_type}:{public_cutoff_record_seq}:vote"
     if batch_id != expected_batch_id:
-        raise V2RepositoryError("day vote batch identity is invalid")
+        raise RepositoryError("day vote batch identity is invalid")
     if (
         not isinstance(public_cutoff_record_seq, int)
         or isinstance(public_cutoff_record_seq, bool)
         or public_cutoff_record_seq < 0
         or public_cutoff_record_seq > game.last_record_seq
     ):
-        raise V2RepositoryError("day vote public cutoff is invalid")
+        raise RepositoryError("day vote public cutoff is invalid")
     voter_ids = tuple(vote.voter_player_id for vote in votes)
     if len(set(expected_voter_ids)) != len(expected_voter_ids) or voter_ids != expected_voter_ids:
-        raise V2RepositoryError("day vote batch is incomplete or out of order")
+        raise RepositoryError("day vote batch is incomplete or out of order")
     if len(set(voter_ids)) != len(voter_ids):
-        raise V2RepositoryError("day vote batch contains duplicate voters")
+        raise RepositoryError("day vote batch contains duplicate voters")
     if (
         decision_context.get("batch_id") != batch_id
         or decision_context.get("public_cutoff_record_seq") != public_cutoff_record_seq
     ):
-        raise V2RepositoryError("day vote private decision context is inconsistent")
+        raise RepositoryError("day vote private decision context is inconsistent")
     expected_resolution_values = {
         "round_no": round_no,
         "action_type": action_type,
@@ -2867,7 +2867,7 @@ def _validate_day_vote_batch(
     if any(
         resolution_payload.get(key) != value for key, value in expected_resolution_values.items()
     ):
-        raise V2RepositoryError("day vote resolution payload is inconsistent")
+        raise RepositoryError("day vote resolution payload is inconsistent")
     eligible_voter_ids = resolution_payload.get("eligible_voter_ids")
     if (
         not isinstance(eligible_voter_ids, list)
@@ -2875,28 +2875,28 @@ def _validate_day_vote_batch(
         or len(set(eligible_voter_ids)) != len(eligible_voter_ids)
         or set(eligible_voter_ids) != set(expected_voter_ids)
     ):
-        raise V2RepositoryError("day vote eligible voter set is inconsistent")
+        raise RepositoryError("day vote eligible voter set is inconsistent")
     candidate_ids = resolution_payload.get("candidate_player_ids")
     if (
         not isinstance(candidate_ids, list)
         or any(not isinstance(player_id, str) for player_id in candidate_ids)
         or len(set(candidate_ids)) != len(candidate_ids)
     ):
-        raise V2RepositoryError("day vote candidate set is invalid")
+        raise RepositoryError("day vote candidate set is invalid")
     candidate_id_set = set(candidate_ids)
     computed_totals: dict[str, float] = {}
     computed_weights: dict[str, float] = {}
     computed_technical_abstentions: list[dict[str, str]] = []
     for vote in votes:
-        voter = db.get(V2PlayerState, (game.game_id, vote.voter_player_id))
+        voter = db.get(PlayerState, (game.game_id, vote.voter_player_id))
         if voter is None or not voter.alive:
-            raise V2RepositoryError("day vote voter must be alive")
+            raise RepositoryError("day vote voter must be alive")
         try:
             weight = float(vote.weight)
         except (TypeError, ValueError) as exc:
-            raise V2RepositoryError("day vote weight is invalid") from exc
+            raise RepositoryError("day vote weight is invalid") from exc
         if not math.isfinite(weight):
-            raise V2RepositoryError("day vote weight is invalid")
+            raise RepositoryError("day vote weight is invalid")
 
         if vote.technical_status == "technical_abstain":
             reason = vote.technical_reason
@@ -2908,7 +2908,7 @@ def _validate_day_vote_batch(
                 or not reason.strip()
                 or len(reason) > 120
             ):
-                raise V2RepositoryError("day vote technical abstention is invalid")
+                raise RepositoryError("day vote technical abstention is invalid")
             _validate_day_vote_technical_abstention_lineage(
                 db,
                 game=game,
@@ -2934,32 +2934,32 @@ def _validate_day_vote_batch(
             or vote.failure_episode_id is not None
             or vote.failure_mode is not None
         ):
-            raise V2RepositoryError("day vote technical status is invalid")
+            raise RepositoryError("day vote technical status is invalid")
         if (
             not isinstance(vote.target_player_id, str)
             or vote.target_player_id == vote.voter_player_id
             or vote.target_player_id not in candidate_id_set
         ):
-            raise V2RepositoryError("day vote target is invalid")
-        target = db.get(V2PlayerState, (game.game_id, vote.target_player_id))
+            raise RepositoryError("day vote target is invalid")
+        target = db.get(PlayerState, (game.game_id, vote.target_player_id))
         if target is None or not target.alive:
-            raise V2RepositoryError("day vote target must be alive")
+            raise RepositoryError("day vote target must be alive")
         if weight <= 0:
-            raise V2RepositoryError("day vote weight must be positive")
+            raise RepositoryError("day vote weight must be positive")
         computed_weights[vote.voter_player_id] = weight
         computed_totals[vote.target_player_id] = (
             computed_totals.get(vote.target_player_id, 0.0) + weight
         )
     if resolution_payload.get("voter_weights") != computed_weights:
-        raise V2RepositoryError("day vote voter weights are inconsistent")
+        raise RepositoryError("day vote voter weights are inconsistent")
     if resolution_payload.get("totals") != computed_totals:
-        raise V2RepositoryError("day vote totals are inconsistent")
+        raise RepositoryError("day vote totals are inconsistent")
     technical_abstentions = resolution_payload.get("technical_abstentions")
     if computed_technical_abstentions:
         if technical_abstentions != computed_technical_abstentions:
-            raise V2RepositoryError("day vote technical abstentions are inconsistent")
+            raise RepositoryError("day vote technical abstentions are inconsistent")
     elif technical_abstentions not in (None, []):
-        raise V2RepositoryError("day vote technical abstentions are inconsistent")
+        raise RepositoryError("day vote technical abstentions are inconsistent")
     leaders = []
     if computed_totals:
         highest = max(computed_totals.values())
@@ -2967,12 +2967,12 @@ def _validate_day_vote_batch(
             player_id for player_id, total in computed_totals.items() if total == highest
         )
     if resolution_payload.get("leaders") != leaders:
-        raise V2RepositoryError("day vote leaders are inconsistent")
+        raise RepositoryError("day vote leaders are inconsistent")
     existing_vote_events = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.event_type.in_(("day_vote_committed", "day_vote_resolved")),
             )
         )
     )
@@ -2980,12 +2980,12 @@ def _validate_day_vote_batch(
         isinstance(event.payload, dict) and event.payload.get("batch_id") == batch_id
         for event in existing_vote_events
     ):
-        raise V2RepositoryError("day vote batch already has durable output")
+        raise RepositoryError("day vote batch already has durable output")
     existing_private_decisions = list(
         db.scalars(
-            select(V2KnowledgeFact).where(
-                V2KnowledgeFact.game_id == game.game_id,
-                V2KnowledgeFact.fact_type == "private_action_decision",
+            select(KnowledgeFact).where(
+                KnowledgeFact.game_id == game.game_id,
+                KnowledgeFact.fact_type == "private_action_decision",
             )
         )
     )
@@ -2995,14 +2995,14 @@ def _validate_day_vote_batch(
         and fact.payload["context"].get("batch_id") == batch_id
         for fact in existing_private_decisions
     ):
-        raise V2RepositoryError("day vote batch already has durable private decisions")
+        raise RepositoryError("day vote batch already has durable private decisions")
 
 
 def _validate_day_vote_technical_abstention_lineage(
     db: Session,
     *,
-    game: V2GameRecord,
-    vote: V2DayVoteCommit,
+    game: GameRecord,
+    vote: DayVoteCommit,
     action_type: str,
     public_cutoff_record_seq: int,
 ) -> None:
@@ -3025,12 +3025,12 @@ def _validate_day_vote_technical_abstention_lineage(
             "action_wall_timeout",
         }
     ):
-        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+        raise RepositoryError("day vote technical abstention lineage is invalid")
 
     supporting = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game.game_id,
-            V2GameRecordEvent.record_seq == supporting_record_seq,
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game.game_id,
+            GameRecordEvent.record_seq == supporting_record_seq,
         )
     )
     supporting_payload = supporting.payload if supporting is not None else None
@@ -3051,14 +3051,14 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_payload.get("model_generation_policy_schema_version")
         != MODEL_GENERATION_POLICY_SCHEMA_VERSION
     ):
-        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+        raise RepositoryError("day vote technical abstention lineage is invalid")
 
     succeeded_events = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
-                V2GameRecordEvent.event_type == "action_succeeded",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.event_type == "action_succeeded",
             )
         )
     )
@@ -3072,14 +3072,14 @@ def _validate_day_vote_technical_abstention_lineage(
         and event.payload.get("technical_outcome_record_seq") == supporting_record_seq
     ]
     if len(matching_succeeded) != 1:
-        raise V2RepositoryError("day vote technical abstention lineage is invalid")
+        raise RepositoryError("day vote technical abstention lineage is invalid")
 
     existing_lineage_events = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
-                V2GameRecordEvent.event_type == "day_vote_technical_abstention_committed",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.event_type == "day_vote_technical_abstention_committed",
             )
         )
     )
@@ -3091,13 +3091,13 @@ def _validate_day_vote_technical_abstention_lineage(
         )
         for event in existing_lineage_events
     ):
-        raise V2RepositoryError("day vote technical abstention lineage was already committed")
+        raise RepositoryError("day vote technical abstention lineage was already committed")
 
 
-def _raise_if_stop_requested(db: Session, game: V2GameRecord) -> None:
+def _raise_if_stop_requested(db: Session, game: GameRecord) -> None:
     run = _run(db, game.current_run_id)
     if run.stop_requested_at is not None:
-        raise V2GameCanceled("V2 game was canceled by an administrator")
+        raise GameCanceled("V2 game was canceled by an administrator")
 
 
 def _private_round_memory_batch_terminal_event(
@@ -3106,22 +3106,22 @@ def _private_round_memory_batch_terminal_event(
     game_id: str,
     run_id: str,
     batch_id: str,
-) -> V2GameRecordEvent | None:
+) -> GameRecordEvent | None:
     matching = [
         event
         for event in db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.run_id == run_id,
-                V2GameRecordEvent.event_type == "day_private_memory_batch_completed",
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.run_id == run_id,
+                GameRecordEvent.event_type == "day_private_memory_batch_completed",
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
         if isinstance(event.payload, dict) and event.payload.get("batch_id") == batch_id
     ]
     if len(matching) > 1:
-        raise V2RepositoryError("private round memory batch has duplicate terminal events")
+        raise RepositoryError("private round memory batch has duplicate terminal events")
     return matching[0] if matching else None
 
 
@@ -3156,11 +3156,11 @@ def _private_round_memory_source_refs(
             None,
         )
         if previous is None:
-            raise V2RepositoryError("private round memory predecessor source is invalid")
+            raise RepositoryError("private round memory predecessor source is invalid")
         payload = previous.get("payload") if isinstance(previous.get("payload"), dict) else {}
         previous_cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0
     elif any(item.get("fact_type") == "private_round_memory" for item in private_facts):
-        raise V2RepositoryError("private round memory predecessor source is missing")
+        raise RepositoryError("private round memory predecessor source is missing")
     public_refs = [
         f"event:{item['source_event_id']}"
         for item in public_history
@@ -3189,8 +3189,8 @@ def _private_round_memory_source_refs(
 def _validate_private_round_memory_model_lineage(
     db: Session,
     *,
-    game: V2GameRecord,
-    commit: V2PrivateRoundMemoryCommit,
+    game: GameRecord,
+    commit: PrivateRoundMemoryCommit,
     batch_id: str,
     phase_id: str,
     phase_state: str,
@@ -3199,28 +3199,28 @@ def _validate_private_round_memory_model_lineage(
     normalized_memory: str,
 ) -> None:
     response = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game.game_id,
-            V2GameRecordEvent.run_id == game.current_run_id,
-            V2GameRecordEvent.record_seq == commit.model_response_record_seq,
-            V2GameRecordEvent.event_type == "model_response_received",
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game.game_id,
+            GameRecordEvent.run_id == game.current_run_id,
+            GameRecordEvent.record_seq == commit.model_response_record_seq,
+            GameRecordEvent.event_type == "model_response_received",
         )
     )
     terminal = db.scalar(
-        select(V2GameRecordEvent).where(
-            V2GameRecordEvent.game_id == game.game_id,
-            V2GameRecordEvent.run_id == game.current_run_id,
-            V2GameRecordEvent.record_seq == commit.terminal_event_record_seq,
-            V2GameRecordEvent.event_type == "action_succeeded",
+        select(GameRecordEvent).where(
+            GameRecordEvent.game_id == game.game_id,
+            GameRecordEvent.run_id == game.current_run_id,
+            GameRecordEvent.record_seq == commit.terminal_event_record_seq,
+            GameRecordEvent.event_type == "action_succeeded",
         )
     )
     opened_matches = [
         event
         for event in db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
-                V2GameRecordEvent.event_type == "action_opened",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.event_type == "action_opened",
             )
         )
         if isinstance(event.payload, dict)
@@ -3245,10 +3245,10 @@ def _validate_private_round_memory_model_lineage(
     )
     requests = list(
         db.scalars(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
-                V2GameRecordEvent.event_type == "model_request_started",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.event_type == "model_request_started",
             )
         )
     )
@@ -3276,7 +3276,7 @@ def _validate_private_round_memory_model_lineage(
             replayed_model_context = project_model_action_context_with_metadata(
                 context,
                 players=tuple(
-                    V2ModelPlayerReference(
+                    ModelPlayerReference(
                         player_id=player.player_id,
                         seat=player.seat,
                         display_name=player.display_name,
@@ -3324,12 +3324,12 @@ def _validate_private_round_memory_model_lineage(
     if commit.previous_snapshot_fact_id is not None:
         previous_rows = list(
             db.scalars(
-                select(V2KnowledgeFact).where(
-                    V2KnowledgeFact.game_id == game.game_id,
-                    V2KnowledgeFact.owner_scope == "player",
-                    V2KnowledgeFact.owner_id == commit.player_id,
-                    V2KnowledgeFact.fact_type == "private_round_memory",
-                    V2KnowledgeFact.knowledge_fact_id == commit.previous_snapshot_fact_id,
+                select(KnowledgeFact).where(
+                    KnowledgeFact.game_id == game.game_id,
+                    KnowledgeFact.owner_scope == "player",
+                    KnowledgeFact.owner_id == commit.player_id,
+                    KnowledgeFact.fact_type == "private_round_memory",
+                    KnowledgeFact.knowledge_fact_id == commit.previous_snapshot_fact_id,
                 )
             )
         )
@@ -3507,20 +3507,20 @@ def _validate_private_round_memory_model_lineage(
         != normalized_memory
         or not (opened.record_seq < request.record_seq < response.record_seq < terminal.record_seq)
     ):
-        raise V2RepositoryError("private round memory model lineage is invalid")
+        raise RepositoryError("private round memory model lineage is invalid")
 
 
 def _append_event(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     event_type: str,
     audience: str,
     payload: dict[str, Any],
 ) -> None:
     next_seq = game.last_record_seq + 1
     db.add(
-        V2GameRecordEvent(
+        GameRecordEvent(
             game_id=game.game_id,
             event_id=next_seq,
             record_seq=next_seq,
@@ -3556,7 +3556,7 @@ def private_round_memory_source_refs_sha256(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _private_round_memory_order(row: V2KnowledgeFact) -> tuple[int, int, str]:
+def _private_round_memory_order(row: KnowledgeFact) -> tuple[int, int, str]:
     payload = row.payload if isinstance(row.payload, dict) else {}
     round_no = _positive_int(payload.get("round_no")) or 0
     cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0

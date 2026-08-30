@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.player_avatar_assets import avatar_asset_url
+from app.shared.player_avatar_assets import avatar_asset_url
 
 
 def admin_player_profile_snapshot(profile: VirtualPlayerProfile) -> dict[str, object]:

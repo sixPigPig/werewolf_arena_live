@@ -4,6 +4,8 @@
 
 **Status:** Approved for implementation
 
+> 2026-08-20 核对：本文的 Status 自创建以来未更新过。音频模式、执行所有权、终局派生在代码中有对应实现，但本文提到的 V9 上下文版本早已被取代（当前 schema 为 13）。实际完成度需按代码核对。
+
 **Priority:** P0 Runtime Safety / P1 Context Correctness / P1 Auditability
 
 **Scope:** `apps/api`、`apps/admin-web`、`apps/mobile-web` 的 Live V2 对局级音频模式、执行所有权、终局状态派生、V9 模型上下文、机器格式确定性修复、私密 audience 审计、被动诊断与狼人分歧分支验收

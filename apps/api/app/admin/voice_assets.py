@@ -7,12 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.judge_voice_asset import JudgeVoiceAssetRecord
-from app.werewolf.judge_voice_assets import (
+from app.shared.judge_voice_assets import (
     JudgeVoiceAsset,
     list_judge_voice_assets,
     list_judge_voice_line_definitions,
 )
-from app.werewolf.voice import is_static_judge_voice_asset_used
+from app.shared.tts_text import is_static_judge_voice_asset_used
 
 
 @dataclass(frozen=True)

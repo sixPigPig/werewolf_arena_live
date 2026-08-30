@@ -80,24 +80,24 @@ _MAX_TIMEOUT_ATTEMPTS = 3
 _MAX_ACTION_WALL_TIMEOUT_MS = 1_800_000
 
 
-class V2ModelGenerationPolicyContractError(ValueError):
+class ModelGenerationPolicyContractError(ValueError):
     pass
 
 
-V2RequiredTargetExhaustionFailureMode = Literal[
+RequiredTargetExhaustionFailureMode = Literal[
     "output_budget_exhausted",
     "attempt_hard_timeout",
     "action_wall_timeout",
 ]
-V2RequiredTargetTechnicalOutcome = Literal[
+RequiredTargetTechnicalOutcome = Literal[
     "technical_abstain",
     "technical_no_action",
 ]
 
 
 @dataclass(frozen=True)
-class V2ResolvedRequiredTargetExhaustionPolicy:
-    eligible_failure_modes: tuple[V2RequiredTargetExhaustionFailureMode, ...]
+class ResolvedRequiredTargetExhaustionPolicy:
+    eligible_failure_modes: tuple[RequiredTargetExhaustionFailureMode, ...]
     day_vote_outcome: Literal["technical_abstain"]
     night_required_target_outcome: Literal["technical_no_action"]
     transport_mode: Literal["retry_then_pause"]
@@ -105,7 +105,7 @@ class V2ResolvedRequiredTargetExhaustionPolicy:
 
 
 @dataclass(frozen=True)
-class V2ResolvedModelGenerationPolicy:
+class ResolvedModelGenerationPolicy:
     status: Literal["supported", "legacy_disabled"]
     enforcement: Literal["observe_only", "disabled"]
     profile: str | None
@@ -136,7 +136,7 @@ class V2ResolvedModelGenerationPolicy:
         "active_only",
         "disabled",
     ]
-    required_target_exhaustion: V2ResolvedRequiredTargetExhaustionPolicy | None
+    required_target_exhaustion: ResolvedRequiredTargetExhaustionPolicy | None
     private_round_memory_mode: Literal[
         "blocking_generation",
         "disabled",
@@ -289,7 +289,7 @@ def validate_model_generation_policy_contract(
 def is_supported_model_generation_policy_contract(contract: Any) -> bool:
     try:
         validate_model_generation_policy_contract(contract)
-    except V2ModelGenerationPolicyContractError:
+    except ModelGenerationPolicyContractError:
         return False
     return True
 
@@ -298,11 +298,11 @@ def resolve_model_generation_action_policy(
     contract: dict[str, Any] | None,
     *,
     action_type: str,
-) -> V2ResolvedModelGenerationPolicy:
+) -> ResolvedModelGenerationPolicy:
     """Resolve immutable reasoning telemetry and execution policy for an action."""
 
     if contract is None:
-        return V2ResolvedModelGenerationPolicy(
+        return ResolvedModelGenerationPolicy(
             status="legacy_disabled",
             enforcement="disabled",
             profile=None,
@@ -336,7 +336,7 @@ def resolve_model_generation_action_policy(
         source = "default_profile"
     profile_contract = validated["profiles"][profile]
     execution = validated.get("execution")
-    return V2ResolvedModelGenerationPolicy(
+    return ResolvedModelGenerationPolicy(
         status="supported",
         enforcement=validated["enforcement"],
         profile=profile,
@@ -378,7 +378,7 @@ def resolve_model_generation_action_policy(
             else "active_only"
         ),
         required_target_exhaustion=(
-            V2ResolvedRequiredTargetExhaustionPolicy(
+            ResolvedRequiredTargetExhaustionPolicy(
                 eligible_failure_modes=tuple(
                     execution["required_target_exhaustion"]["eligible_failure_modes"]
                 ),
@@ -426,4 +426,4 @@ def _is_bounded_int(value: Any, *, minimum: int, maximum: int) -> bool:
 
 
 def _raise_unsupported() -> None:
-    raise V2ModelGenerationPolicyContractError(_UNSUPPORTED_ERROR)
+    raise ModelGenerationPolicyContractError(_UNSUPPORTED_ERROR)

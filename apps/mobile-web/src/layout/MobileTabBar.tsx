@@ -1,13 +1,11 @@
 import { NavLink } from "react-router-dom";
 
 import createRoomNavAsset from "../assets/nav-bar/create-room-clean-alpha.png";
-import matchRecordNavAsset from "../assets/nav-bar/match-record-clean-alpha.png";
 import playerAtlasNavAsset from "../assets/nav-bar/player-atlas-clean-alpha.png";
 
 const tabs = [
   { label: "创建对局", href: "/games", imageSrc: createRoomNavAsset },
   { label: "玩家图鉴", href: "/players", imageSrc: playerAtlasNavAsset },
-  { label: "对局记录", href: "/history", imageSrc: matchRecordNavAsset },
 ];
 
 export function MobileTabBar() {

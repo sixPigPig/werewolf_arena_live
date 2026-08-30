@@ -12,18 +12,18 @@ import unicodedata
 import httpx
 
 from app.model_catalog.defaults import reasoning_policy_for_model
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.model_parameters import (
-    V2FrozenModelParametersError,
+from app.match.model_parameters import (
+    FrozenModelParametersError,
     validate_frozen_model_parameters,
 )
 
 
-V2ModelFailureCategory = Literal[
+ModelFailureCategory = Literal[
     "admission_capacity",
     "transport",
     "timeout",
@@ -32,7 +32,7 @@ V2ModelFailureCategory = Literal[
     "provider_configuration",
     "internal_invariant",
 ]
-V2ModelFinishReason = Literal[
+ModelFinishReason = Literal[
     "completed",
     "stop",
     "length",
@@ -41,24 +41,24 @@ V2ModelFinishReason = Literal[
     "tool_calls",
     "unknown",
 ]
-V2ProviderUsage = dict[str, int]
-V2UsageConsistency = Literal[
+ProviderUsage = dict[str, int]
+UsageConsistency = Literal[
     "exact",
     "provider_total_mismatch",
     "unavailable",
 ]
-V2ProviderAdmissionMode = Literal["normal", "idle_only"]
+ProviderAdmissionMode = Literal["normal", "idle_only"]
 
 
 @dataclass(frozen=True)
-class V2FailureDisposition:
-    category: V2ModelFailureCategory
+class FailureDisposition:
+    category: ModelFailureCategory
     retryable: bool
     pausable: bool
     max_attempts: int
 
 
-class V2ModelError(RuntimeError):
+class ModelError(RuntimeError):
     def __init__(
         self,
         code: str,
@@ -89,11 +89,11 @@ class V2ModelError(RuntimeError):
         estimated_output_tokens: int | None = None,
         max_inter_delta_ms: int | None = None,
         last_progress_ms: int | None = None,
-        finish_reason: V2ModelFinishReason | None = None,
-        provider_usage: V2ProviderUsage | None = None,
+        finish_reason: ModelFinishReason | None = None,
+        provider_usage: ProviderUsage | None = None,
         usage_update_count: int = 0,
         usage_conflict_observed: bool = False,
-        usage_consistency: V2UsageConsistency = "unavailable",
+        usage_consistency: UsageConsistency = "unavailable",
         reasoning_only_elapsed_ms: int | None = None,
     ) -> None:
         super().__init__(code)
@@ -132,7 +132,7 @@ class V2ModelError(RuntimeError):
         self.reasoning_only_elapsed_ms = reasoning_only_elapsed_ms
 
 
-class V2QualityError(V2ModelError):
+class QualityError(ModelError):
     def __init__(self, code: str, *, raw_response: str | None = None) -> None:
         super().__init__(
             code,
@@ -147,7 +147,7 @@ class V2QualityError(V2ModelError):
 
 
 @dataclass(frozen=True)
-class V2ModelDecision:
+class ModelDecision:
     target_player_id: str | None
     speech: str | None
     provider_request_id: str
@@ -166,15 +166,15 @@ class V2ModelDecision:
     text_delta_count: int = 0
     max_inter_delta_ms: int | None = None
     last_progress_ms: int | None = None
-    finish_reason: V2ModelFinishReason | None = None
-    provider_usage: V2ProviderUsage | None = None
+    finish_reason: ModelFinishReason | None = None
+    provider_usage: ProviderUsage | None = None
     usage_update_count: int = 0
     usage_conflict_observed: bool = False
-    usage_consistency: V2UsageConsistency = "unavailable"
+    usage_consistency: UsageConsistency = "unavailable"
     reasoning_only_elapsed_ms: int | None = None
 
 
-V2ModelProgressStage = Literal[
+ModelProgressStage = Literal[
     "queued",
     "admitted",
     "response_headers",
@@ -182,16 +182,16 @@ V2ModelProgressStage = Literal[
     "first_text",
     "stream_delta",
 ]
-V2ModelTokenKind = Literal["reasoning", "text"]
+ModelTokenKind = Literal["reasoning", "text"]
 
 
 @dataclass(frozen=True)
-class V2ModelProgress:
-    stage: V2ModelProgressStage
+class ModelProgress:
+    stage: ModelProgressStage
     provider_request_id: str
     elapsed_ms: int
     response_headers: dict[str, str] | None = None
-    token_kind: V2ModelTokenKind | None = None
+    token_kind: ModelTokenKind | None = None
     provider: str | None = None
     queue_wait_ms: int | None = None
     provider_in_flight: int | None = None
@@ -206,10 +206,10 @@ class V2ModelProgress:
     text_delta_count: int | None = None
     max_inter_delta_ms: int | None = None
     last_progress_ms: int | None = None
-    provider_usage: V2ProviderUsage | None = None
+    provider_usage: ProviderUsage | None = None
     usage_update_count: int | None = None
     usage_conflict_observed: bool | None = None
-    usage_consistency: V2UsageConsistency | None = None
+    usage_consistency: UsageConsistency | None = None
 
 
 @dataclass(frozen=True)
@@ -219,7 +219,7 @@ class ParsedDecisionObject:
 
 
 @dataclass(frozen=True)
-class V2ModelTarget:
+class ModelTarget:
     provider: str
     model_id: str
     supports_thinking: bool
@@ -257,12 +257,12 @@ class _StreamResult:
     max_inter_delta_ms: int | None
     last_progress_ms: int | None
     response_headers: dict[str, str]
-    first_token_kind: V2ModelTokenKind
-    finish_reason: V2ModelFinishReason | None
-    provider_usage: V2ProviderUsage | None
+    first_token_kind: ModelTokenKind
+    finish_reason: ModelFinishReason | None
+    provider_usage: ProviderUsage | None
     usage_update_count: int
     usage_conflict_observed: bool
-    usage_consistency: V2UsageConsistency
+    usage_consistency: UsageConsistency
     reasoning_only_elapsed_ms: int | None
 
 
@@ -278,14 +278,14 @@ class _ProviderGate:
         self,
         *,
         check_cancellation: Callable[[], None] | None,
-        admission_mode: V2ProviderAdmissionMode = "normal",
+        admission_mode: ProviderAdmissionMode = "normal",
     ):
         loop = asyncio.get_running_loop()
         queued_at = loop.time()
         if admission_mode == "idle_only":
             _check(check_cancellation)
             if self._normal_waiters > 0 or self._semaphore.locked():
-                raise V2ModelError(
+                raise ModelError(
                     "model_prefetch_capacity_unavailable",
                     retryable=False,
                     failure_stage="provider_admission",
@@ -329,15 +329,15 @@ class _ProviderEvent:
     text_delta: str | None = None
     reasoning_delta: str | None = None
     failed: bool = False
-    finish_reason: V2ModelFinishReason | None = None
-    provider_usage: V2ProviderUsage | None = None
+    finish_reason: ModelFinishReason | None = None
+    provider_usage: ProviderUsage | None = None
     usage_is_terminal: bool = False
 
 
 @dataclass
 class _ProviderUsageState:
-    last_snapshot: V2ProviderUsage | None = None
-    last_terminal_snapshot: V2ProviderUsage | None = None
+    last_snapshot: ProviderUsage | None = None
+    last_terminal_snapshot: ProviderUsage | None = None
     update_count: int = 0
     conflict_observed: bool = False
     first_values: dict[str, int] = field(default_factory=dict)
@@ -357,7 +357,7 @@ class _ProviderUsageState:
             else:
                 self.first_values.setdefault(name, value)
 
-    def selected(self) -> V2ProviderUsage | None:
+    def selected(self) -> ProviderUsage | None:
         snapshot = self.last_terminal_snapshot or self.last_snapshot
         return dict(snapshot) if snapshot is not None else None
 
@@ -419,16 +419,16 @@ _FINISH_REASONS = frozenset(
 )
 
 
-def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
+def model_failure_disposition(exc: ModelError) -> FailureDisposition:
     if exc.code == "model_prefetch_capacity_unavailable":
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="admission_capacity",
             retryable=False,
             pausable=False,
             max_attempts=1,
         )
     if exc.code == "model_output_budget_exhausted":
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="output_budget",
             retryable=True,
             pausable=True,
@@ -438,14 +438,14 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
         "model_decision_contract_missing",
         "model_decision_contract_invalid",
     }:
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="internal_invariant",
             retryable=False,
             pausable=False,
             max_attempts=1,
         )
-    if isinstance(exc, V2QualityError):
-        return V2FailureDisposition(
+    if isinstance(exc, QualityError):
+        return FailureDisposition(
             category="machine_format",
             retryable=True,
             pausable=True,
@@ -457,7 +457,7 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
         "model_attempt_hard_timeout",
         "model_total_timeout",
     }:
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="timeout",
             retryable=True,
             pausable=True,
@@ -470,7 +470,7 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
         "model_invalid_event",
         "model_provider_failed",
     } or (exc.http_status in _RETRYABLE_HTTP_STATUSES):
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="transport",
             retryable=True,
             pausable=True,
@@ -482,13 +482,13 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
         "model_provider_credentials_missing",
         "model_parameters_invalid",
     } or (exc.http_status is not None and 400 <= exc.http_status < 500):
-        return V2FailureDisposition(
+        return FailureDisposition(
             category="provider_configuration",
             retryable=False,
             pausable=False,
             max_attempts=1,
         )
-    return V2FailureDisposition(
+    return FailureDisposition(
         category="internal_invariant",
         retryable=exc.retryable,
         pausable=False,
@@ -496,7 +496,7 @@ def model_failure_disposition(exc: V2ModelError) -> V2FailureDisposition:
     )
 
 
-class V2ModelClient:
+class ModelClient:
     def __init__(
         self,
         *,
@@ -595,18 +595,18 @@ class V2ModelClient:
         model_id: str,
         model_supports_thinking: bool,
         model_parameters: dict[str, Any],
-    ) -> V2ModelTarget:
+    ) -> ModelTarget:
         provider = model_provider.strip()
         selected_model_id = model_id.strip()
         if not provider or not selected_model_id:
-            raise V2ModelError("model_not_configured")
+            raise ModelError("model_not_configured")
         route = self._routes.get(provider)
         if route is None:
-            raise V2ModelError("model_provider_not_configured")
+            raise ModelError("model_provider_not_configured")
         if not route.api_key:
-            raise V2ModelError("model_provider_credentials_missing")
+            raise ModelError("model_provider_credentials_missing")
         if not isinstance(model_supports_thinking, bool):
-            raise V2ModelError("model_parameters_invalid")
+            raise ModelError("model_parameters_invalid")
         try:
             parameters = validate_frozen_model_parameters(
                 model_parameters,
@@ -614,9 +614,9 @@ class V2ModelClient:
                 model_id=selected_model_id,
                 supports_thinking=model_supports_thinking,
             )
-        except V2FrozenModelParametersError as exc:
-            raise V2ModelError("model_parameters_invalid") from exc
-        return V2ModelTarget(
+        except FrozenModelParametersError as exc:
+            raise ModelError("model_parameters_invalid") from exc
+        return ModelTarget(
             provider=provider,
             model_id=selected_model_id,
             supports_thinking=model_supports_thinking,
@@ -628,7 +628,7 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
     ) -> dict[str, Any]:
         route = self._routes[target.provider]
         if route.protocol == "responses":
@@ -656,7 +656,7 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
     ) -> dict[str, str | int | None]:
         route = self._routes[target.provider]
         if not decision:
@@ -687,10 +687,10 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        target: V2ModelTarget,
+        target: ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
-        admission_mode: V2ProviderAdmissionMode = "normal",
-    ) -> V2ModelDecision:
+        admission_mode: ProviderAdmissionMode = "normal",
+    ) -> ModelDecision:
         return await self.generate_action_decision_with_progress(
             action_context=action_context,
             attempt_id=attempt_id,
@@ -705,11 +705,11 @@ class V2ModelClient:
         *,
         action_context: dict[str, Any],
         attempt_id: str,
-        target: V2ModelTarget,
+        target: ModelTarget,
         check_cancellation: Callable[[], None] | None = None,
-        on_progress: Callable[[V2ModelProgress], None] | None = None,
-        admission_mode: V2ProviderAdmissionMode = "normal",
-    ) -> V2ModelDecision:
+        on_progress: Callable[[ModelProgress], None] | None = None,
+        admission_mode: ProviderAdmissionMode = "normal",
+    ) -> ModelDecision:
         result = await self._stream_text(
             action_context=action_context,
             attempt_id=attempt_id,
@@ -725,7 +725,7 @@ class V2ModelClient:
         try:
             try:
                 parsed_object = _parse_decision_object(raw, output_contract=output_contract)
-            except V2QualityError as exc:
+            except QualityError as exc:
                 if not _decision_parse_can_fallback(exc):
                     raise
                 parsed_object = None
@@ -749,11 +749,11 @@ class V2ModelClient:
                 output_contract,
                 parsed_object=parsed_object,
             )
-        except V2QualityError as exc:
-            enriched = V2QualityError(exc.code, raw_response=raw)
+        except QualityError as exc:
+            enriched = QualityError(exc.code, raw_response=raw)
             _enrich_model_error_from_stream_result(enriched, result)
             raise enriched from exc
-        return V2ModelDecision(
+        return ModelDecision(
             target_player_id=target_player_id,
             speech=normalized_speech,
             provider_request_id=result.provider_request_id,
@@ -787,17 +787,17 @@ class V2ModelClient:
         attempt_id: str,
         max_output_tokens: int | None,
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
         check_cancellation: Callable[[], None] | None,
-        on_progress: Callable[[V2ModelProgress], None] | None,
-        admission_mode: V2ProviderAdmissionMode,
+        on_progress: Callable[[ModelProgress], None] | None,
+        admission_mode: ProviderAdmissionMode,
     ) -> _StreamResult:
         _check(check_cancellation)
         route = self._routes[target.provider]
         gate = self._gates[target.provider]
         if on_progress is not None:
             on_progress(
-                V2ModelProgress(
+                ModelProgress(
                     stage="queued",
                     provider_request_id=attempt_id,
                     elapsed_ms=0,
@@ -811,7 +811,7 @@ class V2ModelClient:
         ) as admission:
             if on_progress is not None:
                 on_progress(
-                    V2ModelProgress(
+                    ModelProgress(
                         stage="admitted",
                         provider_request_id=attempt_id,
                         elapsed_ms=admission.queue_wait_ms,
@@ -840,16 +840,16 @@ class V2ModelClient:
         attempt_id: str,
         max_output_tokens: int | None,
         decision: bool,
-        target: V2ModelTarget,
+        target: ModelTarget,
         route: _ProviderRoute,
         admission: _ProviderAdmission,
         check_cancellation: Callable[[], None] | None,
-        on_progress: Callable[[V2ModelProgress], None] | None,
+        on_progress: Callable[[ModelProgress], None] | None,
     ) -> _StreamResult:
         loop = asyncio.get_running_loop()
         started = loop.time()
         first_token_at: float | None = None
-        first_token_kind: V2ModelTokenKind | None = None
+        first_token_kind: ModelTokenKind | None = None
         first_text_at: float | None = None
         last_progress_at: float | None = None
         max_inter_delta_ms: int | None = None
@@ -864,7 +864,7 @@ class V2ModelClient:
         pending_text_delta = ""
         last_stream_progress_at: float | None = None
         last_stream_usage_update_count = 0
-        finish_reason: V2ModelFinishReason | None = None
+        finish_reason: ModelFinishReason | None = None
         usage_state = _ProviderUsageState()
 
         def emit_stream_progress(*, force: bool = False) -> None:
@@ -885,7 +885,7 @@ class V2ModelClient:
             ):
                 return
             on_progress(
-                V2ModelProgress(
+                ModelProgress(
                     stage="stream_delta",
                     provider_request_id=provider_request_id,
                     elapsed_ms=round((emitted_at - started) * 1000),
@@ -968,7 +968,7 @@ class V2ModelClient:
                 response_headers = _diagnostic_response_headers(response.headers)
                 if on_progress is not None:
                     on_progress(
-                        V2ModelProgress(
+                        ModelProgress(
                             stage="response_headers",
                             provider_request_id=provider_request_id,
                             elapsed_ms=round((loop.time() - started) * 1000),
@@ -977,7 +977,7 @@ class V2ModelClient:
                     )
                 if response.status_code >= 400:
                     await response.aread()
-                    raise V2ModelError(
+                    raise ModelError(
                         f"model_http_{response.status_code}",
                         retryable=response.status_code in _RETRYABLE_HTTP_STATUSES,
                         failure_stage="http_response",
@@ -1059,7 +1059,7 @@ class V2ModelClient:
                     if provider_event.candidate_id:
                         provider_request_id = provider_event.candidate_id
                     if provider_event.failed:
-                        raise V2ModelError(
+                        raise ModelError(
                             "model_provider_failed",
                             retryable=True,
                             failure_stage=("first_token" if first_token_at is None else "stream"),
@@ -1078,7 +1078,7 @@ class V2ModelClient:
                         )
                     if provider_event.finish_reason:
                         finish_reason = provider_event.finish_reason
-                    token_kind: V2ModelTokenKind | None = None
+                    token_kind: ModelTokenKind | None = None
                     if provider_event.reasoning_delta:
                         reasoning_delta_count += 1
                         token_kind = "reasoning"
@@ -1102,7 +1102,7 @@ class V2ModelClient:
                         first_token_kind = token_kind
                         if on_progress is not None:
                             on_progress(
-                                V2ModelProgress(
+                                ModelProgress(
                                     stage="first_token",
                                     provider_request_id=provider_request_id,
                                     elapsed_ms=round((first_token_at - started) * 1000),
@@ -1117,7 +1117,7 @@ class V2ModelClient:
                         first_text_at = progress_at
                         if on_progress is not None:
                             on_progress(
-                                V2ModelProgress(
+                                ModelProgress(
                                     stage="first_text",
                                     provider_request_id=provider_request_id,
                                     elapsed_ms=round((first_text_at - started) * 1000),
@@ -1128,7 +1128,7 @@ class V2ModelClient:
         except asyncio.CancelledError:
             emit_stream_progress(force=True)
             raise
-        except V2ModelError as exc:
+        except ModelError as exc:
             emit_stream_progress(force=True)
             _enrich_model_error_from_stream(
                 exc,
@@ -1187,7 +1187,7 @@ class V2ModelClient:
             emit_stream_progress(force=True)
             root = _root_exception(exc)
             root_errno = getattr(root, "errno", None)
-            transport_error = V2ModelError(
+            transport_error = ModelError(
                 "model_transport_failed",
                 retryable=isinstance(exc, _RETRYABLE_TRANSPORT_ERRORS),
                 failure_stage=_transport_failure_stage(
@@ -1233,7 +1233,7 @@ class V2ModelClient:
             raise transport_error from exc
         emit_stream_progress(force=True)
         if not text.strip() or first_token_at is None:
-            exc = V2ModelError(
+            exc = ModelError(
                 (
                     "model_output_budget_exhausted"
                     if finish_reason in {"length", "max_output_tokens"}
@@ -1297,11 +1297,11 @@ class V2ModelClient:
 
 
 def _enrich_model_error_from_stream(
-    exc: V2ModelError,
+    exc: ModelError,
     *,
     started: float,
     first_token_at: float | None,
-    first_token_kind: V2ModelTokenKind | None,
+    first_token_kind: ModelTokenKind | None,
     first_text_at: float | None,
     provider_request_id: str,
     response_headers_seen: bool,
@@ -1311,7 +1311,7 @@ def _enrich_model_error_from_stream(
     text_delta_count: int,
     max_inter_delta_ms: int | None,
     last_progress_at: float | None,
-    finish_reason: V2ModelFinishReason | None,
+    finish_reason: ModelFinishReason | None,
     usage_state: _ProviderUsageState,
 ) -> None:
     ended_at = asyncio.get_running_loop().time()
@@ -1365,7 +1365,7 @@ def _enrich_model_error_from_stream(
 
 
 def _enrich_model_error_from_stream_result(
-    exc: V2ModelError,
+    exc: ModelError,
     result: _StreamResult,
 ) -> None:
     exc.provider_request_id = result.provider_request_id
@@ -1407,8 +1407,8 @@ def _reasoning_only_elapsed_ms(
 
 
 def _provider_usage_consistency(
-    usage: V2ProviderUsage | None,
-) -> V2UsageConsistency:
+    usage: ProviderUsage | None,
+) -> UsageConsistency:
     if usage is None:
         return "unavailable"
     input_tokens = usage.get("input_tokens")
@@ -1433,14 +1433,14 @@ def _model_timeout_error(
     text_delta_count: int,
     max_inter_delta_ms: int | None,
     last_progress_at: float | None,
-) -> V2ModelError:
+) -> ModelError:
     before_first_token = first_token_at is None
     code = {
         "first_token": "model_first_token_timeout",
         "stream_idle": "model_stream_idle_timeout",
         "attempt_hard": "model_attempt_hard_timeout",
     }[scope]
-    return V2ModelError(
+    return ModelError(
         code,
         retryable=True,
         failure_stage=(
@@ -1615,7 +1615,7 @@ def _provider_event(
             "response.failed",
         } or response_status in {"completed", "incomplete", "failed"}
         if event_type == "response.completed" or response_status == "completed":
-            finish_reason: V2ModelFinishReason | None = "completed"
+            finish_reason: ModelFinishReason | None = "completed"
         elif event_type == "response.incomplete" or response_status == "incomplete":
             finish_reason = _normalized_finish_reason(
                 incomplete_reason,
@@ -1640,7 +1640,7 @@ def _provider_event(
     choices = event.get("choices")
     text_delta: str | None = None
     reasoning_delta: str | None = None
-    finish_reason: V2ModelFinishReason | None = None
+    finish_reason: ModelFinishReason | None = None
     raw_finish_reason: str | None = None
     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
         delta_object = choices[0].get("delta")
@@ -1672,18 +1672,18 @@ def _normalized_finish_reason(
     value: Any,
     *,
     missing_as_unknown: bool = False,
-) -> V2ModelFinishReason | None:
+) -> ModelFinishReason | None:
     if not isinstance(value, str):
         return "unknown" if missing_as_unknown else None
     if value in _FINISH_REASONS:
-        return cast(V2ModelFinishReason, value)
+        return cast(ModelFinishReason, value)
     return "unknown"
 
 
-def _normalized_responses_usage(raw_usage: Any) -> V2ProviderUsage | None:
+def _normalized_responses_usage(raw_usage: Any) -> ProviderUsage | None:
     if not isinstance(raw_usage, dict):
         return None
-    normalized: V2ProviderUsage = {}
+    normalized: ProviderUsage = {}
     _copy_usage_int(normalized, "input_tokens", raw_usage.get("input_tokens"))
     _copy_usage_int(normalized, "output_tokens", raw_usage.get("output_tokens"))
     _copy_usage_int(normalized, "total_tokens", raw_usage.get("total_tokens"))
@@ -1704,10 +1704,10 @@ def _normalized_responses_usage(raw_usage: Any) -> V2ProviderUsage | None:
     return normalized or None
 
 
-def _normalized_chat_completions_usage(raw_usage: Any) -> V2ProviderUsage | None:
+def _normalized_chat_completions_usage(raw_usage: Any) -> ProviderUsage | None:
     if not isinstance(raw_usage, dict):
         return None
-    normalized: V2ProviderUsage = {}
+    normalized: ProviderUsage = {}
     _copy_usage_int(normalized, "input_tokens", raw_usage.get("prompt_tokens"))
     _copy_usage_int(normalized, "output_tokens", raw_usage.get("completion_tokens"))
     _copy_usage_int(normalized, "total_tokens", raw_usage.get("total_tokens"))
@@ -1729,7 +1729,7 @@ def _normalized_chat_completions_usage(raw_usage: Any) -> V2ProviderUsage | None
 
 
 def _copy_usage_int(
-    destination: V2ProviderUsage,
+    destination: ProviderUsage,
     name: str,
     value: Any,
 ) -> None:
@@ -1931,7 +1931,7 @@ def request_payload_matches_model_context(
                 supports_thinking=supports_thinking,
                 supports_strict_json_schema=strict,
             )
-        except V2ModelError:
+        except ModelError:
             return False
         return request_payload == expected
     if isinstance(request_payload.get("messages"), list):
@@ -1950,7 +1950,7 @@ def request_payload_matches_model_context(
                 supports_thinking=supports_thinking,
                 supports_strict_json_schema=strict,
             )
-        except V2ModelError:
+        except ModelError:
             return False
         return request_payload == expected
     return False
@@ -2027,7 +2027,7 @@ def _effective_max_tokens(
     ]
     if candidates:
         return min(candidates)
-    raise V2ModelError("model_parameters_invalid")
+    raise ModelError("model_parameters_invalid")
 
 
 def _apply_common_parameters(
@@ -2116,14 +2116,14 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
     _require_current_prompt_contract(action_context)
     output_contract = _decision_output_contract(action_context)
     if not isinstance(output_contract, dict):
-        raise V2ModelError("model_decision_contract_missing")
+        raise ModelError("model_decision_contract_missing")
     kind = output_contract.get("kind")
     speech_instruction = _speech_output_instruction(output_contract)
     note_instruction = _decision_note_output_instruction(output_contract)
     if kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         boolean = output_contract.get("boolean")
         boolean = boolean if isinstance(boolean, dict) else {}
         output_instruction = (
@@ -2138,7 +2138,7 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
         target_policy = target_policy if isinstance(target_policy, dict) else {}
         target_mode = target_policy.get("mode")
         if target_mode not in {"required", "optional"}:
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         output_instruction = (
             "输出一个 JSON 对象，使用 target_player_id 表示目标。"
             "需要选择目标时，target_player_id 必须是候选列表中的 seat_N 引用；"
@@ -2156,7 +2156,7 @@ def _decision_model_input(action_context: dict[str, Any]) -> list[dict[str, Any]
             "不要输出 target_player_id。"
         )
     else:
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     if action_context["prompt_template_version"] == PROMPT_TEMPLATE_VERSION:
         output_schema = _decision_output_json_schema(action_context)
         allowed_output_fields = "、".join(output_schema["properties"])
@@ -2241,7 +2241,7 @@ def _require_current_prompt_contract(action_context: dict[str, Any]) -> None:
         or known_events.get("schema_version") != KNOWN_EVENTS_SCHEMA_VERSION
         or known_events.get("encoding") != "lossless_refs_v1"
     ):
-        raise V2ModelError("model_prompt_template_unsupported")
+        raise ModelError("model_prompt_template_unsupported")
 
 
 def _decision_output_examples(
@@ -2255,21 +2255,21 @@ def _decision_output_examples(
         target_policy = output_contract.get("target_policy")
         target_policy = target_policy if isinstance(target_policy, dict) else {}
         if not candidate_ids and target_policy.get("mode") != "optional":
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         examples = [{"target_player_id": ("<candidate_player_id>" if candidate_ids else None)}]
     elif kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         examples = [{field: True}, {field: False}]
     elif kind == "speech":
         examples = [{}]
     else:
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
 
     speech = output_contract.get("speech")
     if not isinstance(speech, dict):
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     speech_mode = speech.get("mode")
     for example in examples:
         if speech_mode == "required" or (
@@ -2351,7 +2351,7 @@ def _decision_output_contract(action_context: dict[str, Any]) -> dict[str, Any] 
 def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, Any]:
     output_contract = _decision_output_contract(action_context)
     if not isinstance(output_contract, dict):
-        raise V2ModelError("model_decision_contract_missing")
+        raise ModelError("model_decision_contract_missing")
 
     properties: dict[str, Any] = {}
     required: list[str] = []
@@ -2360,13 +2360,13 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
     if kind == "target":
         target_policy = output_contract.get("target_policy")
         if not isinstance(target_policy, dict):
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         target_mode = target_policy.get("mode")
         if target_mode not in {"required", "optional"}:
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         candidate_ids = _candidate_player_ids(action_context)
         if target_mode == "required" and not candidate_ids:
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         properties["target_player_id"] = {
             "type": "string",
             "enum": candidate_ids,
@@ -2380,17 +2380,17 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
     elif kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         if field in {"decision_note", "speech", "target_player_id"}:
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         properties[field] = {"type": "boolean"}
         required.append(field)
     elif kind != "speech":
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
 
     speech = output_contract.get("speech")
     if not isinstance(speech, dict):
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     speech_mode = speech.get("mode")
     speech_schema = _non_empty_string_schema(speech)
     if speech_mode == "required":
@@ -2402,7 +2402,7 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
         }
     elif speech_mode == "required_if_true":
         if kind != "boolean":
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         field = output_contract["field"]
         properties["speech"] = {
             "anyOf": [speech_schema, {"type": "null"}],
@@ -2420,7 +2420,7 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
             }
         )
     elif speech_mode != "forbidden":
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
 
     note = output_contract.get("decision_note")
     if isinstance(note, dict) and note.get("mode") == "optional":
@@ -2430,9 +2430,9 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
             note_schema["maxLength"] = max_chars
         properties["decision_note"] = note_schema
     elif isinstance(note, dict) and note.get("mode") not in {None, "none"}:
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     elif note is not None and not isinstance(note, dict):
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
 
     schema: dict[str, Any] = {
         "type": "object",
@@ -2448,17 +2448,17 @@ def _decision_output_json_schema(action_context: dict[str, Any]) -> dict[str, An
 def _candidate_player_ids(action_context: dict[str, Any]) -> list[str]:
     candidates = action_context.get("candidates")
     if not isinstance(candidates, list):
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     candidate_ids: list[str] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         player_id = candidate.get("player_id")
         if not isinstance(player_id, str) or not player_id.strip():
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         normalized = player_id.strip()
         if normalized in candidate_ids:
-            raise V2ModelError("model_decision_contract_invalid")
+            raise ModelError("model_decision_contract_invalid")
         candidate_ids.append(normalized)
     return candidate_ids
 
@@ -2493,7 +2493,7 @@ def _speech_output_instruction(output_contract: dict[str, Any]) -> str:
             "为 false 时不要发言，speech 应省略或为 null。"
         )
     else:
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
 
     max_chars = speech.get("max_chars")
     if isinstance(max_chars, int) and max_chars > 0:
@@ -2513,7 +2513,7 @@ def _decision_note_output_instruction(output_contract: dict[str, Any]) -> str:
     if not isinstance(note, dict) or note.get("mode") == "none":
         return ""
     if note.get("mode") != "optional":
-        raise V2ModelError("model_decision_contract_invalid")
+        raise ModelError("model_decision_contract_invalid")
     max_chars = note.get("max_chars")
     limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else 120
     return (
@@ -2531,9 +2531,9 @@ def _sse_data(line: str) -> dict[str, Any] | None:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise V2ModelError("model_invalid_sse", retryable=True) from exc
+        raise ModelError("model_invalid_sse", retryable=True) from exc
     if not isinstance(value, dict):
-        raise V2ModelError("model_invalid_event", retryable=True)
+        raise ModelError("model_invalid_event", retryable=True)
     return value
 
 
@@ -2550,11 +2550,11 @@ def _parse_decision_object(
     if duplicate is not None:
         return duplicate
     if _has_additional_json_document(raw):
-        raise V2QualityError("model_decision_invalid_json_document")
+        raise QualityError("model_decision_invalid_json_document")
     return ParsedDecisionObject(value=_single_decision_object(raw))
 
 
-def _decision_parse_can_fallback(exc: V2QualityError) -> bool:
+def _decision_parse_can_fallback(exc: QualityError) -> bool:
     return exc.code in {
         "model_decision_invalid_json",
         "model_decision_invalid_shape",
@@ -2575,8 +2575,8 @@ def _single_decision_object(raw: str) -> dict[str, Any]:
                 continue
             if isinstance(value, dict):
                 return value
-            raise V2QualityError("model_decision_invalid_shape")
-    raise V2QualityError("model_decision_invalid_json")
+            raise QualityError("model_decision_invalid_shape")
+    raise QualityError("model_decision_invalid_json")
 
 
 def _serialized_decision_candidates(value: str) -> tuple[str, ...]:
@@ -2610,7 +2610,7 @@ def _duplicate_decision_object(
         first_semantics = _decision_object_semantics(first, output_contract)
         second_semantics = _decision_object_semantics(second, output_contract)
         if first_semantics != second_semantics:
-            raise V2QualityError("model_decision_ambiguous_multiple_objects")
+            raise QualityError("model_decision_ambiguous_multiple_objects")
         return ParsedDecisionObject(
             value=first,
             repair_kind="duplicate_identical_json_ignored",
@@ -2786,19 +2786,19 @@ def _decision_fields(
     parsed_object: ParsedDecisionObject | None | object = _PARSED_OBJECT_UNSET,
 ) -> tuple[str | None, str | None, str | None, bool | None]:
     if not isinstance(output_contract, dict):
-        raise V2QualityError("model_decision_contract_missing")
+        raise QualityError("model_decision_contract_missing")
     kind = output_contract.get("kind")
     if kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
-            raise V2QualityError("model_decision_contract_invalid")
+            raise QualityError("model_decision_contract_invalid")
         try:
             value = _parsed_decision_value(
                 raw,
                 output_contract=output_contract,
                 parsed_object=parsed_object,
             )
-        except V2QualityError as exc:
+        except QualityError as exc:
             if not _decision_parse_can_fallback(exc):
                 raise
             boolean_value = _boolean_fragment(raw, field=field)
@@ -2822,7 +2822,7 @@ def _decision_fields(
                 output_contract=output_contract,
                 parsed_object=parsed_object,
             )
-        except V2QualityError as exc:
+        except QualityError as exc:
             if not _decision_parse_can_fallback(exc):
                 raise
             return (
@@ -2839,14 +2839,14 @@ def _decision_fields(
                 output_contract=output_contract,
                 parsed_object=parsed_object,
             )
-        except V2QualityError as exc:
+        except QualityError as exc:
             if not _decision_parse_can_fallback(exc):
                 raise
             speech = _fallback_speech(raw, output_contract=output_contract)
         else:
             return _decision_fields_from_object(value, output_contract)
         return None, speech, None, None
-    raise V2QualityError("model_decision_contract_invalid")
+    raise QualityError("model_decision_contract_invalid")
 
 
 def _parsed_decision_value(
@@ -2858,7 +2858,7 @@ def _parsed_decision_value(
     if parsed_object is _PARSED_OBJECT_UNSET:
         return _parse_decision_object(raw, output_contract=output_contract).value
     if parsed_object is None:
-        raise V2QualityError("model_decision_invalid_json")
+        raise QualityError("model_decision_invalid_json")
     assert isinstance(parsed_object, ParsedDecisionObject)
     return parsed_object.value
 
@@ -2872,10 +2872,10 @@ def _decision_fields_from_object(
     if kind == "boolean":
         field = output_contract.get("field")
         if not isinstance(field, str) or not field.strip():
-            raise V2QualityError("model_decision_contract_invalid")
+            raise QualityError("model_decision_contract_invalid")
         boolean_value = payload.get(field)
         if not isinstance(boolean_value, bool):
-            raise V2QualityError("model_decision_invalid_boolean")
+            raise QualityError("model_decision_invalid_boolean")
         speech = _speech_field(
             payload.get("speech"),
             output_contract=output_contract,
@@ -2885,7 +2885,7 @@ def _decision_fields_from_object(
     if kind == "target":
         target_player_id = payload.get("target_player_id")
         if target_player_id is not None and not isinstance(target_player_id, str):
-            raise V2QualityError("model_decision_invalid_target")
+            raise QualityError("model_decision_invalid_target")
         speech = _speech_field(
             payload.get("speech"),
             output_contract=output_contract,
@@ -2902,7 +2902,7 @@ def _decision_fields_from_object(
             output_contract=output_contract,
         )
         return None, speech, None, None
-    raise V2QualityError("model_decision_contract_invalid")
+    raise QualityError("model_decision_contract_invalid")
 
 
 def _decision_repair_kind(
@@ -2918,7 +2918,7 @@ def _decision_repair_kind(
     if parsed_object is _PARSED_OBJECT_UNSET:
         try:
             parsed_object = _parse_decision_object(raw, output_contract=output_contract)
-        except V2QualityError as exc:
+        except QualityError as exc:
             if not _decision_parse_can_fallback(exc):
                 raise
             parsed_object = None
@@ -2957,14 +2957,14 @@ def _decision_note(
     if not isinstance(note_contract, dict) or note_contract.get("mode") == "none":
         return None
     if note_contract.get("mode") != "optional":
-        raise V2QualityError("model_decision_contract_invalid")
+        raise QualityError("model_decision_contract_invalid")
     try:
         value = _parsed_decision_value(
             raw,
             output_contract=output_contract,
             parsed_object=parsed_object,
         )
-    except V2QualityError as exc:
+    except QualityError as exc:
         if not _decision_parse_can_fallback(exc):
             raise
         return None
@@ -2979,7 +2979,7 @@ def _decision_note_from_object(
     if not isinstance(note_contract, dict) or note_contract.get("mode") == "none":
         return None
     if note_contract.get("mode") != "optional":
-        raise V2QualityError("model_decision_contract_invalid")
+        raise QualityError("model_decision_contract_invalid")
     note_value = _decision_payload(
         value,
         output_contract=output_contract,
@@ -2987,7 +2987,7 @@ def _decision_note_from_object(
     if note_value is None:
         return None
     if not isinstance(note_value, str):
-        raise V2QualityError("model_decision_invalid_note")
+        raise QualityError("model_decision_invalid_note")
     note = note_value.strip()
     if not note:
         return None
@@ -3002,41 +3002,41 @@ def _speech_field(
 ) -> str | None:
     speech_contract = output_contract.get("speech")
     if not isinstance(speech_contract, dict):
-        raise V2QualityError("model_decision_contract_invalid")
+        raise QualityError("model_decision_contract_invalid")
     mode = speech_contract.get("mode")
     if mode == "forbidden":
         if value is None or value == "":
             return None
         if not isinstance(value, str):
-            raise V2QualityError("model_decision_invalid_speech")
+            raise QualityError("model_decision_invalid_speech")
         speech = value.strip()
         if not speech:
             return None
         if _looks_like_structured_speech(speech):
-            raise V2QualityError("model_decision_structured_speech_leak")
+            raise QualityError("model_decision_structured_speech_leak")
         # Parsing must preserve a provider's extra speech so the action layer can
         # audit and normalize the contract violation without retrying the model.
         return speech
     if mode == "required_if_true" and boolean_value is False:
         if value is not None and not isinstance(value, str):
-            raise V2QualityError("model_decision_invalid_speech")
+            raise QualityError("model_decision_invalid_speech")
         return None
     required = mode == "required" or (mode == "required_if_true" and boolean_value is True)
     if mode not in {"required", "optional", "required_if_true"}:
-        raise V2QualityError("model_decision_contract_invalid")
+        raise QualityError("model_decision_contract_invalid")
     if value is None:
         if required:
-            raise V2QualityError("model_decision_invalid_speech")
+            raise QualityError("model_decision_invalid_speech")
         return None
     if not isinstance(value, str):
-        raise V2QualityError("model_decision_invalid_speech")
+        raise QualityError("model_decision_invalid_speech")
     speech = value.strip()
     if speech:
         if _looks_like_structured_speech(speech):
-            raise V2QualityError("model_decision_structured_speech_leak")
+            raise QualityError("model_decision_structured_speech_leak")
         return speech
     if required:
-        raise V2QualityError("model_decision_invalid_speech")
+        raise QualityError("model_decision_invalid_speech")
     return None
 
 
@@ -3048,11 +3048,11 @@ def _fallback_speech(
 ) -> str | None:
     stripped = _strip_json_fence(raw)
     if _looks_like_context_echo(stripped):
-        raise V2QualityError("model_decision_structured_speech_leak")
+        raise QualityError("model_decision_structured_speech_leak")
     if _looks_like_structured_speech(stripped):
         recovered = _json_string_fragment(stripped, field="speech")
         if recovered is None or _looks_like_structured_speech(recovered):
-            raise V2QualityError("model_decision_structured_speech_leak")
+            raise QualityError("model_decision_structured_speech_leak")
         return _speech_field(
             recovered,
             output_contract=output_contract,
@@ -3120,7 +3120,7 @@ def _require_top_level_json_fragment(value: str, *, field_start: int) -> None:
             if depth < 0:
                 break
     if depth != 1 or quote is not None:
-        raise V2QualityError("model_decision_structured_speech_leak")
+        raise QualityError("model_decision_structured_speech_leak")
 
 
 def _strip_json_fence(raw: str) -> str:
@@ -3181,7 +3181,7 @@ def _decision_payload(
     if "response" in value:
         response = _compatible_response_wrapper(value, output_contract=output_contract)
         if response is None:
-            raise V2QualityError("model_decision_structured_speech_leak")
+            raise QualityError("model_decision_structured_speech_leak")
         return response
     output = value.get("output")
     if isinstance(output, dict):
@@ -3192,7 +3192,7 @@ def _decision_payload(
     if _expected_output_fields(output_contract).intersection(value):
         return value
     if _is_context_echo_object(value):
-        raise V2QualityError("model_decision_structured_speech_leak")
+        raise QualityError("model_decision_structured_speech_leak")
     return value
 
 
@@ -3325,8 +3325,8 @@ def _decode_json_escape(raw: str, slash_index: int) -> tuple[str, int]:
 
 def _required_speech(value: Any, *, error_code: str) -> str:
     if not isinstance(value, str):
-        raise V2QualityError(error_code)
+        raise QualityError(error_code)
     speech = value.strip()
     if not speech:
-        raise V2QualityError(error_code)
+        raise QualityError(error_code)
     return speech

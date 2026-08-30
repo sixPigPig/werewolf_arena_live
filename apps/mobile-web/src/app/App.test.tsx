@@ -13,31 +13,21 @@ import {
 } from "react-router-dom";
 
 import { MobileAppShell } from "../layout/MobileAppShell";
-import { GameDetailPage } from "../pages/GameDetailPage";
 import { GamesPage } from "../pages/GamesPage";
-import { HistoryPage } from "../pages/HistoryPage";
-import { LivePage } from "../pages/LivePage";
-import { LiveReplayPage } from "../pages/LiveReplayPage";
-import { PlaybackPage } from "../pages/PlaybackPage";
 import { PlayerDetailPage } from "../pages/PlayerDetailPage";
 import { PlayersPage } from "../pages/PlayersPage";
 import { routes } from "../routes/definitions";
 import { updateRootFontSize } from "../styles/rem";
-import { LiveV2Page } from "../v2/live/LiveV2Page";
-import { GodViewPage } from "../v2/god-view/GodViewPage";
+import { LivePage } from "../match/live/LivePage";
+import { GodViewPage } from "../match/god-view/GodViewPage";
 
 const requiredRoutes = [
   "/",
   "/v2/games/:gameId/live",
   "/v2/games/:gameId/live/god",
   "/games",
-  "/games/:gameId",
-  "/games/:gameId/live",
-  "/games/:gameId/live-replay",
-  "/games/:gameId/replay",
   "/players",
   "/players/:playerId",
-  "/history",
 ];
 
 const routeSmokeCases = [
@@ -45,13 +35,8 @@ const routeSmokeCases = [
   { path: "/v2/games/wolf-1/live", heading: "Live V2" },
   { path: "/v2/games/wolf-1/live/god", heading: "上帝视角" },
   { path: "/games", heading: "狼人杀对局大厅" },
-  { path: "/games/wolf-1", heading: "移动复盘" },
-  { path: "/games/wolf-1/live", heading: "实时观战" },
-  { path: "/games/wolf-1/live-replay", heading: "历史直播回放" },
-  { path: "/games/wolf-1/replay", heading: "移动复盘" },
   { path: "/players", heading: "玩家图鉴" },
   { path: "/players/seer-1", heading: "玩家详情" },
-  { path: "/history", heading: "对局历史" },
 ];
 
 const eagerTestRoutes: RouteObject[] = [
@@ -60,16 +45,11 @@ const eagerTestRoutes: RouteObject[] = [
     element: <MobileAppShell />,
     children: [
       { index: true, element: <Navigate to="/games" replace /> },
-      { path: "v2/games/:gameId/live", element: <LiveV2Page /> },
+      { path: "v2/games/:gameId/live", element: <LivePage /> },
       { path: "v2/games/:gameId/live/god", element: <GodViewPage /> },
       { path: "games", element: <GamesPage /> },
-      { path: "games/:gameId", element: <GameDetailPage /> },
-      { path: "games/:gameId/live", element: <LivePage /> },
-      { path: "games/:gameId/live-replay", element: <LiveReplayPage /> },
-      { path: "games/:gameId/replay", element: <PlaybackPage /> },
       { path: "players", element: <PlayersPage /> },
       { path: "players/:playerId", element: <PlayerDetailPage /> },
-      { path: "history", element: <HistoryPage /> },
     ],
   },
 ];

@@ -6,13 +6,13 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from app.werewolf.rules import (
+from app.rule_sets.types import (
     LEGACY_WEREWOLF_ATTACK_RESOLUTION,
     WEREWOLF_ATTACK_RESOLUTIONS,
 )
 
 
-class V2AbilityConfigurationError(RuntimeError):
+class AbilityConfigurationError(RuntimeError):
     pass
 
 
@@ -20,7 +20,7 @@ OwnerScope = Literal["player", "team"]
 
 
 @dataclass(frozen=True)
-class V2AbilityDefinition:
+class AbilityDefinition:
     ability_id: str
     ability_version: int
     action_name: str
@@ -39,7 +39,7 @@ class V2AbilityDefinition:
 
 
 @dataclass(frozen=True)
-class V2NightResolution:
+class NightResolution:
     deaths: tuple[dict[str, str], ...]
     peaceful: bool
     attack_prevented_by: str | None
@@ -72,8 +72,8 @@ _TEAM_KEYS = {
     "好人": "villagers",
 }
 
-ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
-    "werewolf.attack": V2AbilityDefinition(
+ABILITY_REGISTRY: dict[str, AbilityDefinition] = {
+    "werewolf.attack": AbilityDefinition(
         ability_id="werewolf.attack",
         ability_version=1,
         action_name="remove",
@@ -89,7 +89,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         effect_type="attack",
         presentation_policy_id="private_team_turn.v1",
     ),
-    "guard.protect": V2AbilityDefinition(
+    "guard.protect": AbilityDefinition(
         ability_id="guard.protect",
         ability_version=1,
         action_name="protect",
@@ -105,7 +105,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         effect_type="protect",
         presentation_policy_id="private_role_turn.v1",
     ),
-    "seer.investigate": V2AbilityDefinition(
+    "seer.investigate": AbilityDefinition(
         ability_id="seer.investigate",
         ability_version=1,
         action_name="investigate",
@@ -121,7 +121,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         effect_type="investigate",
         presentation_policy_id="private_role_turn_with_result.v1",
     ),
-    "witch.heal": V2AbilityDefinition(
+    "witch.heal": AbilityDefinition(
         ability_id="witch.heal",
         ability_version=1,
         action_name="witch_save",
@@ -137,7 +137,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         effect_type="heal",
         presentation_policy_id="private_role_turn.v1",
     ),
-    "witch.poison": V2AbilityDefinition(
+    "witch.poison": AbilityDefinition(
         ability_id="witch.poison",
         ability_version=1,
         action_name="witch_poison",
@@ -153,7 +153,7 @@ ABILITY_REGISTRY: dict[str, V2AbilityDefinition] = {
         effect_type="poison",
         presentation_policy_id="private_role_turn.v1",
     ),
-    "hunter.death_shot": V2AbilityDefinition(
+    "hunter.death_shot": AbilityDefinition(
         ability_id="hunter.death_shot",
         ability_version=1,
         action_name="hunter_shoot",
@@ -179,10 +179,10 @@ _NIGHT_ACTIONS = frozenset({"remove", "protect", "investigate", "witch_save", "w
 
 def normalize_role_key(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise V2AbilityConfigurationError("role key is missing")
+        raise AbilityConfigurationError("role key is missing")
     role_key = _ROLE_KEYS.get(value.strip())
     if role_key is None:
-        raise V2AbilityConfigurationError(f"unsupported role {value.strip()}")
+        raise AbilityConfigurationError(f"unsupported role {value.strip()}")
     return role_key
 
 
@@ -202,10 +202,10 @@ def compile_ability_runtime_snapshot(
 ) -> dict[str, Any]:
     rule_set = rule_snapshot.get("rule_set")
     if not isinstance(rule_set, dict):
-        raise V2AbilityConfigurationError("rule snapshot has no rule set")
+        raise AbilityConfigurationError("rule snapshot has no rule set")
     normalized_assignments = [_assignment(item) for item in assignments]
     if not normalized_assignments:
-        raise V2AbilityConfigurationError("ability runtime requires role assignments")
+        raise AbilityConfigurationError("ability runtime requires role assignments")
     role_counts: dict[str, int] = {}
     for item in normalized_assignments:
         role_counts[item["role_key"]] = role_counts.get(item["role_key"], 0) + 1
@@ -218,19 +218,19 @@ def compile_ability_runtime_snapshot(
         if not isinstance(raw_night_actions, list) or any(
             not isinstance(item, str) or not item.strip() for item in raw_night_actions
         ):
-            raise V2AbilityConfigurationError("night actions are invalid")
+            raise AbilityConfigurationError("night actions are invalid")
         night_actions = tuple(item.strip() for item in raw_night_actions)
         action_source = "frozen_rule_snapshot"
     if len(night_actions) != len(set(night_actions)):
-        raise V2AbilityConfigurationError("night actions contain duplicates")
+        raise AbilityConfigurationError("night actions contain duplicates")
     unknown_actions = set(night_actions) - _NIGHT_ACTIONS
     if unknown_actions:
-        raise V2AbilityConfigurationError(
+        raise AbilityConfigurationError(
             f"unknown night actions: {', '.join(sorted(unknown_actions))}"
         )
     expected_actions = set(_derived_night_actions(role_counts))
     if set(night_actions) != expected_actions:
-        raise V2AbilityConfigurationError("night actions do not match assigned roles")
+        raise AbilityConfigurationError("night actions do not match assigned roles")
     werewolf_attack_policy = _werewolf_attack_policy(rule_set)
 
     instances: list[dict[str, Any]] = []
@@ -238,7 +238,7 @@ def compile_ability_runtime_snapshot(
         definition = ABILITY_REGISTRY[_ACTION_TO_ABILITY[action_name]]
         owners = _owners(definition, normalized_assignments)
         if not owners:
-            raise V2AbilityConfigurationError(
+            raise AbilityConfigurationError(
                 f"ability {definition.ability_id} has no eligible owner"
             )
         for owner_id in owners:
@@ -307,10 +307,10 @@ def compile_ability_runtime_snapshot(
 def ability_snapshot_hash(snapshot: dict[str, Any]) -> str:
     digest = snapshot.get("snapshot_hash")
     if not isinstance(digest, str) or len(digest) != 64:
-        raise V2AbilityConfigurationError("ability snapshot hash is missing")
+        raise AbilityConfigurationError("ability snapshot hash is missing")
     canonical = {key: value for key, value in snapshot.items() if key != "snapshot_hash"}
     if hashlib.sha256(_canonical(canonical)).hexdigest() != digest:
-        raise V2AbilityConfigurationError("ability snapshot hash mismatch")
+        raise AbilityConfigurationError("ability snapshot hash mismatch")
     return digest
 
 
@@ -320,7 +320,7 @@ def resolve_first_night(
     protected_target: str | None,
     healed_target: str | None,
     poisoned_target: str | None,
-) -> V2NightResolution:
+) -> NightResolution:
     deaths: list[dict[str, str]] = []
     prevented_by: str | None = None
     if attack_target is not None:
@@ -333,8 +333,8 @@ def resolve_first_night(
     if poisoned_target is not None:
         deaths.append({"player_id": poisoned_target, "cause": "witch_poison"})
     if len({item["player_id"] for item in deaths}) != len(deaths):
-        raise V2AbilityConfigurationError("night resolution produced duplicate death")
-    return V2NightResolution(
+        raise AbilityConfigurationError("night resolution produced duplicate death")
+    return NightResolution(
         deaths=tuple(deaths),
         peaceful=not deaths,
         attack_prevented_by=prevented_by,
@@ -354,7 +354,7 @@ def _werewolf_attack_policy(rule_set: dict[str, Any]) -> dict[str, Any]:
         "allow_no_attack",
         "allow_wolf_target",
     }:
-        raise V2AbilityConfigurationError("werewolf attack policy is invalid")
+        raise AbilityConfigurationError("werewolf attack policy is invalid")
     resolution = raw.get("resolution")
     allow_no_attack = raw.get("allow_no_attack")
     allow_wolf_target = raw.get("allow_wolf_target")
@@ -364,7 +364,7 @@ def _werewolf_attack_policy(rule_set: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(allow_no_attack, bool)
         or not isinstance(allow_wolf_target, bool)
     ):
-        raise V2AbilityConfigurationError("werewolf attack policy is invalid")
+        raise AbilityConfigurationError("werewolf attack policy is invalid")
     return {
         "resolution": resolution,
         "allow_no_attack": allow_no_attack,
@@ -417,9 +417,9 @@ def _assignment(value: Any) -> dict[str, Any]:
     seat = getattr(value, "seat", None)
     team = getattr(value, "team", None)
     if not isinstance(player_id, str) or not player_id.strip():
-        raise V2AbilityConfigurationError("assignment player id is invalid")
+        raise AbilityConfigurationError("assignment player id is invalid")
     if not isinstance(seat, int) or isinstance(seat, bool) or not 1 <= seat <= 24:
-        raise V2AbilityConfigurationError("assignment seat is invalid")
+        raise AbilityConfigurationError("assignment seat is invalid")
     role_key = normalize_role_key(role)
     return {
         "seat": seat,
@@ -430,7 +430,7 @@ def _assignment(value: Any) -> dict[str, Any]:
 
 
 def _owners(
-    definition: V2AbilityDefinition,
+    definition: AbilityDefinition,
     assignments: list[dict[str, Any]],
 ) -> tuple[str, ...]:
     matching = [item for item in assignments if item["role_key"] == definition.owner_role_key]
@@ -441,7 +441,7 @@ def _owners(
 
 def _instance(
     game_id: str,
-    definition: V2AbilityDefinition,
+    definition: AbilityDefinition,
     owner_id: str,
 ) -> dict[str, Any]:
     identity = hashlib.sha256(
@@ -471,7 +471,7 @@ def _instance(
 
 def _required_text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise V2AbilityConfigurationError(f"{label} is missing")
+        raise AbilityConfigurationError(f"{label} is missing")
     return value.strip()
 
 
@@ -486,9 +486,9 @@ def _canonical(value: object) -> bytes:
 
 __all__ = [
     "ABILITY_REGISTRY",
-    "V2AbilityConfigurationError",
-    "V2AbilityDefinition",
-    "V2NightResolution",
+    "AbilityConfigurationError",
+    "AbilityDefinition",
+    "NightResolution",
     "ability_snapshot_hash",
     "compile_ability_runtime_snapshot",
     "normalize_role_key",

@@ -1,4 +1,4 @@
-from app.v2.win_conditions import (
+from app.match.win_conditions import (
     all_hunter_settlement_branches_terminal,
     build_public_win_condition_contract,
     hunter_settlement_can_change_winner,

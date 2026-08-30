@@ -7,35 +7,35 @@ from typing import Any
 
 import pytest
 
-from app.v2.action_engine import (
-    V2ActionFailure,
-    V2ActionResult,
-    V2SpeechSpec,
+from app.match.action_engine import (
+    ActionFailure,
+    ActionResult,
+    SpeechSpec,
     _action_context,
 )
-from app.v2.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
-from app.v2.day_engine import (
+from app.match.day_speech_pipeline_contract import resolve_day_speech_pipeline_contract
+from app.match.day_engine import (
     _PreExileLaunch,
-    V2DayEngine,
-    V2DayRuntimeError,
+    DayEngine,
+    DayRuntimeError,
     _pre_exile_wolf_vote_private_facts,
     _private_fact_visible_at_public_cutoff,
 )
-from app.v2.match_repository import (
-    V2MatchPlayer,
-    V2MatchSnapshot,
-    V2PreExileExplosionCommit,
-    V2PreExilePrefetchSnapshot,
+from app.match.match_repository import (
+    MatchPlayer,
+    MatchSnapshot,
+    PreExileExplosionCommit,
+    PreExilePrefetchSnapshot,
 )
-from app.v2.model_client import V2ModelDecision, V2ModelError
-from app.v2.model_context import project_model_action_context
-from app.v2.model_context_compaction import expand_known_events_v7
-from app.v2.model_context_contract import current_model_context_contract
-from app.v2.pre_exile_pipeline_contract import (
+from app.match.model_client import ModelDecision, ModelError
+from app.match.model_context import project_model_action_context
+from app.match.model_context_compaction import expand_known_events_v7
+from app.match.model_context_contract import current_model_context_contract
+from app.match.pre_exile_pipeline_contract import (
     freeze_pre_exile_pipeline_contract,
     resolve_pre_exile_pipeline_contract,
 )
-from app.v2.repository import V2ExecutionOwnershipLost, V2PresentationIdentity
+from app.match.repository import ExecutionOwnershipLost, PresentationIdentity
 
 
 def _false_explosion_fact(
@@ -162,7 +162,7 @@ def test_wolf_vote_rejects_non_authoritative_false_fact(
         target[parts[-1]] = value
 
     with pytest.raises(
-        V2DayRuntimeError,
+        DayRuntimeError,
         match="pre_exile_wolf_false_private_fact_invalid",
     ):
         _pre_exile_wolf_vote_private_facts(
@@ -178,7 +178,7 @@ def test_wolf_vote_rejects_non_authoritative_false_fact(
 
 def test_wolf_vote_rejects_false_fact_without_post_cutoff_durable_clock() -> None:
     with pytest.raises(
-        V2DayRuntimeError,
+        DayRuntimeError,
         match="pre_exile_wolf_false_private_fact_missing",
     ):
         _pre_exile_wolf_vote_private_facts(
@@ -206,12 +206,12 @@ class _Broadcaster:
 
 
 class _VoteRepository:
-    def __init__(self, state: V2MatchSnapshot) -> None:
+    def __init__(self, state: MatchSnapshot) -> None:
         self.state = state
         self.events: list[dict[str, Any]] = []
         self.finalize_calls: list[dict[str, Any]] = []
 
-    def snapshot(self, game_id: str) -> V2MatchSnapshot:
+    def snapshot(self, game_id: str) -> MatchSnapshot:
         assert game_id == self.state.game_id
         return self.state
 
@@ -238,7 +238,7 @@ class _VoteActions:
         self.active = 0
         self.max_active = 0
         self.release = asyncio.Event()
-        self.specs: list[V2SpeechSpec] = []
+        self.specs: list[SpeechSpec] = []
         self._seq = 200
 
     def check_cancellation(self, _game_id: str) -> None:
@@ -249,9 +249,9 @@ class _VoteActions:
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
+        spec: SpeechSpec,
         **_kwargs: Any,
-    ) -> V2ActionResult:
+    ) -> ActionResult:
         del game_id, broadcaster
         self.specs.append(spec)
         self.active += 1
@@ -263,7 +263,7 @@ class _VoteActions:
         self.active -= 1
         self._seq += 2
         assert spec.allowed_target_ids
-        return V2ActionResult(
+        return ActionResult(
             action_id=f"v2_action_recovery_{spec.actor_id}",
             decision=_vote_decision(spec.allowed_target_ids[0]),
             model_response_record_seq=self._seq - 1,
@@ -285,8 +285,8 @@ class _PreExileRows:
         return SimpleNamespace(action_id=kwargs["source_action_id"])
 
 
-def _player(player_id: str, seat: int, *, role_key: str = "villager") -> V2MatchPlayer:
-    return V2MatchPlayer(
+def _player(player_id: str, seat: int, *, role_key: str = "villager") -> MatchPlayer:
+    return MatchPlayer(
         player_id=player_id,
         seat=seat,
         display_name=f"{seat}号玩家",
@@ -304,9 +304,9 @@ def _player(player_id: str, seat: int, *, role_key: str = "villager") -> V2Match
     )
 
 
-def _vote_snapshot() -> V2MatchSnapshot:
+def _vote_snapshot() -> MatchSnapshot:
     players = tuple(_player(f"player_{seat}", seat) for seat in range(1, 4))
-    return V2MatchSnapshot(
+    return MatchSnapshot(
         game_id="v2_game_pre_exile",
         run_id="v2_run_pre_exile",
         last_record_seq=100,
@@ -338,8 +338,8 @@ def _vote_snapshot() -> V2MatchSnapshot:
     )
 
 
-def _vote_decision(target_player_id: str) -> V2ModelDecision:
-    return V2ModelDecision(
+def _vote_decision(target_player_id: str) -> ModelDecision:
+    return ModelDecision(
         target_player_id=target_player_id,
         speech=None,
         provider_request_id=f"request:{target_player_id}",
@@ -384,21 +384,21 @@ def test_all_false_pre_exile_votes_finalize_atomically_once() -> None:
         ]
     )
     actions = _VoteActions()
-    engine = V2DayEngine(
+    engine = DayEngine(
         repository=repository,  # type: ignore[arg-type]
         action_engine=actions,  # type: ignore[arg-type]
         pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
     )
     initial = {
-        "player_1": V2ActionResult(
+        "player_1": ActionResult(
             action_id="v2_action_player_1",
             decision=_vote_decision("player_2"),
         ),
-        "player_2": V2ActionResult(
+        "player_2": ActionResult(
             action_id="v2_action_player_2",
             decision=_vote_decision("player_3"),
         ),
-        "player_3": V2ActionResult(
+        "player_3": ActionResult(
             action_id="v2_action_player_3",
             decision=_vote_decision("player_1"),
         ),
@@ -447,16 +447,16 @@ def test_multiple_idle_capacity_failures_recover_concurrently_once() -> None:
         ]
     )
     actions = _VoteActions(expected_concurrency=2)
-    engine = V2DayEngine(
+    engine = DayEngine(
         repository=repository,  # type: ignore[arg-type]
         action_engine=actions,  # type: ignore[arg-type]
         pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
     )
     initial = {
         player.player_id: (
-            V2ActionResult(
+            ActionResult(
                 action_id=f"v2_action_idle_{player.player_id}",
-                failure=V2ActionFailure(
+                failure=ActionFailure(
                     code="model_prefetch_capacity_unavailable",
                     category="admission_capacity",
                     terminal_attempt_id="v2_attempt_idle_capacity",
@@ -464,7 +464,7 @@ def test_multiple_idle_capacity_failures_recover_concurrently_once() -> None:
                 terminal_event_record_seq=150 + player.seat,
             )
             if player.player_id in failed_ids
-            else V2ActionResult(
+            else ActionResult(
                 action_id=f"v2_action_idle_{player.player_id}",
                 decision=_vote_decision("player_1"),
             )
@@ -512,7 +512,7 @@ def test_multiple_idle_capacity_failures_recover_concurrently_once() -> None:
 
 
 class _GenerationRepository(_VoteRepository):
-    def __init__(self, state: V2MatchSnapshot) -> None:
+    def __init__(self, state: MatchSnapshot) -> None:
         super().__init__(state)
         self.private_facts: dict[str, list[dict[str, Any]]] = {}
         self.resolve_calls: list[dict[str, Any]] = []
@@ -529,9 +529,9 @@ class _GenerationRepository(_VoteRepository):
     def resolve_pre_exile_self_explosions(
         self,
         **kwargs: Any,
-    ) -> V2PreExileExplosionCommit:
+    ) -> PreExileExplosionCommit:
         self.resolve_calls.append(dict(kwargs))
-        return V2PreExileExplosionCommit(
+        return PreExileExplosionCommit(
             outcome="explosion_selected",
             selected_player_id="wolf_2",
             failed_player_ids=(),
@@ -542,7 +542,7 @@ class _GenerationPipeline:
     def __init__(self, repository: _GenerationRepository) -> None:
         self.repository = repository
         self.rows: dict[tuple[str, str], Any] = {}
-        self.action_results: dict[str, V2ActionResult] = {}
+        self.action_results: dict[str, ActionResult] = {}
         self.vote_recorded_count = 0
         self.self_recorded_count = 0
         self.vote_rows_ready = asyncio.Event()
@@ -625,7 +625,7 @@ class _GenerationPipeline:
 class _GenerationActions:
     def __init__(self, pipeline: _GenerationPipeline) -> None:
         self.pipeline = pipeline
-        self.specs: list[V2SpeechSpec] = []
+        self.specs: list[SpeechSpec] = []
         self.start_order: list[tuple[str, str, str]] = []
         self.model_retry_guards: dict[str, Any] = {}
         self.initial_retry_guard_results: dict[str, bool] = {}
@@ -639,17 +639,17 @@ class _GenerationActions:
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
+        spec: SpeechSpec,
         on_model_admission_pending: Any = None,
         **_kwargs: Any,
-    ) -> V2ActionResult:
+    ) -> ActionResult:
         del game_id, broadcaster
         self.specs.append(spec)
         model_retry_guard = _kwargs.get("model_retry_guard")
         if model_retry_guard is not None:
             self.model_retry_guards[spec.actor_id] = model_retry_guard
             self.initial_retry_guard_results[spec.actor_id] = model_retry_guard(
-                V2ModelError("model_empty_stream"),
+                ModelError("model_empty_stream"),
                 1,
             )
         self.start_order.append(
@@ -664,7 +664,7 @@ class _GenerationActions:
         self._seq += 2
         action_id = f"v2_action_{spec.pipeline_result_kind}_{spec.actor_id}"
         if spec.pipeline_result_kind == "self_explosion":
-            decision = V2ModelDecision(
+            decision = ModelDecision(
                 target_player_id=None,
                 speech=None,
                 provider_request_id=f"request:{spec.actor_id}",
@@ -676,7 +676,7 @@ class _GenerationActions:
         else:
             assert spec.allowed_target_ids
             decision = _vote_decision(spec.allowed_target_ids[0])
-        result = V2ActionResult(
+        result = ActionResult(
             action_id=action_id,
             decision=decision,
             model_response_record_seq=self._seq - 1,
@@ -686,7 +686,7 @@ class _GenerationActions:
         return result
 
 
-def _generation_snapshot() -> V2MatchSnapshot:
+def _generation_snapshot() -> MatchSnapshot:
     state = _vote_snapshot()
     return replace(
         state,
@@ -707,7 +707,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
         repository = _GenerationRepository(state)
         pipeline_repository = _GenerationPipeline(repository)
         actions = _GenerationActions(pipeline_repository)
-        engine = V2DayEngine(
+        engine = DayEngine(
             repository=repository,  # type: ignore[arg-type]
             action_engine=actions,  # type: ignore[arg-type]
             pre_exile_pipeline_repository=pipeline_repository,  # type: ignore[arg-type]
@@ -717,7 +717,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
             presentation_closed=asyncio.Event(),
             predecessor_committed=predecessor_committed,
             pipeline=SimpleNamespace(pipeline_id="v2_preex_pipeline"),
-            frozen=V2PreExilePrefetchSnapshot(
+            frozen=PreExilePrefetchSnapshot(
                 match_snapshot=state,
                 public_cutoff_record_seq=100,
                 predecessor_presentation_id="v2_pres_last",
@@ -790,7 +790,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
     )
     assert actions.initial_retry_guard_results == {"wolf_1": True, "wolf_2": True}
     assert all(
-        guard(V2ModelError("model_empty_stream"), 1) is False
+        guard(ModelError("model_empty_stream"), 1) is False
         for guard in actions.model_retry_guards.values()
     )
     self_context = _action_context(
@@ -857,7 +857,7 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
     assert "private_judge_facts" not in projected["self"]
 
 
-class _DiscussionEngine(V2DayEngine):
+class _DiscussionEngine(DayEngine):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.long_pre_exile_gate = asyncio.Event()
@@ -869,12 +869,12 @@ class _DiscussionEngine(V2DayEngine):
     async def _offer_all_wolves_explosion(self, **_kwargs: Any) -> bool:
         return False
 
-    async def _player_action(self, **kwargs: Any) -> V2ModelDecision:
+    async def _player_action(self, **kwargs: Any) -> ModelDecision:
         player = kwargs["player"]
         opened = kwargs.get("on_presentation_opened")
         closed = kwargs.get("on_presentation_closed")
         if opened is not None:
-            identity = V2PresentationIdentity(
+            identity = PresentationIdentity(
                 game_id=kwargs["game_id"],
                 run_id="v2_run_pre_exile",
                 action_id=f"v2_action_speech_{player.player_id}",
@@ -895,7 +895,7 @@ class _DiscussionEngine(V2DayEngine):
             opened(identity)
             if closed is not None:
                 closed(identity)
-        return V2ModelDecision(
+        return ModelDecision(
             target_player_id=None,
             speech=f"speech:{player.player_id}",
             provider_request_id=f"request:{player.player_id}",
@@ -924,7 +924,7 @@ class _FailingFinalDiscussionEngine(_DiscussionEngine):
         self.error_type = error_type
         self.last_launch: _PreExileLaunch | None = None
 
-    async def _player_action(self, **kwargs: Any) -> V2ModelDecision:
+    async def _player_action(self, **kwargs: Any) -> ModelDecision:
         decision = await super()._player_action(**kwargs)
         if kwargs["player"].player_id == "villager_4":
             raise self.error_type("synthetic final presentation failure")
@@ -1017,17 +1017,17 @@ class _CanceledGenerationActions(_GenerationActions):
 
     def check_cancellation(self, _game_id: str) -> None:
         if self.canceled_returned:
-            raise V2ExecutionOwnershipLost("synthetic fence loss")
+            raise ExecutionOwnershipLost("synthetic fence loss")
 
     async def run_player_decision_result(
         self,
         *,
         game_id: str,
         broadcaster: Any,
-        spec: V2SpeechSpec,
+        spec: SpeechSpec,
         on_model_admission_pending: Any = None,
         **_kwargs: Any,
-    ) -> V2ActionResult:
+    ) -> ActionResult:
         del game_id, broadcaster
         self.start_order.append(
             (str(spec.pipeline_result_kind), spec.model_admission_mode, spec.actor_id)
@@ -1035,9 +1035,9 @@ class _CanceledGenerationActions(_GenerationActions):
         if on_model_admission_pending is not None:
             on_model_admission_pending()
         self.canceled_returned = True
-        return V2ActionResult(
+        return ActionResult(
             action_id=f"v2_action_canceled_{spec.actor_id}",
-            failure=V2ActionFailure(
+            failure=ActionFailure(
                 code="pre_exile_pipeline_generation_canceled",
                 category="canceled",
                 terminal_attempt_id=None,
@@ -1052,7 +1052,7 @@ def test_canceled_member_does_not_become_false_or_continue_to_votes() -> None:
         repository = _GenerationRepository(state)
         pipeline_repository = _GenerationPipeline(repository)
         actions = _CanceledGenerationActions(pipeline_repository)
-        engine = V2DayEngine(
+        engine = DayEngine(
             repository=repository,  # type: ignore[arg-type]
             action_engine=actions,  # type: ignore[arg-type]
             pre_exile_pipeline_repository=pipeline_repository,  # type: ignore[arg-type]
@@ -1061,7 +1061,7 @@ def test_canceled_member_does_not_become_false_or_continue_to_votes() -> None:
             presentation_closed=asyncio.Event(),
             predecessor_committed=asyncio.Event(),
             pipeline=SimpleNamespace(pipeline_id="v2_preex_pipeline"),
-            frozen=V2PreExilePrefetchSnapshot(
+            frozen=PreExilePrefetchSnapshot(
                 match_snapshot=state,
                 public_cutoff_record_seq=100,
                 predecessor_presentation_id="v2_pres_last",
@@ -1073,7 +1073,7 @@ def test_canceled_member_does_not_become_false_or_continue_to_votes() -> None:
             ),
             run_fence=None,
         )
-        with pytest.raises(V2ExecutionOwnershipLost, match="synthetic fence loss"):
+        with pytest.raises(ExecutionOwnershipLost, match="synthetic fence loss"):
             await engine._generate_pre_exile_pipeline(
                 launch=launch,
                 sealed_private_facts={player.player_id: [] for player in state.players},

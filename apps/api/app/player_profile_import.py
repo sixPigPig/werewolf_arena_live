@@ -9,8 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.player_avatar_assets import resolve_profile_avatar_reference
-from app.werewolf.player_profile_store import PlayerProfileFileStore, StoredPlayerProfile
+from app.shared.player_avatar_assets import resolve_profile_avatar_reference
+from app.shared.player_profile_store import PlayerProfileFileStore, StoredPlayerProfile
 
 
 class PlayerProfileImportError(RuntimeError):

@@ -3,32 +3,32 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.v2.action_engine import V2ActionEngine, V2BroadcastPort, V2SpeechSpec
-from app.v2.day_engine import V2DayEngine
-from app.v2.first_night_engine import V2NightEngine
-from app.v2.match_repository import V2MatchRepository
-from app.v2.night_repository import V2NightRepository
-from app.v2.protocol import game_phase_changed, live_state
-from app.v2.repository import (
-    V2ActionRepository,
-    V2ExecutionOwnershipLost,
-    V2RepositoryError,
+from app.match.action_engine import ActionEngine, BroadcastPort, SpeechSpec
+from app.match.day_engine import DayEngine
+from app.match.first_night_engine import NightEngine
+from app.match.match_repository import MatchRepository
+from app.match.night_repository import NightRepository
+from app.match.protocol import game_phase_changed, live_state
+from app.match.repository import (
+    ActionRepository,
+    ExecutionOwnershipLost,
+    RepositoryError,
 )
 
 
 logger = logging.getLogger(__name__)
 
 
-class V2LiveFlowEngine:
+class LiveFlowEngine:
     def __init__(
         self,
         *,
-        action_repository: V2ActionRepository,
-        night_repository: V2NightRepository,
-        match_repository: V2MatchRepository,
-        action_engine: V2ActionEngine,
-        first_night_engine: V2NightEngine,
-        day_engine: V2DayEngine,
+        action_repository: ActionRepository,
+        night_repository: NightRepository,
+        match_repository: MatchRepository,
+        action_engine: ActionEngine,
+        first_night_engine: NightEngine,
+        day_engine: DayEngine,
     ) -> None:
         self._action_repository = action_repository
         self._night_repository = night_repository
@@ -37,7 +37,7 @@ class V2LiveFlowEngine:
         self._first_night = first_night_engine
         self._day = day_engine
 
-    async def run(self, *, game_id: str, broadcaster: V2BroadcastPort) -> None:
+    async def run(self, *, game_id: str, broadcaster: BroadcastPort) -> None:
         try:
             await self._run_active(game_id=game_id, broadcaster=broadcaster)
         except asyncio.CancelledError:
@@ -58,13 +58,13 @@ class V2LiveFlowEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         try:
             opening_state = self._match_repository.snapshot(game_id)
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
-        except V2RepositoryError:
+        except RepositoryError:
             opening_setup = None
         else:
             opening_setup = {
@@ -76,7 +76,7 @@ class V2LiveFlowEngine:
         opening_ok = await self._actions.run_judge_speech(
             game_id=game_id,
             broadcaster=broadcaster,
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type="judge_opening_speech",
                 phase_id="opening",
                 required_phase_state="opening_ready",
@@ -91,7 +91,7 @@ class V2LiveFlowEngine:
         self._action_repository.check_cancellation(game_id)
         try:
             transition = self._action_repository.transition_to_first_night(game_id=game_id)
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except Exception as exc:
             logger.warning(
@@ -164,13 +164,13 @@ class V2LiveFlowEngine:
         game_id: str,
         phase_id: str,
         round_no: int,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
         terminal: bool,
     ) -> bool:
         return await self._actions.run_judge_speech(
             game_id=game_id,
             broadcaster=broadcaster,
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type="judge_nightfall_announcement",
                 phase_id=phase_id,
                 required_phase_state="nightfall_ready",

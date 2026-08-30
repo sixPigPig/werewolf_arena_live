@@ -31,8 +31,8 @@ const gameClientMocks = vi.hoisted(() => ({
   unfavoritePlayerProfile: vi.fn(),
 }));
 
-const v2ApiMocks = vi.hoisted(() => ({
-  createV2Game: vi.fn(),
+const apiMocks = vi.hoisted(() => ({
+  createGame: vi.fn(),
 }));
 
 vi.mock("@werewolf-arena/game-client", async () => {
@@ -51,8 +51,8 @@ vi.mock("@werewolf-arena/game-client", async () => {
   };
 });
 
-vi.mock("../v2/api", () => ({
-  createV2Game: v2ApiMocks.createV2Game,
+vi.mock("../match/api", () => ({
+  createGame: apiMocks.createGame,
 }));
 
 const classicRuleSet: RuleSetSummary = {
@@ -118,7 +118,7 @@ function buildProfile(
   };
 }
 
-function buildV2Game() {
+function buildGame() {
   return {
     game_id: "v2_game_0123456789abcdef",
     run_id: "v2_run_0123456789abcdef",
@@ -347,7 +347,7 @@ describe("GamesPage", () => {
     gameClientMocks.listPlayerProfileFavorites.mockResolvedValue({
       profile_ids: ["profile-1"],
     });
-    v2ApiMocks.createV2Game.mockResolvedValue(buildV2Game());
+    apiMocks.createGame.mockResolvedValue(buildGame());
     gameClientMocks.previewGameLineup.mockImplementation(
       (request: LineupPreviewRequest) => Promise.resolve(buildLineupPreview(request)),
     );
@@ -768,12 +768,12 @@ describe("GamesPage", () => {
     const readyLaunchButton = screen.getByRole("button", { name: "开始对局" });
     expect(readyLaunchButton).toBeEnabled();
     expect(readyLaunchButton).toHaveClass("mobile-lobby-launch-button");
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
 
     await user.click(readyLaunchButton);
 
     await waitFor(() => {
-      expect(v2ApiMocks.createV2Game).toHaveBeenCalledWith({
+      expect(apiMocks.createGame).toHaveBeenCalledWith({
         title: "经典 8 人",
         audio_mode: "tts",
         lobby_snapshot: expect.objectContaining({
@@ -821,8 +821,8 @@ describe("GamesPage", () => {
           },
         ],
       });
-    v2ApiMocks.createV2Game.mockRejectedValueOnce(
-      Object.assign(new Error("V2 对局创建失败 (409)"), {
+    apiMocks.createGame.mockRejectedValueOnce(
+      Object.assign(new Error("对局创建失败 (409)"), {
         status: 409,
         code: "rule_revision_changed",
       }),
@@ -874,7 +874,7 @@ describe("GamesPage", () => {
     await waitFor(() => {
       expect(gameClientMocks.listRuleSets).toHaveBeenCalledTimes(2);
     });
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
   });
 
   it("requires a second tap before clearing assigned seats", async () => {
@@ -916,7 +916,7 @@ describe("GamesPage", () => {
 
   it("disables lineup actions while game creation is pending", async () => {
     const user = userEvent.setup();
-    v2ApiMocks.createV2Game.mockReturnValue(
+    apiMocks.createGame.mockReturnValue(
       new Promise(() => undefined),
     );
     renderGamesPage();
@@ -985,7 +985,7 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "开始对局" }));
     const qualityPanel = await screen.findByRole("region", { name: "阵容质量" });
     expect(within(qualityPanel).getByText("阵容需要调整")).toBeVisible();
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
 
     await user.click(
       within(qualityPanel).getByRole("button", { name: "仍使用当前阵容" }),
@@ -993,7 +993,7 @@ describe("GamesPage", () => {
     await user.click(screen.getByRole("button", { name: "开始对局" }));
 
     await waitFor(() =>
-      expect(v2ApiMocks.createV2Game).toHaveBeenCalledWith(
+      expect(apiMocks.createGame).toHaveBeenCalledWith(
         expect.objectContaining({
           lobby_snapshot: expect.objectContaining({
             allow_lineup_quality_warnings: true,
@@ -1049,7 +1049,7 @@ describe("GamesPage", () => {
     expect(
       screen.getByRole("button", { name: "选择 2 号座位，当前为 白石" }),
     ).toBeVisible();
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
   });
 
   it("blocks creation when the player library cannot fill the selected rule set", async () => {
@@ -1066,7 +1066,7 @@ describe("GamesPage", () => {
       await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
   });
 
   it("disables launch until empty seats are completed from the library", async () => {
@@ -1109,7 +1109,7 @@ describe("GamesPage", () => {
       await within(lineup).findByText("已选 0/2 · 还差 1 名玩家"),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "还差 2 位" })).toBeDisabled();
-    expect(v2ApiMocks.createV2Game).not.toHaveBeenCalled();
+    expect(apiMocks.createGame).not.toHaveBeenCalled();
   });
 
   it("opens the full-screen modal player picker from a selected seat", async () => {

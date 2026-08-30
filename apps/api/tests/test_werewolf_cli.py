@@ -13,121 +13,16 @@ from app.db.base import Base
 from app.models.player_avatar_asset import PlayerAvatarAsset
 from app.models.user import User
 from app.models.virtual_player_profile import VirtualPlayerProfile
-from app.werewolf.orphan_reaper import OrphanRecoveryResult
-from app.werewolf.private_memory_cleanup import PrivateMemoryCleanupResult
-from app.werewolf.runner import GameRunError, RunGameResult
-from app.werewolf.rules import (
-    DEFAULT_RULE_SET_ID,
-    freeze_rule_set_snapshot,
-    get_rule_set,
-)
 
-PNG_BYTES = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGA"
+    "WjR9awAAAABJRU5ErkJggg=="
 )
 
 
-class FakeSession:
-    def close(self) -> None:
-        pass
 
 
-def test_run_game_command_uses_catalog_default_and_prints_chinese_result(
-    tmp_path,
-    capsys,
-    monkeypatch,
-) -> None:
-    calls = {}
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
-    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
-    monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
-    def fake_run_game(**kwargs) -> RunGameResult:
-        calls.update(kwargs)
-        return RunGameResult(winner="狼人阵营", session_id="game_1200abcd")
-
-    monkeypatch.setattr("app.cli.run_game", fake_run_game)
-    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(cli, "default_model_name", lambda: "deepseek-v4-flash")
-
-    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "8"])
-
-    output = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert output.strip().splitlines() == [
-        "胜利阵营=狼人阵营",
-        "session_id=game_1200abcd",
-    ]
-    assert "record_store" in calls
-    assert calls["villager_model"] == "deepseek-v4-flash"
-    assert calls["werewolf_model"] == "deepseek-v4-flash"
-    assert "rule_set_id" not in calls
-    compiled = calls["compiled_rule_set"]
-    assert compiled.rule_set.id == DEFAULT_RULE_SET_ID
-    assert compiled.snapshot == freeze_rule_set_snapshot(
-        get_rule_set(DEFAULT_RULE_SET_ID)
-    )
-    assert compiled.revision_id is None
-    assert compiled.revision_no is None
-    assert compiled.content_hash == (
-        "104d9818faac73536d50d57ca93eb623ca2dc044a4e334c6b72fcdbb0c2f5cef"
-    )
-
-
-def test_run_game_command_defaults_to_agent_plan_when_plan_key_is_configured(
-    tmp_path,
-    capsys,
-    monkeypatch,
-) -> None:
-    (tmp_path / ".env").write_text(
-        "#DEEPSEEK_API_KEY=\n"
-        "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-        "ARK_AGENT_PLAN_API_KEY=agent-plan-key\n",
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("WEREWOLF_DEFAULT_MODEL", raising=False)
-    monkeypatch.delenv("ARK_AGENT_PLAN_API_KEY", raising=False)
-    monkeypatch.delenv("ARK_API_KEY", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    calls = {}
-
-    def fake_run_game(**kwargs) -> RunGameResult:
-        calls.update(kwargs)
-        return RunGameResult(winner="狼人阵营", session_id="game_1200abcd")
-
-    monkeypatch.setattr("app.cli.run_game", fake_run_game)
-    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
-
-    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "8"])
-
-    capsys.readouterr()
-
-    assert exit_code == 0
-    assert "record_store" in calls
-    assert calls["villager_model"] == "doubao-seed-2-0-lite-260215"
-    assert calls["werewolf_model"] == "doubao-seed-2-0-lite-260215"
-
-
-def test_run_game_command_returns_nonzero_on_engine_failure(capsys, monkeypatch) -> None:
-    def fake_run_game(**kwargs) -> RunGameResult:
-        raise GameRunError("Maximum rounds exceeded", "game_failed")
-
-    monkeypatch.setattr("app.cli.run_game", fake_run_game)
-    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(cli, "default_model_name", lambda: "test-model")
-
-    exit_code = main(["run-game", "--seed", "13", "--max-rounds", "0"])
-
-    captured = capsys.readouterr()
-
-    assert exit_code == 1
-    assert "Maximum rounds exceeded" in captured.err
-    assert "session_id=game_failed" in captured.err
 
 
 def test_purge_legacy_game_records_dry_run_lists_matches(tmp_path, capsys) -> None:
@@ -165,92 +60,6 @@ def test_purge_legacy_game_records_deletes_only_matching_directories(tmp_path, c
     assert (tmp_path / "player_profiles.json").exists()
     assert (tmp_path / "game_ffffffff").is_symlink()
     assert target.exists()
-
-
-def test_redact_private_round_memory_defaults_to_dry_run(capsys, monkeypatch) -> None:
-    calls: list[bool] = []
-
-    class CleanupSession:
-        def __init__(self) -> None:
-            self.commits = 0
-            self.rollbacks = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            pass
-
-        def commit(self) -> None:
-            self.commits += 1
-
-        def rollback(self) -> None:
-            self.rollbacks += 1
-
-    db = CleanupSession()
-
-    def fake_cleanup(_db: object, *, apply: bool) -> PrivateMemoryCleanupResult:
-        calls.append(apply)
-        return PrivateMemoryCleanupResult(
-            applied=apply,
-            run_count=2,
-            event_count=3,
-            voice_count=1,
-            audio_chunk_count=4,
-        )
-
-    monkeypatch.setattr(cli, "SessionLocal", lambda: db)
-    monkeypatch.setattr(cli, "cleanup_private_round_memory", fake_cleanup)
-
-    exit_code = main(["redact-private-round-memory"])
-
-    output = capsys.readouterr().out
-    assert exit_code == 0
-    assert calls == [False]
-    assert db.commits == 0
-    assert db.rollbacks == 1
-    assert "模式=dry-run run=2 事件=3 语音=1 音频块=4 失败=0" in output
-    assert "数据库未修改" in output
-
-
-def test_redact_private_round_memory_apply_commits(capsys, monkeypatch) -> None:
-    class CleanupSession:
-        def __init__(self) -> None:
-            self.commits = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            pass
-
-        def commit(self) -> None:
-            self.commits += 1
-
-        def rollback(self) -> None:
-            pass
-
-    db = CleanupSession()
-    monkeypatch.setattr(cli, "SessionLocal", lambda: db)
-    monkeypatch.setattr(
-        cli,
-        "cleanup_private_round_memory",
-        lambda _db, *, apply: PrivateMemoryCleanupResult(
-            applied=apply,
-            run_count=1,
-            event_count=1,
-            voice_count=1,
-            audio_chunk_count=1,
-        ),
-    )
-
-    exit_code = main(["redact-private-round-memory", "--apply"])
-
-    output = capsys.readouterr().out
-    assert exit_code == 0
-    assert db.commits == 1
-    assert "模式=apply" in output
-    assert "数据库未修改" not in output
 
 
 def test_serve_command_starts_uvicorn(monkeypatch) -> None:
@@ -334,85 +143,6 @@ def test_voice_worker_probe_reports_fresh_and_stale(capsys, monkeypatch) -> None
     assert stale == 1
     assert capsys.readouterr().out.strip() == "judge_voice_worker=stale"
 
-
-def test_live_run_reaper_once_reports_recovery(capsys, monkeypatch) -> None:
-    calls = {}
-
-    class FakeTelemetry:
-        def __init__(self) -> None:
-            self.started = False
-            self.stopped = False
-            self.results = []
-
-        def start(self) -> None:
-            self.started = True
-
-        def stop(self) -> None:
-            self.stopped = True
-
-        def record_scan(self) -> None:
-            return None
-
-        def record_recovery(self, result) -> None:
-            self.results.append(result)
-
-        def record_error(self, _code: str) -> None:
-            return None
-
-    telemetry = FakeTelemetry()
-
-    def fake_reaper(session_factory, registry, **kwargs) -> int:
-        calls["session_factory"] = session_factory
-        calls["registry"] = registry
-        calls.update(kwargs)
-        kwargs["on_recovery"](
-            OrphanRecoveryResult(
-                run_id="run_123456789abc",
-                session_id="game_1234abcd",
-                attempt=2,
-                outcome="resumed",
-            )
-        )
-        return 1
-
-    monkeypatch.setattr(cli, "run_live_run_reaper", fake_reaper)
-    monkeypatch.setattr(cli, "RuntimeWorkerTelemetry", lambda *_args, **_kwargs: telemetry)
-
-    exit_code = main(["run-live-run-reaper", "--once"])
-
-    assert exit_code == 0
-    assert capsys.readouterr().out.strip() == ("run_id=run_123456789abc outcome=resumed attempt=2")
-    assert calls["once"] is True
-    assert calls["poll_seconds"] == 5.0
-    assert calls["stale_grace_seconds"] == 30.0
-    assert calls["backoff_seconds"] == 30.0
-    assert calls["max_attempts"] == 3
-    assert calls["on_scan"] == telemetry.record_scan
-    assert calls["on_error"] == telemetry.record_error
-    assert telemetry.started is True
-    assert telemetry.stopped is True
-    assert len(telemetry.results) == 1
-
-
-def test_live_run_reaper_rejects_unsafe_options(capsys) -> None:
-    exit_code = main(["run-live-run-reaper", "--backoff-seconds", "1"])
-
-    assert exit_code == 2
-    assert "between 5 and 3600" in capsys.readouterr().err
-
-
-def test_live_run_reaper_probe_reports_fresh_and_stale(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "SessionLocal", lambda: nullcontext(object()))
-    monkeypatch.setattr(cli, "live_run_reaper_is_alive", lambda *_args, **_kwargs: True)
-
-    healthy = main(["check-live-run-reaper"])
-    assert healthy == 0
-    assert capsys.readouterr().out.strip() == "reaper=ok"
-
-    monkeypatch.setattr(cli, "live_run_reaper_is_alive", lambda *_args, **_kwargs: False)
-    stale = main(["check-live-run-reaper"])
-    assert stale == 1
-    assert capsys.readouterr().out.strip() == "reaper=stale"
 
 
 def test_provision_admin_user_creates_and_updates_authorized_account(

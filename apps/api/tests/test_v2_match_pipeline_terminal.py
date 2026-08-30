@@ -10,15 +10,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers referenced users table
-from app.v2.match_repository import V2MatchRepository
-from app.v2.models import (
-    V2DaySpeechSlot,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2MatchState,
+from app.match.match_repository import MatchRepository
+from app.match.models import (
+    DaySpeechSlot,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    MatchState,
 )
-from app.v2.repository import V2RepositoryError
+from app.match.repository import RepositoryError
 
 
 GAME_ID = "v2_game_match_pipeline_terminal"
@@ -31,7 +31,7 @@ PHASE_STATE = "public_discussion_open"
 @dataclass(frozen=True)
 class _Harness:
     factory: sessionmaker[Session]
-    repository: V2MatchRepository
+    repository: MatchRepository
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def harness() -> _Harness:
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=GAME_ID,
                 title="match pipeline terminal test",
                 status="ready",
@@ -67,7 +67,7 @@ def harness() -> _Harness:
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=RUN_ID,
                 game_id=GAME_ID,
                 attempt_no=1,
@@ -79,13 +79,13 @@ def harness() -> _Harness:
             )
         )
         db.add(
-            V2MatchState(
+            MatchState(
                 game_id=GAME_ID,
                 round_no=1,
                 sheriff_badge_state="disabled",
             )
         )
-    result = _Harness(factory=factory, repository=V2MatchRepository(factory))
+    result = _Harness(factory=factory, repository=MatchRepository(factory))
     try:
         yield result
     finally:
@@ -101,7 +101,7 @@ def test_finish_day_rejects_open_slots_then_fail_runtime_invalidates_all(
             db.add(_slot(index=index, state=state))
 
     with pytest.raises(
-        V2RepositoryError,
+        RepositoryError,
         match="cannot finish day with a nonterminal day speech slot",
     ):
         harness.repository.finish_day(
@@ -110,18 +110,18 @@ def test_finish_day_rejects_open_slots_then_fail_runtime_invalidates_all(
         )
 
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
-        match = db.get(V2MatchState, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
+        match = db.get(MatchState, GAME_ID)
         slots_before_failure = list(
             db.scalars(
-                select(V2DaySpeechSlot)
-                .where(V2DaySpeechSlot.game_id == GAME_ID)
-                .order_by(V2DaySpeechSlot.turn_index)
+                select(DaySpeechSlot)
+                .where(DaySpeechSlot.game_id == GAME_ID)
+                .order_by(DaySpeechSlot.turn_index)
             )
         )
         events_before_failure = list(
-            db.scalars(select(V2GameRecordEvent).where(V2GameRecordEvent.game_id == GAME_ID))
+            db.scalars(select(GameRecordEvent).where(GameRecordEvent.game_id == GAME_ID))
         )
     assert game is not None
     assert (game.phase_seq, game.phase_id, game.phase_state, game.status) == (
@@ -142,21 +142,21 @@ def test_finish_day_rejects_open_slots_then_fail_runtime_invalidates_all(
     assert returned_run_id == RUN_ID
 
     with harness.factory() as db:
-        game = db.get(V2GameRecord, GAME_ID)
-        run = db.get(V2GameRun, RUN_ID)
-        match = db.get(V2MatchState, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
+        match = db.get(MatchState, GAME_ID)
         slots = list(
             db.scalars(
-                select(V2DaySpeechSlot)
-                .where(V2DaySpeechSlot.game_id == GAME_ID)
-                .order_by(V2DaySpeechSlot.turn_index)
+                select(DaySpeechSlot)
+                .where(DaySpeechSlot.game_id == GAME_ID)
+                .order_by(DaySpeechSlot.turn_index)
             )
         )
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == GAME_ID)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == GAME_ID)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     assert game is not None and game.status == "failed" and game.phase_state == "failed"
@@ -199,9 +199,9 @@ def test_fail_runtime_without_slots_keeps_zero_count_semantics(harness: _Harness
     )
     with harness.factory() as db:
         runtime_failed = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "day_runtime_failed",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "day_runtime_failed",
             )
         )
     assert runtime_failed is not None
@@ -209,8 +209,8 @@ def test_fail_runtime_without_slots_keeps_zero_count_semantics(harness: _Harness
     assert runtime_failed.payload["invalidated_day_speech_slot_count"] == 0
 
 
-def _slot(*, index: int, state: str) -> V2DaySpeechSlot:
-    return V2DaySpeechSlot(
+def _slot(*, index: int, state: str) -> DaySpeechSlot:
+    return DaySpeechSlot(
         slot_id=f"v2_slot_match_terminal_{index}",
         game_id=GAME_ID,
         run_id=RUN_ID,

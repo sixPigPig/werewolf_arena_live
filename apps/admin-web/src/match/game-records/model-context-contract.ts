@@ -1,11 +1,11 @@
-import type { V2ModelRequest } from "@/v2/game-records/types";
+import type { ModelRequest } from "@/match/game-records/types";
 
-export type V2ModelContextPresentationKind =
+export type ModelContextPresentationKind =
   | "v13_memory"
   | "unsupported";
 
-export type V2ModelContextContractEnvelope = Pick<
-  V2ModelRequest,
+export type ModelContextContractEnvelope = Pick<
+  ModelRequest,
   | "expanded_known_events"
   | "known_events_expansion_status"
   | "model_context_schema_version"
@@ -16,12 +16,12 @@ export type V2ModelContextContractEnvelope = Pick<
   | "request_payload"
 >;
 
-export function classifyV2ModelContextContract(
-  request: V2ModelContextContractEnvelope,
+export function classifyModelContextContract(
+  request: ModelContextContractEnvelope,
   promptContext = structuredModelContextFromRequestPayload(
     request.request_payload,
   ),
-): V2ModelContextPresentationKind {
+): ModelContextPresentationKind {
   const projection = request.prompt_projection;
   const knownEvents = isRecord(promptContext?.known_events)
     ? promptContext.known_events

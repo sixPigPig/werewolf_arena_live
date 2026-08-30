@@ -4,22 +4,10 @@ const ForbiddenPage = lazy(() => import("@/pages/ForbiddenPage"));
 const LoginPage = lazy(() => import("@/pages/LoginPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
 const GameRecordsPage = lazy(
-  () => import("@/features/game-records/GameRecordsPage"),
+  () => import("@/match/game-records/GameRecordsPage"),
 );
 const GameRecordDetailPage = lazy(
-  () => import("@/features/game-records/GameRecordDetailPage"),
-);
-const V2GameRecordsPage = lazy(
-  () => import("@/v2/game-records/V2GameRecordsPage"),
-);
-const V2GameRecordDetailPage = lazy(
-  () => import("@/v2/game-records/V2GameRecordDetailPage"),
-);
-const LiveRunsPage = lazy(
-  () => import("@/features/live-runs/LiveRunsPage"),
-);
-const LiveRunDetailPage = lazy(
-  () => import("@/features/live-runs/LiveRunDetailPage"),
+  () => import("@/match/game-records/GameRecordDetailPage"),
 );
 const JudgeVoiceAssetsPage = lazy(
   () => import("@/features/voice-assets/JudgeVoiceAssetsPage"),
@@ -96,38 +84,6 @@ export function GameRecordDetailRoute() {
   return (
     <LazyRoute>
       <GameRecordDetailPage />
-    </LazyRoute>
-  );
-}
-
-export function V2GameRecordsRoute() {
-  return (
-    <LazyRoute>
-      <V2GameRecordsPage />
-    </LazyRoute>
-  );
-}
-
-export function V2GameRecordDetailRoute() {
-  return (
-    <LazyRoute>
-      <V2GameRecordDetailPage />
-    </LazyRoute>
-  );
-}
-
-export function LiveRunsRoute() {
-  return (
-    <LazyRoute>
-      <LiveRunsPage />
-    </LazyRoute>
-  );
-}
-
-export function LiveRunDetailRoute() {
-  return (
-    <LazyRoute>
-      <LiveRunDetailPage />
     </LazyRoute>
   );
 }

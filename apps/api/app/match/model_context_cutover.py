@@ -7,29 +7,29 @@ from typing import Any, Literal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     frozen_model_context_contract,
     is_current_model_context_contract,
     is_historical_v11_model_context_contract,
 )
-from app.v2.models import (
-    V2AbilityActivation,
-    V2ActionWindow,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2MatchState,
-    V2ModelActionRecovery,
-    V2VoiceAsset,
+from app.match.models import (
+    AbilityActivation,
+    ActionWindow,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    MatchState,
+    ModelActionRecovery,
+    VoiceAsset,
 )
-from app.v2.runtime_state import project_v2_runtime_state
+from app.match.runtime_state import project_runtime_state
 
 
-V2_CUTOVER_TERMINAL_MATCH_STATUSES = frozenset({"completed", "canceled", "failed"})
-V2_CUTOVER_TERMINAL_RECOVERY_STATES = frozenset({"resolved", "canceled"})
-V2_CUTOVER_TERMINAL_VOICE_STATES = frozenset({"ready", "failed", "canceled"})
-V2_CUTOVER_FAILURE_EVENT_TYPES = frozenset(
+CUTOVER_TERMINAL_MATCH_STATUSES = frozenset({"completed", "canceled", "failed"})
+CUTOVER_TERMINAL_RECOVERY_STATES = frozenset({"resolved", "canceled"})
+CUTOVER_TERMINAL_VOICE_STATES = frozenset({"ready", "failed", "canceled"})
+CUTOVER_FAILURE_EVENT_TYPES = frozenset(
     {
         "action_failed",
         "ability_runtime_failed",
@@ -38,29 +38,29 @@ V2_CUTOVER_FAILURE_EVENT_TYPES = frozenset(
         "match_runtime_failed",
     }
 )
-V2_CUTOVER_AUDIT_EVENT_TYPES = frozenset(
+CUTOVER_AUDIT_EVENT_TYPES = frozenset(
     {
         "game_completed",
         "game_canceled",
         "v2_run_execution_claimed",
         "v2_run_execution_released",
-        *V2_CUTOVER_FAILURE_EVENT_TYPES,
+        *CUTOVER_FAILURE_EVENT_TYPES,
     }
 )
 
-V2CutoverMatchStatus = Literal["waiting", "running", "completed", "failed", "canceled"]
-V2CutoverExecutionState = Literal["unowned", "owned", "stale", "stopped"]
+CutoverMatchStatus = Literal["waiting", "running", "completed", "failed", "canceled"]
+CutoverExecutionState = Literal["unowned", "owned", "stale", "stopped"]
 
 
 @dataclass(frozen=True)
-class V2ModelContextCutoverEventFact:
+class ModelContextCutoverEventFact:
     event_type: str
     record_seq: int
     payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
-class V2ModelContextCutoverFacts:
+class ModelContextCutoverFacts:
     game_id: str
     current_run_id: str
     checked_run_id: str | None
@@ -69,8 +69,8 @@ class V2ModelContextCutoverFacts:
     game_status: str
     phase_state: str
     run_status: str | None
-    match_status: V2CutoverMatchStatus
-    execution_state: V2CutoverExecutionState
+    match_status: CutoverMatchStatus
+    execution_state: CutoverExecutionState
     winner: str | None
     completion_reason: str | None
     run_completed_at: datetime | None
@@ -78,7 +78,7 @@ class V2ModelContextCutoverFacts:
     worker_heartbeat_at: datetime | None
     lease_expires_at: datetime | None
     fence_token: int | None
-    events: tuple[V2ModelContextCutoverEventFact, ...] = ()
+    events: tuple[ModelContextCutoverEventFact, ...] = ()
     open_presentation_count: int = 0
     open_action_window_count: int = 0
     open_ability_activation_count: int = 0
@@ -88,7 +88,7 @@ class V2ModelContextCutoverFacts:
 
 
 @dataclass(frozen=True)
-class V2ModelContextCutoverFinding:
+class ModelContextCutoverFinding:
     game_id: str
     current_run_id: str
     prompt_template_version: int | None
@@ -113,10 +113,10 @@ class V2ModelContextCutoverFinding:
 
 
 @dataclass(frozen=True)
-class V2ModelContextCutoverReport:
+class ModelContextCutoverReport:
     scanned_game_count: int
     ignored_current_v12_game_count: int
-    findings: tuple[V2ModelContextCutoverFinding, ...]
+    findings: tuple[ModelContextCutoverFinding, ...]
 
     @property
     def candidate_count(self) -> int:
@@ -149,8 +149,8 @@ class V2ModelContextCutoverReport:
 
 
 def evaluate_v11_model_context_cutover(
-    facts: V2ModelContextCutoverFacts,
-) -> V2ModelContextCutoverFinding:
+    facts: ModelContextCutoverFacts,
+) -> ModelContextCutoverFinding:
     reasons: list[str] = []
 
     if facts.checked_run_id is None:
@@ -163,7 +163,7 @@ def evaluate_v11_model_context_cutover(
     terminal_kind = _expected_terminal_kind(facts)
     terminal_event = _latest_terminal_event(facts.events, terminal_kind)
 
-    if facts.match_status not in V2_CUTOVER_TERMINAL_MATCH_STATUSES:
+    if facts.match_status not in CUTOVER_TERMINAL_MATCH_STATUSES:
         reasons.append("match_status_not_terminal")
     if terminal_kind == "completed":
         if facts.phase_state != "game_completed":
@@ -233,7 +233,7 @@ def evaluate_v11_model_context_cutover(
             terminal_event=terminal_event,
         )
 
-    return V2ModelContextCutoverFinding(
+    return ModelContextCutoverFinding(
         game_id=facts.game_id,
         current_run_id=facts.current_run_id,
         prompt_template_version=facts.prompt_template_version,
@@ -247,13 +247,13 @@ def preflight_v12_model_context_cutover(
     db: Session,
     *,
     now: datetime | None = None,
-) -> V2ModelContextCutoverReport:
+) -> ModelContextCutoverReport:
     checked_at = now or datetime.now(UTC)
-    findings: list[V2ModelContextCutoverFinding] = []
+    findings: list[ModelContextCutoverFinding] = []
     ignored_current_v12_count = 0
 
     with db.no_autoflush:
-        games = list(db.scalars(select(V2GameRecord).order_by(V2GameRecord.game_id)))
+        games = list(db.scalars(select(GameRecord).order_by(GameRecord.game_id)))
         for game in games:
             contract = frozen_model_context_contract(game.rule_snapshot)
             if is_current_model_context_contract(contract):
@@ -268,7 +268,7 @@ def preflight_v12_model_context_cutover(
                     contract=contract,
                 )
                 findings.append(
-                    V2ModelContextCutoverFinding(
+                    ModelContextCutoverFinding(
                         game_id=game.game_id,
                         current_run_id=game.current_run_id,
                         prompt_template_version=prompt_version,
@@ -286,7 +286,7 @@ def preflight_v12_model_context_cutover(
             )
             findings.append(evaluate_v11_model_context_cutover(facts))
 
-    return V2ModelContextCutoverReport(
+    return ModelContextCutoverReport(
         scanned_game_count=len(games),
         ignored_current_v12_game_count=ignored_current_v12_count,
         findings=tuple(findings),
@@ -296,29 +296,29 @@ def preflight_v12_model_context_cutover(
 def _load_cutover_facts(
     db: Session,
     *,
-    game: V2GameRecord,
+    game: GameRecord,
     prompt_template_version: int | None,
     now: datetime,
-) -> V2ModelContextCutoverFacts:
-    run = db.get(V2GameRun, game.current_run_id)
-    match = db.get(V2MatchState, game.game_id)
+) -> ModelContextCutoverFacts:
+    run = db.get(GameRun, game.current_run_id)
+    match = db.get(MatchState, game.game_id)
     event_rows = list(
         db.execute(
             select(
-                V2GameRecordEvent.event_type,
-                V2GameRecordEvent.record_seq,
-                V2GameRecordEvent.payload,
+                GameRecordEvent.event_type,
+                GameRecordEvent.record_seq,
+                GameRecordEvent.payload,
             )
             .where(
-                V2GameRecordEvent.game_id == game.game_id,
-                V2GameRecordEvent.run_id == game.current_run_id,
-                V2GameRecordEvent.event_type.in_(V2_CUTOVER_AUDIT_EVENT_TYPES),
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.run_id == game.current_run_id,
+                GameRecordEvent.event_type.in_(CUTOVER_AUDIT_EVENT_TYPES),
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
     events = tuple(
-        V2ModelContextCutoverEventFact(
+        ModelContextCutoverEventFact(
             event_type=str(event_type),
             record_seq=int(record_seq),
             payload=dict(payload) if isinstance(payload, dict) else {},
@@ -327,10 +327,10 @@ def _load_cutover_facts(
     )
 
     if run is None:
-        match_status: V2CutoverMatchStatus = "running"
-        execution_state: V2CutoverExecutionState = "stale"
+        match_status: CutoverMatchStatus = "running"
+        execution_state: CutoverExecutionState = "stale"
     else:
-        projection = project_v2_runtime_state(
+        projection = project_runtime_state(
             game=game,
             run=run,
             match=match,
@@ -343,65 +343,65 @@ def _load_cutover_facts(
     open_presentation_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2LivePresentation)
+        .select_from(LivePresentation)
         .where(
-            V2LivePresentation.game_id == game.game_id,
-            V2LivePresentation.closed_at.is_(None),
+            LivePresentation.game_id == game.game_id,
+            LivePresentation.closed_at.is_(None),
         ),
     )
     open_action_window_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2ActionWindow)
+        .select_from(ActionWindow)
         .where(
-            V2ActionWindow.game_id == game.game_id,
-            V2ActionWindow.closed_at.is_(None),
+            ActionWindow.game_id == game.game_id,
+            ActionWindow.closed_at.is_(None),
         ),
     )
     open_ability_activation_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2AbilityActivation)
+        .select_from(AbilityActivation)
         .where(
-            V2AbilityActivation.game_id == game.game_id,
-            V2AbilityActivation.closed_at.is_(None),
+            AbilityActivation.game_id == game.game_id,
+            AbilityActivation.closed_at.is_(None),
         ),
     )
     unsafe_recovery_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2ModelActionRecovery)
+        .select_from(ModelActionRecovery)
         .where(
-            V2ModelActionRecovery.game_id == game.game_id,
-            ~V2ModelActionRecovery.state.in_(tuple(sorted(V2_CUTOVER_TERMINAL_RECOVERY_STATES))),
+            ModelActionRecovery.game_id == game.game_id,
+            ~ModelActionRecovery.state.in_(tuple(sorted(CUTOVER_TERMINAL_RECOVERY_STATES))),
         ),
     )
     leased_recovery_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2ModelActionRecovery)
+        .select_from(ModelActionRecovery)
         .where(
-            V2ModelActionRecovery.game_id == game.game_id,
+            ModelActionRecovery.game_id == game.game_id,
             or_(
-                V2ModelActionRecovery.lease_owner.is_not(None),
-                V2ModelActionRecovery.lease_expires_at.is_not(None),
+                ModelActionRecovery.lease_owner.is_not(None),
+                ModelActionRecovery.lease_expires_at.is_not(None),
             ),
         ),
     )
     unfinished_voice_asset_count = _count_rows(
         db,
         select(func.count())
-        .select_from(V2VoiceAsset)
+        .select_from(VoiceAsset)
         .where(
-            V2VoiceAsset.game_id == game.game_id,
+            VoiceAsset.game_id == game.game_id,
             or_(
-                ~V2VoiceAsset.state.in_(tuple(sorted(V2_CUTOVER_TERMINAL_VOICE_STATES))),
-                V2VoiceAsset.completed_at.is_(None),
+                ~VoiceAsset.state.in_(tuple(sorted(CUTOVER_TERMINAL_VOICE_STATES))),
+                VoiceAsset.completed_at.is_(None),
             ),
         ),
     )
 
-    return V2ModelContextCutoverFacts(
+    return ModelContextCutoverFacts(
         game_id=game.game_id,
         current_run_id=game.current_run_id,
         checked_run_id=run.run_id if run is not None else None,
@@ -430,7 +430,7 @@ def _load_cutover_facts(
 
 
 def _expected_terminal_kind(
-    facts: V2ModelContextCutoverFacts,
+    facts: ModelContextCutoverFacts,
 ) -> Literal["completed", "canceled", "failed"] | None:
     if facts.game_status == "canceled" or facts.run_status == "canceled":
         return "canceled"
@@ -446,15 +446,15 @@ def _expected_terminal_kind(
 
 
 def _latest_terminal_event(
-    events: tuple[V2ModelContextCutoverEventFact, ...],
+    events: tuple[ModelContextCutoverEventFact, ...],
     terminal_kind: Literal["completed", "canceled", "failed"] | None,
-) -> V2ModelContextCutoverEventFact | None:
+) -> ModelContextCutoverEventFact | None:
     if terminal_kind == "completed":
         event_types = {"game_completed"}
     elif terminal_kind == "canceled":
         event_types = {"game_canceled"}
     elif terminal_kind == "failed":
-        event_types = V2_CUTOVER_FAILURE_EVENT_TYPES
+        event_types = CUTOVER_FAILURE_EVENT_TYPES
     else:
         return None
     return max(
@@ -467,8 +467,8 @@ def _latest_terminal_event(
 def _append_completed_or_failed_ownership_reasons(
     reasons: list[str],
     *,
-    facts: V2ModelContextCutoverFacts,
-    terminal_event: V2ModelContextCutoverEventFact | None,
+    facts: ModelContextCutoverFacts,
+    terminal_event: ModelContextCutoverEventFact | None,
 ) -> None:
     claims = tuple(
         event for event in facts.events if event.event_type == "v2_run_execution_claimed"
@@ -490,7 +490,7 @@ def _append_completed_or_failed_ownership_reasons(
 
 
 def _cancellation_invalidated_fence(
-    terminal_event: V2ModelContextCutoverEventFact,
+    terminal_event: ModelContextCutoverEventFact,
     *,
     current_fence_token: int | None,
 ) -> bool:

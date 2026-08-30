@@ -10,8 +10,6 @@ from uuid import uuid4
 
 import websockets
 
-from app.werewolf.volcengine_tts import build_tts_session_request
-
 
 _FULL_CLIENT = 0x1
 _FULL_SERVER = 0x9
@@ -31,9 +29,16 @@ _SESSION_CANCELED = 151
 _SESSION_FINISHED = 152
 _SESSION_FAILED = 153
 _TASK_REQUEST = 200
+_TTS_NAMESPACE = "BidirectionalTTS"
+_TTS_USER_ID = "werewolf-arena-live-v2"
+_EXPLICIT_DIALECTS = {
+    "sichuan": "sichuan",
+    "shaanxi": "shaanxi",
+    "northeast": "dongbei",
+}
 
 
-class V2TtsError(RuntimeError):
+class TtsError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
@@ -47,7 +52,7 @@ class _TtsFrame:
     error_code: int | None = None
 
 
-class V2TtsClient:
+class TtsClient:
     def __init__(
         self,
         *,
@@ -93,7 +98,7 @@ class V2TtsClient:
                 selected_speaker,
             )
         ):
-            raise V2TtsError("tts_not_configured")
+            raise TtsError("tts_not_configured")
         connection_id = str(uuid4())
         session_id = str(uuid4())
         websocket = None
@@ -122,13 +127,9 @@ class V2TtsClient:
             )
             session_request = build_tts_session_request(
                 speaker=selected_speaker,
-                audio_format="pcm",
                 sample_rate=self._sample_rate,
                 dialect=dialect or "",
             )
-            session_request["user"]["uid"] = "werewolf-arena-live-v2"
-            session_request["event"] = _START_SESSION
-            session_request["req_params"]["audio_params"]["enable_subtitle"] = False
             session_payload = json.dumps(
                 session_request,
                 ensure_ascii=False,
@@ -145,7 +146,7 @@ class V2TtsClient:
             task_payload = json.dumps(
                 {
                     "event": _TASK_REQUEST,
-                    "namespace": "BidirectionalTTS",
+                    "namespace": _TTS_NAMESPACE,
                     "req_params": {"text": text},
                     "request_id": attempt_id,
                 },
@@ -164,34 +165,34 @@ class V2TtsClient:
                         timeout=timeout,
                         check_cancellation=check_cancellation,
                     )
-                except V2TtsError as exc:
+                except TtsError as exc:
                     if exc.code != "tts_receive_timeout":
                         raise
                     code = "tts_audio_idle_timeout" if received_audio else "tts_first_audio_timeout"
-                    raise V2TtsError(code) from exc
+                    raise TtsError(code) from exc
                 if frame.message_type == _AUDIO_SERVER:
                     if frame.payload:
                         received_audio = True
                         yield frame.payload
                     continue
                 if frame.message_type == _ERROR:
-                    raise V2TtsError(f"tts_provider_error_{frame.error_code or 0}")
+                    raise TtsError(f"tts_provider_error_{frame.error_code or 0}")
                 if frame.message_type != _FULL_SERVER:
-                    raise V2TtsError("tts_unexpected_frame")
+                    raise TtsError("tts_unexpected_frame")
                 if frame.event in {_CONNECTION_FAILED, _SESSION_CANCELED, _SESSION_FAILED}:
-                    raise V2TtsError(f"tts_failure_event_{frame.event}")
+                    raise TtsError(f"tts_failure_event_{frame.event}")
                 if frame.event == _SESSION_FINISHED:
                     session_finished = True
                     break
             if not received_audio:
-                raise V2TtsError("tts_empty_audio")
-        except V2TtsError:
+                raise TtsError("tts_empty_audio")
+        except TtsError:
             raise
         except TimeoutError as exc:
             code = "tts_audio_idle_timeout" if session_started else "tts_connect_timeout"
-            raise V2TtsError(code) from exc
+            raise TtsError(code) from exc
         except (OSError, websockets.WebSocketException, ValueError) as exc:
-            raise V2TtsError("tts_transport_failed") from exc
+            raise TtsError("tts_transport_failed") from exc
         finally:
             if websocket is not None:
                 if session_started and not session_finished:
@@ -209,7 +210,7 @@ class V2TtsClient:
                     pass
 
 
-class V2DisabledTtsClient:
+class DisabledTtsClient:
     @property
     def enabled(self) -> bool:
         return False
@@ -224,7 +225,7 @@ class V2DisabledTtsClient:
         check_cancellation: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]:
         del text, attempt_id, speaker, dialect, check_cancellation
-        raise V2TtsError("tts_disabled_client_must_not_be_called")
+        raise TtsError("tts_disabled_client_must_not_be_called")
         yield b""
 
 
@@ -250,9 +251,9 @@ async def _expect_event(
         check_cancellation=check_cancellation,
     )
     if frame.message_type == _ERROR:
-        raise V2TtsError(f"tts_provider_error_{frame.error_code or 0}")
+        raise TtsError(f"tts_provider_error_{frame.error_code or 0}")
     if frame.message_type != _FULL_SERVER or frame.event != event:
-        raise V2TtsError(f"tts_expected_event_{event}")
+        raise TtsError(f"tts_expected_event_{event}")
     return frame
 
 
@@ -268,7 +269,7 @@ async def _receive(
         while True:
             remaining = timeout - (asyncio.get_running_loop().time() - started)
             if remaining <= 0:
-                raise V2TtsError("tts_receive_timeout")
+                raise TtsError("tts_receive_timeout")
             done, _pending = await asyncio.wait(
                 {task},
                 timeout=min(remaining, 0.25),
@@ -282,8 +283,41 @@ async def _receive(
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     if not isinstance(data, bytes):
-        raise V2TtsError("tts_text_frame_rejected")
+        raise TtsError("tts_text_frame_rejected")
     return _decode_frame(data)
+
+
+def build_tts_session_request(
+    *,
+    speaker: str,
+    sample_rate: int,
+    dialect: str = "",
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "event": _START_SESSION,
+        "user": {"uid": _TTS_USER_ID},
+        "namespace": _TTS_NAMESPACE,
+        "req_params": {
+            "speaker": speaker,
+            "audio_params": {
+                "enable_subtitle": False,
+                "format": "pcm",
+                "sample_rate": sample_rate,
+            },
+        },
+    }
+    normalized_dialect = dialect.strip().lower()
+    if normalized_dialect:
+        try:
+            additions = {"explicit_dialect": _EXPLICIT_DIALECTS[normalized_dialect]}
+        except KeyError as exc:
+            raise ValueError(f"Unsupported Volcengine TTS dialect: {dialect}") from exc
+        request["req_params"]["additions"] = json.dumps(
+            additions,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    return request
 
 
 def _check(check_cancellation: Callable[[], None] | None) -> None:

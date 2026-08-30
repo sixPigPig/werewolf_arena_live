@@ -4,6 +4,8 @@
 
 **Status:** Approved for implementation
 
+> 2026-08-20 核对：本文的 Status 自创建以来未更新过。代码中能看到冻结玩家库、重试、暂停等对应实现，但文档内没有闭合验收记录，实际完成度需按代码核对，不要假设本文描述的全部条目都已交付。
+
 **Priority:** P0 Match Reliability / P0 Data Integrity
 
 **Scope:** `apps/api` 的 Live V2 玩家库冻结、模型调用、输出解析、动作重试、持久暂停、跨进程恢复、事件审计与稳定性验收

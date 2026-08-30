@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.werewolf.rules import (
+from app.shared.rules import (
     CLASSIC_8,
     DEFAULT_RULE_SET_ID,
     ENGINE_CONSTRAINT_TO_CLAUSE_IDS,
@@ -153,7 +153,7 @@ def test_frozen_runtime_contract_keeps_rule_text_and_private_clause_after_regist
         replace(clause, neutral_text_zh=f"新版：{clause.neutral_text_zh}")
         for clause in RULE_CLAUSES
     )
-    monkeypatch.setattr("app.werewolf.rules.RULE_CLAUSES", changed_registry)
+    monkeypatch.setattr("app.shared.rules.RULE_CLAUSES", changed_registry)
 
     assert rule_text_from_snapshot(snapshot, fallback_rule_set=rule) == frozen_rule_text
     restored_private_text = next(
@@ -175,7 +175,7 @@ def test_frozen_v1_contract_remains_readable_after_writer_version_advances(
     rule = get_rule_set("classic_12_seer_witch_hunter_idiot")
     snapshot = freeze_rule_set_snapshot(rule)
 
-    monkeypatch.setattr("app.werewolf.rules.RULE_CONTRACT_SCHEMA_VERSION", 2)
+    monkeypatch.setattr("app.shared.rules.RULE_CONTRACT_SCHEMA_VERSION", 2)
 
     validate_frozen_rule_contract_snapshot(snapshot, rule)
     clauses = prompt_rule_clauses_from_snapshot(

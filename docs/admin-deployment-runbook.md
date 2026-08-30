@@ -199,30 +199,21 @@ cd apps/api
 
 ## 进程拓扑
 
-直播运行、事件、租约、控制版本和 fencing token 已持久化到 PostgreSQL，可运行多个 API 副本；每个副本只执行自己持有有效租约的模型任务：
+直播运行已由 Live V2 接管。可运行多个 API 副本：
 
 ```bash
 cd apps/api
 .venv/bin/python -m app.cli serve --host 0.0.0.0 --port 8000
 ```
 
-语音生成使用独立、由进程管理器自动拉起的持续进程：
+法官语音生成使用独立、由进程管理器自动拉起的持续进程：
 
 ```bash
 cd apps/api
 .venv/bin/python -m app.cli run-judge-voice-worker
 ```
 
-直播 orphan 恢复同样使用独立持续进程，不要在每个 API 副本内重复启动：
-
-```bash
-cd apps/api
-.venv/bin/python -m app.cli run-live-run-reaper
-```
-
-systemd 模板见 `deploy/systemd/werewolf-live-run-reaper.service.example`。部署时把路径、用户和 `EnvironmentFile` 替换为实际值；进程收到 SIGTERM 后停止领取新 orphan，并等待当前恢复边界退出。
-
-发布停止时先从负载均衡摘除 API，再发送 SIGTERM；语音 Worker 和 reaper 收到 SIGTERM 后不会领取新任务，并在当前任务/恢复边界返回后退出。Kubernetes 的语音 Worker 使用单副本 Recreate 与 90 秒优雅终止窗口，避免滚动更新期间重复消费。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
+发布停止时先从负载均衡摘除 API，再发送 SIGTERM；语音 Worker 收到 SIGTERM 后不会领取新任务，并在当前任务边界返回后退出。Kubernetes 的语音 Worker 使用单副本 Recreate 与 90 秒优雅终止窗口，避免滚动更新期间重复消费。进程管理器应使用有限退避重启，避免数据库故障时形成快速重启循环。
 
 Mobile 与 Admin 静态产物分别由各自的 `pnpm build` 生成。Web 服务器必须把未知页面路由回退到 `index.html`，把 `/api` 反向代理至 API，并禁止缓存 HTML；带哈希的静态资源可长期缓存。
 
@@ -230,16 +221,15 @@ Mobile 与 Admin 静态产物分别由各自的 `pnpm build` 生成。Web 服务
 
 - 存活探针：`GET /api/v1/health/live`，期望 200 `{"status":"ok"}`。
 - 就绪探针：`GET /api/v1/health/ready`，只在数据库可连接且位于 Alembic head 时返回 200；其他情况返回 503。
-- Reaper 存活探针：`python -m app.cli check-live-run-reaper`，数据库中存在新鲜心跳时退出 0，否则退出 1；数据库/参数错误退出 2。
 - 语音 Worker 存活探针：`python -m app.cli check-judge-voice-worker`，数据库中存在新鲜心跳时退出 0，否则退出 1；数据库/参数错误退出 2。
 - Prometheus：直接抓取每个 API Pod 的 `GET /api/v1/metrics`。该端点只有聚合计数，不含运行、会话或 Worker ID，但仍应仅在内部监控网络开放。
 - 旧 `/api/v1/health` 只为兼容保留，不能用于接流量判断。
 
-Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告警规则见 `deploy/prometheus/live-run-alerts.yml`，覆盖 reaper 无心跳、stale orphan 积压、自动恢复耗尽、规则默认数量异常、snapshot/checkpoint 失败、修订失败率相对前一修订显著上升和 legacy 开局。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用 Pod discovery 并保留 Pod/instance 维度，或建立等价的 PodMonitor。不得只通过负载均衡 Service 抓取：`werewolf_rule_*_total` 是进程本地 counter，告警使用 `sum(increase(...))` 聚合所有 Pod；`werewolf_rule_games`、`werewolf_rule_game_failure_ratio_delta` 和 `werewolf_rule_published_defaults` 是每个 Pod 重复渲染的数据库 gauge，必须先用 `max` 跨 Pod 去重，不能直接求和。
+Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`。Kubernetes API Pod 已带标准 `prometheus.io` 注解；集群 Prometheus 必须启用 Pod discovery 并保留 Pod/instance 维度，或建立等价的 PodMonitor。不得只通过负载均衡 Service 抓取：`werewolf_rule_*_total` 是进程本地 counter，告警使用 `sum(increase(...))` 聚合所有 Pod；`werewolf_rule_games`、`werewolf_rule_game_failure_ratio_delta` 和 `werewolf_rule_published_defaults` 是每个 Pod 重复渲染的数据库 gauge，必须先用 `max` 跨 Pod 去重，不能直接求和。
 
-`WerewolfLegacyRuleCreates` 默认立即生效。因为当前没有独立的日历截止日配置，运营方只能在仍有未升级客户端的切换窗口内为该告警配置临时 inhibit/silence；步骤 4 的 revision-aware 客户端全部部署后必须移除抑制。指标标签和日志不得包含完整快照、description、玩家/对局/运行身份、SQL/driver 错误或 revision UUID；日志只允许稳定 ID、revision number、schema version 和 12 位小写 hash 前缀。
+指标标签和日志不得包含完整快照、description、玩家/对局/运行身份、SQL/driver 错误或 revision UUID；日志只允许稳定 ID、revision number、schema version 和 12 位小写 hash 前缀。
 
-发布后先运行 `python -m app.cli run-live-run-reaper --once`，再启动持续进程；持续进程启动后 `check-live-run-reaper` 必须返回 `reaper=ok`，语音 Worker 启动后 `check-judge-voice-worker` 必须返回 `judge_voice_worker=ok`。
+语音 Worker 启动后 `check-judge-voice-worker` 必须返回 `judge_voice_worker=ok`。
 
 `scripts/smoke-mobile-deployment.sh` 自动检查 Mobile 健康、API live/ready、metrics 外部阻断和 SPA 深链；`scripts/smoke-admin-deployment.sh` 额外检查未登录权限边界。它们不代替真实 OIDC 账号验收；OIDC 登录、角色绑定和高风险后台操作仍按下方清单人工验收。
 
@@ -249,24 +239,21 @@ Prometheus 的 Compose 采集配置见 `deploy/prometheus/prometheus.yml`，告�
 2. 使用已预配置的正式低权限账号完成提供商跳转、callback 和 `/admin/me`，导航和深链权限一致；未预配置账号必须被拒绝。
 3. 使用超级管理员在“后台账号”开通一个测试账号，重复提交不应创建重复用户；修改角色、停用和撤销会话后，目标账号权限应立即变化。
 4. 在“审计日志”按 `admin.user.create` / `admin.user.update` 筛选，确认操作者、资源、结果和请求编号存在，且响应不包含 OIDC subject、IP、before/after 或凭据。
-5. 玩家列表、对局记录、运行监控和语音资产均读取真实 API。
+5. 玩家列表、V2 对局记录和语音资产均读取真实 API。
 6. 使用有权限账号排队一个“生成缺失”任务，确认 worker 日志出现 job ID、页面进入终态且审计只有一次。
-7. 检查 `/metrics` 中 `werewolf_live_run_reaper_up 1`，并确认 Admin 对 stale/退避/耗尽状态的展示与数据库一致。
-8. 在 320px、390px 和 412px 移动视口验证 Mobile 大厅、玩家图鉴、收藏、开局和观战；桌面端不在支持范围内。
-9. 确认 API Pod 的 `RULE_SET_CATALOG_SOURCE=database`，公开规则目录返回 revision ID/number/hash，Mobile 开局提交 `expected_rule_revision_id` 并能处理冲突。
-10. 检查 `werewolf_rule_published_defaults 1`，并确认 publish/conflict/snapshot/checkpoint/legacy/game/failure-ratio-delta 指标家族全部存在且不含原始数据。
-11. 用一个 checkpoint-v1 和一个 checkpoint-v2 完成恢复冒烟，并验证发布新修订后历史局仍使用旧 snapshot。
-12. 使用授权账号进入“内容资产 → 游戏规则”，保存结构化草稿并完成发布、设为默认和归档验收；确认每次操作的版本冲突由服务端拒绝、操作原因必填，且审计日志记录操作者、资源和结果。
+7. 在 320px、390px 和 412px 移动视口验证 Mobile 大厅、玩家图鉴、收藏、开局和 Live V2 观战；桌面端不在支持范围内。
+8. 确认 API Pod 的 `RULE_SET_CATALOG_SOURCE=database`，公开规则目录返回 revision ID/number/hash，Mobile 开局提交 `expected_rule_revision_id` 并能处理冲突。
+9. 检查 `werewolf_rule_published_defaults 1`，并确认规则目录指标家族存在且不含原始数据。
+10. 使用授权账号进入“内容资产 → 游戏规则”，保存结构化草稿并完成发布、设为默认和归档验收；确认每次操作的版本冲突由服务端拒绝、操作原因必填，且审计日志记录操作者、资源和结果。
 
 ## 回滚
 
 优先回滚应用，不回滚数据库：
 
-1. 从负载均衡摘除新 API，停止新 worker，保留 queued/running 任务记录。
-2. 恢复上一版 API、Admin、Mobile、worker 和 reaper 制品；上一版必须在发布前验证可读取扩展后的 schema 与现有 v1/v2 checkpoint。
+1. 从负载均衡摘除新 API，停止新 worker，保留 queued/running 法官语音任务记录。
+2. 恢复上一版 API、Admin、Mobile 和 judge-voice-worker 制品；上一版必须在发布前验证可读取扩展后的 schema。
 3. 检查 `/api/v1/health/ready`，再逐步恢复流量。
 4. 语音数据库读取异常时保留新表，恢复上一版应用并使用 API 自有种子目录；不要删除资产表或种子文件。
-5. 保留迁移 15/16 和规则目录数据，不将 Alembic schema 随应用回滚。存在任何用户规则时，未先完整导出目录绝不允许 downgrade `20260712_15`，因为它会删除 `rule_sets` 和 `rule_set_revisions`。
-6. 即使返回旧应用制品，也必须继续保留 legacy snapshot parser 和 checkpoint-v1 reader；不得以回滚或兼容期结束为由删除历史恢复能力。
+5. 保留规则目录数据，不将 Alembic schema 随应用回滚。存在任何用户规则时，未先完整导出目录绝不允许 downgrade `20260712_15`，因为它会删除 `rule_sets` 和 `rule_set_revisions`。
 
 若数据库不可用或迁移落后，保持 readiness 为 503 并停止发布；若 worker 不可用，API 可继续提供只读资产和排队能力，但必须告警 queued 任务积压，恢复 worker 后由持久队列继续处理。

@@ -9,28 +9,28 @@ from typing import Iterator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.v2.models import V2GameRecord, V2GameRun
+from app.match.models import GameRecord, GameRun
 
 
-class V2RunFenceRejected(RuntimeError):
+class RunFenceRejected(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class V2RunFence:
+class RunFence:
     run_id: str
     worker_id: str
     fence_token: int
 
 
-_CURRENT_RUN_FENCE: ContextVar[V2RunFence | None] = ContextVar(
-    "v2_current_run_fence",
+_CURRENT_RUN_FENCE: ContextVar[RunFence | None] = ContextVar(
+    "current_run_fence",
     default=None,
 )
 
 
 @contextmanager
-def bind_v2_run_fence(fence: V2RunFence) -> Iterator[None]:
+def bind_run_fence(fence: RunFence) -> Iterator[None]:
     token = _CURRENT_RUN_FENCE.set(fence)
     try:
         yield
@@ -38,35 +38,35 @@ def bind_v2_run_fence(fence: V2RunFence) -> Iterator[None]:
         _CURRENT_RUN_FENCE.reset(token)
 
 
-def current_v2_run_fence() -> V2RunFence | None:
+def current_run_fence() -> RunFence | None:
     return _CURRENT_RUN_FENCE.get()
 
 
-def require_v2_run_fence(
+def require_run_fence(
     db: Session,
-    game: V2GameRecord,
+    game: GameRecord,
     *,
-    fence: V2RunFence | None = None,
+    fence: RunFence | None = None,
     lock: bool = True,
-) -> V2GameRun:
-    expected = fence or current_v2_run_fence()
+) -> GameRun:
+    expected = fence or current_run_fence()
     if expected is None:
-        raise V2RunFenceRejected("v2_run_execution_fence_missing")
+        raise RunFenceRejected("v2_run_execution_fence_missing")
     if expected.run_id != game.current_run_id:
-        raise V2RunFenceRejected("v2_run_execution_run_changed")
-    statement = select(V2GameRun).where(V2GameRun.run_id == game.current_run_id)
+        raise RunFenceRejected("v2_run_execution_run_changed")
+    statement = select(GameRun).where(GameRun.run_id == game.current_run_id)
     if lock:
         statement = statement.with_for_update()
     run = db.scalar(statement.execution_options(populate_existing=True))
     if run is None:
-        raise V2RunFenceRejected("v2_run_execution_run_missing")
+        raise RunFenceRejected("v2_run_execution_run_missing")
     if run.worker_id != expected.worker_id or run.fence_token != expected.fence_token:
-        raise V2RunFenceRejected("v2_run_execution_lease_lost")
+        raise RunFenceRejected("v2_run_execution_lease_lost")
     if run.lease_expires_at is None:
-        raise V2RunFenceRejected("v2_run_execution_lease_missing")
+        raise RunFenceRejected("v2_run_execution_lease_missing")
     database_now = database_utc_now(db)
     if _as_utc(run.lease_expires_at) <= _as_utc(database_now):
-        raise V2RunFenceRejected("v2_run_execution_lease_expired")
+        raise RunFenceRejected("v2_run_execution_lease_expired")
     return run
 
 

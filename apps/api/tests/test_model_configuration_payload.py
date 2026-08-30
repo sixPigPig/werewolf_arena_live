@@ -9,8 +9,8 @@ from app.model_catalog.runtime import (
     RuntimeModelConfiguration,
     runtime_configuration_for_model,
 )
-from app.werewolf.execution_budget import ModelCallOptions
-from app.werewolf.providers import (
+from app.shared.execution_budget import ModelCallOptions
+from app.shared.providers import (
     ARK_AGENT_PLAN_CONFIG,
     DEEPSEEK_CONFIG,
     ModelRuntimeConfigurationError,
@@ -26,7 +26,7 @@ def test_agent_plan_runtime_configuration_is_applied_to_chat_payload(monkeypatch
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
@@ -78,7 +78,7 @@ def test_deepseek_thinking_payload_omits_ignored_sampling_parameters(monkeypatch
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
@@ -119,7 +119,7 @@ def test_agent_plan_deepseek_thinking_payload_uses_model_sampling_policy(
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
@@ -170,7 +170,7 @@ def test_runtime_payload_omits_stored_reasoning_effort_when_thinking_is_disabled
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
@@ -210,7 +210,7 @@ def test_runtime_payload_omits_thinking_fields_for_model_without_capability(
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda provider, model: RuntimeModelConfiguration(
             provider=provider,
             model_id=model,
@@ -280,7 +280,7 @@ def test_provider_fails_closed_when_runtime_configuration_is_missing(
         return {"choices": [{"message": {"content": "{}"}}]}
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         lambda _provider, _model: None,
     )
     provider = OpenAICompatibleProvider(
@@ -309,7 +309,7 @@ def test_provider_fails_closed_when_runtime_configuration_is_invalid(
         raise ValueError("stale automatic max_tokens")
 
     monkeypatch.setattr(
-        "app.werewolf.providers.runtime_configuration_for_model",
+        "app.shared.providers.runtime_configuration_for_model",
         invalid_runtime_configuration,
     )
     provider = OpenAICompatibleProvider(

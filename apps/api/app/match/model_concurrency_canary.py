@@ -10,19 +10,19 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Sequence
 
-from app.v2.model_client import build_model_request_payload
-from app.v2.model_context_compaction import (
+from app.match.model_client import build_model_request_payload
+from app.match.model_context_compaction import (
     build_known_events_v7_compaction_metadata,
     encode_known_events_v7,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
 )
-from app.v2.model_context_selector import select_known_events_v13
-from app.v2.model_parameters import (
-    V2FrozenModelParametersError,
+from app.match.model_context_selector import select_known_events_v13
+from app.match.model_parameters import (
+    FrozenModelParametersError,
     validate_frozen_model_parameters,
 )
 
@@ -860,7 +860,7 @@ def _parse_models(value: Any) -> tuple[E1CanaryModelSpec, ...]:
                 model_id=model_id,
                 supports_thinking=supports_thinking,
             )
-        except V2FrozenModelParametersError as exc:
+        except FrozenModelParametersError as exc:
             raise E1CanaryContractError("canary_model_parameters_invalid") from exc
         raw_quota = raw.get("quota_by_response_kind")
         if not isinstance(raw_quota, dict) or set(raw_quota) != _RESPONSE_KINDS:

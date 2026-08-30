@@ -1,1 +1,1 @@
-"""Live V2 application boundary."""
+"""Match application boundary. HTTP remains under /api/v2."""

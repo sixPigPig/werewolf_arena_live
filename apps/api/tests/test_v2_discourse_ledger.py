@@ -4,12 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from app.v2.discourse_ledger import (
+from app.match.discourse_ledger import (
     build_public_discourse_ledger,
     validate_claim_candidate,
 )
-from app.v2.discourse_model_view import build_discourse_model_view
-from app.v2.model_context_contract import (
+from app.match.discourse_model_view import build_discourse_model_view
+from app.match.model_context_contract import (
     DISCOURSE_LEDGER_SCHEMA_VERSION,
     DISCOURSE_MODEL_VIEW_SCHEMA_VERSION,
 )

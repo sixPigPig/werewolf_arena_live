@@ -119,8 +119,6 @@ kubectl apply --server-side --field-manager=werewolf-release \
   --filename "$output_dir/application.yaml"
 kubectl rollout status deployment/werewolf-api --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
-kubectl rollout status deployment/werewolf-live-run-reaper --namespace "$namespace" \
-  --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-judge-voice-worker --namespace "$namespace" \
   --timeout="${ROLLOUT_TIMEOUT:-5m}"
 kubectl rollout status deployment/werewolf-mobile-web --namespace "$namespace" \

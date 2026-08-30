@@ -1,16 +1,16 @@
 import {
-  parseV2GameCreateResponse,
-  parseV2DirectorLiveSnapshotResponse,
-  parseV2GodViewIdentitySnapshotResponse,
-  parseV2LiveSnapshotResponse,
-  type V2GameCreateRequest,
-  type V2GameCreateResponse,
-  type V2DirectorLiveSnapshot,
-  type V2GodViewIdentitySnapshot,
-  type V2LiveSnapshot,
+  parseGameCreateResponse,
+  parseDirectorLiveSnapshotResponse,
+  parseGodViewIdentitySnapshotResponse,
+  parseLiveSnapshotResponse,
+  type GameCreateRequest,
+  type GameCreateResponse,
+  type DirectorLiveSnapshot,
+  type GodViewIdentitySnapshot,
+  type LiveSnapshot,
 } from "./contracts";
 
-export class V2GameCreateError extends Error {
+export class GameCreateError extends Error {
   public readonly status: number;
   public readonly code: string | null;
 
@@ -18,25 +18,25 @@ export class V2GameCreateError extends Error {
     status: number,
     code: string | null,
   ) {
-    super(`V2 对局创建失败 (${status})`);
-    this.name = "V2GameCreateError";
+    super(`对局创建失败 (${status})`);
+    this.name = "GameCreateError";
     this.status = status;
     this.code = code;
   }
 }
 
-export async function createV2Game(
-  request: V2GameCreateRequest,
-): Promise<V2GameCreateResponse> {
-  const response = await fetch(resolveV2HttpUrl("/api/v2/games"), {
+export async function createGame(
+  request: GameCreateRequest,
+): Promise<GameCreateResponse> {
+  const response = await fetch(resolveHttpUrl("/api/v2/games"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new V2GameCreateError(response.status, await responseErrorCode(response));
+    throw new GameCreateError(response.status, await responseErrorCode(response));
   }
-  return parseV2GameCreateResponse(await response.json());
+  return parseGameCreateResponse(await response.json());
 }
 
 async function responseErrorCode(response: Response): Promise<string | null> {
@@ -55,36 +55,36 @@ async function responseErrorCode(response: Response): Promise<string | null> {
   }
 }
 
-export async function fetchV2LiveSnapshot(gameId: string): Promise<V2LiveSnapshot> {
+export async function fetchLiveSnapshot(gameId: string): Promise<LiveSnapshot> {
   const path = `/api/v2/live/games/${encodeURIComponent(gameId)}/snapshot`;
-  const response = await fetch(resolveV2HttpUrl(path), {
+  const response = await fetch(resolveHttpUrl(path), {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) {
     throw new Error(`V2 座位快照读取失败 (${response.status})`);
   }
-  return parseV2LiveSnapshotResponse(await response.json());
+  return parseLiveSnapshotResponse(await response.json());
 }
 
-export async function fetchV2DirectorLiveSnapshot(
+export async function fetchDirectorLiveSnapshot(
   gameId: string,
-): Promise<V2DirectorLiveSnapshot> {
+): Promise<DirectorLiveSnapshot> {
   const path = `/api/v2/director/games/${encodeURIComponent(gameId)}/snapshot`;
-  const response = await fetch(resolveV2HttpUrl(path), {
+  const response = await fetch(resolveHttpUrl(path), {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) {
     throw new Error(`V2 导演直播快照读取失败 (${response.status})`);
   }
-  return parseV2DirectorLiveSnapshotResponse(await response.json());
+  return parseDirectorLiveSnapshotResponse(await response.json());
 }
 
-export async function fetchV2GodViewIdentitySnapshot(
+export async function fetchGodViewIdentitySnapshot(
   gameId: string,
   accessToken: string,
-): Promise<V2GodViewIdentitySnapshot> {
+): Promise<GodViewIdentitySnapshot> {
   const path = `/api/v2/god-view/games/${encodeURIComponent(gameId)}/identity-snapshot`;
-  const response = await fetch(resolveV2HttpUrl(path), {
+  const response = await fetch(resolveHttpUrl(path), {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`,
@@ -93,10 +93,10 @@ export async function fetchV2GodViewIdentitySnapshot(
   if (!response.ok) {
     throw new Error(`V2 上帝视角身份快照读取失败 (${response.status})`);
   }
-  return parseV2GodViewIdentitySnapshotResponse(await response.json());
+  return parseGodViewIdentitySnapshotResponse(await response.json());
 }
 
-export function resolveV2WebSocketUrl(gameId: string): string {
+export function resolveWebSocketUrl(gameId: string): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
   const base = configured || window.location.origin;
   const url = new URL(
@@ -107,7 +107,7 @@ export function resolveV2WebSocketUrl(gameId: string): string {
   return url.toString();
 }
 
-export function resolveV2DirectorWebSocketUrl(gameId: string): string {
+export function resolveDirectorWebSocketUrl(gameId: string): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
   const base = configured || window.location.origin;
   const url = new URL(
@@ -118,7 +118,7 @@ export function resolveV2DirectorWebSocketUrl(gameId: string): string {
   return url.toString();
 }
 
-export function resolveV2GodViewWebSocketUrl(gameId: string): string {
+export function resolveGodViewWebSocketUrl(gameId: string): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
   const base = configured || window.location.origin;
   const url = new URL(
@@ -129,7 +129,7 @@ export function resolveV2GodViewWebSocketUrl(gameId: string): string {
   return url.toString();
 }
 
-function resolveV2HttpUrl(path: string): string {
+function resolveHttpUrl(path: string): string {
   const configured = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
   return new URL(path, configured || window.location.origin).toString();
 }

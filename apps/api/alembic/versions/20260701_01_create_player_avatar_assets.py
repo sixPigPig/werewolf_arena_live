@@ -6,7 +6,7 @@ import hashlib
 from alembic import op
 import sqlalchemy as sa
 
-from app.werewolf.system_player_avatar_data import SYSTEM_AVATAR_DATA_BASE64
+from app.shared.system_player_avatar_data import SYSTEM_AVATAR_DATA_BASE64
 
 revision = "20260701_01"
 down_revision = "20260517_02"

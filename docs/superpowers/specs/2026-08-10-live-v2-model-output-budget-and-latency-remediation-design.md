@@ -4,6 +4,8 @@
 
 **Status:** 用户已批准进入开发；A/B/C1/D 与 E1 离线 harness 已实现并完成聚焦验证；V12 发布与外部实验仍被 cutover/billing 门禁及尚未实现的 E1 live runner 阻断
 
+> 2026-08-20 核对：代码的 `MODEL_CONTEXT_SCHEMA_VERSION` 已是 **13**，本文写作时的 V12 cutover 描述已被后续变更覆盖。E1 live runner 在代码中仍无对应实现。本文的延迟分析与失败分类仍是当前实时提速工作的主要依据。
+
 **Priority:** P0 Failure Semantics / P0 Automatic Recovery / P1 Generation Latency / P1 Context Efficiency / P1 Queue Throughput
 
 **Source Game:** `v2_game_f29d64c8a34045e6`

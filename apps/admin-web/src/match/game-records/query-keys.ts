@@ -1,4 +1,4 @@
-export const v2GameRecordKeys = {
+export const gameRecordKeys = {
   all: ["admin", "v2", "game-records"] as const,
   detail: (gameId: string) =>
     ["admin", "v2", "game-records", "detail", gameId] as const,

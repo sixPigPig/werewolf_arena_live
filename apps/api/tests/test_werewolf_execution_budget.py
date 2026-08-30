@@ -1,6 +1,6 @@
 import pytest
 
-from app.werewolf.execution_budget import (
+from app.shared.execution_budget import (
     ActionExecutionBudgetV1,
     ModelDeadlineExceeded,
 )

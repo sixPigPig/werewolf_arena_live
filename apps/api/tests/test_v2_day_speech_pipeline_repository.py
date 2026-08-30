@@ -11,37 +11,37 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers the referenced users table
-from app.v2.day_speech_pipeline_contract import (
-    V2DaySpeechPipelineContractError,
+from app.match.day_speech_pipeline_contract import (
+    DaySpeechPipelineContractError,
     current_day_speech_pipeline_contract,
     freeze_day_speech_pipeline_contract,
     resolve_day_speech_pipeline_contract,
 )
-from app.v2.day_speech_pipeline_repository import (
-    V2DaySpeechPipelineRepository,
-    V2DaySpeechPipelineRepositoryError,
-    V2DaySpeechSlotSnapshot,
+from app.match.day_speech_pipeline_repository import (
+    DaySpeechPipelineRepository,
+    DaySpeechPipelineRepositoryError,
+    DaySpeechSlotSnapshot,
 )
-from app.v2.event_contract import canonical_event_payload
-from app.v2.execution import V2RunFence, bind_v2_run_fence
-from app.v2.model_context_contract import freeze_model_context_contract
-from app.v2.model_generation_policy_contract import (
+from app.match.event_contract import canonical_event_payload
+from app.match.execution import RunFence, bind_run_fence
+from app.match.model_context_contract import freeze_model_context_contract
+from app.match.model_generation_policy_contract import (
     freeze_model_generation_policy_contract,
 )
-from app.v2.models import (
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2PlayerState,
+from app.match.models import (
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    PlayerState,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ActionRepository,
-    V2ExecutionOwnershipLost,
-    V2PresentationIdentity,
+from app.match.repository import (
+    ActionClaim,
+    ActionRepository,
+    ExecutionOwnershipLost,
+    PresentationIdentity,
 )
-from app.v2.service import create_waiting_game
+from app.match.service import create_waiting_game
 
 
 GAME_ID = "v2_game_day_speech_slots"
@@ -57,15 +57,15 @@ PREDECESSOR_SOURCE_EVENT_ID = 900
 @dataclass(frozen=True)
 class _Harness:
     session_factory: sessionmaker[Session]
-    actions: V2ActionRepository
-    slots: V2DaySpeechPipelineRepository
-    fence: V2RunFence
-    predecessor_claim: V2ActionClaim
-    predecessor: V2PresentationIdentity
+    actions: ActionRepository
+    slots: DaySpeechPipelineRepository
+    fence: RunFence
+    predecessor_claim: ActionClaim
+    predecessor: PresentationIdentity
     predecessor_source_record_seq: int
     cutoff: int
 
-    def reserve(self) -> V2DaySpeechSlotSnapshot:
+    def reserve(self) -> DaySpeechSlotSnapshot:
         return self.slots.reserve_slot(
             game_id=GAME_ID,
             phase_id=PHASE_ID,
@@ -101,7 +101,7 @@ def harness() -> _Harness:
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=GAME_ID,
                 title="day speech slot test",
                 status="ready",
@@ -119,7 +119,7 @@ def harness() -> _Harness:
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=RUN_ID,
                 game_id=GAME_ID,
                 attempt_no=1,
@@ -132,14 +132,14 @@ def harness() -> _Harness:
         )
         db.add_all(
             [
-                V2PlayerState(
+                PlayerState(
                     game_id=GAME_ID,
                     player_id="player_1",
                     seat=1,
                     alive=True,
                     state={},
                 ),
-                V2PlayerState(
+                PlayerState(
                     game_id=GAME_ID,
                     player_id="player_2",
                     seat=2,
@@ -148,9 +148,9 @@ def harness() -> _Harness:
                 ),
             ]
         )
-    fence = V2RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=1)
-    actions = V2ActionRepository(factory, enforce_execution_fence=True)
-    with bind_v2_run_fence(fence):
+    fence = RunFence(run_id=RUN_ID, worker_id=WORKER_ID, fence_token=1)
+    actions = ActionRepository(factory, enforce_execution_fence=True)
+    with bind_run_fence(fence):
         claim = actions.claim_action(
             game_id=GAME_ID,
             action_id=PREDECESSOR_ACTION_ID,
@@ -176,25 +176,25 @@ def harness() -> _Harness:
     )
     with factory.begin() as db:
         presentation = db.get(
-            V2LivePresentation,
+            LivePresentation,
             (GAME_ID, predecessor.presentation_seq),
         )
         assert presentation is not None
         source = db.get(
-            V2GameRecordEvent,
+            GameRecordEvent,
             (GAME_ID, presentation.source_event_id),
         )
         assert source is not None
         source_record_seq = source.record_seq
         source.event_id = PREDECESSOR_SOURCE_EVENT_ID
         presentation.source_event_id = PREDECESSOR_SOURCE_EVENT_ID
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         cutoff = game.last_record_seq
     result = _Harness(
         session_factory=factory,
         actions=actions,
-        slots=V2DaySpeechPipelineRepository(factory),
+        slots=DaySpeechPipelineRepository(factory),
         fence=fence,
         predecessor_claim=claim,
         predecessor=predecessor,
@@ -307,7 +307,7 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
     ]
     for malformed_contract in malformed_contracts:
         with pytest.raises(
-            V2DaySpeechPipelineContractError,
+            DaySpeechPipelineContractError,
             match="unsupported_day_speech_pipeline_contract",
         ):
             resolve_day_speech_pipeline_contract(
@@ -325,11 +325,11 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
         )
         game_id = game.game_id
     with factory() as db:
-        game = db.get(V2GameRecord, game_id)
+        game = db.get(GameRecord, game_id)
         created = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_type == "game_created",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.event_type == "game_created",
             )
         )
         assert game is not None and created is not None
@@ -401,7 +401,7 @@ def test_slot_happy_path_is_idempotent_ordered_and_private(harness: _Harness) ->
     )
 
     _complete_voice_action(harness, harness.predecessor)
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         next_claim = harness.actions.claim_action(
             game_id=GAME_ID,
             action_id="v2_action_day_prefetch_presentation",
@@ -446,12 +446,12 @@ def test_slot_happy_path_is_idempotent_ordered_and_private(harness: _Harness) ->
     with harness.session_factory() as db:
         lifecycle = list(
             db.scalars(
-                select(V2GameRecordEvent)
+                select(GameRecordEvent)
                 .where(
-                    V2GameRecordEvent.game_id == GAME_ID,
-                    V2GameRecordEvent.event_type.like("day_speech_slot_%"),
+                    GameRecordEvent.game_id == GAME_ID,
+                    GameRecordEvent.event_type.like("day_speech_slot_%"),
                 )
-                .order_by(V2GameRecordEvent.record_seq)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
     assert [event.event_type for event in lifecycle] == [
@@ -472,7 +472,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
     _complete_voice_action(harness, harness.predecessor)
     with harness.session_factory.begin() as db:
         db.add(
-            V2PlayerState(
+            PlayerState(
                 game_id=GAME_ID,
                 player_id="player_3",
                 seat=3,
@@ -496,7 +496,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
         fence=harness.fence,
     )
     judge_action_id = "v2_action_judge_technical_skip"
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         claim = harness.actions.claim_action(
             game_id=GAME_ID,
             action_id=judge_action_id,
@@ -532,8 +532,8 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
         actor_id="judge",
     )
     with harness.session_factory() as db:
-        source = db.get(V2GameRecordEvent, (GAME_ID, judge.source_event_id))
-        game = db.get(V2GameRecord, GAME_ID)
+        source = db.get(GameRecordEvent, (GAME_ID, judge.source_event_id))
+        game = db.get(GameRecord, GAME_ID)
         assert source is not None and game is not None
         source_record_seq = source.record_seq
         cutoff = game.last_record_seq
@@ -559,7 +559,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
     assert slot.turn_index == 3
 
     with pytest.raises(
-        V2DaySpeechPipelineRepositoryError,
+        DaySpeechPipelineRepositoryError,
         match="active public TTS presentation",
     ):
         harness.slots.reserve_slot(
@@ -592,7 +592,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
         fence=harness.fence,
     )
     _complete_voice_action(harness, judge)
-    with bind_v2_run_fence(harness.fence):
+    with bind_run_fence(harness.fence):
         player_claim = harness.actions.claim_action(
             game_id=GAME_ID,
             action_id="v2_action_present_after_technical_skip",
@@ -639,7 +639,7 @@ def test_slot_rejects_illegal_transition_and_wrong_context_cutoff(
 ) -> None:
     slot = harness.reserve()
     with pytest.raises(
-        V2DaySpeechPipelineRepositoryError,
+        DaySpeechPipelineRepositoryError,
         match="cannot transition from reserved",
     ):
         harness.slots.mark_ready(
@@ -658,7 +658,7 @@ def test_slot_rejects_illegal_transition_and_wrong_context_cutoff(
         projection_at_seq=harness.cutoff - 1,
     )
     with pytest.raises(
-        V2DaySpeechPipelineRepositoryError,
+        DaySpeechPipelineRepositoryError,
         match="changed its frozen context cutoff",
     ):
         harness.slots.mark_ready(
@@ -716,9 +716,9 @@ def test_slot_failure_requires_durable_pipeline_action_lineage(harness: _Harness
     assert failed.failure["model_request_failed"]["raw_response"] == ("must remain private")
     with harness.session_factory() as db:
         lifecycle = db.scalar(
-            select(V2GameRecordEvent).where(
-                V2GameRecordEvent.game_id == GAME_ID,
-                V2GameRecordEvent.event_type == "day_speech_slot_failed",
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "day_speech_slot_failed",
             )
         )
         assert lifecycle is not None
@@ -732,16 +732,16 @@ def test_new_fence_invalidates_stale_slot_without_mutating_from_old_owner(
     slot = harness.reserve()
     now = datetime.now(tz=UTC)
     with harness.session_factory.begin() as db:
-        run = db.get(V2GameRun, RUN_ID)
+        run = db.get(GameRun, RUN_ID)
         assert run is not None
         run.worker_id = "v2_worker_day_speech_recovery"
         run.worker_heartbeat_at = now
         run.lease_expires_at = now + timedelta(minutes=5)
         run.fence_token = 2
-    with pytest.raises(V2ExecutionOwnershipLost, match="v2_run_execution_lease_lost"):
+    with pytest.raises(ExecutionOwnershipLost, match="v2_run_execution_lease_lost"):
         harness.slots.mark_generating(slot_id=slot.slot_id, fence=harness.fence)
 
-    recovery_fence = V2RunFence(
+    recovery_fence = RunFence(
         run_id=RUN_ID,
         worker_id="v2_worker_day_speech_recovery",
         fence_token=2,
@@ -797,7 +797,7 @@ def _speech_context(
 def _append_action_opened(
     harness: _Harness,
     *,
-    slot: V2DaySpeechSlotSnapshot,
+    slot: DaySpeechSlotSnapshot,
     action_id: str,
     stage: str,
     projection_at_seq: int | None = None,
@@ -818,13 +818,13 @@ def _append_action_opened(
     )
     context["batch_id"] = f"{slot.slot_id}:generation"
     with harness.session_factory.begin() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         record_seq = game.last_record_seq + 1
         context["run_id"] = RUN_ID
         context["action_record_seq"] = record_seq
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=GAME_ID,
                 event_id=record_seq,
                 record_seq=record_seq,
@@ -844,7 +844,7 @@ def _append_action_opened(
 def _append_generation_success(
     harness: _Harness,
     *,
-    slot: V2DaySpeechSlotSnapshot,
+    slot: DaySpeechSlotSnapshot,
     action_id: str,
     speech: str,
     projection_at_seq: int | None = None,
@@ -894,11 +894,11 @@ def _append_record_event(
     payload: dict[str, Any],
 ) -> int:
     with factory.begin() as db:
-        game = db.get(V2GameRecord, GAME_ID)
+        game = db.get(GameRecord, GAME_ID)
         assert game is not None
         record_seq = game.last_record_seq + 1
         db.add(
-            V2GameRecordEvent(
+            GameRecordEvent(
                 game_id=GAME_ID,
                 event_id=record_seq,
                 record_seq=record_seq,
@@ -914,7 +914,7 @@ def _append_record_event(
 
 def _complete_voice_action(
     harness: _Harness,
-    identity: V2PresentationIdentity,
+    identity: PresentationIdentity,
 ) -> None:
     harness.actions.mark_voice_ready(
         identity=identity,

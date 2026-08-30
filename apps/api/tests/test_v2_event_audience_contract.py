@@ -10,26 +10,26 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
-from app.v2.action_engine import V2ActionEngine, V2DecisionContract, V2SpeechSpec
-from app.v2.control import _event_audience
-from app.v2.event_contract import canonical_event_payload, model_event_audience
-from app.v2.model_client import V2ModelDecision
-from app.v2.model_context_contract import current_model_context_contract
-from app.v2.models import (
-    V2AbilityActivation,
-    V2GameRecord,
-    V2GameRecordEvent,
-    V2GameRun,
-    V2LivePresentation,
-    V2VoiceAsset,
+from app.match.action_engine import ActionEngine, DecisionContract, SpeechSpec
+from app.match.control import _event_audience
+from app.match.event_contract import canonical_event_payload, model_event_audience
+from app.match.model_client import ModelDecision
+from app.match.model_context_contract import current_model_context_contract
+from app.match.models import (
+    AbilityActivation,
+    GameRecord,
+    GameRecordEvent,
+    GameRun,
+    LivePresentation,
+    VoiceAsset,
 )
-from app.v2.repository import (
-    V2ActionClaim,
-    V2ActionRepository,
+from app.match.repository import (
+    ActionClaim,
+    ActionRepository,
     _action_snapshot_audience,
     _activation_audience,
 )
-from app.v2.router import _admin_model_requests
+from app.match.router import _admin_model_requests
 
 
 @pytest.mark.parametrize(
@@ -79,8 +79,8 @@ def test_model_event_audience_uses_the_narrowest_existing_canonical_scope(
 
 
 def test_legacy_followup_events_fail_closed_without_blocking_operator_paths() -> None:
-    event = V2GameRecordEvent(payload={})
-    activation = V2AbilityActivation(
+    event = GameRecordEvent(payload={})
+    activation = AbilityActivation(
         activation_id="v2_activation_legacy01",
         game_id="v2_game_legacyaudience",
         action_id="v2_action_legacyaudience",
@@ -196,11 +196,11 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
     Base.metadata.create_all(
         engine,
         tables=[
-            V2GameRecord.__table__,
-            V2GameRun.__table__,
-            V2GameRecordEvent.__table__,
-            V2VoiceAsset.__table__,
-            V2LivePresentation.__table__,
+            GameRecord.__table__,
+            GameRun.__table__,
+            GameRecordEvent.__table__,
+            VoiceAsset.__table__,
+            LivePresentation.__table__,
         ],
     )
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -208,7 +208,7 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
     run_id = "v2_run_audience0001"
     with Session(engine) as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=game_id,
                 title="audience contract",
                 status="generating",
@@ -227,7 +227,7 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=run_id,
                 game_id=game_id,
                 attempt_no=1,
@@ -237,8 +237,8 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
         )
         db.commit()
 
-    repository = V2ActionRepository(factory)
-    claim = V2ActionClaim(
+    repository = ActionRepository(factory)
+    claim = ActionClaim(
         game_id=game_id,
         run_id=run_id,
         action_id="v2_action_audience01",
@@ -265,12 +265,12 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
     with Session(engine) as db:
         events = list(
             db.scalars(
-                select(V2GameRecordEvent)
-                .where(V2GameRecordEvent.game_id == game_id)
-                .order_by(V2GameRecordEvent.record_seq)
+                select(GameRecordEvent)
+                .where(GameRecordEvent.game_id == game_id)
+                .order_by(GameRecordEvent.record_seq)
             )
         )
-        presentation = db.get(V2LivePresentation, (game_id, 1))
+        presentation = db.get(LivePresentation, (game_id, 1))
 
     assert identity.audience == "god_view"
     assert presentation is not None
@@ -327,11 +327,11 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
     Base.metadata.create_all(
         engine,
         tables=[
-            V2GameRecord.__table__,
-            V2GameRun.__table__,
-            V2GameRecordEvent.__table__,
-            V2VoiceAsset.__table__,
-            V2LivePresentation.__table__,
+            GameRecord.__table__,
+            GameRun.__table__,
+            GameRecordEvent.__table__,
+            VoiceAsset.__table__,
+            LivePresentation.__table__,
         ],
     )
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -339,7 +339,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
     run_id = "v2_run_privatefailure"
     with Session(engine) as db:
         db.add(
-            V2GameRecord(
+            GameRecord(
                 game_id=game_id,
                 title="private TTS failure",
                 status="ready",
@@ -358,7 +358,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
             )
         )
         db.add(
-            V2GameRun(
+            GameRun(
                 run_id=run_id,
                 game_id=game_id,
                 attempt_no=1,
@@ -368,8 +368,8 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
         )
         db.commit()
 
-    repository = V2ActionRepository(factory)
-    action_engine = V2ActionEngine(
+    repository = ActionRepository(factory)
+    action_engine = ActionEngine(
         repository=repository,
         model_client=MagicMock(),
         tts_client=FailingTtsClient(),
@@ -380,7 +380,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
         judge_configuration_provider=MagicMock(),
     )
     broadcaster = RecordingBroadcaster()
-    decision = V2ModelDecision(
+    decision = ModelDecision(
         target_player_id=None,
         speech="这是狼人私聊发言。",
         provider_request_id="precomputed-private",
@@ -391,7 +391,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
         action_engine.present_player_decision(
             game_id=game_id,
             broadcaster=broadcaster,  # type: ignore[arg-type]
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type="werewolf_private_discussion",
                 phase_id="first_night",
                 required_phase_state="night_running",
@@ -402,7 +402,7 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
                 actor_id="seat_1",
                 audience="god_view",
                 output_kind="private_speech",
-                decision_contract=V2DecisionContract(kind="speech"),
+                decision_contract=DecisionContract(kind="speech"),
             ),
             decision=decision,
         )

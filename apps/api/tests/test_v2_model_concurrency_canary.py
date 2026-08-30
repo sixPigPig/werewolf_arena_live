@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 import app.cli as cli
-from app.v2.model_client import V2ModelClient
-from app.v2.model_concurrency_canary import (
+from app.match.model_client import ModelClient
+from app.match.model_concurrency_canary import (
     DEFAULT_E1_CANARY_CORPUS_PATH,
     E1CanaryAttemptObservation,
     E1CanaryBudgetLedger,
@@ -99,7 +99,7 @@ def test_fixture_contexts_pass_real_payload_and_parser_contract_with_mock_transp
         )
 
     async def run() -> list[Any]:
-        client = V2ModelClient(
+        client = ModelClient(
             agent_plan_api_key="fake-agent-plan-key",
             agent_plan_base_url="https://ark.example.test/api/plan/v3",
             ark_api_key="",
@@ -747,7 +747,7 @@ def test_cli_defaults_to_zero_request_dry_run(monkeypatch: pytest.MonkeyPatch, c
     def forbidden_database_session(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("dry-run must not create a database session")
 
-    monkeypatch.setattr("app.v2.model_client.httpx.AsyncClient", forbidden_http_client)
+    monkeypatch.setattr("app.match.model_client.httpx.AsyncClient", forbidden_http_client)
     monkeypatch.setattr("app.cli.SessionLocal", forbidden_database_session)
 
     exit_code = cli.main(["run-v2-agent-plan-canary"])
@@ -771,7 +771,7 @@ def test_cli_execute_fails_closed_even_after_all_offline_guards(
     def forbidden_database_session(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("offline E1 build must not create a database session")
 
-    monkeypatch.setattr("app.v2.model_client.httpx.AsyncClient", forbidden_http_client)
+    monkeypatch.setattr("app.match.model_client.httpx.AsyncClient", forbidden_http_client)
     monkeypatch.setattr("app.cli.SessionLocal", forbidden_database_session)
     ledger = tmp_path / "ledger.json"
     ledger.write_text(

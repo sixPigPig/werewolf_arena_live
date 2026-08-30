@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createV2Game,
-  fetchV2DirectorLiveSnapshot,
-  fetchV2GodViewIdentitySnapshot,
-  fetchV2LiveSnapshot,
+  createGame,
+  fetchDirectorLiveSnapshot,
+  fetchGodViewIdentitySnapshot,
+  fetchLiveSnapshot,
 } from "./api";
 
 
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 
-describe("createV2Game", () => {
+describe("createGame", () => {
   it("posts the existing lobby snapshot and accepts only a waiting V2 game", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -83,7 +83,7 @@ describe("createV2Game", () => {
       },
     };
 
-    const result = await createV2Game(request);
+    const result = await createGame(request);
 
     expect(result.game_id).toBe("v2_game_0123456789abcdef");
     expect(result.audio_mode).toBe("text_only");
@@ -117,9 +117,9 @@ describe("createV2Game", () => {
     );
 
     await expect(
-      createV2Game({ title: "过期规则" } as Parameters<typeof createV2Game>[0]),
+      createGame({ title: "过期规则" } as Parameters<typeof createGame>[0]),
     ).rejects.toMatchObject({
-      name: "V2GameCreateError",
+      name: "GameCreateError",
       status: 409,
       code: "rule_revision_changed",
     });
@@ -143,7 +143,7 @@ describe("createV2Game", () => {
     );
 
     await expect(
-      createV2Game({
+      createGame({
         title: "非法响应",
         audio_mode: "tts",
         lobby_snapshot: {
@@ -183,7 +183,7 @@ describe("createV2Game", () => {
   });
 });
 
-describe("fetchV2DirectorLiveSnapshot", () => {
+describe("fetchDirectorLiveSnapshot", () => {
   it("accepts the contextual identity projection without a God View token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -231,7 +231,7 @@ describe("fetchV2DirectorLiveSnapshot", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const snapshot = await fetchV2DirectorLiveSnapshot(
+    const snapshot = await fetchDirectorLiveSnapshot(
       "v2_game_0123456789abcdef",
     );
 
@@ -245,7 +245,7 @@ describe("fetchV2DirectorLiveSnapshot", () => {
   });
 });
 
-describe("fetchV2GodViewIdentitySnapshot", () => {
+describe("fetchGodViewIdentitySnapshot", () => {
   it("sends the capability token and accepts only the strict God View projection", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -308,7 +308,7 @@ describe("fetchV2GodViewIdentitySnapshot", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const snapshot = await fetchV2GodViewIdentitySnapshot(
+    const snapshot = await fetchGodViewIdentitySnapshot(
       "v2_game_0123456789abcdef",
       "a".repeat(43),
     );
@@ -324,7 +324,7 @@ describe("fetchV2GodViewIdentitySnapshot", () => {
   });
 });
 
-describe("fetchV2LiveSnapshot", () => {
+describe("fetchLiveSnapshot", () => {
   it("loads the ordered public seat projection", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -377,7 +377,7 @@ describe("fetchV2LiveSnapshot", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const snapshot = await fetchV2LiveSnapshot("v2_game_0123456789abcdef");
+    const snapshot = await fetchLiveSnapshot("v2_game_0123456789abcdef");
 
     expect(snapshot.public_players).toEqual([
       {
@@ -433,7 +433,7 @@ describe("fetchV2LiveSnapshot", () => {
     );
 
     await expect(
-      fetchV2LiveSnapshot("v2_game_0123456789abcdef"),
+      fetchLiveSnapshot("v2_game_0123456789abcdef"),
     ).rejects.toThrow("V2 实时直播协议无效");
   });
 
@@ -476,7 +476,7 @@ describe("fetchV2LiveSnapshot", () => {
     );
 
     await expect(
-      fetchV2LiveSnapshot("v2_game_0123456789abcdef"),
+      fetchLiveSnapshot("v2_game_0123456789abcdef"),
     ).rejects.toThrow("V2 实时直播协议无效");
   });
 
@@ -511,7 +511,7 @@ describe("fetchV2LiveSnapshot", () => {
     );
 
     await expect(
-      fetchV2LiveSnapshot("v2_game_0123456789abcdef"),
+      fetchLiveSnapshot("v2_game_0123456789abcdef"),
     ).rejects.toThrow("V2 实时直播协议无效");
   });
 
@@ -543,7 +543,7 @@ describe("fetchV2LiveSnapshot", () => {
     );
 
     await expect(
-      fetchV2LiveSnapshot("v2_game_0123456789abcdef"),
+      fetchLiveSnapshot("v2_game_0123456789abcdef"),
     ).rejects.toThrow("V2 实时直播协议无效");
   });
 });

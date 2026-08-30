@@ -6,13 +6,9 @@ import { AdminSessionBoundary } from "@/features/auth/AdminSessionBoundary";
 import { RequireAdminPermission } from "@/features/auth/RequireAdminPermission";
 import {
   ForbiddenRoute,
-  GameRecordDetailRoute,
-  GameRecordsRoute,
   JudgeVoiceAssetsRoute,
   JudgeConfigurationRoute,
   LoginRoute,
-  LiveRunDetailRoute,
-  LiveRunsRoute,
   NotFoundRoute,
   PlayerProfileEditorRoute,
   PlayerProfilesRoute,
@@ -25,8 +21,8 @@ import {
   RuleSetNewRoute,
   RuleSetDetailRoute,
   ModelsRoute,
-  V2GameRecordDetailRoute,
-  V2GameRecordsRoute,
+  GameRecordDetailRoute,
+  GameRecordsRoute,
 } from "@/routes/lazy-pages";
 
 export const routes: RouteObject[] = [
@@ -55,7 +51,7 @@ export const routes: RouteObject[] = [
                 path: "v2/operations/games",
                 element: (
                   <RequireAdminPermission permission="v2_games.read">
-                    <V2GameRecordsRoute />
+                    <GameRecordsRoute />
                   </RequireAdminPermission>
                 ),
               },
@@ -63,38 +59,6 @@ export const routes: RouteObject[] = [
                 path: "v2/operations/games/:gameId",
                 element: (
                   <RequireAdminPermission permission="v2_games.read">
-                    <V2GameRecordDetailRoute />
-                  </RequireAdminPermission>
-                ),
-              },
-              {
-                path: "operations/runs",
-                element: (
-                  <RequireAdminPermission permission="runs.read">
-                    <LiveRunsRoute />
-                  </RequireAdminPermission>
-                ),
-              },
-              {
-                path: "operations/runs/:runId",
-                element: (
-                  <RequireAdminPermission permission="runs.read">
-                    <LiveRunDetailRoute />
-                  </RequireAdminPermission>
-                ),
-              },
-              {
-                path: "operations/games",
-                element: (
-                  <RequireAdminPermission permission="games.read">
-                    <GameRecordsRoute />
-                  </RequireAdminPermission>
-                ),
-              },
-              {
-                path: "operations/games/:sessionId",
-                element: (
-                  <RequireAdminPermission permission="games.read">
                     <GameRecordDetailRoute />
                   </RequireAdminPermission>
                 ),

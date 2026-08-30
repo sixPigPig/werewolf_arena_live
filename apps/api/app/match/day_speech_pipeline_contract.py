@@ -39,12 +39,12 @@ _CONTRACT_KEYS_V3 = frozenset(
 )
 
 
-class V2DaySpeechPipelineContractError(ValueError):
+class DaySpeechPipelineContractError(ValueError):
     pass
 
 
 @dataclass(frozen=True)
-class V2ResolvedDaySpeechPipelineContract:
+class ResolvedDaySpeechPipelineContract:
     status: Literal["supported", "legacy_sequential"]
     mode: Literal["one_ahead", "sequential"]
     source: Literal["frozen_contract", "legacy_missing_contract"]
@@ -140,11 +140,11 @@ def freeze_day_speech_pipeline_contract(
 
 def resolve_day_speech_pipeline_contract(
     rule_snapshot: dict[str, Any] | None,
-) -> V2ResolvedDaySpeechPipelineContract:
+) -> ResolvedDaySpeechPipelineContract:
     """Resolve a frozen contract; missing legacy contracts remain sequential."""
 
     if not isinstance(rule_snapshot, dict) or _CONTRACT_KEY not in rule_snapshot:
-        return V2ResolvedDaySpeechPipelineContract(
+        return ResolvedDaySpeechPipelineContract(
             status="legacy_sequential",
             mode="sequential",
             source="legacy_missing_contract",
@@ -162,7 +162,7 @@ def resolve_day_speech_pipeline_contract(
         )
     contract = validate_day_speech_pipeline_contract(rule_snapshot[_CONTRACT_KEY])
     schema_version = contract["schema_version"]
-    return V2ResolvedDaySpeechPipelineContract(
+    return ResolvedDaySpeechPipelineContract(
         status="supported",
         mode="one_ahead",
         source="frozen_contract",
@@ -261,4 +261,4 @@ def day_speech_pipeline_contract_summary(
 
 
 def _raise_unsupported() -> None:
-    raise V2DaySpeechPipelineContractError(_UNSUPPORTED_ERROR)
+    raise DaySpeechPipelineContractError(_UNSUPPORTED_ERROR)

@@ -82,7 +82,7 @@ from app.rule_sets.snapshots import (
 )
 from app.rule_sets.types import RuleSetConfig, RuleValidationIssue
 from app.rule_sets.validation import normalize_rule_set_config
-from app.werewolf.rules import render_rule_text
+from app.shared.rules import render_rule_text
 
 
 router = APIRouter()

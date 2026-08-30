@@ -12,13 +12,18 @@ from typing import TYPE_CHECKING, cast
 from app.models.rule_set import RuleSetRevisionRecord
 from app.rule_sets.errors import RuleSetCatalogCorrupt
 from app.rule_sets.telemetry import record_rule_snapshot_failure
-from app.rule_sets.types import CompiledRuleSet, RuleRoleId, RuleSetConfig
+from app.rule_sets.types import (
+    CompiledRuleSet,
+    LEGACY_WEREWOLF_ATTACK_RESOLUTION,
+    RuleRoleId,
+    RuleSetConfig,
+)
 from app.rule_sets.validation import (
     RULE_ROLE_IDS,
     normalize_rule_set_config,
     validate_rule_set_config,
 )
-from app.werewolf.rules import (
+from app.shared.rules import (
     ACTION_DEBATE,
     ACTION_EXILE_LAST_WORDS,
     ACTION_HUNTER_SHOOT,
@@ -39,7 +44,6 @@ from app.werewolf.rules import (
     ACTION_WITCH_SAVE,
     MODEL_GROUP_VILLAGER,
     MODEL_GROUP_WEREWOLF,
-    LEGACY_WEREWOLF_ATTACK_RESOLUTION,
     REVEAL_POLICY_HIDDEN,
     ROLE_CATEGORY_CIVILIAN,
     ROLE_CATEGORY_GOD,

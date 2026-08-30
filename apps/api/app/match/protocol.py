@@ -5,15 +5,15 @@ import json
 import struct
 from typing import Any
 
-from app.v2.repository import V2PhaseTransition, V2PresentationIdentity
-from app.v2.contracts import V2DirectorSceneResponse
+from app.match.repository import PhaseTransition, PresentationIdentity
+from app.match.contracts import DirectorSceneResponse
 
 
 PROTOCOL_VERSION = 1
 AUDIO_MAGIC = b"LV2A"
 
 
-class V2LiveProtocolError(RuntimeError):
+class LiveProtocolError(RuntimeError):
     pass
 
 
@@ -34,7 +34,7 @@ def control_message(
     }
 
 
-def presentation_opened(identity: V2PresentationIdentity) -> dict[str, Any]:
+def presentation_opened(identity: PresentationIdentity) -> dict[str, Any]:
     return control_message(
         message_type="presentation.opened",
         game_id=identity.game_id,
@@ -50,7 +50,7 @@ def presentation_opened(identity: V2PresentationIdentity) -> dict[str, Any]:
     )
 
 
-def segment_committed(identity: V2PresentationIdentity) -> dict[str, Any]:
+def segment_committed(identity: PresentationIdentity) -> dict[str, Any]:
     return control_message(
         message_type="speech.segment_committed",
         game_id=identity.game_id,
@@ -81,7 +81,7 @@ def live_state(
     )
 
 
-def game_phase_changed(transition: V2PhaseTransition) -> dict[str, Any]:
+def game_phase_changed(transition: PhaseTransition) -> dict[str, Any]:
     return control_message(
         message_type="game.phase_changed",
         game_id=transition.game_id,
@@ -99,7 +99,7 @@ def director_scene_changed(
     *,
     game_id: str,
     run_id: str,
-    scene: V2DirectorSceneResponse,
+    scene: DirectorSceneResponse,
 ) -> dict[str, Any]:
     return control_message(
         message_type="director.scene_changed",
@@ -122,7 +122,7 @@ def night_progress(
         "night_resolved",
         "dawn_announced",
     }:
-        raise V2LiveProtocolError("invalid public night progress")
+        raise LiveProtocolError("invalid public night progress")
     return control_message(
         message_type="night.progress_changed",
         game_id=game_id,
@@ -238,7 +238,7 @@ def day_progress(
     total_count: int | None = None,
 ) -> dict[str, Any]:
     if (completed_count is None) != (total_count is None):
-        raise V2LiveProtocolError("day progress counts must be provided together")
+        raise LiveProtocolError("day progress counts must be provided together")
     if completed_count is not None and (
         type(completed_count) is not int
         or type(total_count) is not int
@@ -246,7 +246,7 @@ def day_progress(
         or total_count <= 0
         or completed_count > total_count
     ):
-        raise V2LiveProtocolError("invalid public day progress counts")
+        raise LiveProtocolError("invalid public day progress counts")
     fields: dict[str, Any] = {"round_no": round_no, "stage": stage}
     if completed_count is not None:
         fields.update(
@@ -264,7 +264,7 @@ def day_progress(
 
 
 def presentation_closed(
-    identity: V2PresentationIdentity,
+    identity: PresentationIdentity,
     *,
     final_chunk_index: int,
     final_sample_cursor: int,
@@ -287,7 +287,7 @@ def presentation_closed(
 
 
 def presentation_failed(
-    identity: V2PresentationIdentity,
+    identity: PresentationIdentity,
     *,
     failure_kind: str,
     failure_code: str,
@@ -308,7 +308,7 @@ def presentation_failed(
 
 
 def audio_frame(
-    identity: V2PresentationIdentity,
+    identity: PresentationIdentity,
     *,
     chunk_index: int,
     start_sample: int,
@@ -318,7 +318,7 @@ def audio_frame(
     is_final: bool = False,
 ) -> bytes:
     if sample_count <= 0 or len(pcm) != sample_count * 2:
-        raise V2LiveProtocolError("PCM payload does not match sample_count")
+        raise LiveProtocolError("PCM payload does not match sample_count")
     header = json.dumps(
         {
             "protocol_version": PROTOCOL_VERSION,
@@ -338,5 +338,5 @@ def audio_frame(
         separators=(",", ":"),
     ).encode()
     if len(header) > 0xFFFF:
-        raise V2LiveProtocolError("audio header is too large")
+        raise LiveProtocolError("audio header is too large")
     return AUDIO_MAGIC + struct.pack(">H", len(header)) + header + pcm

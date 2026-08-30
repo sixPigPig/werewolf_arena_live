@@ -32,20 +32,16 @@ describe("MobileAppShell", () => {
 
     const createRoomLink = within(navigation).getByRole("link", { name: "创建对局" });
     const playerAtlasLink = within(navigation).getByRole("link", { name: "玩家图鉴" });
-    const matchRecordLink = within(navigation).getByRole("link", { name: "对局记录" });
 
     expect(createRoomLink).toHaveAttribute("href", "/games");
     expect(playerAtlasLink).toHaveAttribute("href", "/players");
-    expect(matchRecordLink).toHaveAttribute("href", "/history");
+    expect(within(navigation).queryByRole("link", { name: "对局记录" })).toBeNull();
 
     expect(createRoomLink.querySelector("img")?.getAttribute("src")).toContain(
       "create-room-clean-alpha.png",
     );
     expect(playerAtlasLink.querySelector("img")?.getAttribute("src")).toContain(
       "player-atlas-clean-alpha.png",
-    );
-    expect(matchRecordLink.querySelector("img")?.getAttribute("src")).toContain(
-      "match-record-clean-alpha.png",
     );
     expect(navigation.querySelector(".mobile-tab-glow")).not.toBeInTheDocument();
   });

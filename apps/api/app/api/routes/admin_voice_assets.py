@@ -29,7 +29,7 @@ from app.api.schemas.admin_voice_assets import (
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.judge_voice_asset import JudgeVoiceGenerationJob
-from app.werewolf.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
+from app.shared.judge_voice_assets import DEFAULT_JUDGE_VOICE_ASSET_DIR
 
 
 router = APIRouter()

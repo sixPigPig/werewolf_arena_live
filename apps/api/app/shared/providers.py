@@ -17,8 +17,8 @@ from app.model_catalog.runtime import (
     runtime_configuration_for_model,
     runtime_default_model,
 )
-from app.werewolf.execution_budget import ModelCallOptions, ModelDeadlineExceeded
-from app.werewolf.streaming import extract_openai_chat_delta
+from app.shared.execution_budget import ModelCallOptions, ModelDeadlineExceeded
+from app.shared.openai_sse import extract_openai_chat_delta
 
 Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
 StreamTransport = Callable[[str, dict[str, str], dict[str, Any]], Any]
@@ -98,19 +98,6 @@ DEEPSEEK_CONFIG = OpenAICompatibleProviderConfig(
     default_model="deepseek-v4-flash",
     model_prefixes=("deepseek-",),
     response_format={"type": "json_object"},
-)
-
-QWEN_CONFIG = OpenAICompatibleProviderConfig(
-    name="Qwen",
-    env_prefix="DASHSCOPE",
-    default_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    default_model="qwen3.6-plus",
-    model_prefixes=("qwen",),
-    api_host_base_path="/compatible-mode/v1",
-    model_aliases={
-        "qwen3.6-plus": "qwen3.6-plus",
-        "qwen3.6-plus-preview": "qwen3.6-plus-preview",
-    },
 )
 
 OPENAI_COMPATIBLE_PROVIDER_CONFIGS = (
@@ -451,28 +438,6 @@ class ArkAgentPlanProvider(OpenAICompatibleProvider):
         )
 
 
-class QwenProvider(OpenAICompatibleProvider):
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        transport: Transport | None = None,
-        stream_transport: StreamTransport | None = None,
-        max_retries: int = 3,
-        sleep: Sleep = time.sleep,
-    ) -> None:
-        super().__init__(
-            config=QWEN_CONFIG,
-            api_key=api_key,
-            base_url=base_url,
-            transport=transport,
-            stream_transport=stream_transport,
-            max_retries=max_retries,
-            sleep=sleep,
-        )
-
-
 @dataclass(frozen=True)
 class ModelProviderRegistration:
     name: str
@@ -761,7 +726,6 @@ def _catalog_provider_name(config: OpenAICompatibleProviderConfig) -> str:
     return {
         "ARK_AGENT_PLAN": "agent_plan",
         "DEEPSEEK": "deepseek",
-        "DASHSCOPE": "qwen",
     }.get(config.env_prefix, config.env_prefix.lower())
 
 
@@ -802,13 +766,6 @@ def _http_error_message(
             " Check ARK_AGENT_PLAN_API_KEY/ARK_API_KEY and make sure "
             "ARK_AGENT_PLAN_BASE_URL/ARK_AGENT_PLAN_API_HOST points to the Agent Plan "
             "data plane, for example https://ark.cn-beijing.volces.com/api/plan/v3."
-        )
-    if config.env_prefix == "DASHSCOPE" and exc.code == 401:
-        message += (
-            " Check DASHSCOPE_API_KEY and make sure DASHSCOPE_BASE_URL/DASHSCOPE_API_HOST "
-            "matches the key region: Beijing=https://dashscope.aliyuncs.com/compatible-mode/v1, "
-            "Singapore=https://dashscope-intl.aliyuncs.com/compatible-mode/v1, "
-            "Virginia=https://dashscope-us.aliyuncs.com/compatible-mode/v1."
         )
     return message
 

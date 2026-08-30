@@ -6,16 +6,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.routes.games import get_tts_config
 from app.core.config import settings
-from app.werewolf.judge_voice_assets import (
+from app.shared.tts_config import get_tts_config
+from app.shared.judge_voice_assets import (
     DEFAULT_JUDGE_VOICE_ASSET_DIR,
     JudgeVoiceAsset,
     JudgeVoiceGenerationResult,
     generate_judge_voice_assets,
     list_judge_voice_assets,
 )
-from app.werewolf.volcengine_tts import VolcengineTtsClient, VolcengineTtsConfig
+from app.shared.volcengine_tts import VolcengineTtsClient, VolcengineTtsConfig
 
 
 router = APIRouter()

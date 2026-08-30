@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.werewolf import volcengine_tts as tts
-from app.werewolf import volcengine_tts_protocol as protocol
-from app.werewolf.volcengine_tts import (
+from app.shared import volcengine_tts as tts
+from app.shared import volcengine_tts_protocol as protocol
+from app.shared.volcengine_tts import (
     TtsSubtitleCue,
     TtsSubtitleTiming,
     VolcengineTtsConfig,

@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  extractV2ModelInputFactResult,
-  extractV2ModelInputFacts,
-} from "@/v2/game-records/model-input-facts";
+  extractModelInputFactResult,
+  extractModelInputFacts,
+} from "@/match/game-records/model-input-facts";
 
-describe("extractV2ModelInputFacts", () => {
+describe("extractModelInputFacts", () => {
   it("uses only backend-verified V13 expansion in retained source order", () => {
     const request = v13Request();
 
-    const result = extractV2ModelInputFactResult(request);
+    const result = extractModelInputFactResult(request);
 
     expect(result.status).toBe("supported");
     expect(result.modelContextSchemaVersion).toBe(13);
@@ -18,7 +18,7 @@ describe("extractV2ModelInputFacts", () => {
       ["472", 472],
     ]);
     expect(result.facts[1].summary).toBe("只能消费后端已验证展开的入选事件。");
-    expect(extractV2ModelInputFacts(request)).toEqual(result.facts);
+    expect(extractModelInputFacts(request)).toEqual(result.facts);
   });
 
   it("never expands Compact V7 defaults in the browser", () => {
@@ -27,7 +27,7 @@ describe("extractV2ModelInputFacts", () => {
       known_events_expansion_status: "unavailable",
     });
 
-    expect(extractV2ModelInputFactResult(request)).toEqual({
+    expect(extractModelInputFactResult(request)).toEqual({
       facts: [],
       modelContextSchemaVersion: 13,
       status: "unsupported_model_context_contract",
@@ -39,7 +39,7 @@ describe("extractV2ModelInputFacts", () => {
       [11, 4, 5],
       [12, 5, 6],
     ] as const) {
-      const result = extractV2ModelInputFactResult(
+      const result = extractModelInputFactResult(
         legacyRequest(schemaVersion, promptVersion, knownEventsVersion),
       );
       expect(result).toMatchObject({
@@ -75,7 +75,7 @@ describe("extractV2ModelInputFacts", () => {
     ];
 
     for (const request of cases) {
-      expect(extractV2ModelInputFactResult(request).status).toBe(
+      expect(extractModelInputFactResult(request).status).toBe(
         "unsupported_model_context_contract",
       );
     }
@@ -88,7 +88,7 @@ describe("extractV2ModelInputFacts", () => {
       },
     });
 
-    expect(extractV2ModelInputFactResult(request)).toEqual({
+    expect(extractModelInputFactResult(request)).toEqual({
       facts: [],
       modelContextSchemaVersion: 13,
       status: "unavailable",

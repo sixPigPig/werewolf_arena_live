@@ -14,7 +14,7 @@ from app.rule_sets.snapshots import (
 )
 from app.rule_sets.types import CompiledRuleSet
 from app.rule_sets.validation import normalize_rule_set_config
-from app.werewolf.rules import get_rule_set, rule_set_snapshot
+from app.shared.rules import get_rule_set, rule_set_snapshot
 
 
 PUBLISHED_AT: Final = datetime(2026, 7, 12, tzinfo=UTC)

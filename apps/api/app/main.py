@@ -9,9 +9,9 @@ from app.api.admin.errors import (
 )
 from app.api.router import api_router
 from app.core.config import settings
-from app.v2.live_runtime import build_v2_live_runtime
-from app.v2.router import god_view_router as api_v2_god_view_router
-from app.v2.router import public_router as api_v2_router
+from app.match.live_runtime import build_live_runtime
+from app.match.router import god_view_router as api_v2_god_view_router
+from app.match.router import public_router as api_v2_router
 
 
 def create_application() -> FastAPI:
@@ -28,12 +28,12 @@ def create_application() -> FastAPI:
     app.include_router(api_router, prefix=settings.api_v1_prefix.rstrip("/"))
     app.include_router(api_v2_router, prefix="/api/v2")
     app.include_router(api_v2_god_view_router, prefix="/api/v2")
-    app.state.v2_live_runtime = build_v2_live_runtime()
+    app.state.live_runtime = build_live_runtime()
 
-    async def close_v2_runtime() -> None:
-        await app.state.v2_live_runtime.aclose()
+    async def close_live_runtime() -> None:
+        await app.state.live_runtime.aclose()
 
-    app.router.add_event_handler("shutdown", close_v2_runtime)
+    app.router.add_event_handler("shutdown", close_live_runtime)
     return app
 
 

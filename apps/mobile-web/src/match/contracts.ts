@@ -1,4 +1,4 @@
-export type V2LiveState =
+export type LiveState =
   | "waiting_to_start"
   | "ready"
   | "generating"
@@ -9,26 +9,26 @@ export type V2LiveState =
   | "canceled"
   | "failed";
 
-export type V2ConfiguredAudioMode = "tts" | "text_only";
-export type V2AudioMode = V2ConfiguredAudioMode | "legacy_unknown";
-export type V2MatchStatus =
+export type ConfiguredAudioMode = "tts" | "text_only";
+export type AudioMode = ConfiguredAudioMode | "legacy_unknown";
+export type MatchStatus =
   | "waiting"
   | "running"
   | "completed"
   | "failed"
   | "canceled";
-export type V2ExecutionState = "unowned" | "owned" | "stale" | "stopped";
+export type ExecutionState = "unowned" | "owned" | "stale" | "stopped";
 
-export type V2RuntimeProjection = {
-  audio_mode: V2AudioMode;
-  match_status: V2MatchStatus;
-  execution_state: V2ExecutionState;
+export type RuntimeProjection = {
+  audio_mode: AudioMode;
+  match_status: MatchStatus;
+  execution_state: ExecutionState;
   winner: "villagers" | "werewolves" | null;
   completion_reason: string | null;
   completed_at: string | null;
 };
 
-export type V2GamePhase = {
+export type GamePhase = {
   phase_seq: number;
   phase_id: string;
   phase_state:
@@ -49,14 +49,14 @@ export type V2GamePhase = {
     | "failed";
 };
 
-export type V2MatchState = {
+export type MatchState = {
   round_no: number;
   sheriff_player_id: string | null;
   sheriff_badge_state: "disabled" | "pending" | "held" | "destroyed";
   winner: "villagers" | "werewolves" | null;
 };
 
-export type V2LobbyRuleSnapshot = {
+export type LobbyRuleSnapshot = {
   id: string;
   version: string;
   name: string;
@@ -100,7 +100,7 @@ export type V2LobbyRuleSnapshot = {
   is_default?: boolean;
 };
 
-export type V2LobbyPlayerSnapshot = {
+export type LobbyPlayerSnapshot = {
   seat: number;
   profile_id: string;
   name?: string | null;
@@ -123,7 +123,7 @@ export type V2LobbyPlayerSnapshot = {
   tags?: string[];
 };
 
-export type V2LobbyQualitySnapshot = {
+export type LobbyQualitySnapshot = {
   schema_version: 1;
   policy_mode: "observe" | "repair" | "enforce";
   player_count: number;
@@ -142,27 +142,27 @@ export type V2LobbyQualitySnapshot = {
   }>;
 };
 
-export type V2GameCreateRequest = {
+export type GameCreateRequest = {
   title: string;
-  audio_mode: V2ConfiguredAudioMode;
+  audio_mode: ConfiguredAudioMode;
   lobby_snapshot: {
     schema_version: 1;
     model_binding_mode: "profile_library";
-    rule_set: V2LobbyRuleSnapshot;
+    rule_set: LobbyRuleSnapshot;
     rule_set_revision_id: string | null;
     seed: number | null;
     max_rounds: number;
-    player_configs: V2LobbyPlayerSnapshot[];
-    lineup_quality_report: V2LobbyQualitySnapshot;
+    player_configs: LobbyPlayerSnapshot[];
+    lineup_quality_report: LobbyQualitySnapshot;
     allow_lineup_quality_warnings: boolean;
   };
 };
 
-export type V2GameCreateResponse = {
+export type GameCreateResponse = {
   game_id: string;
   run_id: string;
   status: "waiting_to_start";
-  audio_mode: V2ConfiguredAudioMode;
+  audio_mode: ConfiguredAudioMode;
   snapshot_url: string;
   websocket_url: string;
   director_snapshot_url: string;
@@ -172,7 +172,7 @@ export type V2GameCreateResponse = {
   god_view_access_token: string;
 };
 
-export type V2Presentation = {
+export type Presentation = {
   action_id: string;
   presentation_seq: number;
   presentation_id: string;
@@ -184,7 +184,7 @@ export type V2Presentation = {
   join_sample_cursor: number;
 };
 
-export type V2PublicPlayerSeat = {
+export type PublicPlayerSeat = {
   seat: number;
   player_id: string;
   display_name: string;
@@ -192,7 +192,7 @@ export type V2PublicPlayerSeat = {
   alive: boolean;
 };
 
-export type V2PublicRuleSnapshot = {
+export type PublicRuleSnapshot = {
   rule_id: string;
   name: string;
   version: string;
@@ -205,30 +205,30 @@ export type V2PublicRuleSnapshot = {
   first_night_last_words_enabled: boolean | null;
 };
 
-export type V2PublicRoleAssignmentStatus = {
+export type PublicRoleAssignmentStatus = {
   state: "sealed" | "unavailable";
   assigned_count: number;
 };
 
-export type V2LiveSnapshot = V2RuntimeProjection & {
+export type LiveSnapshot = RuntimeProjection & {
   protocol_version: 1;
   type: "live.snapshot";
   api_version: "v2";
   audience: "player_public";
   game_id: string;
   run_id: string;
-  live_state: V2LiveState;
-  game_phase: V2GamePhase;
-  match_state: V2MatchState | null;
+  live_state: LiveState;
+  game_phase: GamePhase;
+  match_state: MatchState | null;
   latest_presentation_seq: number;
   server_time: string;
-  public_rule: V2PublicRuleSnapshot | null;
-  public_players: V2PublicPlayerSeat[];
-  public_role_assignment: V2PublicRoleAssignmentStatus;
-  current_presentation: V2Presentation | null;
+  public_rule: PublicRuleSnapshot | null;
+  public_players: PublicPlayerSeat[];
+  public_role_assignment: PublicRoleAssignmentStatus;
+  current_presentation: Presentation | null;
 };
 
-export type V2GodViewPlayerIdentity = {
+export type GodViewPlayerIdentity = {
   seat: number;
   player_id: string;
   display_name: string;
@@ -239,7 +239,7 @@ export type V2GodViewPlayerIdentity = {
   death_cause: string | null;
 };
 
-export type V2DirectorSceneKind =
+export type DirectorSceneKind =
   | "opening"
   | "public_stage"
   | "nightfall"
@@ -251,65 +251,65 @@ export type V2DirectorSceneKind =
   | "dawn"
   | "terminal";
 
-export type V2DirectorScene = {
-  scene_kind: V2DirectorSceneKind;
+export type DirectorScene = {
+  scene_kind: DirectorSceneKind;
   action_id: string | null;
   action_type: string | null;
   ability_id: string | null;
   actor_player_id: string | null;
 };
 
-export type V2DirectorLiveSnapshot = V2RuntimeProjection & {
+export type DirectorLiveSnapshot = RuntimeProjection & {
   protocol_version: 1;
   type: "director.live_snapshot";
   api_version: "v2";
   audience: "spectator_directed";
   game_id: string;
   run_id: string;
-  live_state: V2LiveState;
-  game_phase: V2GamePhase;
-  match_state: V2MatchState | null;
+  live_state: LiveState;
+  game_phase: GamePhase;
+  match_state: MatchState | null;
   latest_presentation_seq: number;
   server_time: string;
-  rule: V2PublicRuleSnapshot | null;
-  players: V2GodViewPlayerIdentity[];
-  current_scene: V2DirectorScene;
-  current_presentation: V2Presentation | null;
+  rule: PublicRuleSnapshot | null;
+  players: GodViewPlayerIdentity[];
+  current_scene: DirectorScene;
+  current_presentation: Presentation | null;
 };
 
-export type V2GodViewIdentitySnapshot = V2RuntimeProjection & {
+export type GodViewIdentitySnapshot = RuntimeProjection & {
   protocol_version: 1;
   type: "god_view.identity_snapshot";
   api_version: "v2";
   audience: "spectator_god_view";
   game_id: string;
   run_id: string;
-  live_state: V2LiveState;
-  game_phase: V2GamePhase;
-  match_state: V2MatchState | null;
+  live_state: LiveState;
+  game_phase: GamePhase;
+  match_state: MatchState | null;
   server_time: string;
-  rule: V2PublicRuleSnapshot | null;
-  players: V2GodViewPlayerIdentity[];
+  rule: PublicRuleSnapshot | null;
+  players: GodViewPlayerIdentity[];
 };
 
-export type V2GodViewLiveSnapshot = V2RuntimeProjection & {
+export type GodViewLiveSnapshot = RuntimeProjection & {
   protocol_version: 1;
   type: "god_view.live_snapshot";
   api_version: "v2";
   audience: "spectator_god_view";
   game_id: string;
   run_id: string;
-  live_state: V2LiveState;
-  game_phase: V2GamePhase;
-  match_state: V2MatchState | null;
+  live_state: LiveState;
+  game_phase: GamePhase;
+  match_state: MatchState | null;
   latest_presentation_seq: number;
   server_time: string;
-  rule: V2PublicRuleSnapshot | null;
-  players: V2GodViewPlayerIdentity[];
-  current_presentation: V2Presentation | null;
+  rule: PublicRuleSnapshot | null;
+  players: GodViewPlayerIdentity[];
+  current_presentation: Presentation | null;
 };
 
-export type V2PresentationOpened = Omit<V2Presentation, "segment_index" | "subtitle_text" | "join_sample_cursor"> & {
+export type PresentationOpened = Omit<Presentation, "segment_index" | "subtitle_text" | "join_sample_cursor"> & {
   protocol_version: 1;
   type: "presentation.opened";
   game_id: string;
@@ -317,7 +317,7 @@ export type V2PresentationOpened = Omit<V2Presentation, "segment_index" | "subti
   server_time: string;
 };
 
-export type V2SegmentCommitted = {
+export type SegmentCommitted = {
   protocol_version: 1;
   type: "speech.segment_committed";
   game_id: string;
@@ -331,29 +331,29 @@ export type V2SegmentCommitted = {
   text: string;
 };
 
-export type V2StateChanged = {
+export type StateChanged = {
   protocol_version: 1;
   type: "live.state_changed";
   game_id: string;
   run_id: string;
   server_time: string;
-  live_state: V2LiveState;
+  live_state: LiveState;
   reason: string | null;
 };
 
-export type V2GamePhaseChanged = {
+export type GamePhaseChanged = {
   protocol_version: 1;
   type: "game.phase_changed";
   game_id: string;
   run_id: string;
   server_time: string;
   phase_seq: number;
-  previous_phase_id: V2GamePhase["phase_id"];
-  phase_id: V2GamePhase["phase_id"];
-  phase_state: V2GamePhase["phase_state"];
+  previous_phase_id: GamePhase["phase_id"];
+  phase_id: GamePhase["phase_id"];
+  phase_state: GamePhase["phase_state"];
 };
 
-export type V2NightProgress = {
+export type NightProgress = {
   protocol_version: 1;
   type: "night.progress_changed";
   game_id: string;
@@ -363,7 +363,7 @@ export type V2NightProgress = {
   latest_presentation_seq: number;
 };
 
-export type V2DirectorSceneChanged = V2DirectorScene & {
+export type DirectorSceneChanged = DirectorScene & {
   protocol_version: 1;
   type: "director.scene_changed";
   game_id: string;
@@ -371,7 +371,7 @@ export type V2DirectorSceneChanged = V2DirectorScene & {
   server_time: string;
 };
 
-export type V2AbilityProgress = {
+export type AbilityProgress = {
   protocol_version: 1;
   type: "ability.progress_changed";
   game_id: string;
@@ -384,7 +384,7 @@ export type V2AbilityProgress = {
   round_no: number | null;
 };
 
-export type V2DawnResult = {
+export type DawnResult = {
   protocol_version: 1;
   type: "dawn.result_announced";
   game_id: string;
@@ -393,7 +393,7 @@ export type V2DawnResult = {
   dead_player_ids: string[];
 };
 
-export type V2GodViewNightResolved = {
+export type GodViewNightResolved = {
   protocol_version: 1;
   type: "god_view.night_resolved";
   game_id: string;
@@ -403,7 +403,7 @@ export type V2GodViewNightResolved = {
   attack_prevented_by: string | null;
 };
 
-export type V2PlayerStateChanged = {
+export type PlayerStateChanged = {
   protocol_version: 1;
   type: "player.state_changed";
   game_id: string;
@@ -414,7 +414,7 @@ export type V2PlayerStateChanged = {
   cause: string | null;
 };
 
-export type V2MatchStateChanged = V2MatchState & {
+export type MatchStateChanged = MatchState & {
   protocol_version: 1;
   type: "match.state_changed";
   game_id: string;
@@ -422,7 +422,7 @@ export type V2MatchStateChanged = V2MatchState & {
   server_time: string;
 };
 
-export type V2DayProgress = {
+export type DayProgress = {
   protocol_version: 1;
   type: "day.progress_changed";
   game_id: string;
@@ -434,7 +434,7 @@ export type V2DayProgress = {
   total_count: number | null;
 };
 
-export type V2PresentationClosed = {
+export type PresentationClosed = {
   protocol_version: 1;
   type: "presentation.closed";
   game_id: string;
@@ -450,7 +450,7 @@ export type V2PresentationClosed = {
   result: "audio_drained_and_voice_saved";
 };
 
-export type V2PresentationFailed = {
+export type PresentationFailed = {
   protocol_version: 1;
   type: "presentation.failed";
   game_id: string;
@@ -464,26 +464,26 @@ export type V2PresentationFailed = {
   failure_code: string;
 };
 
-export type V2ServerMessage =
-  | V2LiveSnapshot
-  | V2DirectorLiveSnapshot
-  | V2GodViewLiveSnapshot
-  | V2DirectorSceneChanged
-  | V2PresentationOpened
-  | V2SegmentCommitted
-  | V2StateChanged
-  | V2GamePhaseChanged
-  | V2NightProgress
-  | V2AbilityProgress
-  | V2DawnResult
-  | V2GodViewNightResolved
-  | V2PlayerStateChanged
-  | V2MatchStateChanged
-  | V2DayProgress
-  | V2PresentationClosed
-  | V2PresentationFailed;
+export type ServerMessage =
+  | LiveSnapshot
+  | DirectorLiveSnapshot
+  | GodViewLiveSnapshot
+  | DirectorSceneChanged
+  | PresentationOpened
+  | SegmentCommitted
+  | StateChanged
+  | GamePhaseChanged
+  | NightProgress
+  | AbilityProgress
+  | DawnResult
+  | GodViewNightResolved
+  | PlayerStateChanged
+  | MatchStateChanged
+  | DayProgress
+  | PresentationClosed
+  | PresentationFailed;
 
-export type V2AudioFrame = {
+export type AudioFrame = {
   header: {
     protocol_version: 1;
     action_id: string;
@@ -502,7 +502,7 @@ export type V2AudioFrame = {
   pcm: ArrayBuffer;
 };
 
-export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse {
+export function parseGameCreateResponse(value: unknown): GameCreateResponse {
   const record = exactObject(value, [
     "game_id",
     "run_id",
@@ -531,23 +531,23 @@ export function parseV2GameCreateResponse(value: unknown): V2GameCreateResponse 
   };
 }
 
-export function parseV2LiveSnapshotResponse(value: unknown): V2LiveSnapshot {
-  const message = parseV2ServerMessage(JSON.stringify(value));
+export function parseLiveSnapshotResponse(value: unknown): LiveSnapshot {
+  const message = parseServerMessage(JSON.stringify(value));
   if (message.type !== "live.snapshot") throw invalid();
   return message;
 }
 
-export function parseV2DirectorLiveSnapshotResponse(
+export function parseDirectorLiveSnapshotResponse(
   value: unknown,
-): V2DirectorLiveSnapshot {
-  const message = parseV2ServerMessage(JSON.stringify(value));
+): DirectorLiveSnapshot {
+  const message = parseServerMessage(JSON.stringify(value));
   if (message.type !== "director.live_snapshot") throw invalid();
   return message;
 }
 
-export function parseV2GodViewIdentitySnapshotResponse(
+export function parseGodViewIdentitySnapshotResponse(
   value: unknown,
-): V2GodViewIdentitySnapshot {
+): GodViewIdentitySnapshot {
   const record = exactObject(value, [
     "protocol_version",
     "type",
@@ -592,7 +592,7 @@ export function parseV2GodViewIdentitySnapshotResponse(
   };
 }
 
-export function parseV2ServerMessage(raw: string): V2ServerMessage {
+export function parseServerMessage(raw: string): ServerMessage {
   const value = object(JSON.parse(raw));
   if (integer(value.protocol_version, 1) !== 1) throw invalid();
   const type = text(value.type);
@@ -943,7 +943,7 @@ export function parseV2ServerMessage(raw: string): V2ServerMessage {
   throw invalid();
 }
 
-export function decodeV2AudioFrame(value: ArrayBuffer): V2AudioFrame {
+export function decodeAudioFrame(value: ArrayBuffer): AudioFrame {
   const bytes = new Uint8Array(value);
   if (bytes.length < 7 || new TextDecoder().decode(bytes.slice(0, 4)) !== "LV2A") {
     throw invalid();
@@ -974,7 +974,7 @@ export function decodeV2AudioFrame(value: ArrayBuffer): V2AudioFrame {
   return { header, pcm };
 }
 
-function presentation(value: unknown): V2Presentation {
+function presentation(value: unknown): Presentation {
   const record = object(value);
   return {
     action_id: text(record.action_id),
@@ -989,7 +989,7 @@ function presentation(value: unknown): V2Presentation {
   };
 }
 
-function gamePhase(value: unknown): V2GamePhase {
+function gamePhase(value: unknown): GamePhase {
   const record = exactObject(value, ["phase_seq", "phase_id", "phase_state"]);
   return {
     phase_seq: integer(record.phase_seq, 0),
@@ -998,7 +998,7 @@ function gamePhase(value: unknown): V2GamePhase {
   };
 }
 
-function matchState(value: unknown): V2MatchState {
+function matchState(value: unknown): MatchState {
   const record = object(value);
   return {
     round_no: integer(record.round_no, 1),
@@ -1017,7 +1017,7 @@ function matchState(value: unknown): V2MatchState {
   };
 }
 
-function parseActor(value: unknown): V2Presentation["actor"] {
+function parseActor(value: unknown): Presentation["actor"] {
   const record = object(value);
   return {
     kind: literal(record.kind, ["judge", "player"]),
@@ -1025,7 +1025,7 @@ function parseActor(value: unknown): V2Presentation["actor"] {
   };
 }
 
-function publicPlayerSeats(value: unknown): V2PublicPlayerSeat[] {
+function publicPlayerSeats(value: unknown): PublicPlayerSeat[] {
   if (!Array.isArray(value) || value.length > 24) throw invalid();
   const players = value.map((item) => {
     const record = exactObject(item, [
@@ -1055,7 +1055,7 @@ function publicPlayerSeats(value: unknown): V2PublicPlayerSeat[] {
   return players;
 }
 
-function publicRule(value: unknown): V2PublicRuleSnapshot {
+function publicRule(value: unknown): PublicRuleSnapshot {
   const record = exactObject(value, [
     "rule_id",
     "name",
@@ -1102,7 +1102,7 @@ function publicRule(value: unknown): V2PublicRuleSnapshot {
   };
 }
 
-function publicRoleAssignmentStatus(value: unknown): V2PublicRoleAssignmentStatus {
+function publicRoleAssignmentStatus(value: unknown): PublicRoleAssignmentStatus {
   const record = exactObject(value, ["state", "assigned_count"]);
   const state = literal(record.state, ["sealed", "unavailable"]);
   const assignedCount = boundedInteger(record.assigned_count, 0, 24);
@@ -1113,7 +1113,7 @@ function publicRoleAssignmentStatus(value: unknown): V2PublicRoleAssignmentStatu
   return { state, assigned_count: assignedCount };
 }
 
-function directorScene(value: unknown): V2DirectorScene {
+function directorScene(value: unknown): DirectorScene {
   const record = exactObject(value, [
     "scene_kind",
     "action_id",
@@ -1142,7 +1142,7 @@ function directorScene(value: unknown): V2DirectorScene {
   };
 }
 
-function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {
+function godViewPlayers(value: unknown): GodViewPlayerIdentity[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 24) throw invalid();
   const players = value.map((item) => {
     const record = exactObject(item, [
@@ -1186,10 +1186,10 @@ function godViewPlayers(value: unknown): V2GodViewPlayerIdentity[] {
 
 function runtimeProjection(
   record: Record<string, unknown>,
-  currentLiveState: V2LiveState,
-  phase: V2GamePhase,
-  match: V2MatchState | null,
-): V2RuntimeProjection {
+  currentLiveState: LiveState,
+  phase: GamePhase,
+  match: MatchState | null,
+): RuntimeProjection {
   const audioMode =
     record.audio_mode === undefined
       ? "legacy_unknown"
@@ -1203,7 +1203,7 @@ function runtimeProjection(
   if (winner !== null && match?.winner != null && match.winner !== winner) {
     throw invalid();
   }
-  const derivedMatchStatus: V2MatchStatus =
+  const derivedMatchStatus: MatchStatus =
     phase.phase_state === "game_completed" && winner !== null
       ? "completed"
       : currentLiveState === "failed" || phase.phase_state === "failed"
@@ -1242,7 +1242,7 @@ function runtimeProjection(
   };
 }
 
-function liveState(value: unknown): V2LiveState {
+function liveState(value: unknown): LiveState {
   return literal(value, [
     "waiting_to_start",
     "ready",
@@ -1256,7 +1256,7 @@ function liveState(value: unknown): V2LiveState {
   ]);
 }
 
-function phaseId(value: unknown): V2GamePhase["phase_id"] {
+function phaseId(value: unknown): GamePhase["phase_id"] {
   const result = text(value);
   if (
     result !== "legacy" &&
@@ -1271,7 +1271,7 @@ function phaseId(value: unknown): V2GamePhase["phase_id"] {
   return result;
 }
 
-function phaseState(value: unknown): V2GamePhase["phase_state"] {
+function phaseState(value: unknown): GamePhase["phase_state"] {
   return literal(value, [
     "legacy_frozen",
     "opening_ready",

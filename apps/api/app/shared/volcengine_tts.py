@@ -14,7 +14,7 @@ from typing import Any
 
 import websockets
 
-from app.werewolf import volcengine_tts_protocol as protocol
+from app.shared import volcengine_tts_protocol as protocol
 
 logger = logging.getLogger(__name__)
 

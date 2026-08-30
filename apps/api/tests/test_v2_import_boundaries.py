@@ -4,18 +4,20 @@ import ast
 from pathlib import Path
 
 
-V2_ROOT = Path(__file__).parents[1] / "app" / "v2"
+MATCH_ROOT = Path(__file__).parents[1] / "app" / "match"
 FORBIDDEN_PREFIXES = (
     "app.werewolf",
+    "app.v2",
     "app.models.game_session",
     "app.models.live",
     "app.api.routes.games",
+    "app.api.routes.lobby",
 )
 
 
 def test_v2_business_code_does_not_import_old_game_live_or_replay_modules() -> None:
     violations: list[str] = []
-    for path in sorted(V2_ROOT.glob("*.py")):
+    for path in sorted(MATCH_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             modules: list[str] = []
@@ -25,5 +27,5 @@ def test_v2_business_code_does_not_import_old_game_live_or_replay_modules() -> N
                 modules = [node.module]
             for module in modules:
                 if module.startswith(FORBIDDEN_PREFIXES):
-                    violations.append(f"{path.name}:{node.lineno} imports {module}")
+                    violations.append(f"{path.relative_to(MATCH_ROOT)}:{node.lineno} imports {module}")
     assert violations == []

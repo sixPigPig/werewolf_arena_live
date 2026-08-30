@@ -1,29 +1,29 @@
 import { AdminApiError } from "@/api/problem-details";
 import type {
-  V2GameControlResult,
-  V2GameEventPage,
-  V2GamePresentation,
-  V2GameRecordEvent,
-  V2GameRecordList,
-  V2GameRecordListItem,
-  V2GameRecordSummary,
-  V2GameRun,
-  V2ModelRequest,
-  V2ModelActionRetryResult,
-  V2ModelRequestAudienceSource,
-  V2ModelFailureImpact,
-  V2ModelFailureResolution,
-  V2ModelRequestPage,
-  V2ModelRequestSummary,
-  V2OutputEnforcementAudit,
-  V2PlayerIdentity,
-  V2PromptProjection,
-  V2VoiceAsset,
-} from "@/v2/game-records/types";
+  GameControlResult,
+  GameEventPage,
+  GamePresentation,
+  GameRecordEvent,
+  GameRecordList,
+  GameRecordListItem,
+  GameRecordSummary,
+  GameRun,
+  ModelRequest,
+  ModelActionRetryResult,
+  ModelRequestAudienceSource,
+  ModelFailureImpact,
+  ModelFailureResolution,
+  ModelRequestPage,
+  ModelRequestSummary,
+  OutputEnforcementAudit,
+  PlayerIdentity,
+  PromptProjection,
+  VoiceAsset,
+} from "@/match/game-records/types";
 
-export function parseV2GameControlResult(
+export function parseGameControlResult(
   value: unknown,
-): V2GameControlResult {
+): GameControlResult {
   const record = object(value);
   return {
     action: oneOf(record.action, ["stop"] as const),
@@ -35,9 +35,9 @@ export function parseV2GameControlResult(
   };
 }
 
-export function parseV2ModelActionRetryResult(
+export function parseModelActionRetryResult(
   value: unknown,
-): V2ModelActionRetryResult {
+): ModelActionRetryResult {
   const record = object(value);
   return {
     action: oneOf(record.action, ["retry_model_action"] as const),
@@ -49,7 +49,7 @@ export function parseV2ModelActionRetryResult(
   };
 }
 
-export function parseV2GameRecordList(value: unknown): V2GameRecordList {
+export function parseGameRecordList(value: unknown): GameRecordList {
   const record = object(value);
   const pagination = object(record.pagination);
   return {
@@ -63,7 +63,7 @@ export function parseV2GameRecordList(value: unknown): V2GameRecordList {
   };
 }
 
-export function parseV2GameRecordSummary(value: unknown): V2GameRecordSummary {
+export function parseGameRecordSummary(value: unknown): GameRecordSummary {
   const record = object(value);
   return {
     ...parseListItem(record),
@@ -87,29 +87,29 @@ export function parseV2GameRecordSummary(value: unknown): V2GameRecordSummary {
   };
 }
 
-export function parseV2GameEventPage(value: unknown): V2GameEventPage {
+export function parseGameEventPage(value: unknown): GameEventPage {
   const record = object(value);
   return {
-    items: array(record.items).map(parseV2GameRecordEvent),
+    items: array(record.items).map(parseGameRecordEvent),
     after_record_seq: integer(record.after_record_seq, 0),
     next_after_record_seq: integer(record.next_after_record_seq, 0),
     has_more: boolean(record.has_more),
   };
 }
 
-export function parseV2ModelRequestPage(
+export function parseModelRequestPage(
   value: unknown,
-): V2ModelRequestPage {
+): ModelRequestPage {
   const record = object(value);
   return {
-    items: array(record.items).map(parseV2ModelRequestSummary),
+    items: array(record.items).map(parseModelRequestSummary),
     after_record_seq: integer(record.after_record_seq, 0),
     next_after_record_seq: integer(record.next_after_record_seq, 0),
     has_more: boolean(record.has_more),
   };
 }
 
-function parsePlayerIdentity(value: unknown): V2PlayerIdentity {
+function parsePlayerIdentity(value: unknown): PlayerIdentity {
   const record = object(value);
   return {
     seat: integer(record.seat, 1),
@@ -123,7 +123,7 @@ function parsePlayerIdentity(value: unknown): V2PlayerIdentity {
   };
 }
 
-function parseListItem(value: unknown): V2GameRecordListItem {
+function parseListItem(value: unknown): GameRecordListItem {
   const record = object(value);
   return {
     game_id: text(record.game_id),
@@ -156,7 +156,7 @@ function parseListItem(value: unknown): V2GameRecordListItem {
   };
 }
 
-function parseRun(value: unknown): V2GameRun {
+function parseRun(value: unknown): GameRun {
   const record = object(value);
   return {
     run_id: text(record.run_id),
@@ -172,9 +172,9 @@ function parseRun(value: unknown): V2GameRun {
   };
 }
 
-export function parseV2GameRecordEvent(
+export function parseGameRecordEvent(
   value: unknown,
-): V2GameRecordEvent {
+): GameRecordEvent {
   const record = object(value);
   return {
     event_id: integer(record.event_id, 1),
@@ -187,7 +187,7 @@ export function parseV2GameRecordEvent(
   };
 }
 
-function parsePresentation(value: unknown): V2GamePresentation {
+function parsePresentation(value: unknown): GamePresentation {
   const record = object(value);
   return {
     presentation_seq: integer(record.presentation_seq, 1),
@@ -210,7 +210,7 @@ function parsePresentation(value: unknown): V2GamePresentation {
   };
 }
 
-function parseVoiceAsset(value: unknown): V2VoiceAsset {
+function parseVoiceAsset(value: unknown): VoiceAsset {
   const record = object(value);
   return {
     voice_asset_id: text(record.voice_asset_id),
@@ -234,9 +234,9 @@ function parseVoiceAsset(value: unknown): V2VoiceAsset {
   };
 }
 
-export function parseV2ModelRequestSummary(
+export function parseModelRequestSummary(
   value: unknown,
-): V2ModelRequestSummary {
+): ModelRequestSummary {
   const record = object(value);
   const audience = text(record.audience);
   const storedAudience =
@@ -259,7 +259,7 @@ export function parseV2ModelRequestSummary(
     record.model_view_selector_version === undefined
       ? null
       : nullableInteger(record.model_view_selector_version, 0);
-  const audienceSource: V2ModelRequestAudienceSource =
+  const audienceSource: ModelRequestAudienceSource =
     record.audience_source === undefined
       ? "legacy_unknown"
       : oneOf(
@@ -273,7 +273,7 @@ export function parseV2ModelRequestSummary(
             "legacy_unknown",
           ] as const,
         );
-  const failureResolution: V2ModelFailureResolution | null =
+  const failureResolution: ModelFailureResolution | null =
     record.failure_resolution === undefined
       ? record.failure_code === null || record.failure_code === undefined
         ? null
@@ -299,7 +299,7 @@ export function parseV2ModelRequestSummary(
     "skipped",
     "canceled",
   ] as const);
-  const failureImpact: V2ModelFailureImpact | null =
+  const failureImpact: ModelFailureImpact | null =
     record.failure_impact === undefined
       ? status === "failed"
         ? "operational_failure"
@@ -771,7 +771,7 @@ function parsePromptProjection(
     promptSchemaVersion: number | null;
     promptTemplateVersion: number | null;
   },
-): V2PromptProjection {
+): PromptProjection {
   const projection = object(value);
   const modelContextSchemaVersion = contract.modelContextSchemaVersion;
   const v13Contract =
@@ -964,7 +964,7 @@ function sumRecordValues(value: Record<string, number>): number {
   return Object.values(value).reduce((total, count) => total + count, 0);
 }
 
-function parseOutputEnforcement(value: unknown): V2OutputEnforcementAudit {
+function parseOutputEnforcement(value: unknown): OutputEnforcementAudit {
   const enforcement = object(value);
   return {
     requested:
@@ -1032,10 +1032,10 @@ function validateOptionalInteger(
   integer(value, minimum);
 }
 
-export function parseV2ModelRequest(value: unknown): V2ModelRequest {
+export function parseModelRequest(value: unknown): ModelRequest {
   const record = object(value);
   return {
-    ...parseV2ModelRequestSummary(record),
+    ...parseModelRequestSummary(record),
     request_payload:
       record.request_payload === null ? null : object(record.request_payload),
     expanded_known_events:

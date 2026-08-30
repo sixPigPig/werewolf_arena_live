@@ -54,22 +54,10 @@ export default function SettingsPage() {
         />
         <SettingsSection
           rows={[
-            ["租约", `${data.live_runs.lease_seconds} 秒`],
-            ["心跳", `${data.live_runs.heartbeat_seconds} 秒`],
-            ["事件轮询", `${data.live_runs.event_poll_seconds} 秒`],
-            ["API 前缀", <Tag>{data.api_prefix}</Tag>],
-          ]}
-          title="运行协调"
-        />
-        <SettingsSection
-          rows={[
             ["语音轮询", `${data.workers.judge_voice_poll_seconds} 秒`],
             ["语音心跳", `${data.workers.judge_voice_heartbeat_seconds} 秒`],
             ["语音探针窗口", `${data.workers.judge_voice_probe_max_age_seconds} 秒`],
-            ["Reaper 轮询", `${data.workers.reaper_poll_seconds} 秒`],
-            ["失联宽限", `${data.workers.reaper_stale_grace_seconds} 秒`],
-            ["最大恢复次数", String(data.workers.reaper_max_attempts)],
-            ["Reaper 探针窗口", `${data.workers.reaper_probe_max_age_seconds} 秒`],
+            ["API 前缀", <Tag>{data.api_prefix}</Tag>],
           ]}
           title="持久 Worker"
         />

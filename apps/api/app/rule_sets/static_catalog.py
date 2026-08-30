@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.rule_sets.errors import RuleRevisionChanged, RuleSetNotFound
 from app.rule_sets.snapshots import resolve_rule_set_snapshot
 from app.rule_sets.types import CompiledRuleSet
-from app.werewolf.rules import (
+from app.shared.rules import (
     OFFICIAL_RULE_SETS,
     freeze_rule_set_snapshot,
     rule_set_snapshot,

@@ -2,22 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import {
-  fetchV2GodViewIdentitySnapshot,
-  resolveV2GodViewWebSocketUrl,
+  fetchGodViewIdentitySnapshot,
+  resolveGodViewWebSocketUrl,
 } from "../api";
 import {
-  decodeV2AudioFrame,
-  parseV2ServerMessage,
-  type V2GodViewIdentitySnapshot,
-  type V2GodViewLiveSnapshot,
-  type V2GamePhase,
-  type V2DayProgress,
-  type V2LiveState,
-  type V2Presentation,
-  type V2AbilityProgress,
-  type V2RuntimeProjection,
+  decodeAudioFrame,
+  parseServerMessage,
+  type GodViewIdentitySnapshot,
+  type GodViewLiveSnapshot,
+  type GamePhase,
+  type DayProgress,
+  type LiveState,
+  type Presentation,
+  type AbilityProgress,
+  type RuntimeProjection,
 } from "../contracts";
-import { V2PcmPlayer } from "../V2PcmPlayer";
+import { PcmPlayer } from "../PcmPlayer";
 import {
   awaitingObservationLabel,
   effectiveMatchStatus,
@@ -34,7 +34,7 @@ const GOD_VIEW_WEBSOCKET_SUBPROTOCOL = "live-v2-god-view";
 
 type LoadState = "loading" | "ready" | "failed" | "denied";
 type ConnectionState = "idle" | "connecting" | "connected" | "failed";
-type GodViewSnapshot = V2GodViewIdentitySnapshot | V2GodViewLiveSnapshot;
+type GodViewSnapshot = GodViewIdentitySnapshot | GodViewLiveSnapshot;
 
 export function GodViewPage() {
   const { gameId = "" } = useParams();
@@ -42,24 +42,24 @@ export function GodViewPage() {
   const hashToken = godViewAccessTokenFromHash(location.hash);
   const accessToken = hashToken ?? readGodViewAccessToken(gameId);
   const socketRef = useRef<WebSocket | null>(null);
-  const playerRef = useRef<V2PcmPlayer | null>(null);
-  const presentationRef = useRef<V2Presentation | null>(null);
+  const playerRef = useRef<PcmPlayer | null>(null);
+  const presentationRef = useRef<Presentation | null>(null);
   const terminalRef = useRef(false);
   const [loadState, setLoadState] = useState<LoadState>(
     accessToken ? "loading" : "denied",
   );
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [snapshot, setSnapshot] = useState<GodViewSnapshot | null>(null);
-  const [liveState, setLiveState] = useState<V2LiveState | null>(null);
-  const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
+  const [liveState, setLiveState] = useState<LiveState | null>(null);
+  const [gamePhase, setGamePhase] = useState<GamePhase | null>(null);
   const [runtimeProjection, setRuntimeProjection] =
-    useState<V2RuntimeProjection | null>(null);
+    useState<RuntimeProjection | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
-  const [presentation, setPresentation] = useState<V2Presentation | null>(null);
+  const [presentation, setPresentation] = useState<Presentation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
-  const [abilityProgress, setAbilityProgress] = useState<V2AbilityProgress[]>([]);
-  const [dayProgress, setDayProgress] = useState<V2DayProgress | null>(null);
+  const [abilityProgress, setAbilityProgress] = useState<AbilityProgress[]>([]);
+  const [dayProgress, setDayProgress] = useState<DayProgress | null>(null);
 
   useEffect(() => {
     if (hashToken) saveGodViewAccessToken(gameId, hashToken);
@@ -68,7 +68,7 @@ export function GodViewPage() {
   useEffect(() => {
     if (!accessToken) return;
     let active = true;
-    void fetchV2GodViewIdentitySnapshot(gameId, accessToken)
+    void fetchGodViewIdentitySnapshot(gameId, accessToken)
       .then((value) => {
         if (!active) return;
         setSnapshot(value);
@@ -116,10 +116,10 @@ export function GodViewPage() {
 
     try {
       const audioEnabled = runtimeProjection?.audio_mode === "tts";
-      const player = audioEnabled ? new V2PcmPlayer() : null;
+      const player = audioEnabled ? new PcmPlayer() : null;
       if (player) await player.unlock();
       playerRef.current = player;
-      const socket = new WebSocket(resolveV2GodViewWebSocketUrl(gameId), [
+      const socket = new WebSocket(resolveGodViewWebSocketUrl(gameId), [
         GOD_VIEW_WEBSOCKET_SUBPROTOCOL,
         accessToken,
       ]);
@@ -140,7 +140,7 @@ export function GodViewPage() {
       socket.onmessage = (event) => {
         try {
           if (typeof event.data === "string") {
-            const message = parseV2ServerMessage(event.data);
+            const message = parseServerMessage(event.data);
             setRunId(message.run_id);
             if (message.type === "god_view.live_snapshot") {
               setSnapshot(message);
@@ -322,7 +322,7 @@ export function GodViewPage() {
               throw new Error("上帝视角收到普通观众黎明投影，连接已关闭");
             }
             if (message.type === "presentation.opened") {
-              const current: V2Presentation = {
+              const current: Presentation = {
                 action_id: message.action_id,
                 presentation_seq: message.presentation_seq,
                 presentation_id: message.presentation_id,
@@ -381,7 +381,7 @@ export function GodViewPage() {
           if (!player) {
             throw new Error("未确认启用语音的对局收到意外音频帧");
           }
-          player.push(decodeV2AudioFrame(event.data));
+          player.push(decodeAudioFrame(event.data));
         } catch (reason) {
           terminalRef.current = true;
           player?.stop();
@@ -620,11 +620,11 @@ export function GodViewPage() {
 }
 
 function liveLabel(
-  state: V2LiveState | null,
-  phase: V2GamePhase | null,
+  state: LiveState | null,
+  phase: GamePhase | null,
   match: GodViewSnapshot["match_state"] | null,
-  runtime: V2RuntimeProjection | null,
-  dayProgress: V2DayProgress | null,
+  runtime: RuntimeProjection | null,
+  dayProgress: DayProgress | null,
   presentationActive: boolean,
 ): string {
   const matchStatus = effectiveMatchStatus(runtime, phase, match, state);
@@ -700,7 +700,7 @@ function liveLabel(
   return "正在读取当前实时状态...";
 }
 
-function godDayProgressLabel(progress: V2DayProgress | null): string {
+function godDayProgressLabel(progress: DayProgress | null): string {
   if (progress?.stage === "pre_exile_special_action") {
     return "正在后台确认特殊行动，未公开任何玩家选择...";
   }
@@ -727,11 +727,11 @@ function abilityLabel(value: string): string {
   return labels[value] ?? value;
 }
 
-function isNightPhase(phase: V2GamePhase | null): boolean {
+function isNightPhase(phase: GamePhase | null): boolean {
   return phase?.phase_id === "first_night" || phase?.phase_id.startsWith("night_") === true;
 }
 
-function isDayPhase(phase: V2GamePhase | null): boolean {
+function isDayPhase(phase: GamePhase | null): boolean {
   return phase?.phase_id.startsWith("day_") === true;
 }
 

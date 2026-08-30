@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.api.schemas.common import PaginationResponse
 
-from app.werewolf.player_presets import (
+from app.shared.player_presets import (
     is_valid_appearance,
     is_valid_personality,
     is_valid_strategy,

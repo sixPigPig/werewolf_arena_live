@@ -18,8 +18,8 @@ from app.player_profiles.errors import (
     PlayerProfileValidationError,
     PlayerProfileVersionConflict,
 )
-from app.werewolf.player_avatar_assets import resolve_profile_avatar_reference
-from app.werewolf.player_presets import (
+from app.shared.player_avatar_assets import resolve_profile_avatar_reference
+from app.shared.player_presets import (
     default_personality_text,
     is_valid_appearance,
     is_valid_personality,

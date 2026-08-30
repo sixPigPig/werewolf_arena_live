@@ -7,7 +7,26 @@ from pydantic import ValidationError
 
 from app.api.schemas.admin_rule_sets import AdminRuleContractResponse
 from app.rule_sets import contracts
-from app.werewolf.rules import CLASSIC_12_SEER_WITCH_HUNTER_IDIOT, CLASSIC_8
+from app.rule_sets.types import (
+    LEGACY_WEREWOLF_ATTACK_RESOLUTION,
+    WEREWOLF_ATTACK_RESOLUTIONS,
+)
+from app.shared import rules as werewolf_rules
+from app.shared.rules import CLASSIC_12_SEER_WITCH_HUNTER_IDIOT, CLASSIC_8
+
+
+def test_werewolf_attack_resolutions_agree_between_catalog_and_engine() -> None:
+    assert werewolf_rules.LEGACY_WEREWOLF_ATTACK_RESOLUTION == (
+        LEGACY_WEREWOLF_ATTACK_RESOLUTION
+    )
+    assert werewolf_rules.DEFAULT_WEREWOLF_ATTACK_RESOLUTION in (
+        WEREWOLF_ATTACK_RESOLUTIONS
+    )
+    assert {
+        werewolf_rules.WEREWOLF_ATTACK_RESOLUTION_PLURALITY_ROTATING_TIEBREAK,
+        werewolf_rules.WEREWOLF_ATTACK_RESOLUTION_PLURALITY_SEEDED_RANDOM,
+        werewolf_rules.WEREWOLF_ATTACK_RESOLUTION_UNANIMOUS_NO_ATTACK,
+    } == set(WEREWOLF_ATTACK_RESOLUTIONS)
 
 
 def test_admin_rule_contract_projects_code_owned_clause_coverage() -> None:

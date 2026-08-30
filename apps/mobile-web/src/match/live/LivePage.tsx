@@ -2,28 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import {
-  fetchV2LiveSnapshot,
-  resolveV2DirectorWebSocketUrl,
-  resolveV2WebSocketUrl,
+  fetchLiveSnapshot,
+  resolveDirectorWebSocketUrl,
+  resolveWebSocketUrl,
 } from "../api";
 import {
-  decodeV2AudioFrame,
-  parseV2ServerMessage,
-  type V2AbilityProgress,
-  type V2DirectorScene,
-  type V2DayProgress,
-  type V2GamePhase,
-  type V2GodViewNightResolved,
-  type V2GodViewPlayerIdentity,
-  type V2LiveState,
-  type V2MatchState,
-  type V2Presentation,
-  type V2PublicPlayerSeat,
-  type V2PublicRoleAssignmentStatus,
-  type V2PublicRuleSnapshot,
-  type V2RuntimeProjection,
+  decodeAudioFrame,
+  parseServerMessage,
+  type AbilityProgress,
+  type DirectorScene,
+  type DayProgress,
+  type GamePhase,
+  type GodViewNightResolved,
+  type GodViewPlayerIdentity,
+  type LiveState,
+  type MatchState,
+  type Presentation,
+  type PublicPlayerSeat,
+  type PublicRoleAssignmentStatus,
+  type PublicRuleSnapshot,
+  type RuntimeProjection,
 } from "../contracts";
-import { V2PcmPlayer } from "../V2PcmPlayer";
+import { PcmPlayer } from "../PcmPlayer";
 import {
   awaitingObservationLabel,
   effectiveMatchStatus,
@@ -31,10 +31,10 @@ import {
   runtimeFromSnapshot,
 } from "../runtime";
 import {
-  V2LiveTheater,
-  type V2ConnectionState,
-  type V2ViewingMode,
-} from "./V2LiveTheater";
+  LiveTheater,
+  type ConnectionState,
+  type ViewingMode,
+} from "./LiveTheater";
 
 type RosterState = "loading" | "ready" | "failed";
 type NightProgress =
@@ -44,40 +44,40 @@ type NightProgress =
   | "dawn_announced"
   | null;
 
-export function LiveV2Page() {
+export function LivePage() {
   const { gameId = "" } = useParams();
   const socketRef = useRef<WebSocket | null>(null);
-  const playerRef = useRef<V2PcmPlayer | null>(null);
-  const presentationRef = useRef<V2Presentation | null>(null);
+  const playerRef = useRef<PcmPlayer | null>(null);
+  const presentationRef = useRef<Presentation | null>(null);
   const terminalRef = useRef(false);
   const audioPulseTimerRef = useRef<number | null>(null);
   const deathReactionTimerRef = useRef<number | null>(null);
   const [connectionState, setConnectionState] =
-    useState<V2ConnectionState>("idle");
-  const [liveState, setLiveState] = useState<V2LiveState | null>(null);
-  const [gamePhase, setGamePhase] = useState<V2GamePhase | null>(null);
-  const [matchState, setMatchState] = useState<V2MatchState | null>(null);
+    useState<ConnectionState>("idle");
+  const [liveState, setLiveState] = useState<LiveState | null>(null);
+  const [gamePhase, setGamePhase] = useState<GamePhase | null>(null);
+  const [matchState, setMatchState] = useState<MatchState | null>(null);
   const [runtimeProjection, setRuntimeProjection] =
-    useState<V2RuntimeProjection | null>(null);
-  const [presentation, setPresentation] = useState<V2Presentation | null>(null);
-  const [viewingMode, setViewingMode] = useState<V2ViewingMode>("director");
-  const [publicPlayers, setPublicPlayers] = useState<V2PublicPlayerSeat[]>([]);
+    useState<RuntimeProjection | null>(null);
+  const [presentation, setPresentation] = useState<Presentation | null>(null);
+  const [viewingMode, setViewingMode] = useState<ViewingMode>("director");
+  const [publicPlayers, setPublicPlayers] = useState<PublicPlayerSeat[]>([]);
   const [directorPlayers, setDirectorPlayers] = useState<
-    V2GodViewPlayerIdentity[]
+    GodViewPlayerIdentity[]
   >([]);
-  const [directorScene, setDirectorScene] = useState<V2DirectorScene | null>(null);
+  const [directorScene, setDirectorScene] = useState<DirectorScene | null>(null);
   const [directorAbility, setDirectorAbility] =
-    useState<V2AbilityProgress | null>(null);
+    useState<AbilityProgress | null>(null);
   const [directorResolution, setDirectorResolution] =
-    useState<V2GodViewNightResolved | null>(null);
-  const [publicRule, setPublicRule] = useState<V2PublicRuleSnapshot | null>(null);
+    useState<GodViewNightResolved | null>(null);
+  const [publicRule, setPublicRule] = useState<PublicRuleSnapshot | null>(null);
   const [roleAssignment, setRoleAssignment] =
-    useState<V2PublicRoleAssignmentStatus | null>(null);
+    useState<PublicRoleAssignmentStatus | null>(null);
   const [rosterState, setRosterState] = useState<RosterState>("loading");
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nightProgress, setNightProgress] = useState<NightProgress>(null);
-  const [dayProgress, setDayProgress] = useState<V2DayProgress | null>(null);
+  const [dayProgress, setDayProgress] = useState<DayProgress | null>(null);
   const [audioActive, setAudioActive] = useState(false);
   const [reactingPlayerIds, setReactingPlayerIds] = useState<Set<string>>(
     () => new Set(),
@@ -85,7 +85,7 @@ export function LiveV2Page() {
 
   useEffect(() => {
     let active = true;
-    void fetchV2LiveSnapshot(gameId)
+    void fetchLiveSnapshot(gameId)
       .then((snapshot) => {
         if (!active) return;
         setPublicRule(snapshot.public_rule);
@@ -167,13 +167,13 @@ export function LiveV2Page() {
     try {
       const enteredMode = viewingMode;
       const audioEnabled = runtimeProjection?.audio_mode === "tts";
-      const player = audioEnabled ? new V2PcmPlayer() : null;
+      const player = audioEnabled ? new PcmPlayer() : null;
       if (player) await player.unlock();
       playerRef.current = player;
       const socket = new WebSocket(
         enteredMode === "director"
-          ? resolveV2DirectorWebSocketUrl(gameId)
-          : resolveV2WebSocketUrl(gameId),
+          ? resolveDirectorWebSocketUrl(gameId)
+          : resolveWebSocketUrl(gameId),
       );
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
@@ -182,7 +182,7 @@ export function LiveV2Page() {
       socket.onmessage = (event) => {
         try {
           if (typeof event.data === "string") {
-            const message = parseV2ServerMessage(event.data);
+            const message = parseServerMessage(event.data);
             if (message.type === "director.live_snapshot") {
               if (enteredMode !== "director") {
                 throw new Error("推理挑战连接收到导演投影，连接已关闭");
@@ -418,7 +418,7 @@ export function LiveV2Page() {
               return;
             }
             if (message.type === "presentation.opened") {
-              const current: V2Presentation = {
+              const current: Presentation = {
                 action_id: message.action_id,
                 presentation_seq: message.presentation_seq,
                 presentation_id: message.presentation_id,
@@ -483,7 +483,7 @@ export function LiveV2Page() {
           if (!player) {
             throw new Error("未确认启用语音的对局收到意外音频帧");
           }
-          player.push(decodeV2AudioFrame(event.data));
+          player.push(decodeAudioFrame(event.data));
           showAudioPulse();
         } catch (reason) {
           terminalRef.current = true;
@@ -537,7 +537,7 @@ export function LiveV2Page() {
     >
       <h1 className="mobile-sr-only">Live V2</h1>
 
-      <V2LiveTheater
+      <LiveTheater
         audioActive={audioActive}
         connectionState={connectionState}
         error={error}
@@ -654,15 +654,15 @@ export function LiveV2Page() {
 }
 
 function liveProcessLabel(
-  connectionState: V2ConnectionState,
-  liveState: V2LiveState | null,
-  phase: V2GamePhase | null,
-  match: V2MatchState | null,
+  connectionState: ConnectionState,
+  liveState: LiveState | null,
+  phase: GamePhase | null,
+  match: MatchState | null,
   nightProgress: NightProgress,
-  dayProgress: V2DayProgress | null,
-  viewingMode: V2ViewingMode,
-  directorScene: V2DirectorScene | null,
-  runtime: V2RuntimeProjection | null,
+  dayProgress: DayProgress | null,
+  viewingMode: ViewingMode,
+  directorScene: DirectorScene | null,
+  runtime: RuntimeProjection | null,
   presentationActive: boolean,
 ): string {
   const matchStatus = effectiveMatchStatus(runtime, phase, match, liveState);
@@ -717,7 +717,7 @@ function liveProcessLabel(
   return "纯文本通道已就绪，等待下一幕";
 }
 
-function directorSceneTitle(scene: V2DirectorScene | null): string {
+function directorSceneTitle(scene: DirectorScene | null): string {
   if (!scene) return "夜间私密场景";
   return {
     opening: "开幕舞台",
@@ -741,7 +741,7 @@ function nightProgressLabel(stage: NightProgress): string {
   return "夜幕中的下一项动作正在准备";
 }
 
-function dayProgressLabel(progress: V2DayProgress | null): string {
+function dayProgressLabel(progress: DayProgress | null): string {
   const stage = progress?.stage ?? null;
   if (!stage || stage === "day_started") return "白天公开流程正在展开";
   if (stage === "pre_sheriff_election") return "警长竞选即将开始";
@@ -763,14 +763,14 @@ function dayProgressLabel(progress: V2DayProgress | null): string {
   return "白天公开动作正在实时推进";
 }
 
-function isNightPhase(phase: V2GamePhase | null): boolean {
+function isNightPhase(phase: GamePhase | null): boolean {
   return (
     phase?.phase_id === "first_night" ||
     phase?.phase_id.startsWith("night_") === true
   );
 }
 
-function isDayPhase(phase: V2GamePhase | null): boolean {
+function isDayPhase(phase: GamePhase | null): boolean {
   return phase?.phase_id.startsWith("day_") === true;
 }
 
@@ -779,7 +779,7 @@ function ruleFlagLabel(value: boolean | null): string {
   return value ? "开启" : "关闭";
 }
 
-function toPublicPlayer(player: V2GodViewPlayerIdentity): V2PublicPlayerSeat {
+function toPublicPlayer(player: GodViewPlayerIdentity): PublicPlayerSeat {
   return {
     seat: player.seat,
     player_id: player.player_id,
@@ -790,8 +790,8 @@ function toPublicPlayer(player: V2GodViewPlayerIdentity): V2PublicPlayerSeat {
 }
 
 function normalizePresentation(
-  presentation: V2Presentation | null,
-): V2Presentation | null {
+  presentation: Presentation | null,
+): Presentation | null {
   return presentation === null
     ? null
     : {

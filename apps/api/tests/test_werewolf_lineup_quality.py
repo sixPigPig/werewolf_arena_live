@@ -1,11 +1,11 @@
 import pytest
 
-from app.werewolf.lineup_quality import (
+from app.shared.lineup_quality import (
     LineupQualityPolicyV1,
     evaluate_lineup_quality,
     plan_diverse_lineup,
 )
-from app.werewolf.player_configs import PlayerConfig
+from app.shared.player_configs import PlayerConfig
 
 
 def _config(

@@ -7,14 +7,14 @@ from typing import Any
 import httpx
 import pytest
 
-from app.v2.model_client import (
-    V2ModelClient,
-    V2ModelError,
-    V2ModelProgress,
-    V2ModelTarget,
+from app.match.model_client import (
+    ModelClient,
+    ModelError,
+    ModelProgress,
+    ModelTarget,
 )
-from app.v2.model_context_compaction import encode_known_events_v7
-from app.v2.model_context_contract import MODEL_CONTEXT_SCHEMA_VERSION, PROMPT_TEMPLATE_VERSION
+from app.match.model_context_compaction import encode_known_events_v7
+from app.match.model_context_contract import MODEL_CONTEXT_SCHEMA_VERSION, PROMPT_TEMPLATE_VERSION
 
 
 def _action_context() -> dict[str, Any]:
@@ -38,8 +38,8 @@ def _action_context() -> dict[str, Any]:
     }
 
 
-def _client(handler: Any, *, max_in_flight: int = 1) -> V2ModelClient:
-    return V2ModelClient(
+def _client(handler: Any, *, max_in_flight: int = 1) -> ModelClient:
+    return ModelClient(
         agent_plan_api_key="agent-plan-key",
         agent_plan_base_url="https://ark.example.test/api/plan/v3",
         ark_api_key="ark-key",
@@ -54,7 +54,7 @@ def _client(handler: Any, *, max_in_flight: int = 1) -> V2ModelClient:
     )
 
 
-def _target(client: V2ModelClient) -> V2ModelTarget:
+def _target(client: ModelClient) -> ModelTarget:
     return client.resolve_model_target(
         model_provider="agent_plan",
         model_id="glm-5-2-260617",
@@ -88,7 +88,7 @@ def test_idle_only_admits_immediately_when_provider_has_idle_capacity() -> None:
 
     async def scenario() -> None:
         client = _client(handler)
-        progress: list[V2ModelProgress] = []
+        progress: list[ModelProgress] = []
         try:
             decision = await client.generate_action_decision_with_progress(
                 action_context=_action_context(),
@@ -131,9 +131,9 @@ def test_idle_only_fails_immediately_when_provider_is_full_without_http() -> Non
             )
         )
         await asyncio.wait_for(owner_started.wait(), timeout=0.5)
-        progress: list[V2ModelProgress] = []
+        progress: list[ModelProgress] = []
         try:
-            with pytest.raises(V2ModelError) as raised:
+            with pytest.raises(ModelError) as raised:
                 await asyncio.wait_for(
                     client.generate_action_decision_with_progress(
                         action_context=_action_context(),
@@ -239,7 +239,7 @@ def test_idle_only_never_bypasses_an_existing_normal_waiter() -> None:
 
         waiter_queued = asyncio.Event()
 
-        def observe_waiter(progress: V2ModelProgress) -> None:
+        def observe_waiter(progress: ModelProgress) -> None:
             if progress.stage == "queued":
                 waiter_queued.set()
 
@@ -254,8 +254,8 @@ def test_idle_only_never_bypasses_an_existing_normal_waiter() -> None:
         await asyncio.wait_for(waiter_queued.wait(), timeout=0.5)
         await asyncio.sleep(0)
 
-        rejected_progress: list[V2ModelProgress] = []
-        with pytest.raises(V2ModelError, match="model_prefetch_capacity_unavailable"):
+        rejected_progress: list[ModelProgress] = []
+        with pytest.raises(ModelError, match="model_prefetch_capacity_unavailable"):
             await client.generate_action_decision_with_progress(
                 action_context=_action_context(),
                 attempt_id="v2_model_fifo_prefetch_rejected",
@@ -315,7 +315,7 @@ def test_canceled_normal_waiter_does_not_leak_capacity_or_block_idle_only() -> N
 
         waiter_queued = asyncio.Event()
 
-        def observe_waiter(progress: V2ModelProgress) -> None:
+        def observe_waiter(progress: ModelProgress) -> None:
             if progress.stage == "queued":
                 waiter_queued.set()
 

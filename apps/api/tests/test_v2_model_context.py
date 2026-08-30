@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.v2.day_engine import V2DayEngine, speech_order_from_start
-from app.v2.model_context import (
-    V2ModelContextProjectionInvariantError,
-    V2ModelPlayerReference,
+from app.match.day_engine import DayEngine, speech_order_from_start
+from app.match.model_context import (
+    ModelContextProjectionInvariantError,
+    ModelPlayerReference,
     build_actor_information,
     build_public_match_state,
     build_public_rule_contract,
@@ -21,12 +21,12 @@ from app.v2.model_context import (
     resolve_model_target,
     sanitize_model_speech,
 )
-from app.v2.model_client import build_model_request_payload
-from app.v2.model_context_compaction import (
+from app.match.model_client import build_model_request_payload
+from app.match.model_context_compaction import (
     encode_known_events_v7,
     expand_known_events_v7,
 )
-from app.v2.model_context_contract import (
+from app.match.model_context_contract import (
     KNOWN_EVENTS_SCHEMA_VERSION,
     MODEL_CONTEXT_SCHEMA_VERSION,
     PROMPT_TEMPLATE_VERSION,
@@ -37,16 +37,16 @@ from app.v2.model_context_contract import (
 
 
 PLAYERS = (
-    V2ModelPlayerReference("system-player-07", 1, "乔宁"),
-    V2ModelPlayerReference("system-player-01", 2, "沈砚"),
-    V2ModelPlayerReference("system-player-09", 4, "唐梨"),
+    ModelPlayerReference("system-player-07", 1, "乔宁"),
+    ModelPlayerReference("system-player-01", 2, "沈砚"),
+    ModelPlayerReference("system-player-09", 4, "唐梨"),
 )
 
 
 def _complete_v11_source(
     context: dict[str, object],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
 ) -> dict[str, object]:
     source = deepcopy(context)
     public_state = source.get("public_match_state")
@@ -130,7 +130,7 @@ def _default_action_record_seq(context: dict[str, object]) -> int:
 def project_model_action_context(
     context: dict[str, object],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     model_context_contract: dict[str, object] | None = None,
     action_record_seq: int | None = None,
     projection_at_seq: int | None = None,
@@ -152,7 +152,7 @@ def project_model_action_context(
 def project_model_action_context_with_metadata(
     context: dict[str, object],
     *,
-    players: tuple[V2ModelPlayerReference, ...],
+    players: tuple[ModelPlayerReference, ...],
     model_context_contract: dict[str, object] | None = None,
     action_record_seq: int | None = None,
     projection_at_seq: int | None = None,
@@ -470,7 +470,7 @@ def test_v11_strips_failure_episode_audit_from_public_history() -> None:
 
 def test_v11_projects_prior_public_investigation_report_without_rewriting_causality() -> None:
     players = tuple(
-        V2ModelPlayerReference(f"player-{seat}", seat, f"玩家{seat}") for seat in (1, 5, 6, 8)
+        ModelPlayerReference(f"player-{seat}", seat, f"玩家{seat}") for seat in (1, 5, 6, 8)
     )
     projected = project_model_action_context_with_metadata(
         {
@@ -963,7 +963,7 @@ def test_v13_selector_audits_future_events_separately_from_omissions() -> None:
 
 def test_model_context_orders_sheriff_plan_before_later_votes_on_one_clock() -> None:
     players = tuple(
-        V2ModelPlayerReference(
+        ModelPlayerReference(
             player_id=f"system-player-{seat:02d}",
             seat=seat,
             display_name=f"{seat}号玩家",
@@ -1159,7 +1159,7 @@ def test_known_events_preserve_input_order_for_duplicate_sequence() -> None:
 
 def test_v11_known_events_place_private_investigation_before_later_public_speech() -> None:
     players = tuple(
-        V2ModelPlayerReference(
+        ModelPlayerReference(
             player_id=f"system-player-{seat:02d}",
             seat=seat,
             display_name=f"{seat}号玩家",
@@ -1465,7 +1465,7 @@ def test_v11_private_history_fails_closed_on_clock_or_owner_violation(
         players=PLAYERS,
     )
 
-    with pytest.raises(V2ModelContextProjectionInvariantError) as exc_info:
+    with pytest.raises(ModelContextProjectionInvariantError) as exc_info:
         _project_model_action_context(
             source,
             players=PLAYERS,
@@ -1567,7 +1567,7 @@ def test_v11_sheriff_engine_reuses_selected_precomputed_order() -> None:
         def append_event(self, **values: object) -> None:
             self.event_payload = values["payload"]  # type: ignore[assignment]
 
-    class Engine(V2DayEngine):
+    class Engine(DayEngine):
         call: dict[str, object] | None = None
 
         async def _player_action(self, **values: object) -> SimpleNamespace:
@@ -1853,7 +1853,7 @@ def test_v11_non_speech_action_omits_reply_opportunity_even_with_an_order() -> N
 
 def test_v11_uses_one_canonical_current_living_werewolf_teammate_event() -> None:
     players = tuple(
-        V2ModelPlayerReference(
+        ModelPlayerReference(
             player_id=f"system-player-{seat:02d}",
             seat=seat,
             display_name=f"{seat}号玩家",
@@ -2349,7 +2349,7 @@ def test_v13_selector_keeps_old_speech_that_names_actor_or_candidate() -> None:
 
 def test_model_context_preserves_first_party_claim_time_before_later_paraphrases() -> None:
     players = tuple(
-        V2ModelPlayerReference(
+        ModelPlayerReference(
             f"system-player-{seat:02d}",
             seat,
             f"{seat}号玩家",

@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.v2.models import V2GameRecordEvent, V2KnowledgeFact, V2PreExileResult
+from app.match.models import GameRecordEvent, KnowledgeFact, PreExileResult
 
 
 _KNOWLEDGE_EVENT_TYPES = frozenset(
@@ -28,14 +28,14 @@ def player_private_knowledge(
 ) -> list[dict[str, Any]]:
     rows = list(
         db.scalars(
-            select(V2KnowledgeFact)
+            select(KnowledgeFact)
             .where(
-                V2KnowledgeFact.game_id == game_id,
-                V2KnowledgeFact.owner_scope == "player",
-                V2KnowledgeFact.owner_id == player_id,
-                V2KnowledgeFact.fact_type != "action_context_projection",
+                KnowledgeFact.game_id == game_id,
+                KnowledgeFact.owner_scope == "player",
+                KnowledgeFact.owner_id == player_id,
+                KnowledgeFact.fact_type != "action_context_projection",
             )
-            .order_by(V2KnowledgeFact.created_at, V2KnowledgeFact.knowledge_fact_id)
+            .order_by(KnowledgeFact.created_at, KnowledgeFact.knowledge_fact_id)
         )
     )
     if not rows:
@@ -43,16 +43,16 @@ def player_private_knowledge(
 
     events = list(
         db.scalars(
-            select(V2GameRecordEvent)
+            select(GameRecordEvent)
             .where(
-                V2GameRecordEvent.game_id == game_id,
-                V2GameRecordEvent.event_type.in_(_KNOWLEDGE_EVENT_TYPES),
+                GameRecordEvent.game_id == game_id,
+                GameRecordEvent.event_type.in_(_KNOWLEDGE_EVENT_TYPES),
             )
-            .order_by(V2GameRecordEvent.record_seq)
+            .order_by(GameRecordEvent.record_seq)
         )
     )
-    event_by_fact_id: dict[str, V2GameRecordEvent] = {}
-    event_by_activation_id: dict[str, V2GameRecordEvent] = {}
+    event_by_fact_id: dict[str, GameRecordEvent] = {}
+    event_by_activation_id: dict[str, GameRecordEvent] = {}
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
         activation_id = payload.get("activation_id")
@@ -67,14 +67,14 @@ def player_private_knowledge(
         if isinstance(fact_id, str):
             event_by_fact_id[fact_id] = event
 
-    def event_for_row(row: V2KnowledgeFact) -> V2GameRecordEvent | None:
+    def event_for_row(row: KnowledgeFact) -> GameRecordEvent | None:
         event = event_by_fact_id.get(row.knowledge_fact_id)
         if event is None and row.source_activation_id is not None:
             event = event_by_activation_id.get(row.source_activation_id)
         return event
 
     if at_or_before_record_seq is not None:
-        visible_rows: list[V2KnowledgeFact] = []
+        visible_rows: list[KnowledgeFact] = []
         for row in rows:
             event = event_for_row(row)
             if event is not None and event.record_seq <= at_or_before_record_seq:
@@ -104,10 +104,10 @@ def player_private_knowledge(
     if provisional_fact_ids:
         committed_fact_ids = set(
             db.scalars(
-                select(V2PreExileResult.private_fact_id).where(
-                    V2PreExileResult.private_fact_id.in_(provisional_fact_ids),
-                    V2PreExileResult.result_kind == "self_explosion",
-                    V2PreExileResult.state == "committed",
+                select(PreExileResult.private_fact_id).where(
+                    PreExileResult.private_fact_id.in_(provisional_fact_ids),
+                    PreExileResult.result_kind == "self_explosion",
+                    PreExileResult.state == "committed",
                 )
             )
         )
@@ -156,7 +156,7 @@ def player_private_knowledge(
     return projected
 
 
-def _is_pre_exile_provisional_fact(row: V2KnowledgeFact) -> bool:
+def _is_pre_exile_provisional_fact(row: KnowledgeFact) -> bool:
     payload = row.payload if isinstance(row.payload, dict) else {}
     context = payload.get("context")
     return (
@@ -168,7 +168,7 @@ def _is_pre_exile_provisional_fact(row: V2KnowledgeFact) -> bool:
     )
 
 
-def _private_round_memory_order(row: V2KnowledgeFact) -> tuple[int, int, str]:
+def _private_round_memory_order(row: KnowledgeFact) -> tuple[int, int, str]:
     payload = row.payload if isinstance(row.payload, dict) else {}
     round_no = _positive_int(payload.get("round_no")) or 0
     cutoff = _positive_int(payload.get("source_cutoff_record_seq")) or 0

@@ -7,28 +7,28 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from app.v2.action_engine import (
-    V2ActionEngine,
-    V2ActionResult,
-    V2BroadcastPort,
-    V2DecisionContract,
-    V2SpeechSpec,
+from app.match.action_engine import (
+    ActionEngine,
+    ActionResult,
+    BroadcastPort,
+    DecisionContract,
+    SpeechSpec,
 )
-from app.v2.model_client import V2ModelDecision
-from app.v2.model_context import (
-    V2ModelPlayerReference,
+from app.match.model_client import ModelDecision
+from app.match.model_context import (
+    ModelPlayerReference,
     build_actor_information,
     build_public_match_state,
     build_public_rule_contract,
     private_authoritative_facts,
 )
-from app.v2.night_repository import (
-    V2ActivationRef,
-    V2NightPlayer,
-    V2NightRepository,
-    V2NightRuntimeState,
+from app.match.night_repository import (
+    ActivationRef,
+    NightPlayer,
+    NightRepository,
+    NightRuntimeState,
 )
-from app.v2.protocol import (
+from app.match.protocol import (
     ability_progress,
     game_phase_changed,
     god_view_night_resolution,
@@ -37,10 +37,10 @@ from app.v2.protocol import (
     night_progress,
     public_dawn_result,
 )
-from app.v2.repository import V2ExecutionOwnershipLost, V2PhaseTransition
+from app.match.repository import ExecutionOwnershipLost, PhaseTransition
 
 if TYPE_CHECKING:
-    from app.v2.day_engine import V2DayEngine
+    from app.match.day_engine import DayEngine
 
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ _PARALLEL_NIGHT_GROUPS = ("werewolves", "guard", "seer")
 _DECISION_NOTE_MAX_CHARS = 80
 
 
-class V2NightError(RuntimeError):
+class NightError(RuntimeError):
     pass
 
 
@@ -80,8 +80,8 @@ class _NightParallelBatch:
 class _PreparedRoleDecision:
     group: str
     ability_id: str
-    player: V2NightPlayer | None
-    candidates: tuple[V2NightPlayer, ...]
+    player: NightPlayer | None
+    candidates: tuple[NightPlayer, ...]
     objective: str
     knowledge: dict[str, Any]
     optional: bool
@@ -91,21 +91,21 @@ class _PreparedRoleDecision:
 @dataclass(frozen=True)
 class _BufferedRoleDecision:
     prepared: _PreparedRoleDecision
-    activation: V2ActivationRef | None
-    decision: V2ModelDecision | None
-    action_result: V2ActionResult | None = None
+    activation: ActivationRef | None
+    decision: ModelDecision | None
+    action_result: ActionResult | None = None
 
 
-GroupHandler = Callable[[V2NightRuntimeState, V2BroadcastPort, _WorkingNight], Awaitable[None]]
+GroupHandler = Callable[[NightRuntimeState, BroadcastPort, _WorkingNight], Awaitable[None]]
 
 
-class V2NightEngine:
+class NightEngine:
     def __init__(
         self,
         *,
-        repository: V2NightRepository,
-        action_engine: V2ActionEngine,
-        day_engine: V2DayEngine,
+        repository: NightRepository,
+        action_engine: ActionEngine,
+        day_engine: DayEngine,
     ) -> None:
         self._repository = repository
         self._actions = action_engine
@@ -121,8 +121,8 @@ class V2NightEngine:
         self,
         *,
         game_id: str,
-        broadcaster: V2BroadcastPort,
-    ) -> V2PhaseTransition | None:
+        broadcaster: BroadcastPort,
+    ) -> PhaseTransition | None:
         try:
             self._actions.check_cancellation(game_id)
             state = self._repository.start_night(game_id, audience="god_view")
@@ -151,7 +151,7 @@ class V2NightEngine:
                 self._actions.check_cancellation(game_id)
                 handler = self._handlers.get(group)
                 if handler is None:
-                    raise V2NightError(f"unsupported_activation_group:{group}")
+                    raise NightError(f"unsupported_activation_group:{group}")
                 await handler(state, broadcaster, working)
                 self._actions.check_cancellation(game_id)
                 await broadcaster.broadcast_json(
@@ -214,7 +214,7 @@ class V2NightEngine:
             dawn_ok = await self._actions.run_judge_speech(
                 game_id=game_id,
                 broadcaster=broadcaster,
-                spec=V2SpeechSpec(
+                spec=SpeechSpec(
                     action_type="judge_dawn_announcement",
                     phase_id=f"day_{state.round_no}",
                     required_phase_state="dawn_announcement_ready",
@@ -230,7 +230,7 @@ class V2NightEngine:
                 ),
             )
             if not dawn_ok:
-                raise V2NightError("dawn_announcement_failed")
+                raise NightError("dawn_announcement_failed")
             await broadcaster.broadcast_json(
                 public_dawn_result(
                     game_id=state.game_id,
@@ -297,12 +297,12 @@ class V2NightEngine:
             if final_transition.phase_state == "game_completed":
                 winner = match["winner"]
                 if winner is None:
-                    raise V2NightError("completed_night_has_no_winner")
+                    raise NightError("completed_night_has_no_winner")
                 winner_name = "好人阵营" if winner == "villagers" else "狼人阵营"
                 await self._actions.run_judge_speech(
                     game_id=game_id,
                     broadcaster=broadcaster,
-                    spec=V2SpeechSpec(
+                    spec=SpeechSpec(
                         action_type="judge_game_completed",
                         phase_id=final_transition.phase_id,
                         required_phase_state="game_completed",
@@ -321,7 +321,7 @@ class V2NightEngine:
                     )
                 )
             return final_transition
-        except V2ExecutionOwnershipLost:
+        except ExecutionOwnershipLost:
             raise
         except Exception as exc:
             logger.warning(
@@ -350,8 +350,8 @@ class V2NightEngine:
     async def _run_parallel_independent_groups(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
         groups: tuple[str, ...],
     ) -> None:
@@ -471,7 +471,7 @@ class V2NightEngine:
                     recovered.action_result is None
                     or recovered.action_result.technical_outcome is None
                 ):
-                    raise V2NightError(f"{recovered.prepared.ability_id}_decision_failed")
+                    raise NightError(f"{recovered.prepared.ability_id}_decision_failed")
                 buffered[group] = recovered
             self._repository.append_event(
                 game_id=state.game_id,
@@ -541,8 +541,8 @@ class V2NightEngine:
 
     async def _broadcast_night_actions_progress(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
     ) -> None:
         await broadcaster.broadcast_json(
             night_progress(
@@ -556,8 +556,8 @@ class V2NightEngine:
 
     async def _run_werewolves(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
         *,
         batch: _NightParallelBatch | None = None,
@@ -597,11 +597,11 @@ class V2NightEngine:
         )
         occurrence = 0
         blind_choices: list[dict[str, Any]] = []
-        proposal_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ActionResult]] = []
+        proposal_items: list[tuple[NightPlayer, ActivationRef, ActionResult]] = []
 
         if len(wolves) > 1:
             proposal_batch_id = f"{state.window_id}:werewolf_attack:preference_probe"
-            prepared: list[tuple[V2NightPlayer, V2ActivationRef]] = []
+            prepared: list[tuple[NightPlayer, ActivationRef]] = []
             for wolf in wolves:
                 occurrence += 1
                 prepared.append(
@@ -618,9 +618,9 @@ class V2NightEngine:
                 )
 
             async def request_preference(
-                wolf: V2NightPlayer,
-                activation: V2ActivationRef,
-            ) -> V2ActionResult:
+                wolf: NightPlayer,
+                activation: ActivationRef,
+            ) -> ActionResult:
                 result = await self._player_decision(
                     state=state,
                     broadcaster=broadcaster,
@@ -639,7 +639,7 @@ class V2NightEngine:
                         "werewolf_attack_policy": policy,
                     },
                     optional=allow_no_attack,
-                    decision_contract=V2DecisionContract(
+                    decision_contract=DecisionContract(
                         kind="target",
                         target_mode="optional" if allow_no_attack else "required",
                         speech_mode="forbidden",
@@ -654,8 +654,8 @@ class V2NightEngine:
                     target_exhaustion_outcome=(None if allow_no_attack else "technical_no_action"),
                     return_result=True,
                 )
-                if not isinstance(result, V2ActionResult):
-                    return V2ActionResult(decision=result)
+                if not isinstance(result, ActionResult):
+                    return ActionResult(decision=result)
                 return result
 
             proposal_results = await asyncio.gather(
@@ -756,8 +756,8 @@ class V2NightEngine:
             )
 
         second_round: list[dict[str, Any]] = []
-        final_items: list[tuple[V2NightPlayer, V2ActivationRef, V2ModelDecision]] = []
-        technical_team_result: V2ActionResult | None = None
+        final_items: list[tuple[NightPlayer, ActivationRef, ModelDecision]] = []
+        technical_team_result: ActionResult | None = None
         technical_team_actor_player_id: str | None = None
         if complete_unanimous_proposal:
             unanimous = proposal_items[0][2].decision
@@ -829,8 +829,8 @@ class V2NightEngine:
                     target_exhaustion_outcome=(None if allow_no_attack else "technical_no_action"),
                     return_result=True,
                 )
-                if not isinstance(final_result, V2ActionResult):
-                    final_result = V2ActionResult(decision=final_result)
+                if not isinstance(final_result, ActionResult):
+                    final_result = ActionResult(decision=final_result)
                 if final_result.technical_outcome is not None:
                     self._repository.complete_activation_technical_no_action(
                         state=state,
@@ -864,7 +864,7 @@ class V2NightEngine:
                     break
                 decision = final_result.decision
                 if decision is None:
-                    raise V2NightError("werewolf.attack_decision_incomplete")
+                    raise NightError("werewolf.attack_decision_incomplete")
                 final_items.append((wolf, activation, decision))
                 second_round.append(
                     {
@@ -945,8 +945,8 @@ class V2NightEngine:
                     ),
                     return_result=True,
                 )
-                if not isinstance(tiebreak_result, V2ActionResult):
-                    tiebreak_result = V2ActionResult(decision=tiebreak_result)
+                if not isinstance(tiebreak_result, ActionResult):
+                    tiebreak_result = ActionResult(decision=tiebreak_result)
                 if tiebreak_result.technical_outcome is not None:
                     technical_team_result = tiebreak_result
                     technical_team_actor_player_id = tiebreaker.player_id
@@ -985,7 +985,7 @@ class V2NightEngine:
                 else:
                     tiebreak_decision = tiebreak_result.decision
                     if tiebreak_decision is None:
-                        raise V2NightError("werewolf.attack_tiebreak_decision_incomplete")
+                        raise NightError("werewolf.attack_tiebreak_decision_incomplete")
                     resolution = _WerewolfAttackResolution(
                         target_player_id=tiebreak_decision.target_player_id,
                         reason=(
@@ -1198,8 +1198,8 @@ class V2NightEngine:
 
     async def _run_guard(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
     ) -> None:
         prepared = self._prepare_guard_decision(state)
@@ -1226,7 +1226,7 @@ class V2NightEngine:
             present_wake=False,
         )
 
-    def _prepare_guard_decision(self, state: V2NightRuntimeState) -> _PreparedRoleDecision:
+    def _prepare_guard_decision(self, state: NightRuntimeState) -> _PreparedRoleDecision:
         ability_id = "guard.protect"
         guard = _single_owner(state, "guard")
         if guard is None or not guard.alive:
@@ -1266,18 +1266,18 @@ class V2NightEngine:
     async def _request_prepared_role_decision(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         prepared: _PreparedRoleDecision,
         batch: _NightParallelBatch | None,
         concurrent_initial: bool,
-        activation: V2ActivationRef | None = None,
+        activation: ActivationRef | None = None,
         request_started: asyncio.Event | None = None,
     ) -> _BufferedRoleDecision:
         if prepared.skip_reason is not None:
             return _BufferedRoleDecision(prepared=prepared, activation=None, decision=None)
         if prepared.player is None:
-            raise V2NightError(f"{prepared.ability_id}_owner_missing")
+            raise NightError(f"{prepared.ability_id}_owner_missing")
         if request_started is not None:
             request_started.set()
         current_activation = activation or self._repository.open_activation(
@@ -1306,8 +1306,8 @@ class V2NightEngine:
                 target_exhaustion_outcome="technical_no_action",
                 return_result=True,
             )
-            if not isinstance(action_result, V2ActionResult):
-                action_result = V2ActionResult(decision=action_result)
+            if not isinstance(action_result, ActionResult):
+                action_result = ActionResult(decision=action_result)
         except asyncio.CancelledError:
             if concurrent_initial:
                 self._repository.cancel_open_activation(
@@ -1328,8 +1328,8 @@ class V2NightEngine:
     async def _commit_guard_decision(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
         buffered: _BufferedRoleDecision,
         present_wake: bool,
@@ -1344,7 +1344,7 @@ class V2NightEngine:
             )
             return
         if buffered.activation is None or prepared.player is None:
-            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+            raise NightError(f"{prepared.ability_id}_decision_incomplete")
         if present_wake:
             await self._private_judge(
                 state=state,
@@ -1380,7 +1380,7 @@ class V2NightEngine:
             )
             return
         if buffered.decision is None:
-            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+            raise NightError(f"{prepared.ability_id}_decision_incomplete")
         decision = buffered.decision
         working.protected_target = decision.target_player_id
         self._repository.complete_activation(
@@ -1409,8 +1409,8 @@ class V2NightEngine:
 
     async def _run_seer(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
     ) -> None:
         del working
@@ -1437,7 +1437,7 @@ class V2NightEngine:
             present_wake=False,
         )
 
-    def _prepare_seer_decision(self, state: V2NightRuntimeState) -> _PreparedRoleDecision:
+    def _prepare_seer_decision(self, state: NightRuntimeState) -> _PreparedRoleDecision:
         ability_id = "seer.investigate"
         seer = _single_owner(state, "seer")
         if seer is None or not seer.alive:
@@ -1474,8 +1474,8 @@ class V2NightEngine:
     async def _commit_seer_decision(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         buffered: _BufferedRoleDecision,
         present_wake: bool,
     ) -> None:
@@ -1489,7 +1489,7 @@ class V2NightEngine:
             )
             return
         if buffered.activation is None or prepared.player is None:
-            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+            raise NightError(f"{prepared.ability_id}_decision_incomplete")
         if present_wake:
             await self._private_judge(
                 state=state,
@@ -1525,7 +1525,7 @@ class V2NightEngine:
             )
             return
         if buffered.decision is None:
-            raise V2NightError(f"{prepared.ability_id}_decision_incomplete")
+            raise NightError(f"{prepared.ability_id}_decision_incomplete")
         decision = buffered.decision
         target = state.player(_required_target(decision))
         alignment = "werewolves" if target.role_key == "werewolf" else "villagers"
@@ -1586,8 +1586,8 @@ class V2NightEngine:
 
     async def _run_witch(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         working: _WorkingNight,
     ) -> None:
         witch = _single_owner(state, "witch")
@@ -1822,9 +1822,9 @@ class V2NightEngine:
     async def _run_hunter_response(
         self,
         *,
-        state: V2NightRuntimeState,
+        state: NightRuntimeState,
         hunter_id: str,
-        broadcaster: V2BroadcastPort,
+        broadcaster: BroadcastPort,
     ) -> None:
         reaction_state = self._repository.open_dawn_reaction_window(state=state)
         players = self._repository.current_players(state.game_id)
@@ -1885,7 +1885,7 @@ class V2NightEngine:
             ok = await self._actions.run_judge_speech(
                 game_id=state.game_id,
                 broadcaster=broadcaster,
-                spec=V2SpeechSpec(
+                spec=SpeechSpec(
                     action_type="judge_hunter_shot_announcement",
                     phase_id=f"day_{state.round_no}",
                     required_phase_state="dawn_reactions_ready",
@@ -1899,7 +1899,7 @@ class V2NightEngine:
                 ),
             )
             if not ok:
-                raise V2NightError("hunter_announcement_failed")
+                raise NightError("hunter_announcement_failed")
             await broadcaster.broadcast_json(
                 public_dawn_result(
                     game_id=state.game_id,
@@ -1917,8 +1917,8 @@ class V2NightEngine:
     async def _private_judge(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         action_type: str,
         objective: str,
         context: dict[str, Any],
@@ -1926,7 +1926,7 @@ class V2NightEngine:
         ok = await self._actions.run_judge_speech(
             game_id=state.game_id,
             broadcaster=broadcaster,
-            spec=V2SpeechSpec(
+            spec=SpeechSpec(
                 action_type=action_type,
                 phase_id=state.phase_id,
                 required_phase_state="night_running",
@@ -1939,16 +1939,16 @@ class V2NightEngine:
             ),
         )
         if not ok:
-            raise V2NightError(f"{action_type}_failed")
+            raise NightError(f"{action_type}_failed")
 
     async def _player_decision(
         self,
         *,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
-        activation: V2ActivationRef,
-        player: V2NightPlayer,
-        candidates: list[V2NightPlayer],
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
+        activation: ActivationRef,
+        player: NightPlayer,
+        candidates: list[NightPlayer],
         objective: str,
         knowledge: dict[str, Any],
         optional: bool,
@@ -1959,10 +1959,10 @@ class V2NightEngine:
         batch_id: str | None = None,
         batch: _NightParallelBatch | None = None,
         batch_stage: str | None = None,
-        decision_contract: V2DecisionContract | None = None,
+        decision_contract: DecisionContract | None = None,
         target_exhaustion_outcome: str | None = None,
         return_result: bool = False,
-    ) -> V2ModelDecision | V2ActionResult | None:
+    ) -> ModelDecision | ActionResult | None:
         knowledge_fact_ids, knowledge_hash = self._repository.register_activation_knowledge(
             state=state,
             activation=activation,
@@ -1989,7 +1989,7 @@ class V2NightEngine:
         }
         action_type = f"ability_{activation.ability_id}_decision"
         is_dawn_reaction = activation.ability_id == "hunter.death_shot"
-        resolved_decision_contract = decision_contract or V2DecisionContract(
+        resolved_decision_contract = decision_contract or DecisionContract(
             kind="target",
             target_mode="optional" if optional else "required",
             speech_mode=("required" if activation.ability_id == "werewolf.attack" else "forbidden"),
@@ -1999,7 +1999,7 @@ class V2NightEngine:
             ),
             decision_note_max_chars=_DECISION_NOTE_MAX_CHARS,
         )
-        spec = V2SpeechSpec(
+        spec = SpeechSpec(
             action_type=action_type,
             phase_id=(f"day_{state.round_no}" if is_dawn_reaction else state.phase_id),
             required_phase_state=("dawn_reactions_ready" if is_dawn_reaction else "night_running"),
@@ -2024,7 +2024,7 @@ class V2NightEngine:
             decision_contract=resolved_decision_contract,
             allowed_target_ids=tuple(item.player_id for item in candidates),
             model_players=tuple(
-                V2ModelPlayerReference(
+                ModelPlayerReference(
                     player_id=item.player_id,
                     seat=item.seat,
                     display_name=item.display_name,
@@ -2118,23 +2118,23 @@ class V2NightEngine:
                 broadcaster=broadcaster,
                 spec=spec,
             )
-            result = V2ActionResult(decision=decision)
+            result = ActionResult(decision=decision)
         if result is None:
-            result = V2ActionResult()
+            result = ActionResult()
         decision = result.decision
         if decision is None and not allow_failure and result.technical_outcome is None:
-            raise V2NightError(f"{activation.ability_id}_decision_failed")
+            raise NightError(f"{activation.ability_id}_decision_failed")
         if return_result:
             return result
         return decision
 
     async def _ability_completed(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         ability_id: str,
-        player: V2NightPlayer,
-        decision: V2ModelDecision,
+        player: NightPlayer,
+        decision: ModelDecision,
         status: str = "completed",
     ) -> None:
         await broadcaster.broadcast_json(
@@ -2151,10 +2151,10 @@ class V2NightEngine:
 
     async def _ability_status(
         self,
-        state: V2NightRuntimeState,
-        broadcaster: V2BroadcastPort,
+        state: NightRuntimeState,
+        broadcaster: BroadcastPort,
         ability_id: str,
-        player: V2NightPlayer,
+        player: NightPlayer,
         status: str,
     ) -> None:
         await broadcaster.broadcast_json(
@@ -2170,7 +2170,7 @@ class V2NightEngine:
 
 
 def _private_decision_record(
-    decision: V2ModelDecision,
+    decision: ModelDecision,
     *,
     target_player_id: str | None = None,
 ) -> dict[str, Any]:
@@ -2182,7 +2182,7 @@ def _private_decision_record(
     }
 
 
-def _technical_no_action_payload(result: V2ActionResult) -> dict[str, Any]:
+def _technical_no_action_payload(result: ActionResult) -> dict[str, Any]:
     outcome = result.technical_outcome
     if (
         outcome is None
@@ -2191,7 +2191,7 @@ def _technical_no_action_payload(result: V2ActionResult) -> dict[str, Any]:
         or result.failure is not None
         or not result.action_id
     ):
-        raise V2NightError("night_required_target_technical_outcome_invalid")
+        raise NightError("night_required_target_technical_outcome_invalid")
     failure = outcome.failure
     return {
         "kind": outcome.kind,
@@ -2211,7 +2211,7 @@ def _technical_no_action_payload(result: V2ActionResult) -> dict[str, Any]:
     }
 
 
-def _werewolf_attack_policy(state: V2NightRuntimeState) -> dict[str, Any]:
+def _werewolf_attack_policy(state: NightRuntimeState) -> dict[str, Any]:
     policies = state.snapshot.get("policies")
     raw = policies.get("werewolf_attack") if isinstance(policies, dict) else None
     if raw is None:
@@ -2225,7 +2225,7 @@ def _werewolf_attack_policy(state: V2NightRuntimeState) -> dict[str, Any]:
         "allow_no_attack",
         "allow_wolf_target",
     }:
-        raise V2NightError("werewolf_attack_policy_invalid")
+        raise NightError("werewolf_attack_policy_invalid")
     resolution = raw.get("resolution")
     if (
         resolution
@@ -2237,19 +2237,19 @@ def _werewolf_attack_policy(state: V2NightRuntimeState) -> dict[str, Any]:
         or not isinstance(raw.get("allow_no_attack"), bool)
         or not isinstance(raw.get("allow_wolf_target"), bool)
     ):
-        raise V2NightError("werewolf_attack_policy_invalid")
+        raise NightError("werewolf_attack_policy_invalid")
     return dict(raw)
 
 
 def _resolve_werewolf_attack(
     *,
-    state: V2NightRuntimeState,
-    wolves: list[V2NightPlayer],
+    state: NightRuntimeState,
+    wolves: list[NightPlayer],
     votes: list[tuple[str, str | None]],
     policy: dict[str, Any],
 ) -> _WerewolfAttackResolution:
     if not votes or len(votes) != len(wolves):
-        raise V2NightError("werewolf_final_votes_incomplete")
+        raise NightError("werewolf_final_votes_incomplete")
     resolution = policy["resolution"]
     targets = [target_player_id for _player_id, target_player_id in votes]
     if resolution == "unanimous_no_attack":
@@ -2291,23 +2291,23 @@ def _resolve_werewolf_attack(
             target_player_id=target,
             reason="seeded_tiebreak_no_attack" if target is None else "seeded_tiebreak",
         )
-    raise V2NightError("werewolf_attack_resolution_unsupported")
+    raise NightError("werewolf_attack_resolution_unsupported")
 
 
 def _rotating_werewolf_tiebreaker(
-    state: V2NightRuntimeState,
-    living_wolves: list[V2NightPlayer],
-) -> V2NightPlayer:
+    state: NightRuntimeState,
+    living_wolves: list[NightPlayer],
+) -> NightPlayer:
     order = _rotating_werewolf_order(state, living_wolves)
     if order:
         return order[0]
-    raise V2NightError("werewolf_tiebreaker_unavailable")
+    raise NightError("werewolf_tiebreaker_unavailable")
 
 
 def _rotating_werewolf_order(
-    state: V2NightRuntimeState,
-    living_wolves: list[V2NightPlayer],
-) -> list[V2NightPlayer]:
+    state: NightRuntimeState,
+    living_wolves: list[NightPlayer],
+) -> list[NightPlayer]:
     living_by_id = {wolf.player_id: wolf for wolf in living_wolves}
     state_players = getattr(state, "players", ())
     original_ids = [
@@ -2320,7 +2320,7 @@ def _rotating_werewolf_order(
     if not original_ids:
         return []
     start = (state.round_no - 1) % len(original_ids)
-    order: list[V2NightPlayer] = []
+    order: list[NightPlayer] = []
     for offset in range(len(original_ids)):
         player_id = original_ids[(start + offset) % len(original_ids)]
         if player_id in living_by_id:
@@ -2329,7 +2329,7 @@ def _rotating_werewolf_order(
 
 
 def _seeded_tie_choice(
-    state: V2NightRuntimeState,
+    state: NightRuntimeState,
     targets: list[str | None],
 ) -> str | None:
     ordered = sorted(targets, key=lambda item: (item is not None, item or ""))
@@ -2358,18 +2358,18 @@ def _activation_groups(snapshot: dict[str, Any]) -> tuple[str, ...]:
     return tuple(groups)
 
 
-def _single_owner(state: V2NightRuntimeState, role_key: str) -> V2NightPlayer | None:
+def _single_owner(state: NightRuntimeState, role_key: str) -> NightPlayer | None:
     owners = [player for player in state.players if player.role_key == role_key]
     if not owners:
         return None
     if len(owners) != 1:
-        raise V2NightError(f"multiple_{role_key}_owners_not_supported")
+        raise NightError(f"multiple_{role_key}_owners_not_supported")
     return owners[0]
 
 
-def _required_target(decision: V2ModelDecision) -> str:
+def _required_target(decision: ModelDecision) -> str:
     if decision.target_player_id is None:
-        raise V2NightError("required_target_missing")
+        raise NightError("required_target_missing")
     return decision.target_player_id
 
 
@@ -2382,4 +2382,4 @@ def _failure_code(exc: Exception) -> str:
 
 # Compatibility name for already-written V2 tests and records. The implementation
 # is round-agnostic and is used for every night.
-V2FirstNightEngine = V2NightEngine
+FirstNightEngine = NightEngine

@@ -12,24 +12,24 @@ import Typography from "antd/es/typography";
 import { useState, type ReactNode } from "react";
 
 import { isAdminApiError } from "@/api/problem-details";
-import { readV2GameEvent } from "@/v2/game-records/api";
+import { readGameEvent } from "@/match/game-records/api";
 import {
-  classifyV2ModelContextContract,
+  classifyModelContextContract,
   structuredModelContextFromRequestPayload,
-} from "@/v2/game-records/model-context-contract";
+} from "@/match/game-records/model-context-contract";
 import {
   actionLabel,
   formatClock,
   phaseLabel,
   prettyJson,
-} from "@/v2/game-records/presentation";
-import { v2GameRecordKeys } from "@/v2/game-records/query-keys";
+} from "@/match/game-records/presentation";
+import { gameRecordKeys } from "@/match/game-records/query-keys";
 import type {
-  V2GameRecordEvent,
-  V2MemorySelectorAudit,
-  V2ModelRequest,
-  V2PromptProjection,
-} from "@/v2/game-records/types";
+  GameRecordEvent,
+  MemorySelectorAudit,
+  ModelRequest,
+  PromptProjection,
+} from "@/match/game-records/types";
 
 type RequestMessage = {
   role: string;
@@ -334,7 +334,7 @@ const valueLabels: Record<string, string> = {
 export function ReadableModelInput({
   request,
 }: {
-  request: V2ModelRequest | null;
+  request: ModelRequest | null;
 }) {
   if (!request?.request_payload) {
     return <Empty description="这一步没有模型输入" />;
@@ -342,7 +342,7 @@ export function ReadableModelInput({
   const promptContext = structuredModelContextFromRequestPayload(
     request.request_payload,
   );
-  const presentationKind = classifyV2ModelContextContract(
+  const presentationKind = classifyModelContextContract(
     request,
     promptContext,
   );
@@ -542,10 +542,10 @@ export function ReadableModelInput({
 export function ReadableModelOutput({
   request,
 }: {
-  request: V2ModelRequest | null;
+  request: ModelRequest | null;
 }) {
   if (!request) return <Empty description="这一步没有模型输出" />;
-  if (classifyV2ModelContextContract(request) === "unsupported") {
+  if (classifyModelContextContract(request) === "unsupported") {
     return <HistoricalRawModelOutput request={request} />;
   }
   if (request.output_source === "unavailable") {
@@ -673,7 +673,7 @@ export function ReadableModelOutput({
 export function ModelOutputDiagnostics({
   request,
 }: {
-  request: V2ModelRequest;
+  request: ModelRequest;
 }) {
   const usage = request.provider_usage;
   const unavailable = "unavailable（Provider 未返回）";
@@ -756,7 +756,7 @@ export function ModelOutputDiagnostics({
   );
 }
 
-function LiveModelStream({ request }: { request: V2ModelRequest }) {
+function LiveModelStream({ request }: { request: ModelRequest }) {
   const hasReasoning = Boolean(request.stream_reasoning);
   const hasText = Boolean(request.stream_text);
   if (!hasReasoning && request.status !== "running") return null;
@@ -840,7 +840,7 @@ function LiveModelStream({ request }: { request: V2ModelRequest }) {
   );
 }
 
-function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
+function HistoricalRawModelInput({ request }: { request: ModelRequest }) {
   const contractVersion =
     request.model_context_schema_version === null
       ? "版本未知"
@@ -870,7 +870,7 @@ function HistoricalRawModelInput({ request }: { request: V2ModelRequest }) {
   );
 }
 
-function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
+function HistoricalRawModelOutput({ request }: { request: ModelRequest }) {
   const value = {
     application_validation_result:
       request.application_validation_result ?? null,
@@ -908,8 +908,8 @@ function HistoricalRawModelOutput({ request }: { request: V2ModelRequest }) {
   );
 }
 
-function finishReasonLabel(reason: V2ModelRequest["finish_reason"]) {
-  const labels: Record<NonNullable<V2ModelRequest["finish_reason"]>, string> = {
+function finishReasonLabel(reason: ModelRequest["finish_reason"]) {
+  const labels: Record<NonNullable<ModelRequest["finish_reason"]>, string> = {
     completed: "Provider 完成（completed）",
     stop: "正常停止（stop）",
     length: "长度上限（length）",
@@ -922,7 +922,7 @@ function finishReasonLabel(reason: V2ModelRequest["finish_reason"]) {
 }
 
 function usageConsistencyLabel(
-  consistency: V2ModelRequest["usage_consistency"],
+  consistency: ModelRequest["usage_consistency"],
 ) {
   if (consistency === null) return "—";
   if (consistency === "exact") return "完整一致（exact）";
@@ -939,9 +939,9 @@ function V13MemoryAudit({
   projection,
 }: {
   expandedKnownEvents: Record<string, unknown> | null;
-  expansionStatus: V2ModelRequest["known_events_expansion_status"];
+  expansionStatus: ModelRequest["known_events_expansion_status"];
   knownEvents: Record<string, unknown> | null;
-  projection: V2PromptProjection | null;
+  projection: PromptProjection | null;
 }) {
   const selector = projection?.selector ?? null;
 
@@ -1073,7 +1073,7 @@ function SelectorAuditEntries({
 }: {
   emptyDescription: string;
   entries: Array<
-    V2MemorySelectorAudit["retained"][number] | { event_ref: string; reason: string }
+    MemorySelectorAudit["retained"][number] | { event_ref: string; reason: string }
   >;
   label: string;
 }) {
@@ -1105,9 +1105,9 @@ function V7CompactionAudit({
   projection,
 }: {
   expandedKnownEvents: Record<string, unknown> | null;
-  expansionStatus: V2ModelRequest["known_events_expansion_status"];
+  expansionStatus: ModelRequest["known_events_expansion_status"];
   knownEvents: Record<string, unknown> | null;
-  projection: V2PromptProjection | null;
+  projection: PromptProjection | null;
 }) {
   const missingFields = v7CompactionAuditFields.filter(
     (key) =>
@@ -1334,7 +1334,7 @@ function auditNumber(value: number | null) {
 function OutputEnforcementAudit({
   request,
 }: {
-  request: V2ModelRequest;
+  request: ModelRequest;
 }) {
   const enforcement = request.output_enforcement;
   const enforcementMissing =
@@ -1422,7 +1422,7 @@ function outputEnforcementLabel(value: string | null) {
 }
 
 function outputSchemaLabel(
-  enforcement: V2ModelRequest["output_enforcement"] | null,
+  enforcement: ModelRequest["output_enforcement"] | null,
 ) {
   if (enforcement?.actual === "prompt_and_application_validation") {
     return "未使用 Provider 严格 Schema";
@@ -1497,7 +1497,7 @@ export function ReadableRawEvents({
   events,
   gameId,
 }: {
-  events: V2GameRecordEvent[];
+  events: GameRecordEvent[];
   gameId: string;
 }) {
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
@@ -1534,14 +1534,14 @@ function RawEventPayload({
   event,
   gameId,
 }: {
-  event: V2GameRecordEvent;
+  event: GameRecordEvent;
   gameId: string;
 }) {
   const query = useQuery({
     gcTime: 0,
     queryFn: ({ signal }) =>
-      readV2GameEvent(gameId, event.event_id, signal),
-    queryKey: v2GameRecordKeys.event(gameId, event.event_id),
+      readGameEvent(gameId, event.event_id, signal),
+    queryKey: gameRecordKeys.event(gameId, event.event_id),
   });
   if (query.isPending) {
     return <Typography.Text type="secondary">正在按需读取事件正文...</Typography.Text>;
@@ -2024,7 +2024,7 @@ function ReadableValue({
 }
 
 function summarizeKnownEvents(
-  projection: V2PromptProjection | null,
+  projection: PromptProjection | null,
   value: Record<string, unknown> | null,
 ): KnownEventsSummary | null {
   const events = value && Array.isArray(value.events) ? value.events : null;

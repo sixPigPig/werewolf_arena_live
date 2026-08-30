@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
-class V2JudgeTemplateError(RuntimeError):
+class JudgeTemplateError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class V2RenderedJudgeSpeech:
+class RenderedJudgeSpeech:
     template_id: str
     template_version: int
     text: str
@@ -20,7 +20,7 @@ def render_judge_speech(
     *,
     action_type: str,
     context: dict[str, Any],
-) -> V2RenderedJudgeSpeech:
+) -> RenderedJudgeSpeech:
     variables: dict[str, Any]
     text: str
 
@@ -118,7 +118,7 @@ def render_judge_speech(
             "werewolves": "狼人阵营",
         }.get(winner)
         if winner_name is None:
-            raise V2JudgeTemplateError(f"unsupported winner: {winner}")
+            raise JudgeTemplateError(f"unsupported winner: {winner}")
         variables = {"winner": winner}
         text = f"本局结束，{winner_name}获胜。"
     elif action_type == "werewolf_attack_wake":
@@ -147,7 +147,7 @@ def render_judge_speech(
             "werewolves": "狼人阵营",
         }.get(alignment)
         if alignment_name is None:
-            raise V2JudgeTemplateError(f"unsupported alignment: {alignment}")
+            raise JudgeTemplateError(f"unsupported alignment: {alignment}")
         variables = {
             "target_player_seat": target_seat,
             "alignment": alignment,
@@ -171,9 +171,9 @@ def render_judge_speech(
         variables = {}
         text = "女巫行动结束，请闭眼。"
     else:
-        raise V2JudgeTemplateError(f"missing judge template: {action_type}")
+        raise JudgeTemplateError(f"missing judge template: {action_type}")
 
-    return V2RenderedJudgeSpeech(
+    return RenderedJudgeSpeech(
         template_id=action_type,
         template_version=1,
         text=text,
@@ -188,7 +188,7 @@ def _mapping(value: Any) -> dict[str, Any]:
 def _required_text(value: Any, field: str) -> str:
     text = _optional_text(value)
     if text is None:
-        raise V2JudgeTemplateError(f"{field} is required")
+        raise JudgeTemplateError(f"{field} is required")
     return text
 
 
@@ -199,7 +199,7 @@ def _optional_text(value: Any) -> str | None:
 def _positive_int(value: Any, field: str) -> int:
     result = _optional_int(value)
     if result is None or result < 1:
-        raise V2JudgeTemplateError(f"{field} must be a positive integer")
+        raise JudgeTemplateError(f"{field} must be a positive integer")
     return result
 
 
@@ -209,7 +209,7 @@ def _optional_int(value: Any) -> int | None:
 
 def _positive_int_list(value: Any, field: str) -> list[int]:
     if not isinstance(value, list):
-        raise V2JudgeTemplateError(f"{field} must be a list")
+        raise JudgeTemplateError(f"{field} must be a list")
     return [_positive_int(item, f"{field}[]") for item in value]
 
 
