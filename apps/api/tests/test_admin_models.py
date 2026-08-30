@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Generator
 from datetime import UTC, datetime
 
@@ -11,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.admin_models import (
     get_agent_plan_catalog_client,
+    get_arkcli_auth_client,
     get_deepseek_catalog_client,
 )
 from app.core.config import settings
@@ -23,8 +25,13 @@ from app.model_catalog.defaults import (
     reasoning_policy_for_model,
 )
 from app.model_catalog.service import (
+    AgentPlanCatalogClient,
+    ArkcliAuthClient,
     DeepSeekCatalogClient,
     DiscoveredModel,
+    ModelCatalogAuthRequired,
+    ModelCatalogUnavailable,
+    VolcLoginChallenge,
     validate_parameter_values,
 )
 from app.models.model_configuration import ModelConfigurationRecord
@@ -97,6 +104,36 @@ class FakeAgentPlanCatalogClient:
         ]
 
 
+class FakeArkcliAuthClient:
+    def __init__(self) -> None:
+        self.completed_codes: list[str] = []
+        self.already_authenticated = False
+        self.fail_start = False
+        self.fail_complete = False
+
+    def start_volc_login(self) -> VolcLoginChallenge:
+        if self.fail_start:
+            raise ModelCatalogAuthRequired(
+                "Agent Plan sync requires an authenticated arkcli Volc SSO session."
+            )
+        if self.already_authenticated:
+            return VolcLoginChallenge(
+                authorize_url=None,
+                expires_in_sec=None,
+                already_authenticated=True,
+            )
+        return VolcLoginChallenge(
+            authorize_url="https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+            expires_in_sec=600,
+            already_authenticated=False,
+        )
+
+    def complete_volc_login(self, authorization_code: str) -> None:
+        if self.fail_complete:
+            raise ModelCatalogUnavailable("Volcengine login failed.")
+        self.completed_codes.append(authorization_code)
+
+
 @pytest.fixture
 def model_admin_client(
     monkeypatch: pytest.MonkeyPatch,
@@ -141,6 +178,7 @@ def model_admin_client(
     application.dependency_overrides[get_agent_plan_catalog_client] = (
         FakeAgentPlanCatalogClient
     )
+    application.dependency_overrides[get_arkcli_auth_client] = FakeArkcliAuthClient
     with TestClient(application) as client:
         yield client, testing_session
     engine.dispose()
@@ -972,3 +1010,148 @@ def test_enabled_thinking_requires_reasoning_effort(model_admin_client) -> None:
 
     assert response.status_code == 422
     assert "reasoning_effort is required" in response.text
+
+
+def test_agent_plan_sync_reports_volc_sso_required(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+
+    class AuthRequiredClient:
+        def list_models(self) -> list[DiscoveredModel]:
+            raise ModelCatalogAuthRequired(
+                "Agent Plan sync requires an authenticated arkcli Volc SSO session."
+            )
+
+    client.app.dependency_overrides[get_agent_plan_catalog_client] = (
+        lambda: AuthRequiredClient()
+    )
+    response = client.post(
+        "/api/v1/admin/models/agent-plan/sync",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "admin_model_catalog_sync_auth_required"
+    assert "Volc SSO" in response.json()["detail"]
+
+
+def test_agent_plan_volc_login_start_and_complete(model_admin_client) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    auth_client = FakeArkcliAuthClient()
+    client.app.dependency_overrides[get_arkcli_auth_client] = lambda: auth_client
+
+    started = client.post(
+        "/api/v1/admin/models/agent-plan/login",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json() == {
+        "authorize_url": "https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+        "expires_in_sec": 600,
+        "already_authenticated": False,
+    }
+
+    completed = client.post(
+        "/api/v1/admin/models/agent-plan/login/complete",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"authorization_code": "  demo-code  "},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json() == {"authenticated": True}
+    assert auth_client.completed_codes == ["  demo-code  "]
+
+
+def test_agent_plan_volc_login_start_reports_already_authenticated(
+    model_admin_client,
+) -> None:
+    client, _ = model_admin_client
+    csrf_token = _login(client)
+    auth_client = FakeArkcliAuthClient()
+    auth_client.already_authenticated = True
+    client.app.dependency_overrides[get_arkcli_auth_client] = lambda: auth_client
+
+    started = client.post(
+        "/api/v1/admin/models/agent-plan/login",
+        headers={"X-CSRF-Token": csrf_token},
+    )
+
+    assert started.status_code == 200, started.text
+    assert started.json() == {
+        "authorize_url": None,
+        "expires_in_sec": None,
+        "already_authenticated": True,
+    }
+
+
+def test_agent_plan_client_raises_auth_required_for_volc_sso(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        del args, kwargs
+        return subprocess.CompletedProcess(
+            args=["arkcli"],
+            returncode=1,
+            stdout="",
+            stderr="control plane requires Volc SSO STS; run arkcli auth login volc-sso",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(ModelCatalogAuthRequired, match="Volc SSO"):
+        AgentPlanCatalogClient().list_models()
+
+
+def test_arkcli_auth_client_parses_no_browser_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        commands.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"stage":"authorize_pending","authorize_url":'
+                '"https://signin.volcengine.com/authorize/oauth/authorize?x=1",'
+                '"expires_in_sec":600}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    challenge = ArkcliAuthClient().start_volc_login()
+
+    assert commands == [["arkcli", "auth", "login", "--no-browser"]]
+    assert challenge.authorize_url == (
+        "https://signin.volcengine.com/authorize/oauth/authorize?x=1"
+    )
+    assert challenge.expires_in_sec == 600
+    assert challenge.already_authenticated is False
+
+
+def test_arkcli_auth_client_completes_no_browser_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        commands.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"auth_method":"sso_no_browser"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ArkcliAuthClient().complete_volc_login("  encoded-code  ")
+
+    assert commands == [
+        ["arkcli", "auth", "login", "--no-browser", "--code", "encoded-code"]
+    ]

@@ -384,4 +384,101 @@ describe("model management flow", () => {
     expect(maxTokens).toHaveValue("512");
     expect(within(model!).getByText("自动联动")).toBeInTheDocument();
   });
+
+  it("prompts Volcengine login after Agent Plan sync auth failure", async () => {
+    let syncedAfterLogin = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/admin/models") && (!init?.method || init.method === "GET")) {
+          return new Response(JSON.stringify(catalog), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/v1/admin/models/agent-plan/sync")) {
+          if (!syncedAfterLogin) {
+            return new Response(
+              JSON.stringify({
+                type: "urn:werewolf-arena:admin-problem:admin_model_catalog_sync_auth_required",
+                title: "Volcengine login required",
+                status: 503,
+                detail: "Agent Plan sync requires an authenticated arkcli Volc SSO session.",
+                code: "admin_model_catalog_sync_auth_required",
+                request_id: "req-models-login",
+              }),
+              {
+                headers: { "Content-Type": "application/problem+json" },
+                status: 503,
+              },
+            );
+          }
+          return new Response(JSON.stringify(catalog), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/v1/admin/models/agent-plan/login")) {
+          return new Response(
+            JSON.stringify({
+              authorize_url: "https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+              expires_in_sec: 600,
+              already_authenticated: false,
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/api/v1/admin/models/agent-plan/login/complete")) {
+          syncedAfterLogin = true;
+          return new Response(JSON.stringify({ authenticated: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const user = userEvent.setup();
+    renderModelsPage();
+
+    await user.click(await screen.findByRole("button", { name: "更新 Agent Plan 模型" }));
+    const dialog = await screen.findByRole("dialog", { name: "是否登录火山引擎" });
+    expect(dialog).toHaveTextContent("是否现在登录");
+    expect(screen.queryByText("模型同步失败")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /取\s*消/ }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "更新 Agent Plan 模型" }));
+    const confirmDialog = await screen.findByRole("dialog", {
+      name: "是否登录火山引擎",
+    });
+    await user.click(within(confirmDialog).getByRole("button", { name: "确认登录" }));
+    expect(await screen.findByRole("dialog", { name: "完成火山引擎登录" })).toBeInTheDocument();
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    await user.type(screen.getByLabelText("火山引擎授权码"), "encoded-code");
+    await user.click(screen.getByRole("button", { name: "完成登录" }));
+    await expectAdminNotification("火山引擎已登录");
+    await expectAdminNotification("Agent Plan 模型已同步");
+
+    const fetchMock = vi.mocked(fetch);
+    const complete = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/api/v1/admin/models/agent-plan/login/complete"),
+    );
+    expect(complete).toBeDefined();
+    expect(JSON.parse(String(complete?.[1]?.body))).toEqual({
+      authorization_code: "encoded-code",
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/api/v1/admin/models/agent-plan/sync"),
+      ),
+    ).toHaveLength(3);
+    openSpy.mockRestore();
+  });
 });

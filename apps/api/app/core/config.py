@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     ] = "agent-plan"
     model_catalog_arkcli_path: str = "arkcli"
     model_catalog_sync_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
+    model_catalog_login_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
     model_catalog_deepseek_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     ark_tts_enabled: bool = False
     ark_tts_api_key: str = ""

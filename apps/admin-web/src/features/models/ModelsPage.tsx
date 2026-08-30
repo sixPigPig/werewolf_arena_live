@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AntApp from "antd/es/app";
 import Checkbox from "antd/es/checkbox";
+import Input from "antd/es/input";
 import InputNumber from "antd/es/input-number";
+import Modal from "antd/es/modal";
 import Select from "antd/es/select";
+import Typography from "antd/es/typography";
 import {
   cloneElement,
   type FormEvent,
@@ -18,7 +21,10 @@ import { isAdminApiError } from "@/api/problem-details";
 import { hasAdminPermission } from "@/features/auth/permissions";
 import { useAdminSession } from "@/features/auth/session-context";
 import {
+  completeAgentPlanVolcLogin,
+  isAgentPlanSyncAuthRequired,
   listAdminModels,
+  startAgentPlanVolcLogin,
   syncAgentPlanModels,
   updateAdminModel,
 } from "@/features/models/api";
@@ -31,6 +37,7 @@ import type {
   ModelConfigurationInput,
   ModelReasoningPolicy,
   ThinkingMode,
+  VolcLoginChallenge,
 } from "@/features/models/types";
 import { adminOperationErrorDescription } from "@/lib/admin-notification";
 
@@ -44,6 +51,11 @@ export default function ModelsPage() {
   const queryClient = useQueryClient();
   const { runtimeMode, session } = useAdminSession();
   const canManage = hasAdminPermission(session?.permissions ?? [], "settings.manage");
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const [loginChallenge, setLoginChallenge] = useState<VolcLoginChallenge | null>(
+    null,
+  );
+  const [loginError, setLoginError] = useState<string | null>(null);
   const catalogQuery = useQuery({
     queryKey: adminModelKeys.catalog,
     queryFn: ({ signal }) =>
@@ -55,6 +67,12 @@ export default function ModelsPage() {
   const syncMutation = useMutation({
     mutationFn: () => syncAgentPlanModels(session?.csrf_token ?? ""),
     onError: (error) => {
+      if (isAgentPlanSyncAuthRequired(error)) {
+        setLoginChallenge(null);
+        setLoginError(null);
+        setLoginDialogOpen(true);
+        return;
+      }
       notification.error({
         description: adminOperationErrorDescription(
           error,
@@ -64,10 +82,53 @@ export default function ModelsPage() {
       });
     },
     onSuccess: (catalog) => {
+      setLoginDialogOpen(false);
+      setLoginChallenge(null);
+      setLoginError(null);
       queryClient.setQueryData(adminModelKeys.catalog, catalog);
       notification.success({ title: "Agent Plan 模型已同步" });
     },
   });
+  const startLoginMutation = useMutation({
+    mutationFn: () => startAgentPlanVolcLogin(session?.csrf_token ?? ""),
+    onError: (error) => {
+      setLoginError(
+        adminOperationErrorDescription(error, "启动火山引擎登录失败。"),
+      );
+    },
+    onSuccess: (challenge) => {
+      setLoginError(null);
+      if (challenge.already_authenticated) {
+        setLoginDialogOpen(false);
+        setLoginChallenge(null);
+        notification.success({ title: "火山引擎已登录" });
+        syncMutation.mutate();
+        return;
+      }
+      setLoginChallenge(challenge);
+      if (challenge.authorize_url) {
+        window.open(challenge.authorize_url, "_blank", "noopener,noreferrer");
+      }
+    },
+  });
+  const completeLoginMutation = useMutation({
+    mutationFn: (authorizationCode: string) =>
+      completeAgentPlanVolcLogin(authorizationCode, session?.csrf_token ?? ""),
+    onError: (error) => {
+      setLoginError(
+        adminOperationErrorDescription(error, "完成火山引擎登录失败。"),
+      );
+    },
+    onSuccess: () => {
+      setLoginError(null);
+      setLoginDialogOpen(false);
+      setLoginChallenge(null);
+      notification.success({ title: "火山引擎已登录" });
+      syncMutation.mutate();
+    },
+  });
+  const loginPending =
+    startLoginMutation.isPending || completeLoginMutation.isPending;
   const configurationMutation = useMutation({
     mutationFn: ({ model, input }: ConfigurationMutation) =>
       updateAdminModel(
@@ -167,7 +228,101 @@ export default function ModelsPage() {
           />
         </div>
       ) : null}
+      {loginDialogOpen ? (
+        <VolcLoginDialog
+          challenge={loginChallenge}
+          error={loginError}
+          onCancel={() => {
+            if (loginPending) return;
+            setLoginDialogOpen(false);
+            setLoginChallenge(null);
+            setLoginError(null);
+          }}
+          onComplete={(code) => completeLoginMutation.mutate(code)}
+          onStart={() => startLoginMutation.mutate()}
+          pending={loginPending}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function VolcLoginDialog({
+  challenge,
+  error,
+  onCancel,
+  onComplete,
+  onStart,
+  pending,
+}: {
+  challenge: VolcLoginChallenge | null;
+  error: string | null;
+  onCancel: () => void;
+  onComplete: (authorizationCode: string) => void;
+  onStart: () => void;
+  pending: boolean;
+}) {
+  const [authorizationCode, setAuthorizationCode] = useState("");
+  const authorizing = Boolean(challenge?.authorize_url);
+  const trimmedCode = authorizationCode.trim();
+
+  return (
+    <Modal
+      cancelText="取消"
+      confirmLoading={pending}
+      destroyOnHidden
+      okButtonProps={{
+        disabled: authorizing && trimmedCode.length === 0,
+      }}
+      okText={authorizing ? "完成登录" : "确认登录"}
+      onCancel={onCancel}
+      onOk={() => {
+        if (authorizing) {
+          onComplete(trimmedCode);
+          return;
+        }
+        onStart();
+      }}
+      open
+      title={authorizing ? "完成火山引擎登录" : "是否登录火山引擎"}
+    >
+      {authorizing ? (
+        <>
+          <Typography.Paragraph>
+            请在打开的页面完成火山引擎授权，然后将页面显示的授权码粘贴到下方。
+          </Typography.Paragraph>
+          {challenge?.authorize_url ? (
+            <Typography.Paragraph>
+              <a
+                href={challenge.authorize_url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                重新打开登录页
+              </a>
+            </Typography.Paragraph>
+          ) : null}
+          <Typography.Text strong>授权码</Typography.Text>
+          <Input.TextArea
+            aria-label="火山引擎授权码"
+            disabled={pending}
+            onChange={(event) => setAuthorizationCode(event.target.value)}
+            placeholder="粘贴页面显示的授权码"
+            rows={3}
+            value={authorizationCode}
+          />
+        </>
+      ) : (
+        <Typography.Paragraph>
+          更新 Agent Plan 模型失败，当前缺少火山引擎登录会话。是否现在登录？
+        </Typography.Paragraph>
+      )}
+      {error ? (
+        <p className="game-inline-warning" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Modal>
   );
 }
 

@@ -17,12 +17,17 @@ from app.api.schemas.admin_models import (
     AdminModelConfigurationRequest,
     AdminModelItem,
     AdminModelSource,
+    AdminVolcLoginCompleteRequest,
+    AdminVolcLoginCompleteResponse,
+    AdminVolcLoginStartResponse,
 )
 from app.db.session import get_db
 from app.model_catalog.service import (
     AgentPlanCatalogClient,
+    ArkcliAuthClient,
     CatalogSnapshot,
     DeepSeekCatalogClient,
+    ModelCatalogAuthRequired,
     ModelCatalogUnavailable,
     ModelConfigurationConflict,
     get_catalog_snapshot,
@@ -39,6 +44,10 @@ ProviderPath = Literal["agent_plan", "ark", "deepseek"]
 
 def get_agent_plan_catalog_client() -> AgentPlanCatalogClient:
     return AgentPlanCatalogClient()
+
+
+def get_arkcli_auth_client() -> ArkcliAuthClient:
+    return ArkcliAuthClient()
 
 
 def get_deepseek_catalog_client() -> DeepSeekCatalogClient:
@@ -76,6 +85,24 @@ def sync_admin_agent_plan_models(
     _require_manage(principal)
     try:
         snapshot = sync_agent_plan_catalog(db, client=client)
+    except ModelCatalogAuthRequired as exc:
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.model_catalog.sync",
+            resource_type="model_catalog",
+            resource_id="agent_plan",
+            result="failed",
+            reason=str(exc),
+        )
+        db.commit()
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_model_catalog_sync_auth_required",
+            title="Volcengine login required",
+            detail=str(exc),
+        ) from exc
     except ModelCatalogUnavailable as exc:
         record_audit_event(
             db,
@@ -118,6 +145,108 @@ def sync_admin_agent_plan_models(
     db.commit()
     _set_private_headers(request, response)
     return _catalog_response(snapshot)
+
+
+@router.post("/models/agent-plan/login", response_model=AdminVolcLoginStartResponse)
+def start_admin_agent_plan_volc_login(
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[ArkcliAuthClient, Depends(get_arkcli_auth_client)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+) -> AdminVolcLoginStartResponse:
+    _require_manage(principal)
+    try:
+        challenge = client.start_volc_login()
+    except ModelCatalogUnavailable as exc:
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.model_catalog.volc_login.start",
+            resource_type="model_catalog",
+            resource_id="agent_plan",
+            result="failed",
+            reason=str(exc),
+        )
+        db.commit()
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_model_catalog_login_unavailable",
+            title="Volcengine login unavailable",
+            detail=str(exc),
+        ) from exc
+    record_audit_event(
+        db,
+        request=request,
+        actor_user_id=principal.user.id,
+        action="admin.model_catalog.volc_login.start",
+        resource_type="model_catalog",
+        resource_id="agent_plan",
+        result="success",
+        after={"already_authenticated": challenge.already_authenticated},
+    )
+    db.commit()
+    _set_private_headers(request, response)
+    return AdminVolcLoginStartResponse(
+        authorize_url=challenge.authorize_url,
+        expires_in_sec=challenge.expires_in_sec,
+        already_authenticated=challenge.already_authenticated,
+    )
+
+
+@router.post(
+    "/models/agent-plan/login/complete",
+    response_model=AdminVolcLoginCompleteResponse,
+)
+def complete_admin_agent_plan_volc_login(
+    payload: AdminVolcLoginCompleteRequest,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[ArkcliAuthClient, Depends(get_arkcli_auth_client)],
+    principal: Annotated[AdminPrincipal, Depends(require_admin_csrf)],
+) -> AdminVolcLoginCompleteResponse:
+    _require_manage(principal)
+    try:
+        client.complete_volc_login(payload.authorization_code)
+    except ValueError as exc:
+        raise AdminAPIProblem(
+            status_code=422,
+            code="admin_model_catalog_login_invalid",
+            title="Invalid Volcengine login request",
+            detail=str(exc),
+        ) from exc
+    except ModelCatalogUnavailable as exc:
+        record_audit_event(
+            db,
+            request=request,
+            actor_user_id=principal.user.id,
+            action="admin.model_catalog.volc_login.complete",
+            resource_type="model_catalog",
+            resource_id="agent_plan",
+            result="failed",
+            reason=str(exc),
+        )
+        db.commit()
+        raise AdminAPIProblem(
+            status_code=503,
+            code="admin_model_catalog_login_unavailable",
+            title="Volcengine login unavailable",
+            detail=str(exc),
+        ) from exc
+    record_audit_event(
+        db,
+        request=request,
+        actor_user_id=principal.user.id,
+        action="admin.model_catalog.volc_login.complete",
+        resource_type="model_catalog",
+        resource_id="agent_plan",
+        result="success",
+    )
+    db.commit()
+    _set_private_headers(request, response)
+    return AdminVolcLoginCompleteResponse(authenticated=True)
 
 
 @router.patch("/models/{provider}/{model_id}", status_code=204)

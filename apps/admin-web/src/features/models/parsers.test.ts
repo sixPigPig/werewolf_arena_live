@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseAdminModelCatalog } from "@/features/models/parsers";
+import {
+  parseAdminModelCatalog,
+  parseVolcLoginChallenge,
+} from "@/features/models/parsers";
 import { previewModelCatalog } from "@/features/models/preview";
 
 function catalogPayload(): Record<string, unknown> {
@@ -78,5 +81,35 @@ describe("admin model catalog parser", () => {
     expect(() => parseAdminModelCatalog(payload)).toThrow(
       "Invalid sampling_parameters_allowed_when_thinking",
     );
+  });
+});
+
+describe("volc login challenge parser", () => {
+  it("parses a pending authorize URL", () => {
+    expect(
+      parseVolcLoginChallenge({
+        authorize_url: "https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+        expires_in_sec: 600,
+        already_authenticated: false,
+      }),
+    ).toEqual({
+      authorize_url: "https://signin.volcengine.com/authorize/oauth/authorize?x=1",
+      expires_in_sec: 600,
+      already_authenticated: false,
+    });
+  });
+
+  it("allows a null URL when already authenticated", () => {
+    expect(
+      parseVolcLoginChallenge({
+        authorize_url: null,
+        expires_in_sec: null,
+        already_authenticated: true,
+      }),
+    ).toEqual({
+      authorize_url: null,
+      expires_in_sec: null,
+      already_authenticated: true,
+    });
   });
 });

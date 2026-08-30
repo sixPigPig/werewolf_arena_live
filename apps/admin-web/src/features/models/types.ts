@@ -66,3 +66,9 @@ export type ModelConfigurationInput = {
   is_default: boolean;
   parameters: ModelParameters;
 };
+
+export type VolcLoginChallenge = {
+  authorize_url: string | null;
+  expires_in_sec: number | null;
+  already_authenticated: boolean;
+};

@@ -6,7 +6,31 @@ import type {
   ModelProvider,
   ModelReasoningPolicy,
   ThinkingMode,
+  VolcLoginChallenge,
 } from "@/features/models/types";
+
+export function parseVolcLoginChallenge(value: unknown): VolcLoginChallenge {
+  const record = requiredRecord(value, "volc login challenge");
+  const alreadyAuthenticated = requiredBoolean(
+    record.already_authenticated,
+    "already_authenticated",
+  );
+  if (alreadyAuthenticated) {
+    return {
+      authorize_url: requiredNullableString(record.authorize_url, "authorize_url"),
+      expires_in_sec: requiredNullableInteger(
+        record.expires_in_sec,
+        "expires_in_sec",
+      ),
+      already_authenticated: true,
+    };
+  }
+  return {
+    authorize_url: requiredString(record.authorize_url, "authorize_url"),
+    expires_in_sec: requiredInteger(record.expires_in_sec, "expires_in_sec"),
+    already_authenticated: false,
+  };
+}
 
 export function parseAdminModelCatalog(value: unknown): AdminModelCatalog {
   const record = requiredRecord(value, "model catalog");

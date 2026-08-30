@@ -73,3 +73,19 @@ class AdminModelConfigurationRequest(BaseModel):
     enabled: bool
     is_default: bool = False
     parameters: AdminModelParameters
+
+
+class AdminVolcLoginStartResponse(BaseModel):
+    authorize_url: str | None
+    expires_in_sec: int | None
+    already_authenticated: bool
+
+
+class AdminVolcLoginCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authorization_code: str = Field(min_length=1, max_length=4096)
+
+
+class AdminVolcLoginCompleteResponse(BaseModel):
+    authenticated: bool = True

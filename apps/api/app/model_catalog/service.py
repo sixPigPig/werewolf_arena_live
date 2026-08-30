@@ -43,6 +43,17 @@ class ModelCatalogUnavailable(RuntimeError):
     pass
 
 
+class ModelCatalogAuthRequired(ModelCatalogUnavailable):
+    pass
+
+
+@dataclass(frozen=True)
+class VolcLoginChallenge:
+    authorize_url: str | None
+    expires_in_sec: int | None
+    already_authenticated: bool
+
+
 @dataclass(frozen=True)
 class DiscoveredModel:
     provider: ModelProviderName
@@ -116,7 +127,7 @@ class AgentPlanCatalogClient:
         except subprocess.TimeoutExpired as exc:
             raise ModelCatalogUnavailable("Agent Plan model discovery timed out.") from exc
         if result.returncode != 0:
-            raise ModelCatalogUnavailable(_safe_cli_error(result.stdout, result.stderr))
+            _raise_cli_failure(result.stdout, result.stderr)
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
@@ -160,6 +171,48 @@ class AgentPlanCatalogClient:
         if not discovered:
             raise ModelCatalogUnavailable("Agent Plan returned an empty model catalog.")
         return discovered
+
+
+class ArkcliAuthClient:
+    def start_volc_login(self) -> VolcLoginChallenge:
+        payload = _run_arkcli_json(
+            ["auth", "login", "--no-browser"],
+            timeout=settings.model_catalog_login_timeout_seconds,
+            timeout_message="Volcengine login timed out.",
+            failure_message="Volcengine login failed.",
+        )
+        authorize_url = _non_empty_string(payload.get("authorize_url"))
+        if authorize_url:
+            expires_in_sec = payload.get("expires_in_sec")
+            return VolcLoginChallenge(
+                authorize_url=authorize_url,
+                expires_in_sec=(
+                    expires_in_sec if isinstance(expires_in_sec, int) and expires_in_sec > 0 else 600
+                ),
+                already_authenticated=False,
+            )
+        if _payload_indicates_authenticated(payload):
+            return VolcLoginChallenge(
+                authorize_url=None,
+                expires_in_sec=None,
+                already_authenticated=True,
+            )
+        raise ModelCatalogUnavailable("arkcli login did not return an authorize URL.")
+
+    def complete_volc_login(self, authorization_code: str) -> None:
+        code = authorization_code.strip()
+        if not code:
+            raise ValueError("authorization_code is required.")
+        payload = _run_arkcli_json(
+            ["auth", "login", "--no-browser", "--code", code],
+            timeout=settings.model_catalog_login_timeout_seconds,
+            timeout_message="Volcengine login timed out.",
+            failure_message="Volcengine login failed.",
+        )
+        if payload.get("stage") == "authorize_pending":
+            raise ModelCatalogUnavailable("arkcli login did not complete.")
+        if not _payload_indicates_authenticated(payload):
+            raise ModelCatalogUnavailable("Volcengine login failed.")
 
 
 class DeepSeekCatalogClient:
@@ -710,8 +763,80 @@ def _deepseek_description(model_id: str) -> str:
     return "DeepSeek 官方 API 模型。"
 
 
-def _safe_cli_error(stdout: str, stderr: str) -> str:
+def _run_arkcli_json(
+    args: list[str],
+    *,
+    timeout: float,
+    timeout_message: str,
+    failure_message: str,
+) -> dict[str, Any]:
+    command = [settings.model_catalog_arkcli_path, *args]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        raise ModelCatalogUnavailable(
+            "arkcli is not installed in the API runtime."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ModelCatalogUnavailable(timeout_message) from exc
+    if result.returncode != 0:
+        _raise_cli_failure(result.stdout, result.stderr, fallback=failure_message)
+    return _parse_cli_json(result.stdout, fallback=failure_message)
+
+
+def _parse_cli_json(stdout: str, *, fallback: str) -> dict[str, Any]:
+    text = stdout.strip()
+    if not text:
+        raise ModelCatalogUnavailable(fallback)
+    candidates = [text]
+    start = text.find("{")
+    end = text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start : end + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    raise ModelCatalogUnavailable(fallback)
+
+
+def _payload_indicates_authenticated(payload: dict[str, Any]) -> bool:
+    auth_method = _non_empty_string(payload.get("auth_method"))
+    if auth_method:
+        return True
+    logged_in = payload.get("logged_in")
+    return logged_in is True
+
+
+def _is_volc_sso_required(stdout: str, stderr: str) -> bool:
     combined = " ".join(part.strip() for part in (stdout, stderr) if part.strip())
-    if "requires Volc SSO STS" in combined or "auth login volc-sso" in combined:
-        return "Agent Plan sync requires an authenticated arkcli Volc SSO session."
-    return "Agent Plan model discovery failed."
+    if "请先登录" in combined or "未登录" in combined:
+        return True
+    lowered = combined.lower()
+    return (
+        "requires volc sso sts" in lowered
+        or "auth login volc-sso" in lowered
+    )
+
+
+def _raise_cli_failure(
+    stdout: str,
+    stderr: str,
+    *,
+    fallback: str = "Agent Plan model discovery failed.",
+) -> None:
+    if _is_volc_sso_required(stdout, stderr):
+        raise ModelCatalogAuthRequired(
+            "Agent Plan sync requires an authenticated arkcli Volc SSO session."
+        )
+    raise ModelCatalogUnavailable(fallback)
