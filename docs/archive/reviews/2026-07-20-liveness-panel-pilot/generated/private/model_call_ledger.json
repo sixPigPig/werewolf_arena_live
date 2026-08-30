@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "calls": [
+    {
+      "seat": "generator",
+      "provider": "DeepSeek official API",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-flash",
+      "orientation": "12 frozen renderer generations",
+      "evidence_file": "generation_evidence.json",
+      "completed_file_at": "2026-07-19T22:47:43.474959+00:00",
+      "accepted": true
+    },
+    {
+      "seat": "judge_glm-5-2-260617",
+      "provider": "Volcengine Agent Plan via arkcli",
+      "calls": [
+        {
+          "file": "glm_original_cli.json",
+          "response_id": "resp_0217845013522178de7d2c0a15fc806db676875154b2f80ad02a2",
+          "model": "glm-5-2-260617",
+          "status": "incomplete",
+          "usage": {
+            "prompt_tokens": 3961,
+            "completion_tokens": 8000,
+            "total_tokens": 11961
+          },
+          "completed_file_at": "2026-07-19T22:50:37.481120+00:00",
+          "accepted": false
+        },
+        {
+          "file": "glm_original_cli_retry.json",
+          "response_id": "resp_021784501456208655dd71e1d01ef51dda793fc89c90573b72208",
+          "model": "glm-5-2-260617",
+          "status": "completed",
+          "usage": {
+            "prompt_tokens": 3955,
+            "completion_tokens": 1889,
+            "total_tokens": 5844
+          },
+          "completed_file_at": "2026-07-19T22:51:19.795963+00:00",
+          "accepted": false
+        },
+        {
+          "file": "glm_original_final.json",
+          "response_id": "resp_021784501510887cd226039e9cdd284b6568180b30f64bf49321a",
+          "model": "glm-5-2-260617",
+          "status": "completed",
+          "usage": {
+            "prompt_tokens": 4044,
+            "completion_tokens": 1562,
+            "total_tokens": 5606
+          },
+          "completed_file_at": "2026-07-19T22:52:15.730778+00:00",
+          "accepted": true
+        },
+        {
+          "file": "glm_swapped_final.json",
+          "response_id": "resp_021784501536356bed15afc0092f915eb01246432c6f7b64c778e",
+          "model": "glm-5-2-260617",
+          "status": "completed",
+          "usage": {
+            "prompt_tokens": 4044,
+            "completion_tokens": 1929,
+            "total_tokens": 5973
+          },
+          "completed_file_at": "2026-07-19T22:52:42.668684+00:00",
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "seat": "judge_deepseek-v4-pro",
+      "provider": "DeepSeek official API",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-pro",
+      "calls": [
+        {
+          "orientation": "original",
+          "file": "deepseek_original_final.json",
+          "completed_file_at": "2026-07-19T22:54:28.582838+00:00",
+          "validated_items": 12,
+          "accepted": true
+        },
+        {
+          "orientation": "swapped",
+          "file": "deepseek_swapped_final.json",
+          "completed_file_at": "2026-07-19T22:55:51.923879+00:00",
+          "validated_items": 12,
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "seat": "judge_codex",
+      "provider": "current Codex task",
+      "model": "Codex",
+      "calls": [
+        {
+          "orientation": "original",
+          "file": "codex_original_final.json",
+          "validated_items": 12,
+          "accepted": true
+        },
+        {
+          "orientation": "swapped",
+          "file": "codex_swapped_final.json",
+          "validated_items": 12,
+          "accepted": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,489 @@
+{
+  "schema_version": 1,
+  "original": [
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_fa7a03c1060a214d",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 5
+      },
+      "reason": "左侧发言充满报告腔（“公开信息显示”、“我提一个可验证的疑点”），且在前置位就过于详细地剖析平安夜，不符合首置位玩家自然开口的语气。右侧以“呃”起头，符合首置位破冰时的犹豫和口语感，迅速抛出问题并交还话题，更像真人自然接话。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_ed10701382646bde",
+      "presented_choice": "tie",
+      "normalized_choice": "tie",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "两侧都精准捕捉到1号遗漏了“同刀同守”并进行了补充。左侧虽然对容错的计算略显咬文嚼字，但展现了真实的玩家规划感；右侧“我不是要强打你，只是提醒一下”极具现场对话的互动感和分寸感，两者均符合真人接话表现，实质相当。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_55b5f96f24fc6a5a",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧直接反驳6号“有点急了”，但忽略了6号是在4号补充后才攻击1号这一具体上下文。右侧准确拆解了动作来源（“6号没补内容，只补情绪”），并依据当前未发言玩家给出了具体的怀疑范围收窄计划，关系连续性和现场盘逻辑的痕迹更足。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_f24884dda5cb0c3f",
+      "presented_choice": "left",
+      "normalized_choice": "left",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧准确抓住了3号双重标准的核心矛盾（只盯1号不盯5号8号），反问简短有力，极具现场施压的对话感。右侧虽然逻辑内容相似，但长篇大论地安排战术（“这一票我先看...”），且直接以主观视角定性“1号两轮都在主动产出信息”，更像是事后复盘而非现场自然对话。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_a47d95acbd590544",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧充斥“因果链”、“互动变化”等生硬的术语，发言像机器分析。右侧用口语化的表达直接指出了3号“一直反问别人却不回答”的行为模式，自然地表达了不信任感，并给出了站边与保留态度，更像真人在桌边的发言。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_f978bd647c3f3428",
+      "presented_choice": "left",
+      "normalized_choice": "left",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 5
+      },
+      "reason": "右侧过度解释警徽流和逻辑推演，长篇大论，报告腔重。左侧仅用一句话直接询问11号的验人信息，干净利落。在临场高压且信息断档的情况下，这种短促直接的追问最符合玩家真实状态。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_076b4e71b5b88c24",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧虽然逻辑严密，但“1.5票警长权重”、“好人倾向”等词更像书面复盘。右侧直接抓住1号逻辑断裂的要害（昨天替3号洗，今天打跟3号投票的8号），并用“逻辑链条断了吧？”这种口语化的反问进行施压，情绪饱满且符合现场对话的自然感。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_d1282bd735c555c5",
+      "presented_choice": "left",
+      "normalized_choice": "left",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "右侧虽然推演详细，但“我补一个被遗漏的角度”起手略显书面，且直接自问自答设定标准（“如果答不出...就是狼”）略显机械。左侧用短促的连续追问直接击破5号的逻辑漏洞，并紧逼8号报验人，施压感和口语感更符合现场对话。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_8f2ceaf86db27bf5",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      },
+      "reason": "左侧“竞选警长，归票明确，警徽会交给最信任的好人”过于端正，有念稿感。右侧“警上就这一轮，我归票7号，警徽流先留一个，后面再报。过了。”非常符合警上竞选时为了抢节奏、留后手的真实玩家口语习惯。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_d7af171514dbde26",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "左侧长篇大论讲述自己的警长规划，过于端正。右侧“上来凑个热闹”、“先信你一半吧”、“别含糊其辞的”极具村民人设的口语感，情绪饱满且对话感强，更像在桌边自由发言。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_2e28d68a0b6703d0",
+      "presented_choice": "tie",
+      "normalized_choice": "tie",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      },
+      "reason": "左侧反问直接，语气自然；右侧虽然稍长，但因果对答完整，且“好人不需要用自毒换信任”也是真人常聊的切入点，两者口语感与反击力度均到位，共同水平相当。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-original",
+      "item_id": "item_3ec387ab62938e98",
+      "presented_choice": "right",
+      "normalized_choice": "right",
+      "sides_swapped": false,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "两侧都给出了低置信度并反击。右侧进一步用“总不能说全场除了10号全是狼吧”这种极具口语化和现场感的反问来论证跟票合理性，并补充了“借刀脏我”的反打视角，情绪和语气更贴近真人现场自辩。"
+    }
+  ],
+  "swapped": [
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_fa7a03c1060a214d",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      },
+      "reason": "左侧发言简短口语化，像首置位玩家没话找话的真实状态，符合开场信息少的情境。右侧“公开信息显示”是报告腔，“我提一个可验证的疑点”过度机械且不适合第1轮首置位的自然语气。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_ed10701382646bde",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧“你漏了一种可能啊”“不过我也不是要强打你”非常贴近桌边交流，补逻辑的同时处理了人际压力。右侧虽逻辑充分但“进六人两狼的残局”“容错只剩一轮”更像复盘报告，口语自然度不如左侧。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_55b5f96f24fc6a5a",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧精准区分了4号的补内容和6号的补情绪，并给出具体怀疑范围，逻辑和关系追踪极强。右侧虽口语化但“是不是有点急了”过于简单，面对6号强挂1号的情境回应力度不足，缺少实质盘人。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_f24884dda5cb0c3f",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 5,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧有强现场感：“一样跟票6号”“只盯1号”“不说话我默认票型有问题”，对3号施压同时逼迫5号8号表态，完全符合轮次压力下的玩家反应。右侧虽也抓住双标问题，但力度偏弱，缺乏向其他玩家施压的现场互动感。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_a47d95acbd590544",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      },
+      "reason": "左侧“目前我倾向站4号边，但我也保留回滚的可能”态度明确且有弹性。右侧“这算因果链”“互动变化”“我记住这条线”像AI生成的报告式拆解，口语不自然。左侧更贴近玩家接话状态。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_f978bd647c3f3428",
+      "presented_choice": "right",
+      "normalized_choice": "left",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      },
+      "reason": "左侧像分析贴：“一个被跳过的事实”“两条路：要么...要么”，结构过于工整。右侧“11号玩家，你接警徽后还没说昨晚验了谁，能告诉大家吗？”是自然的现场追问，像真人直接向目标玩家施压。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_076b4e71b5b88c24",
+      "presented_choice": "tie",
+      "normalized_choice": "tie",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "两侧都抓住了1号逻辑断裂和8号跟女巫投票的关键事实。左侧“逻辑链条断了吧？”口语感略强。右侧“反问1号”和收益分析更像深度复盘。在残局高压下两者都有玩家感，但各有偏重，整体水平相当。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_d1282bd735c555c5",
+      "presented_choice": "tie",
+      "normalized_choice": "tie",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 4
+      },
+      "reason": "左侧对7号自爆动机的拆解很完整，但“我补一个被遗漏的角度”“核心收益”像AI分析。右侧“这保护逻辑说不通吧？”“别藏着，直接报出来”更像现场逼问。但右侧对“自爆吞发言”这一核心信息未点透，因此与左侧各有优劣。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_8f2ceaf86db27bf5",
+      "presented_choice": "tie",
+      "normalized_choice": "tie",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      },
+      "reason": "两侧都报了验人和归票。左侧“警徽流先留一个，后面再报。过了。”非常口语且真实，但未报具体警徽流。右侧“先11后12”更完整且“归票明确”也自然。两侧各有优势，选择平局。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_d7af171514dbde26",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 5,
+        "emotion_fit": 4,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧“上来凑个热闹”“听着有点悬”“先信你一半吧”完全符合村民凑热闹的人设和语气。右侧“不交感情票、不交场面票”“谁的逻辑链断了”像施政纲领，一个普通村民上警时这样发言不自然。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_2e28d68a0b6703d0",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧“好人不需要用自毒换信任”直击要害且反击自然。右侧“别转移话题”虽然也有现场感，但“我早就说了”略显急躁且未充分展开反击逻辑。左侧在PK环节的压迫感和完整性更优。"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617-swapped",
+      "item_id": "item_3ec387ab62938e98",
+      "presented_choice": "left",
+      "normalized_choice": "right",
+      "sides_swapped": true,
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 5,
+        "relationship_continuity": 5,
+        "factual_grounding": 5
+      },
+      "reason": "左侧“总不能说全场除了10号全是狼吧？”“没什么可洗的”回应自然且有力量，同时提出“狼借刀脏我”的反逻辑。右侧“反而让我觉得你更可疑”虽自然但反击力度弱，且未像左侧那样点出“全场跟票”的荒谬性。"
+    }
+  ],
+  "stability": [
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_076b4e71b5b88c24",
+      "first_choice": "right",
+      "swapped_choice": "tie",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_2e28d68a0b6703d0",
+      "first_choice": "tie",
+      "swapped_choice": "right",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_3ec387ab62938e98",
+      "first_choice": "right",
+      "swapped_choice": "right",
+      "stable": true,
+      "final_choice": "right"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_55b5f96f24fc6a5a",
+      "first_choice": "right",
+      "swapped_choice": "right",
+      "stable": true,
+      "final_choice": "right"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_8f2ceaf86db27bf5",
+      "first_choice": "right",
+      "swapped_choice": "tie",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_a47d95acbd590544",
+      "first_choice": "right",
+      "swapped_choice": "right",
+      "stable": true,
+      "final_choice": "right"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_d1282bd735c555c5",
+      "first_choice": "left",
+      "swapped_choice": "tie",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_d7af171514dbde26",
+      "first_choice": "right",
+      "swapped_choice": "right",
+      "stable": true,
+      "final_choice": "right"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_ed10701382646bde",
+      "first_choice": "tie",
+      "swapped_choice": "right",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_f24884dda5cb0c3f",
+      "first_choice": "left",
+      "swapped_choice": "right",
+      "stable": false,
+      "final_choice": "tie"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_f978bd647c3f3428",
+      "first_choice": "left",
+      "swapped_choice": "left",
+      "stable": true,
+      "final_choice": "left"
+    },
+    {
+      "reviewer_id": "judge_glm-5-2-260617",
+      "item_id": "item_fa7a03c1060a214d",
+      "first_choice": "right",
+      "swapped_choice": "right",
+      "stable": true,
+      "final_choice": "right"
+    }
+  ]
+}

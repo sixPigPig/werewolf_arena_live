@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "review_id": "review_bdce85c602352d5f",
+  "reviewer_id": "judge_deepseek-v4-pro",
+  "ratings": [
+    {
+      "item_id": "item_076b4e71b5b88c24",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      }
+    },
+    {
+      "item_id": "item_2e28d68a0b6703d0",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_3ec387ab62938e98",
+      "choice": "left",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 5
+      }
+    },
+    {
+      "item_id": "item_55b5f96f24fc6a5a",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_8f2ceaf86db27bf5",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 3,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_a47d95acbd590544",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_d1282bd735c555c5",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 4,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_d7af171514dbde26",
+      "choice": "right",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_ed10701382646bde",
+      "choice": "right",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_f24884dda5cb0c3f",
+      "choice": "tie",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 5,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 4,
+        "emotion_fit": 4,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_f978bd647c3f3428",
+      "choice": "left",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 3,
+        "relationship_continuity": 4,
+        "factual_grounding": 4
+      }
+    },
+    {
+      "item_id": "item_fa7a03c1060a214d",
+      "choice": "right",
+      "media_status": "ok",
+      "dimensions": {
+        "responsiveness": 4,
+        "spoken_naturalness": 5,
+        "persona_distinctiveness": 3,
+        "emotion_fit": 4,
+        "relationship_continuity": 3,
+        "factual_grounding": 4
+      }
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ratings"
+  ],
+  "properties": {
+    "ratings": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "choice",
+          "dimensions",
+          "reason"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "pattern": "^item_[0-9a-f]{16}$"
+          },
+          "choice": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "tie",
+              "skip"
+            ]
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "responsiveness",
+              "spoken_naturalness",
+              "persona_distinctiveness",
+              "emotion_fit",
+              "relationship_continuity",
+              "factual_grounding"
+            ],
+            "properties": {
+              "responsiveness": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "spoken_naturalness": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "persona_distinctiveness": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "emotion_fit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "relationship_continuity": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "factual_grounding": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          }
+        }
+      }
+    }
+  }
+}
