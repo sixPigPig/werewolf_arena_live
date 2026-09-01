@@ -3095,7 +3095,11 @@ class DayEngine:
                     technical.get("failure_code") or failure_code
                 )
                 degraded_abstain_lineage[index] = {
-                    "source_action_id": source_action_id,
+                    # The commit gate anchors the abstain on the terminal
+                    # action: the recovery action when one ran, else the
+                    # original speculative action (match_repository.py
+                    # expects recovery_action_id or action_id).
+                    "source_action_id": recovery_action_id or source_action_id,
                     "supporting_event_record_seq": failure_meta.get(
                         "technical_outcome_record_seq"
                     ),

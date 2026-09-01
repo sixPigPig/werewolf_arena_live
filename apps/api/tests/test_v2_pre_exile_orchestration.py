@@ -626,6 +626,9 @@ def test_vote_recovery_failure_degrades_to_durable_abstain() -> None:
     degraded_vote = [vote for vote in votes if vote.voter_player_id == "player_1"]
     assert len(degraded_vote) == 1
     assert degraded_vote[0].technical_status == "technical_abstain"
+    # The commit gate anchors the abstain on the terminal recovery action,
+    # not on the original speculative action (recovery_action_id or action_id).
+    assert degraded_vote[0].source_action_id == "v2_action_recovery_player_1"
     assert degraded_vote[0].technical_reason == "model_total_timeout"
     assert degraded_vote[0].failure_mode == "model_failure_degraded"
     assert degraded_vote[0].supporting_event_record_seq == 300

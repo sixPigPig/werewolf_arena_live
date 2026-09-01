@@ -3185,7 +3185,14 @@ def _validate_day_vote_technical_abstention_lineage(
             or supporting.event_type != "pre_exile_vote_degraded_to_abstain"
             or not isinstance(supporting_payload, dict)
             or supporting_payload.get("audience") != "god_view"
-            or supporting_payload.get("action_id") != source_action_id
+            # The vote anchors on the terminal action: the recovery action
+            # when one ran, else the original speculative action — the same
+            # recovery_action_id-or-action_id rule the commit gate enforces.
+            or source_action_id
+            != (
+                supporting_payload.get("recovery_action_id")
+                or supporting_payload.get("action_id")
+            )
             or supporting_payload.get("failure_episode_id") != failure_episode_id
             or supporting_payload.get("actor_id") != vote.voter_player_id
             or supporting_payload.get("technical_outcome") != "technical_abstain"

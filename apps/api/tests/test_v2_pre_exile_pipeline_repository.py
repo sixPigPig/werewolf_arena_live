@@ -2091,3 +2091,142 @@ def test_degraded_abstain_is_durable_and_passes_commit_gate(harness: _Harness) -
             resolution_payload=resolution,
             pre_exile_pipeline_id=harness.pipeline.pipeline_id,
         )
+
+
+def test_degraded_abstain_after_recovery_failure_passes_commit_gate(
+    harness: _Harness,
+) -> None:
+    _record_self_result(harness, actor_id="wolf_1", explode=False)
+    _record_self_result(harness, actor_id="wolf_2", explode=False)
+    source = _record_capacity_failure(harness, actor_id="villager_3")
+    _record_vote_success(harness, actor_id="villager_4", target_id="wolf_2")
+    harness.close_predecessor()
+    with bind_run_fence(harness.fence):
+        harness.matches.resolve_pre_exile_self_explosions(
+            game_id=GAME_ID,
+            pipeline_id=harness.pipeline.pipeline_id,
+            expected_wolf_ids=WOLVES,
+        )
+
+    # The single normal recovery re-drive fails with a technical outcome.
+    claim = _claim_recovery(harness, actor_id="villager_3", source_row=source)
+    with bind_run_fence(harness.fence):
+        technical_seq = harness.actions.append_event(
+            game_id=GAME_ID,
+            event_type="technical_target_outcome_applied",
+            audience="god_view",
+            payload={
+                "action_id": claim.action_id,
+                "attempt_id": "v2_attempt_recovery_wall_timeout",
+                "actor_id": "villager_3",
+                "action_type": "exile_vote",
+                "technical_outcome": "technical_abstain",
+                "failure_episode_id": "v2_episode_recovery_wall_timeout",
+                "failure_code": "model_action_wall_timeout",
+                "target_exhaustion_failure_mode": "action_wall_timeout",
+                "target_player_id": None,
+                "model_generation_policy_schema_version": 4,
+            },
+        )
+        harness.actions.complete_silent_action(
+            claim=claim,
+            next_live_state="ready",
+            next_phase_state=PHASE_STATE,
+            failure_episode_id="v2_episode_recovery_wall_timeout",
+            technical_outcome_record_seq=technical_seq,
+        )
+    adopted = harness.pipelines.adopt_vote_recovery_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="villager_3",
+        source_action_id=str(source.action_id),
+        recovery_action_id=claim.action_id,
+        technical_outcome_record_seq=technical_seq,
+        fence=harness.fence,
+    )
+    assert adopted.state == "failed"
+    assert adopted.recovery_action_id == claim.action_id
+
+    snapshot = harness.pipelines.record_vote_degraded_abstain(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="villager_3",
+        source_action_id=str(source.action_id),
+        recovery_action_id=claim.action_id,
+        failure_code="model_action_wall_timeout",
+        failure_category="timeout",
+        failure_episode_id="v2_episode_recovery_wall_timeout",
+        fence=harness.fence,
+    )
+    assert snapshot.failure is not None
+    assert snapshot.failure["degraded_abstain"] is True
+    technical = snapshot.failure["technical_outcome"]
+    assert technical["degraded_from"] == "recovery_failed"
+
+    resolution = {
+        "round_no": 1,
+        "action_type": "exile_vote",
+        "batch_id": harness.batch_id,
+        "public_cutoff_record_seq": harness.pipeline.public_cutoff_record_seq,
+        "eligible_voter_ids": ["villager_3", "villager_4"],
+        "candidate_player_ids": list(PLAYERS),
+        "voter_weights": {"villager_3": 0.0, "villager_4": 1.0},
+        "totals": {"wolf_2": 1.0},
+        "leaders": ["wolf_2"],
+        "technical_abstentions": [
+            {
+                "voter_player_id": "villager_3",
+                "technical_status": "technical_abstain",
+                "technical_reason": "model_action_wall_timeout",
+            }
+        ],
+    }
+
+    def _commit(source_action_id: str) -> None:
+        votes = (
+            DayVoteCommit(
+                "villager_3",
+                None,
+                0.0,
+                None,
+                technical_status="technical_abstain",
+                technical_reason="model_action_wall_timeout",
+                source_action_id=source_action_id,
+                supporting_event_record_seq=snapshot.failure[
+                    "technical_outcome_record_seq"
+                ],
+                failure_episode_id=technical["failure_episode_id"],
+                failure_mode="model_failure_degraded",
+            ),
+            DayVoteCommit("villager_4", "wolf_2", 1.0, None),
+        )
+        harness.matches.finalize_day_vote_batch(
+            game_id=GAME_ID,
+            phase_id=PHASE_ID,
+            phase_state=PHASE_STATE,
+            round_no=1,
+            action_type="exile_vote",
+            batch_id=harness.batch_id,
+            public_cutoff_record_seq=harness.pipeline.public_cutoff_record_seq,
+            expected_voter_ids=("villager_3", "villager_4"),
+            votes=votes,
+            decision_context={
+                "batch_id": harness.batch_id,
+                "public_cutoff_record_seq": harness.pipeline.public_cutoff_record_seq,
+            },
+            resolution_payload=resolution,
+            pre_exile_pipeline_id=harness.pipeline.pipeline_id,
+        )
+
+    # Anchoring the abstain on the original speculative action (the pre-fix
+    # day_engine lineage) is exactly what the commit gate must reject.
+    with (
+        bind_run_fence(harness.fence),
+        pytest.raises(
+            RepositoryError,
+            match="pre-exile technical abstention changed its speculative result",
+        ),
+    ):
+        _commit(str(source.action_id))
+
+    # Anchoring on the terminal recovery action passes the gate.
+    with bind_run_fence(harness.fence):
+        _commit(claim.action_id)
