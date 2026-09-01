@@ -8,6 +8,7 @@ import type {
   AdminSearchResponse,
   AdminSearchResult,
   AdminSettings,
+  AdminV2Metrics,
 } from "@/features/dashboard/types";
 
 const ENVIRONMENTS = ["development", "test", "staging", "production"] as const;
@@ -188,4 +189,47 @@ function invalidContract(detail: string) {
   return new AdminApiError({
     problem: { type: "about:blank", title: "后台总览接口响应无效", status: 502, detail, code: "admin_invalid_dashboard_response", request_id: null },
   });
+}
+
+export function parseAdminV2Metrics(value: unknown): AdminV2Metrics {
+  const record = objectValue(value);
+  const runs = objectValue(record.runs);
+  const modelFailures = objectValue(record.model_failures);
+  const signals = objectValue(record.signals);
+  return {
+    generated_at: dateValue(record.generated_at, "generated_at"),
+    window_days: positiveInteger(record.window_days, "window_days"),
+    runs: {
+      by_status: countMap(runs.by_status, "runs.by_status"),
+      finished: nonNegativeInteger(runs.finished, "runs.finished"),
+      completed: nonNegativeInteger(runs.completed, "runs.completed"),
+      failed: nonNegativeInteger(runs.failed, "runs.failed"),
+      success_rate: nullableRate(runs.success_rate, "runs.success_rate"),
+    },
+    model_failures: {
+      total: nonNegativeInteger(modelFailures.total, "model_failures.total"),
+      by_category: countMap(modelFailures.by_category, "model_failures.by_category"),
+      top_failure_codes: countMap(modelFailures.top_failure_codes, "model_failures.top_failure_codes"),
+    },
+    signals: {
+      death_reasons: countMap(signals.death_reasons, "signals.death_reasons"),
+      degraded_vote_abstains: nonNegativeInteger(signals.degraded_vote_abstains, "signals.degraded_vote_abstains"),
+      auto_resumed_model_actions: nonNegativeInteger(signals.auto_resumed_model_actions, "signals.auto_resumed_model_actions"),
+      reaped_runs: nonNegativeInteger(signals.reaped_runs, "signals.reaped_runs"),
+    },
+  };
+}
+
+function countMap(value: unknown, field: string): Record<string, number> {
+  const record = objectValue(value);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, count]) => [key, nonNegativeInteger(count, `${field}.${key}`)]),
+  );
+}
+
+function nullableRate(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  const result = nonNegativeNumber(value, field);
+  if (result > 1) throw invalidContract(`${field} 不是有效比例`);
+  return result;
 }

@@ -26,7 +26,10 @@ from app.match.models import (
     PreExileResult,
     RoleAssignment,
 )
-from app.match.pre_exile_pipeline_contract import resolve_pre_exile_pipeline_contract
+from app.match.pre_exile_pipeline_contract import (
+    RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES,
+    resolve_pre_exile_pipeline_contract,
+)
 from app.match.repository import ExecutionOwnershipLost, RepositoryError
 
 
@@ -764,7 +767,7 @@ class PreExilePipelineRepository:
                         "pre-exile vote already has durable recovery lineage"
                     )
             _require_result_state(row, "failed")
-            _validate_admission_capacity_recovery_source(
+            _validate_vote_recovery_source(
                 db,
                 pipeline=pipeline,
                 row=row,
@@ -919,6 +922,112 @@ class PreExilePipelineRepository:
     ) -> tuple[PreExileResultSnapshot, ...]:
         del pipeline_id, expected_voter_ids, fence
         raise PreExilePipelineRepositoryError("pre_exile_atomic_vote_commit_required")
+
+    def record_vote_degraded_abstain(
+        self,
+        *,
+        pipeline_id: str,
+        actor_player_id: str,
+        source_action_id: str,
+        recovery_action_id: str | None,
+        failure_code: str,
+        failure_category: str | None,
+        failure_episode_id: str | None,
+        fence: RunFence | None = None,
+    ) -> PreExileResultSnapshot:
+        """Degrade an unrecoverable failed vote into a durable technical abstain.
+
+        A vote whose speculative attempt and its single recovery re-drive both
+        failed must not kill the day runtime.  This records the degraded
+        outcome durably so the commit gate sees the same technical-outcome
+        lineage it expects from target-exhaustion abstains.
+        """
+
+        _canonical_id(source_action_id, field="source_action_id", maximum=48)
+        if recovery_action_id is not None:
+            _canonical_id(recovery_action_id, field="recovery_action_id", maximum=48)
+        if not isinstance(failure_code, str) or not failure_code.strip():
+            raise PreExilePipelineRepositoryError(
+                "pre-exile degraded abstain requires a failure code"
+            )
+        with self._session_factory.begin() as db:
+            game, run, pipeline, row = _locked_result(
+                db,
+                pipeline_id=pipeline_id,
+                actor_player_id=actor_player_id,
+                result_kind="exile_vote",
+                fence=fence,
+            )
+            if pipeline.state not in {"collecting", "no_explosion"}:
+                raise PreExilePipelineRepositoryError(
+                    "pre-exile degraded abstain requires an open pipeline"
+                )
+            if row.action_id != source_action_id:
+                raise PreExilePipelineRepositoryError(
+                    "pre-exile degraded abstain source action changed"
+                )
+            if row.recovery_action_id != recovery_action_id:
+                raise PreExilePipelineRepositoryError(
+                    "pre-exile degraded abstain recovery lineage changed"
+                )
+            if (
+                row.state == "failed"
+                and isinstance(row.failure, dict)
+                and row.failure.get("degraded_abstain") is True
+            ):
+                return _result_snapshot(row)
+            _require_result_state(row, "failed")
+            episode_id = failure_episode_id
+            if not isinstance(episode_id, str) or not episode_id:
+                episode_id = f"v2_episode_degraded_{row.result_id}"
+            degraded_outcome = {
+                "technical_outcome": "technical_abstain",
+                "failure_code": failure_code,
+                "failure_category": failure_category,
+                "failure_episode_id": episode_id,
+                "target_exhaustion_failure_mode": "model_failure_degraded",
+                "action_id": source_action_id,
+                "actor_id": actor_player_id,
+                "degraded_from": (
+                    "recovery_failed" if recovery_action_id is not None else "source_not_recoverable"
+                ),
+            }
+            degraded_event = _append_raw_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="pre_exile_vote_degraded_to_abstain",
+                payload={
+                    "pipeline_id": pipeline.pipeline_id,
+                    "pipeline_run_id": pipeline.run_id,
+                    "phase_id": pipeline.phase_id,
+                    "round_no": pipeline.round_no,
+                    "result_id": row.result_id,
+                    "actor_player_id": actor_player_id,
+                    "action_id": source_action_id,
+                    "recovery_action_id": recovery_action_id,
+                    **degraded_outcome,
+                },
+            )
+            row.failure = {
+                "technical_outcome_record_seq": degraded_event.record_seq,
+                "technical_outcome": degraded_outcome,
+                "degraded_abstain": True,
+                "initial_admission_failure": deepcopy(row.failure or {}),
+            }
+            row.decision = None
+            row.terminal_record_seq = degraded_event.record_seq
+            row.ready_at = _now()
+            result_event = _append_result_recorded_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                pipeline=pipeline,
+                row=row,
+            )
+            row.result_record_seq = result_event.record_seq
+            db.flush()
+            return _result_snapshot(row)
 
     def mark_consumed(
         self,
@@ -1460,7 +1569,7 @@ def _validate_result_action_opened(
     return opened
 
 
-def _validate_admission_capacity_recovery_source(
+def _validate_vote_recovery_source(
     db: Session,
     *,
     pipeline: PreExilePipeline,
@@ -1471,8 +1580,22 @@ def _validate_admission_capacity_recovery_source(
     if (
         not isinstance(request_failure, dict)
         or request_failure.get("action_id") != row.action_id
-        or request_failure.get("failure_category") != "admission_capacity"
-        or request_failure.get("failure_stage") != "provider_admission"
+    ):
+        raise PreExilePipelineRepositoryError(
+            "pre-exile vote recovery requires a recorded model request failure"
+        )
+    category = request_failure.get("failure_category")
+    if category not in RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES:
+        raise PreExilePipelineRepositoryError(
+            "pre-exile vote recovery requires a recoverable failure category"
+        )
+    if category != "admission_capacity":
+        # Transport/timeout failures already completed a full attempt against
+        # the provider; re-driving starts a fresh request, so the
+        # never-reached-provider guard below does not apply to them.
+        return
+    if (
+        request_failure.get("failure_stage") != "provider_admission"
         or request_failure.get("failure_code") != "model_prefetch_capacity_unavailable"
     ):
         raise PreExilePipelineRepositoryError(

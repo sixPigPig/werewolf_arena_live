@@ -832,3 +832,32 @@ class AdminGameDetailResponse(AdminGameListItem):
     ability_activations: list[dict[str, Any]]
     effect_intents: list[dict[str, Any]]
     knowledge_facts: list[dict[str, Any]]
+
+
+class AdminV2RunMetricsResponse(BaseModel):
+    by_status: dict[str, int] = Field(default_factory=dict)
+    finished: int = 0
+    completed: int = 0
+    failed: int = 0
+    success_rate: float | None = None
+
+
+class AdminV2ModelFailureMetricsResponse(BaseModel):
+    total: int = 0
+    by_category: dict[str, int] = Field(default_factory=dict)
+    top_failure_codes: dict[str, int] = Field(default_factory=dict)
+
+
+class AdminV2SignalMetricsResponse(BaseModel):
+    death_reasons: dict[str, int] = Field(default_factory=dict)
+    degraded_vote_abstains: int = 0
+    auto_resumed_model_actions: int = 0
+    reaped_runs: int = 0
+
+
+class AdminV2MetricsResponse(BaseModel):
+    generated_at: datetime
+    window_days: int
+    runs: AdminV2RunMetricsResponse
+    model_failures: AdminV2ModelFailureMetricsResponse
+    signals: AdminV2SignalMetricsResponse

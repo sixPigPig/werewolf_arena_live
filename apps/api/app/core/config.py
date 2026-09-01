@@ -226,6 +226,14 @@ class Settings(BaseSettings):
     live_run_reaper_max_attempts: int = Field(default=3, ge=1, le=10)
     live_run_reaper_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     live_run_reaper_probe_max_age_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
+    live_v2_reaper_enabled: bool = True
+    live_v2_reaper_interval_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
+    live_v2_reaper_grace_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
+    live_v2_model_auto_retry_enabled: bool = True
+    live_v2_model_auto_retry_seconds: float = Field(default=120.0, ge=0.0, le=3600.0)
+    live_v2_stream_progress_min_interval_ms: int = Field(default=3000, ge=0, le=60000)
+    live_v2_vote_fanout_stagger_ms: int = Field(default=300, ge=0, le=10_000)
+    live_v2_vote_disable_thinking: bool = True
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
     @classmethod

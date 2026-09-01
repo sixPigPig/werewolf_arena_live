@@ -200,6 +200,7 @@ class DayVoteCommit:
             "output_budget_exhausted",
             "attempt_hard_timeout",
             "action_wall_timeout",
+            "model_failure_degraded",
         ]
         | None
     ) = None
@@ -3160,6 +3161,7 @@ def _validate_day_vote_technical_abstention_lineage(
             "output_budget_exhausted",
             "attempt_hard_timeout",
             "action_wall_timeout",
+            "model_failure_degraded",
         }
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
@@ -3171,6 +3173,27 @@ def _validate_day_vote_technical_abstention_lineage(
         )
     )
     supporting_payload = supporting.payload if supporting is not None else None
+    if failure_mode == "model_failure_degraded":
+        # Degraded abstains come from a failed model action, not a completed
+        # target-exhaustion success, so their lineage anchors on the durable
+        # degraded-abstain event alone: it is appended in the same transaction
+        # that seals the failed pre-exile row, and the failure episode may
+        # belong to the recovery re-drive rather than the source action.
+        if (
+            supporting is None
+            or supporting.run_id != game.current_run_id
+            or supporting.event_type != "pre_exile_vote_degraded_to_abstain"
+            or not isinstance(supporting_payload, dict)
+            or supporting_payload.get("audience") != "god_view"
+            or supporting_payload.get("action_id") != source_action_id
+            or supporting_payload.get("failure_episode_id") != failure_episode_id
+            or supporting_payload.get("actor_id") != vote.voter_player_id
+            or supporting_payload.get("technical_outcome") != "technical_abstain"
+            or supporting_payload.get("failure_code") != vote.technical_reason
+            or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
+        ):
+            raise RepositoryError("day vote technical abstention lineage is invalid")
+        return
     if (
         supporting is None
         or supporting.run_id != game.current_run_id

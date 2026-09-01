@@ -84,3 +84,26 @@ export type AdminSearchResponse = {
   query: string;
   items: AdminSearchResult[];
 };
+
+export type AdminV2Metrics = {
+  generated_at: string;
+  window_days: number;
+  runs: {
+    by_status: Record<string, number>;
+    finished: number;
+    completed: number;
+    failed: number;
+    success_rate: number | null;
+  };
+  model_failures: {
+    total: number;
+    by_category: Record<string, number>;
+    top_failure_codes: Record<string, number>;
+  };
+  signals: {
+    death_reasons: Record<string, number>;
+    degraded_vote_abstains: number;
+    auto_resumed_model_actions: number;
+    reaped_runs: number;
+  };
+};

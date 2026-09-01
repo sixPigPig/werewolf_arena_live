@@ -1730,6 +1730,121 @@ def _record_capacity_failure(
     )
 
 
+def _record_provider_failure(
+    harness: _Harness,
+    *,
+    actor_id: str,
+    failure_code: str,
+    failure_category: str,
+    failure_stage: str,
+) -> Any:
+    """Persist a vote failure whose attempt reached the provider."""
+    harness.pipelines.reserve_result(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id=actor_id,
+        result_kind="exile_vote",
+        fence=harness.fence,
+    )
+    action_id = f"v2_action_provider_{actor_id}"
+    claim = _claim_initial(
+        harness,
+        actor_id=actor_id,
+        result_kind="exile_vote",
+        action_id=action_id,
+    )
+    with bind_run_fence(harness.fence):
+        for event_type in (
+            "model_request_admitted",
+            "model_response_headers_received",
+            "model_first_token_received",
+        ):
+            harness.actions.append_event(
+                game_id=GAME_ID,
+                event_type=event_type,
+                audience="god_view",
+                payload={
+                    "action_id": action_id,
+                    "attempt_id": f"v2_attempt_provider_{actor_id}",
+                },
+            )
+        harness.actions.append_event(
+            game_id=GAME_ID,
+            event_type="model_request_failed",
+            audience="god_view",
+            payload={
+                "action_id": action_id,
+                "attempt_id": f"v2_attempt_provider_{actor_id}",
+                "attempt_no": 3,
+                "cycle_attempt_no": 3,
+                "retry_cycle": 2,
+                "max_attempts": 3,
+                "failure_kind": "technical",
+                "failure_code": failure_code,
+                "failure_category": failure_category,
+                "failure_stage": failure_stage,
+                "retryable": True,
+                "attempt_terminal": True,
+                "action_recoverable": False,
+                "run_terminal": False,
+                "terminal": True,
+                "automatic_retry_scheduled": False,
+            },
+        )
+        failed_seq = harness.actions.fail_action(
+            claim=claim,
+            failure_kind="technical",
+            failure_code=failure_code,
+            identity=None,
+        )
+    return harness.pipelines.record_failure(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id=actor_id,
+        result_kind="exile_vote",
+        action_id=action_id,
+        failure_record_seq=failed_seq,
+        fence=harness.fence,
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_code", "failure_category", "failure_stage"),
+    [
+        ("model_transport_failed", "transport", "stream"),
+        ("model_total_timeout", "timeout", "stream"),
+    ],
+)
+def test_vote_recovery_accepts_transport_and_timeout_sources(
+    harness: _Harness,
+    failure_code: str,
+    failure_category: str,
+    failure_stage: str,
+) -> None:
+    _record_self_result(harness, actor_id="wolf_1", explode=False)
+    _record_self_result(harness, actor_id="wolf_2", explode=False)
+    source = _record_provider_failure(
+        harness,
+        actor_id="villager_3",
+        failure_code=failure_code,
+        failure_category=failure_category,
+        failure_stage=failure_stage,
+    )
+    harness.close_predecessor()
+    with bind_run_fence(harness.fence):
+        harness.matches.resolve_pre_exile_self_explosions(
+            game_id=GAME_ID,
+            pipeline_id=harness.pipeline.pipeline_id,
+            expected_wolf_ids=WOLVES,
+        )
+
+    claim = _claim_recovery(
+        harness,
+        actor_id="villager_3",
+        source_row=source,
+    )
+
+    assert claim.action_id == "v2_action_recovery_villager_3"
+
+
 def _claim_recovery(
     harness: _Harness,
     *,
@@ -1850,3 +1965,129 @@ def _resolution_payload(
         "leaders": sorted(player_id for player_id, total in totals.items() if total == highest),
         "technical_abstentions": [],
     }
+
+
+def test_degraded_abstain_is_durable_and_passes_commit_gate(harness: _Harness) -> None:
+    _record_self_result(harness, actor_id="wolf_1", explode=False)
+    _record_self_result(harness, actor_id="wolf_2", explode=False)
+    source = _record_provider_failure(
+        harness,
+        actor_id="villager_3",
+        failure_code="model_transport_failed",
+        failure_category="transport",
+        failure_stage="stream",
+    )
+    _record_vote_success(harness, actor_id="villager_4", target_id="wolf_2")
+    harness.close_predecessor()
+    with bind_run_fence(harness.fence):
+        harness.matches.resolve_pre_exile_self_explosions(
+            game_id=GAME_ID,
+            pipeline_id=harness.pipeline.pipeline_id,
+            expected_wolf_ids=WOLVES,
+        )
+
+    snapshot = harness.pipelines.record_vote_degraded_abstain(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="villager_3",
+        source_action_id=source.action_id,
+        recovery_action_id=None,
+        failure_code="model_transport_failed",
+        failure_category="transport",
+        failure_episode_id=None,
+        fence=harness.fence,
+    )
+
+    assert snapshot.action_id == source.action_id
+    assert snapshot.decision is None
+    assert snapshot.failure is not None
+    assert snapshot.failure["degraded_abstain"] is True
+    technical = snapshot.failure["technical_outcome"]
+    assert technical["technical_outcome"] == "technical_abstain"
+    assert technical["failure_code"] == "model_transport_failed"
+    assert technical["failure_category"] == "transport"
+    assert technical["target_exhaustion_failure_mode"] == "model_failure_degraded"
+    assert technical["degraded_from"] == "source_not_recoverable"
+    assert technical["failure_episode_id"] == f"v2_episode_degraded_{source.result_id}"
+    assert isinstance(snapshot.failure["technical_outcome_record_seq"], int)
+    with harness.factory() as db:
+        event = db.scalar(
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == GAME_ID,
+                GameRecordEvent.event_type == "pre_exile_vote_degraded_to_abstain",
+            )
+        )
+        assert event is not None
+        assert event.payload["actor_player_id"] == "villager_3"
+        assert event.payload["action_id"] == source.action_id
+        assert event.payload["technical_outcome"] == "technical_abstain"
+        assert event.record_seq == snapshot.failure["technical_outcome_record_seq"]
+        row = db.get(PreExileResult, snapshot.result_id)
+        assert row is not None
+        assert row.state == "failed"
+        assert row.decision is None
+        assert row.terminal_record_seq == event.record_seq
+
+    # Re-entry is idempotent and returns the same durable outcome.
+    again = harness.pipelines.record_vote_degraded_abstain(
+        pipeline_id=harness.pipeline.pipeline_id,
+        actor_player_id="villager_3",
+        source_action_id=source.action_id,
+        recovery_action_id=None,
+        failure_code="model_transport_failed",
+        failure_category="transport",
+        failure_episode_id=None,
+        fence=harness.fence,
+    )
+    assert again.failure == snapshot.failure
+
+    votes = (
+        DayVoteCommit(
+            "villager_3",
+            None,
+            0.0,
+            None,
+            technical_status="technical_abstain",
+            technical_reason="model_transport_failed",
+            source_action_id=source.action_id,
+            supporting_event_record_seq=snapshot.failure["technical_outcome_record_seq"],
+            failure_episode_id=technical["failure_episode_id"],
+            failure_mode="model_failure_degraded",
+        ),
+        DayVoteCommit("villager_4", "wolf_2", 1.0, None),
+    )
+    resolution = {
+        "round_no": 1,
+        "action_type": "exile_vote",
+        "batch_id": harness.batch_id,
+        "public_cutoff_record_seq": harness.pipeline.public_cutoff_record_seq,
+        "eligible_voter_ids": ["villager_3", "villager_4"],
+        "candidate_player_ids": list(PLAYERS),
+        "voter_weights": {"villager_3": 0.0, "villager_4": 1.0},
+        "totals": {"wolf_2": 1.0},
+        "leaders": ["wolf_2"],
+        "technical_abstentions": [
+            {
+                "voter_player_id": "villager_3",
+                "technical_status": "technical_abstain",
+                "technical_reason": "model_transport_failed",
+            }
+        ],
+    }
+    with bind_run_fence(harness.fence):
+        harness.matches.finalize_day_vote_batch(
+            game_id=GAME_ID,
+            phase_id=PHASE_ID,
+            phase_state=PHASE_STATE,
+            round_no=1,
+            action_type="exile_vote",
+            batch_id=harness.batch_id,
+            public_cutoff_record_seq=harness.pipeline.public_cutoff_record_seq,
+            expected_voter_ids=("villager_3", "villager_4"),
+            votes=votes,
+            decision_context={
+                "batch_id": harness.batch_id,
+                "public_cutoff_record_seq": harness.pipeline.public_cutoff_record_seq,
+            },
+            resolution_payload=resolution,
+            pre_exile_pipeline_id=harness.pipeline.pipeline_id,
+        )

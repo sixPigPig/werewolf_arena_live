@@ -30,6 +30,8 @@
 | 已完成 | 死代码 | 见下一节 |
 | 已完成 | V1 退场 | 第 1–6 步全部落地，见下一节 |
 | 已完成 | 目录改名 | `app/v2` → `app/match`，前端 `src/v2` → `src/match`，`V2Xxx` 去前缀 |
+| 已完成 | Live V2 可靠性修复 | 2026-08-31 数据分析定位四项并落地：① stale run 收割（`RunReaper` + `reap_stale_runs`，`live_v2_reaper_*` 配置，首轮实盘清掉 63 条遗留 active run）；② `paused_model_error` 到期自动续跑（`auto_resume_model_action`，每 action 一次，`live_v2_model_auto_retry_*`）；③ pre-exile 投票恢复接受 transport/timeout 失败源（`RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES`）；④ stream progress 事件按 `live_v2_stream_progress_min_interval_ms`（默认 3000ms）节流，计数器保持精确 |
+| 已完成 | Live V2 对局成功率修复（P0→P2） | 2026-08-31 针对"连续多日成功率 0%、死因集中在投票批一次性恢复失败"落地：P0 恢复重驱失败先走 pause+auto-resume 重试周期（`pause_on_model_failure` + `abandon_model_action_pause`），重试耗尽或失败源不可恢复时降级为持久技术性弃票（`record_vote_degraded_abstain` + `pre_exile_vote_degraded_to_abstain` / `day_vote_degraded_to_abstain` 事件 + `model_failure_degraded` 提交谱系），对局不再死亡；P1 投票 fan-out 按槽位错峰（`live_v2_vote_fanout_stagger_ms`，默认 300ms）且投票阶段关闭 thinking（`live_v2_vote_disable_thinking`，默认开，经 SpeechSpec `disable_provider_thinking` 在 frozen 参数校验后的 payload 层生效，不改写 frozen 参数本身）以降首 token 延迟与 admission 压力；P2 新增 `GET /api/v1/admin/v2/metrics`（run 成功率、死因、模型失败分类/Top code、降级弃票/自动恢复/收割计数）与 admin-web 总览「V2 对局健康」卡片。API 全量 1756 通过，admin-web 全量 333 通过 |
 
 ### 已清理的死代码
 

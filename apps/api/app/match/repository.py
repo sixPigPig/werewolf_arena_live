@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.match.day_speech_pipeline_contract import (
@@ -67,6 +67,18 @@ from app.match.runtime_state import AudioMode, delivery_audio_mode
 
 class RepositoryError(RuntimeError):
     pass
+
+
+_ACTIVE_RUN_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+        "paused_model_error",
+        "awaiting_observation",
+    }
+)
 
 
 class ExecutionOwnershipLost(RepositoryError):
@@ -1531,6 +1543,134 @@ class ActionRepository:
                 },
             )
 
+    def auto_resume_model_action(
+        self,
+        *,
+        claim: ActionClaim,
+        failure_code: str,
+    ) -> bool:
+        """Resume a paused model action without an operator control request.
+
+        Bounded to one auto-resume per action per run so a permanently broken
+        model action still ends up in front of an operator.
+        """
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
+            _raise_if_stop_requested(db, game)
+            run = _run(db, claim.run_id)
+            if game.status != "paused_model_error" or run.status != "paused_model_error":
+                return False
+            recovery = db.get(ModelActionRecovery, claim.action_id)
+            if recovery is None or recovery.state != "paused":
+                return False
+            already_auto_resumed = (
+                db.scalar(
+                    select(GameRecordEvent.event_id).where(
+                        GameRecordEvent.game_id == game.game_id,
+                        GameRecordEvent.run_id == run.run_id,
+                        GameRecordEvent.event_type == "model_action_auto_resumed",
+                        GameRecordEvent.payload["action_id"].as_string()
+                        == claim.action_id,
+                    )
+                )
+                is not None
+            )
+            if already_auto_resumed:
+                return False
+            game.status = "generating"
+            run.status = "generating"
+            recovery.state = "running"
+            recovery.control_request_id = None
+            recovery_audience = _model_action_recovery_audience(recovery)
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_recovery_leased",
+                audience=recovery_audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "recovery_id": recovery.recovery_id,
+                    "control_request_id": None,
+                    "lease_mode": "auto_retry",
+                },
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_resumed",
+                audience=recovery_audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "control_request_id": None,
+                    "resume_mode": "auto_retry",
+                },
+            )
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_auto_resumed",
+                audience="god_view",
+                payload={
+                    "action_id": claim.action_id,
+                    "recovery_id": recovery.recovery_id,
+                    "failure_code": failure_code,
+                },
+            )
+            return True
+
+    def abandon_model_action_pause(
+        self,
+        *,
+        claim: ActionClaim,
+        failure_code: str,
+    ) -> None:
+        """Release a paused model action so it can fail terminally.
+
+        Used when an isolated (batch) action pauses but auto-retry is already
+        exhausted and no operator is expected: the run goes back to
+        generating and the action fails through its normal terminal path.
+        """
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
+            _raise_if_stop_requested(db, game)
+            run = _run(db, claim.run_id)
+            if game.status != "paused_model_error" or run.status != "paused_model_error":
+                raise RepositoryError("model action pause is not active")
+            recovery = db.get(ModelActionRecovery, claim.action_id)
+            if recovery is None or recovery.state != "paused":
+                raise RepositoryError("model action recovery is not paused")
+            game.status = "generating"
+            run.status = "generating"
+            recovery.state = "canceled"
+            recovery.resolved_at = _now()
+            recovery_audience = _model_action_recovery_audience(recovery)
+            _append_event(
+                db,
+                game=game,
+                run_id=run.run_id,
+                event_type="model_action_recovery_canceled",
+                audience=recovery_audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "recovery_id": recovery.recovery_id,
+                    "reason_code": "auto_retry_exhausted",
+                    "failure_code": failure_code,
+                },
+            )
+
     def resolve_model_action_recovery(
         self,
         *,
@@ -1897,6 +2037,151 @@ class ActionRepository:
                 status=run.status,
                 changed=True,
             )
+
+    def reap_stale_runs(self, *, grace_seconds: float) -> list[dict[str, Any]]:
+        """Fail-closed terminalization of active runs whose execution lease expired.
+
+        A worker that died (process exit, machine sleep) leaves its run in an
+        active status with an expired lease forever because nothing else renews
+        it.  Bumping the fence token also fences out the dead worker's heartbeat
+        and release calls if the process ever wakes back up.
+        """
+        if grace_seconds < 0:
+            raise RepositoryError("invalid V2 reaper grace duration")
+        with self._session_factory.begin() as db:
+            now = database_utc_now(db)
+            cutoff = now - timedelta(seconds=grace_seconds)
+            candidates = db.scalars(
+                select(GameRun)
+                .where(
+                    GameRun.status.in_(sorted(_ACTIVE_RUN_STATUSES)),
+                    or_(
+                        GameRun.lease_expires_at.is_(None),
+                        GameRun.lease_expires_at < cutoff,
+                    ),
+                )
+                .order_by(GameRun.run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            reaped: list[dict[str, Any]] = []
+            for run in candidates:
+                game = _locked_game(db, run.game_id, require_fence=False)
+                if run.status not in _ACTIVE_RUN_STATUSES:
+                    continue
+                if run.lease_expires_at is not None and _as_utc(run.lease_expires_at) >= cutoff:
+                    continue
+                if game.status in {"completed", "failed", "canceled"}:
+                    continue
+                reaped_at = database_utc_now(db)
+                interrupted_presentations = list(
+                    db.scalars(
+                        select(LivePresentation).where(
+                            LivePresentation.game_id == game.game_id,
+                            LivePresentation.state == "active",
+                        )
+                    )
+                )
+                for presentation in interrupted_presentations:
+                    presentation.state = "canceled"
+                    presentation.closed_at = reaped_at
+                    if presentation.voice_asset_id is not None:
+                        voice = db.get(VoiceAsset, presentation.voice_asset_id)
+                        if voice is not None and voice.state == "writing":
+                            voice.state = "canceled"
+                            voice.completed_at = reaped_at
+                    _append_event(
+                        db,
+                        game=game,
+                        run_id=run.run_id,
+                        event_type="speech_interrupted",
+                        audience=presentation.audience,
+                        payload={
+                            "action_id": presentation.action_id,
+                            "presentation_id": presentation.presentation_id,
+                            "speech_id": presentation.speech_id,
+                            "reason_code": "worker_lease_expired",
+                        },
+                    )
+                active_recoveries = list(
+                    db.scalars(
+                        select(ModelActionRecovery).where(
+                            ModelActionRecovery.game_id == game.game_id,
+                            ModelActionRecovery.state.in_(
+                                ("paused", "retry_requested", "running")
+                            ),
+                        )
+                    )
+                )
+                for recovery in active_recoveries:
+                    recovery.state = "canceled"
+                    recovery.resolved_at = reaped_at
+                    _append_event(
+                        db,
+                        game=game,
+                        run_id=run.run_id,
+                        event_type="model_action_recovery_canceled",
+                        audience=_model_action_recovery_audience(recovery),
+                        payload={
+                            "action_id": recovery.action_id,
+                            "recovery_id": recovery.recovery_id,
+                            "reason_code": "worker_lease_expired",
+                        },
+                    )
+                invalidated_worker_id = run.worker_id
+                invalidated_fence_token = run.fence_token
+                previous_status = run.status
+                run.status = "failed"
+                run.completed_at = reaped_at
+                run.worker_id = None
+                run.worker_heartbeat_at = None
+                run.lease_expires_at = None
+                run.fence_token += 1
+                game.status = "failed"
+                game.phase_state = "failed"
+                failed_failure_episode_ids = _open_failure_episode_ids_for_locked_run(
+                    db,
+                    game=game,
+                )
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="v2_run_execution_reaped",
+                    audience="god_view",
+                    payload={
+                        "run_id": run.run_id,
+                        "reason_code": "worker_lease_expired",
+                        "invalidated_worker_id": invalidated_worker_id,
+                        "invalidated_fence_token": invalidated_fence_token,
+                        "interrupted_presentation_count": len(interrupted_presentations),
+                        "canceled_model_recovery_count": len(active_recoveries),
+                        "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                    },
+                )
+                _append_event(
+                    db,
+                    game=game,
+                    run_id=run.run_id,
+                    event_type="game_failed",
+                    audience="all",
+                    payload={
+                        "reason_code": "worker_lease_expired",
+                        "invalidated_worker_id": invalidated_worker_id,
+                        "interrupted_presentation_count": len(interrupted_presentations),
+                        "canceled_model_recovery_count": len(active_recoveries),
+                        "failed_failure_episode_ids": list(failed_failure_episode_ids),
+                    },
+                )
+                reaped.append(
+                    {
+                        "game_id": game.game_id,
+                        "run_id": run.run_id,
+                        "previous_status": previous_status,
+                        "invalidated_worker_id": invalidated_worker_id,
+                    }
+                )
+            return reaped
 
 
 def _terminalize_canceled_day_speech_actions(
@@ -2635,11 +2920,9 @@ def _bind_pre_exile_vote_recovery_claim(
         != f"{pipeline.phase_id}:exile_vote:{pipeline.public_cutoff_record_seq}:vote"
     ):
         raise RepositoryError("pre-exile vote recovery lineage is invalid")
-    from app.match.pre_exile_pipeline_repository import (
-        _validate_admission_capacity_recovery_source,
-    )
+    from app.match.pre_exile_pipeline_repository import _validate_vote_recovery_source
 
-    _validate_admission_capacity_recovery_source(
+    _validate_vote_recovery_source(
         db,
         pipeline=pipeline,
         row=result,

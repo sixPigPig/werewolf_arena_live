@@ -10076,7 +10076,11 @@ def test_progress_capability_preserves_pre_token_outer_timeout_stage(
 
 def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fields(
     v2_context,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This test pins the exact persisted stream payload (reasoning + text
+    # previews 2ms apart), which the production throttle would collapse.
+    monkeypatch.setattr(settings, "live_v2_stream_progress_min_interval_ms", 0)
     client, session_factory, _voice_root = v2_context
     runtime = client.app.state.live_runtime
     runtime._action_engine._model_retry_policy = ModelRetryPolicy(
@@ -14146,3 +14150,99 @@ def _advanced_create_request() -> dict[str, Any]:
             "allow_lineup_quality_warnings": False,
         },
     }
+
+
+def test_admin_v2_metrics_reports_run_and_failure_aggregates(v2_context) -> None:
+    client, session_factory, _voice_root = v2_context
+
+    unauthorized = client.get("/api/v1/admin/v2/metrics")
+    assert unauthorized.status_code == 401
+    session = client.post("/api/v1/admin/dev-login")
+    assert session.status_code == 200, session.text
+
+    games = [
+        _create_legacy_waiting_game(
+            client=client,
+            session_factory=session_factory,
+            title=f"指标对局-{index}",
+        )
+        for index in range(4)
+    ]
+    with session_factory.begin() as db:
+        for index, (status, finished) in enumerate(
+            [
+                ("completed", True),
+                ("completed", True),
+                ("failed", True),
+                ("generating", False),
+            ]
+        ):
+            run = db.get(GameRun, games[index]["run_id"])
+            assert run is not None
+            run.status = status
+            run.started_at = datetime.now(tz=UTC)
+            if finished:
+                run.completed_at = datetime.now(tz=UTC)
+        target_game_id = games[0]["game_id"]
+        target_run_id = games[0]["run_id"]
+        game = db.get(GameRecord, target_game_id)
+        assert game is not None
+        event_specs = [
+            ("game_failed", {"reason_code": "worker_lease_expired"}),
+            ("game_failed", {"reason_code": "model_action_fatal"}),
+            (
+                "model_request_failed",
+                {"failure_category": "transport", "failure_code": "model_transport_failed"},
+            ),
+            (
+                "model_request_failed",
+                {"failure_category": "transport", "failure_code": "model_transport_failed"},
+            ),
+            (
+                "model_request_failed",
+                {"failure_category": "timeout", "failure_code": "model_total_timeout"},
+            ),
+            ("day_vote_degraded_to_abstain", {}),
+            ("model_action_auto_resumed", {}),
+            ("v2_run_execution_reaped", {}),
+        ]
+        for offset, (event_type, payload) in enumerate(event_specs, start=1):
+            record_seq = game.last_record_seq + offset
+            db.add(
+                GameRecordEvent(
+                    game_id=target_game_id,
+                    event_id=record_seq,
+                    record_seq=record_seq,
+                    run_id=target_run_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
+            )
+        game.last_record_seq += len(event_specs)
+
+    metrics = client.get("/api/v1/admin/v2/metrics?days=7")
+    assert metrics.status_code == 200, metrics.text
+    body = metrics.json()
+    assert body["window_days"] == 7
+    assert body["runs"]["by_status"] == {
+        "completed": 2,
+        "failed": 1,
+        "generating": 1,
+    }
+    assert body["runs"]["finished"] == 3
+    assert body["runs"]["completed"] == 2
+    assert body["runs"]["failed"] == 1
+    assert body["runs"]["success_rate"] == 0.6667
+    assert body["model_failures"]["total"] == 3
+    assert body["model_failures"]["by_category"] == {"transport": 2, "timeout": 1}
+    assert body["model_failures"]["top_failure_codes"] == {
+        "model_transport_failed": 2,
+        "model_total_timeout": 1,
+    }
+    assert body["signals"]["death_reasons"] == {
+        "model_action_fatal": 1,
+        "worker_lease_expired": 1,
+    }
+    assert body["signals"]["degraded_vote_abstains"] == 1
+    assert body["signals"]["auto_resumed_model_actions"] == 1
+    assert body["signals"]["reaped_runs"] == 1

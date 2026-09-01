@@ -12,6 +12,7 @@ import time
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
+from app.core.config import settings
 from app.judge_configuration import RuntimeJudgeConfiguration
 from app.match.director_projection import project_director_scene
 from app.match.event_contract import model_event_audience
@@ -192,6 +193,8 @@ class SpeechSpec:
     best_effort: bool = False
     defer_presentation: bool = False
     isolated_failure: bool = False
+    pause_on_model_failure: bool = False
+    disable_provider_thinking: bool = False
     batch_id: str | None = None
     projection_at_seq: int | None = None
     decision_family_id: str | None = None
@@ -228,6 +231,8 @@ class SpeechSpec:
             raise ValueError("automatic_output_budget_budget must be non-negative")
         if self.preflight_pause_failure is not None and self.isolated_failure:
             raise ValueError("preflight pause requires a blocking action")
+        if self.pause_on_model_failure and not self.isolated_failure:
+            raise ValueError("pause on model failure only extends isolated actions")
         if self.model_admission_mode not in {"normal", "idle_only"}:
             raise ValueError("unsupported model admission mode")
         if (self.pipeline_slot_id is None) != (self.pipeline_stage is None):
@@ -529,6 +534,7 @@ class _ModelAttemptProgressTrace:
     response_headers_recorded: bool = False
     first_token_recorded: bool = False
     first_text_recorded: bool = False
+    last_stream_event_ms: int | None = None
 
     def accept(self, progress: ModelProgress) -> tuple[str, dict[str, Any]] | None:
         self.provider_request_id = progress.provider_request_id
@@ -654,6 +660,14 @@ class _ModelAttemptProgressTrace:
                 self.usage_conflict_observed = (
                     self.usage_conflict_observed or progress.usage_conflict_observed
                 )
+            # Persisting every delta dominated the event table (~70% of rows);
+            # sampled progress keeps diagnostics while counters stay exact
+            # because model_response_received carries the final values.
+            if self.last_stream_event_ms is not None:
+                min_interval_ms = settings.live_v2_stream_progress_min_interval_ms
+                if progress.elapsed_ms - self.last_stream_event_ms < min_interval_ms:
+                    return None
+            self.last_stream_event_ms = progress.elapsed_ms
             return (
                 "model_stream_progress",
                 {
@@ -773,6 +787,7 @@ class ActionEngine:
         failure_episode_id: str | None = None,
         source_failure_episode_ids: tuple[str, ...] = (),
         on_paused: Callable[[], None] | None = None,
+        operator_wait: bool = True,
     ) -> None:
         waiter = _PausedModelActionWaiter(
             action_id=claim.action_id,
@@ -803,6 +818,13 @@ class ActionEngine:
                 ),
                 audience="all",
             )
+            loop = asyncio.get_running_loop()
+            auto_resume_deadline: float | None = (
+                loop.time() + settings.live_v2_model_auto_retry_seconds
+                if settings.live_v2_model_auto_retry_enabled
+                else None
+            )
+            auto_resumed = False
             while not waiter.requested.is_set():
                 self.check_cancellation(claim.game_id)
                 durable_control_request_id = self._repository.pending_model_action_retry(
@@ -813,16 +835,46 @@ class ActionEngine:
                     waiter.control_request_id = durable_control_request_id
                     waiter.requested.set()
                     break
+                if (
+                    auto_resume_deadline is not None
+                    and loop.time() >= auto_resume_deadline
+                ):
+                    auto_resume_deadline = None
+                    auto_resumed = self._repository.auto_resume_model_action(
+                        claim=claim,
+                        failure_code=failure_code,
+                    )
+                    if auto_resumed:
+                        waiter.requested.set()
+                        break
+                    if not operator_wait:
+                        # Isolated batch actions have no operator watching the
+                        # pause; once auto-retry is exhausted, release the run
+                        # and let the action fail into the caller's recovery.
+                        self._repository.abandon_model_action_pause(
+                            claim=claim,
+                            failure_code=failure_code,
+                        )
+                        await broadcaster.broadcast_json(
+                            live_state(
+                                game_id=claim.game_id,
+                                run_id=claim.run_id,
+                                state="generating",
+                            ),
+                            audience=audience,
+                        )
+                        raise ModelError(failure_code)
                 try:
                     await asyncio.wait_for(waiter.requested.wait(), timeout=0.25)
                 except TimeoutError:
                     continue
-            if waiter.control_request_id is None:
-                raise RepositoryError("model retry has no control request")
-            self._repository.resume_model_action(
-                claim=claim,
-                control_request_id=waiter.control_request_id,
-            )
+            if not auto_resumed:
+                if waiter.control_request_id is None:
+                    raise RepositoryError("model retry has no control request")
+                self._repository.resume_model_action(
+                    claim=claim,
+                    control_request_id=waiter.control_request_id,
+                )
             waiter.resume_succeeded = True
             await broadcaster.broadcast_json(
                 live_state(
@@ -1266,6 +1318,11 @@ class ActionEngine:
                     model_id=model_id,
                     model_supports_thinking=spec.model_supports_thinking,
                     model_parameters=model_parameters,
+                )
+                model_target, thinking_source = _apply_provider_thinking_override(
+                    model_target,
+                    thinking_source=thinking_source,
+                    enabled=spec.disable_provider_thinking,
                 )
                 resolved_model_provider = model_target.provider
                 resolved_model_id = model_target.model_id
@@ -2274,7 +2331,10 @@ class ActionEngine:
                                 )
                             if (
                                 not spec.best_effort
-                                and not spec.isolated_failure
+                                and (
+                                    not spec.isolated_failure
+                                    or spec.pause_on_model_failure
+                                )
                                 and _can_pause_for_model_failure(exc)
                             ):
                                 await self._pause_for_model_retry(
@@ -3276,6 +3336,39 @@ def _action_model_parameters(
     spec: SpeechSpec,
 ) -> tuple[dict[str, Any], str]:
     return dict(spec.model_parameters or {}), "model_configuration"
+
+
+def _apply_provider_thinking_override(
+    target: Any,
+    *,
+    thinking_source: str,
+    enabled: bool,
+) -> tuple[Any, str]:
+    """Force thinking off on the resolved provider payload.
+
+    This must stay a payload-level override: the frozen player parameters are
+    a validated canonical contract, so editing that dict (e.g. flipping
+    thinking to disabled while reasoning_effort/max_tokens still match the
+    enabled configuration) fails frozen validation and kills every request
+    with `model_parameters_invalid` before it reaches the provider.
+    """
+    if (
+        not enabled
+        or not target.supports_thinking
+        or target.parameters.get("thinking") != "enabled"
+    ):
+        return target, thinking_source
+    return (
+        replace(
+            target,
+            parameters={
+                **target.parameters,
+                "thinking": "disabled",
+                "reasoning_effort": None,
+            },
+        ),
+        "vote_phase_thinking_policy",
+    )
 
 
 def _output_contract(spec: SpeechSpec) -> dict[str, Any]:

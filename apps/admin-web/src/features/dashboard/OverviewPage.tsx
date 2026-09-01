@@ -17,12 +17,13 @@ import {
   AdminPageHeader,
 } from "@/components/admin/AdminPage";
 import { useAdminSession } from "@/features/auth/session-context";
-import { useOverviewQuery } from "@/features/dashboard/queries";
+import { useOverviewQuery, useV2MetricsQuery } from "@/features/dashboard/queries";
 
 export default function OverviewPage() {
   const navigate = useNavigate();
   const { runtimeMode } = useAdminSession();
   const overview = useOverviewQuery(runtimeMode);
+  const v2Metrics = useV2MetricsQuery(runtimeMode);
 
   if (overview.isPending) {
     return <AdminLoading message="正在汇总运营状态..." />;
@@ -60,6 +61,74 @@ export default function OverviewPage() {
           label="后台任务"
           value={data.jobs.queued + data.jobs.running}
         />
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col lg={14} xs={24}>
+          <Card
+            title={<h2 id="dashboard-v2-metrics-title">V2 对局健康（近 7 天）</h2>}
+            extra={
+              v2Metrics.isPending || v2Metrics.isError || !v2Metrics.data ? undefined : (
+                <Typography.Text type="secondary">
+                  更新时间：{new Date(v2Metrics.data.generated_at).toLocaleString("zh-CN")}
+                </Typography.Text>
+              )
+            }
+          >
+            {v2Metrics.isPending ? (
+              <Typography.Text type="secondary">正在汇总对局指标...</Typography.Text>
+            ) : v2Metrics.isError || !v2Metrics.data ? (
+              <Typography.Text type="warning">对局指标暂时不可用。</Typography.Text>
+            ) : (
+              <>
+                <Row gutter={[12, 12]}>
+                  <Col lg={6} sm={12} xs={24}>
+                    <Statistic
+                      precision={v2Metrics.data.runs.success_rate === null ? undefined : 1}
+                      suffix="%"
+                      title="对局成功率"
+                      value={
+                        v2Metrics.data.runs.success_rate === null
+                          ? "--"
+                          : v2Metrics.data.runs.success_rate * 100
+                      }
+                    />
+                  </Col>
+                  <Col lg={6} sm={12} xs={24}>
+                    <Statistic title="失败对局" value={v2Metrics.data.runs.failed} />
+                  </Col>
+                  <Col lg={6} sm={12} xs={24}>
+                    <Statistic title="模型失败请求" value={v2Metrics.data.model_failures.total} />
+                  </Col>
+                  <Col lg={6} sm={12} xs={24}>
+                    <Statistic title="技术性弃票" value={v2Metrics.data.signals.degraded_vote_abstains} />
+                  </Col>
+                </Row>
+                <dl className="ant-dashboard-breakdown">
+                  <div>
+                    <dt>主要死因</dt>
+                    <dd>
+                      {formatCounts(v2Metrics.data.signals.death_reasons, "暂无失败对局")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>失败类别</dt>
+                    <dd>
+                      {formatCounts(v2Metrics.data.model_failures.by_category, "暂无模型失败")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>自动恢复 / 收割</dt>
+                    <dd>
+                      {v2Metrics.data.signals.auto_resumed_model_actions} 次自动恢复 ·{" "}
+                      {v2Metrics.data.signals.reaped_runs} 次收割
+                    </dd>
+                  </div>
+                </dl>
+              </>
+            )}
+          </Card>
+        </Col>
       </Row>
 
       <Row gutter={[16, 16]}>
@@ -127,4 +196,15 @@ function MetricCard({
       </Link>
     </Col>
   );
+}
+
+
+function formatCounts(counts: Record<string, number>, emptyLabel: string): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return emptyLabel;
+  return entries
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([key, count]) => `${key} × ${count}`)
+    .join("，");
 }

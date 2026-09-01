@@ -11,6 +11,7 @@ import logging
 import time
 from typing import Any, Literal
 
+from app.core.config import settings
 from app.match.action_engine import (
     ActionEngine,
     ActionFailure,
@@ -54,7 +55,10 @@ from app.match.protocol import (
     match_state_changed,
     player_state_changed,
 )
-from app.match.pre_exile_pipeline_contract import pre_exile_context_sha256
+from app.match.pre_exile_pipeline_contract import (
+    RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES,
+    pre_exile_context_sha256,
+)
 from app.match.pre_exile_pipeline_repository import PreExilePipelineRepository
 from app.match.repository import (
     ExecutionOwnershipLost,
@@ -98,6 +102,15 @@ _SUPPORTED_DAY_ACTIONS = {
     "hunter_shoot",
     "summarize",
 }
+# Batch target votes: the phases whose fan-out drives provider admission load.
+_VOTE_PHASE_ACTION_TYPES = frozenset(
+    {
+        "exile_vote",
+        "sheriff_vote",
+        "sheriff_runoff_vote",
+        "exile_runoff_vote",
+    }
+)
 _SHERIFF_PK_SPEECH_OBJECTIVE = "发表警长竞选平票 PK 发言。"
 _EXILE_PK_SPEECH_OBJECTIVE = "发表放逐平票 PK 发言。"
 _VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET = 2
@@ -1299,7 +1312,8 @@ class DayEngine:
                 return
             if (
                 recorded.failure is not None
-                and _persisted_pre_exile_failure_category(recorded.failure) == "admission_capacity"
+                and _persisted_pre_exile_failure_category(recorded.failure)
+                in RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES
             ):
                 return
             async with vote_progress_lock:
@@ -1488,10 +1502,19 @@ class DayEngine:
             await publish_member_terminal(result_kind, recorded)
             return action_result, recorded
 
+        vote_fanout_slots = {
+            voter.player_id: slot for slot, voter in enumerate(voters)
+        }
+
         async def start_vote(
             player: MatchPlayer,
             private_facts: list[dict[str, Any]],
         ) -> tuple[ActionResult, Any]:
+            fanout_delay = _vote_fanout_delay_seconds(
+                vote_fanout_slots.get(player.player_id, 0)
+            )
+            if fanout_delay > 0:
+                await asyncio.sleep(fanout_delay)
             vote_private_facts_by_voter[player.player_id] = copy.deepcopy(private_facts)
             result, recorded = await run_member(
                 player=player,
@@ -1633,22 +1656,15 @@ class DayEngine:
             }
             if set(vote_rows) != {voter.player_id for voter in voters}:
                 raise DayRuntimeError("pre_exile_vote_durable_result_set_incomplete")
-            for voter_id, row in vote_rows.items():
-                if row.failure is None:
-                    continue
-                if vote_results[voter_id].technical_outcome is not None:
-                    continue
-                category = _persisted_pre_exile_failure_category(row.failure)
-                if category != "admission_capacity":
-                    raise DayRuntimeError(
-                        f"pre_exile_vote_failure_not_recoverable:{voter_id}:{category}"
-                    )
-            has_capacity_recovery = any(
+            # Non-recoverable persisted failures are degraded to durable
+            # abstains inside the vote batch instead of failing the day.
+            has_recoverable_vote_failure = any(
                 row.failure is not None
-                and _persisted_pre_exile_failure_category(row.failure) == "admission_capacity"
+                and _persisted_pre_exile_failure_category(row.failure)
+                in RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES
                 for row in vote_rows.values()
             )
-            if not has_capacity_recovery:
+            if not has_recoverable_vote_failure:
                 await broadcaster.broadcast_json(
                     day_progress(
                         game_id=state.game_id,
@@ -2862,6 +2878,7 @@ class DayEngine:
         output_budget_failure_episode_ids_by_voter: list[list[str]] = [[] for _item in prepared]
         technical_abstain_reasons: list[str | None] = [None for _item in prepared]
         technical_abstain_results: list[ActionResult | None] = [None for _item in prepared]
+        degraded_abstain_lineage: dict[int, dict[str, Any]] = {}
         pre_exile_vote_rows: dict[str, Any] = {}
         if pre_exile_pipeline_id is not None:
             if self._pre_exile_pipeline is None or initial_results_by_voter is None:
@@ -2886,6 +2903,7 @@ class DayEngine:
             ],
             preflight_pause_failure: PreflightPauseFailure | None = None,
             pre_exile_recovery: dict[str, Any] | None = None,
+            pause_on_model_failure: bool = False,
         ) -> ActionResult:
             isolated = stage != "sequential_recovery"
             result = await self._player_action(
@@ -2929,6 +2947,7 @@ class DayEngine:
                 projection_at_seq=(None if frozen_state is not None else public_cutoff_record_seq),
                 defer_presentation=isolated,
                 isolated_failure=isolated,
+                pause_on_model_failure=pause_on_model_failure,
                 allow_failure=isolated,
                 batch_id=batch_id,
                 decision_family_id=decision_family_ids[index],
@@ -3028,6 +3047,61 @@ class DayEngine:
             pipeline_repository = self._pre_exile_pipeline
             if pipeline_repository is None:
                 raise DayRuntimeError("pre_exile_pipeline_repository_missing")
+
+            def degrade_vote_to_abstain(
+                index: int,
+                *,
+                source_action_id: str,
+                recovery_action_id: str | None,
+                failure_code: str,
+                failure_category: str | None,
+                failure_episode_id: str | None,
+                degraded_from: str,
+            ) -> None:
+                voter = prepared[index][0]
+                snapshot = pipeline_repository.record_vote_degraded_abstain(
+                    pipeline_id=pre_exile_pipeline_id,
+                    actor_player_id=voter.player_id,
+                    source_action_id=source_action_id,
+                    recovery_action_id=recovery_action_id,
+                    failure_code=failure_code,
+                    failure_category=failure_category,
+                    failure_episode_id=failure_episode_id,
+                    fence=pre_exile_run_fence,
+                )
+                self._repository.append_event(
+                    game_id=game_id,
+                    event_type="day_vote_degraded_to_abstain",
+                    audience="god_view",
+                    payload={
+                        "round_no": state.round_no,
+                        "action_type": action_type,
+                        "batch_id": batch_id,
+                        "public_cutoff_record_seq": public_cutoff_record_seq,
+                        "voter_player_id": voter.player_id,
+                        "source_action_id": source_action_id,
+                        "recovery_action_id": recovery_action_id,
+                        "failure_code": failure_code,
+                        "degraded_from": degraded_from,
+                    },
+                )
+                failure_meta = snapshot.failure if isinstance(snapshot.failure, dict) else {}
+                technical = (
+                    failure_meta.get("technical_outcome")
+                    if isinstance(failure_meta.get("technical_outcome"), dict)
+                    else {}
+                )
+                technical_abstain_reasons[index] = str(
+                    technical.get("failure_code") or failure_code
+                )
+                degraded_abstain_lineage[index] = {
+                    "source_action_id": source_action_id,
+                    "supporting_event_record_seq": failure_meta.get(
+                        "technical_outcome_record_seq"
+                    ),
+                    "failure_episode_id": technical.get("failure_episode_id"),
+                }
+
             if (
                 getattr(
                     state.pre_exile_pipeline_contract,
@@ -3038,18 +3112,20 @@ class DayEngine:
             ):
                 raise DayRuntimeError("pre_exile_capacity_recovery_contract_unsupported")
             recovery_inputs: list[tuple[int, dict[str, Any]]] = []
+            degraded_source_indexes: list[int] = []
             for index in failed_indexes:
                 voter = prepared[index][0]
                 row = pre_exile_vote_rows[voter.player_id]
                 category = _persisted_pre_exile_failure_category(row.failure or {})
                 if (
-                    category != "admission_capacity"
+                    category not in RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES
                     or not isinstance(row.action_id, str)
                     or not row.action_id
                 ):
-                    raise DayRuntimeError(
-                        f"pre_exile_vote_failure_not_recoverable:{voter.player_id}:{category}"
-                    )
+                    # A failure the sole recovery re-drive cannot touch must
+                    # degrade to a durable abstain instead of killing the day.
+                    degraded_source_indexes.append(index)
+                    continue
                 recovery_inputs.append(
                     (
                         index,
@@ -3060,6 +3136,36 @@ class DayEngine:
                             "model_admission_mode": "normal",
                         },
                     )
+                )
+            for index in degraded_source_indexes:
+                voter = prepared[index][0]
+                row = pre_exile_vote_rows[voter.player_id]
+                failure = row.failure if isinstance(row.failure, dict) else {}
+                action_payload = (
+                    failure.get("action_failed")
+                    if isinstance(failure.get("action_failed"), dict)
+                    else {}
+                )
+                request_payload = (
+                    failure.get("model_request_failed")
+                    if isinstance(failure.get("model_request_failed"), dict)
+                    else {}
+                )
+                degrade_vote_to_abstain(
+                    index,
+                    source_action_id=row.action_id,
+                    recovery_action_id=row.recovery_action_id,
+                    failure_code=str(
+                        action_payload.get("failure_code")
+                        or request_payload.get("failure_code")
+                        or "model_failure_unrecoverable"
+                    ),
+                    failure_category=_persisted_pre_exile_failure_category(failure),
+                    failure_episode_id=(
+                        action_payload.get("failure_episode_id")
+                        or request_payload.get("failure_episode_id")
+                    ),
+                    degraded_from="source_not_recoverable",
                 )
             self._repository.append_event(
                 game_id=game_id,
@@ -3077,19 +3183,23 @@ class DayEngine:
             recovery_results = list(
                 await asyncio.gather(
                     *(
-                        request_vote(
+                        _staggered_vote_request(
+                            slot,
+                            request_vote,
                             index,
                             prepared[index][0],
                             prepared[index][1],
                             stage="concurrent_recovery",
                             pre_exile_recovery=recovery,
+                            pause_on_model_failure=True,
                         )
-                        for index, recovery in recovery_inputs
+                        for slot, (index, recovery) in enumerate(recovery_inputs)
                     )
                 )
             )
             recovered_voter_ids: list[str] = []
             technical_voter_ids: list[str] = []
+            degraded_recovery_voter_ids: list[str] = []
             for (index, _recovery), result in zip(
                 recovery_inputs,
                 recovery_results,
@@ -3104,9 +3214,20 @@ class DayEngine:
                 if result.failure is not None:
                     if result.failure.category == "canceled":
                         self._actions.check_cancellation(game_id)
-                    raise DayRuntimeError(
-                        f"pre_exile_vote_recovery_failed:{voter.player_id}:{result.failure.code}"
+                    # The sole durable recovery re-drive failed (e.g. the
+                    # provider stalled past the auto-retry).  Degrade this
+                    # vote to a durable abstain; the batch must not die here.
+                    degrade_vote_to_abstain(
+                        index,
+                        source_action_id=source.action_id,
+                        recovery_action_id=result.action_id,
+                        failure_code=result.failure.code,
+                        failure_category=result.failure.category,
+                        failure_episode_id=result.failure.failure_episode_id,
+                        degraded_from="recovery_failed",
                     )
+                    degraded_recovery_voter_ids.append(voter.player_id)
+                    continue
                 adopted = pipeline_repository.adopt_vote_recovery_result(
                     pipeline_id=pre_exile_pipeline_id,
                     actor_player_id=voter.player_id,
@@ -3148,6 +3269,8 @@ class DayEngine:
             }
             if technical_voter_ids:
                 recovery_payload["technical_abstained_voter_ids"] = technical_voter_ids
+            if degraded_recovery_voter_ids:
+                recovery_payload["degraded_abstained_voter_ids"] = degraded_recovery_voter_ids
             self._repository.append_event(
                 game_id=game_id,
                 event_type="day_vote_batch_recovery_completed",
@@ -3189,13 +3312,15 @@ class DayEngine:
             concurrent_recovery_results = list(
                 await asyncio.gather(
                     *(
-                        request_vote(
+                        _staggered_vote_request(
+                            slot,
+                            request_vote,
                             index,
                             prepared[index][0],
                             prepared[index][1],
                             stage="concurrent_recovery",
                         )
-                        for index in concurrent_recovery_indexes
+                        for slot, index in enumerate(concurrent_recovery_indexes)
                     )
                 )
             )
@@ -3341,6 +3466,23 @@ class DayEngine:
             zip(prepared, decisions, strict=True)
         ):
             technical_reason = technical_abstain_reasons[index]
+            if technical_reason is not None and index in degraded_abstain_lineage:
+                lineage = degraded_abstain_lineage[index]
+                committed.append(
+                    DayVoteCommit(
+                        voter_player_id=voter.player_id,
+                        target_player_id=None,
+                        weight=0.0,
+                        decision_note=None,
+                        technical_status="technical_abstain",
+                        technical_reason=technical_reason,
+                        source_action_id=lineage["source_action_id"],
+                        supporting_event_record_seq=lineage["supporting_event_record_seq"],
+                        failure_episode_id=lineage["failure_episode_id"],
+                        failure_mode="model_failure_degraded",
+                    )
+                )
+                continue
             if technical_reason is not None:
                 technical_result = technical_abstain_results[index]
                 technical_outcome = (
@@ -4541,6 +4683,7 @@ class DayEngine:
         projection_at_seq: int | None = None,
         defer_presentation: bool = False,
         isolated_failure: bool = False,
+        pause_on_model_failure: bool = False,
         allow_failure: bool = False,
         batch_id: str | None = None,
         decision_family_id: str | None = None,
@@ -4647,6 +4790,12 @@ class DayEngine:
             model_id=player.model_id,
             model_supports_thinking=player.model_supports_thinking,
             model_parameters=player.model_parameters,
+            # Vote-phase thinking offload is applied at the payload layer after
+            # frozen-parameter validation, never by mutating the frozen dict.
+            disable_provider_thinking=(
+                settings.live_v2_vote_disable_thinking
+                and action_type in _VOTE_PHASE_ACTION_TYPES
+            ),
             output_kind=output_kind,
             decision_contract=resolved_contract,
             allowed_target_ids=(
@@ -4706,6 +4855,7 @@ class DayEngine:
             },
             defer_presentation=defer_presentation,
             isolated_failure=isolated_failure,
+            pause_on_model_failure=pause_on_model_failure,
             batch_id=batch_id,
             projection_at_seq=projection_at_seq,
             decision_family_id=decision_family_id,
@@ -4905,6 +5055,31 @@ def _private_fact_visible_at_public_cutoff(
     record_seq = fact.get("record_seq")
     clock = known_at_seq if type(known_at_seq) is int else record_seq
     return type(clock) is int and clock <= public_cutoff_record_seq
+
+
+def _vote_fanout_delay_seconds(slot: int) -> float:
+    """Per-slot delay that spaces out a vote fan-out.
+
+    A whole vote batch hitting provider admission in the same instant showed
+    up as `model_prefetch_capacity_unavailable` storms; staggering each slot
+    by a few hundred milliseconds spreads the admission pressure.
+    """
+    stagger_ms = int(settings.live_v2_vote_fanout_stagger_ms)
+    if stagger_ms <= 0 or slot <= 0:
+        return 0.0
+    return min(slot * stagger_ms, 10_000) / 1000.0
+
+
+async def _staggered_vote_request(
+    slot: int,
+    request: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    delay = _vote_fanout_delay_seconds(slot)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    return await request(*args, **kwargs)
 
 
 def _persisted_pre_exile_failure_category(failure: dict[str, Any]) -> str | None:

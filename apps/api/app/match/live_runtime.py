@@ -61,6 +61,7 @@ from app.match.public_projection import (
 from app.match.protocol import live_state
 from app.match.pre_exile_pipeline_repository import PreExilePipelineRepository
 from app.match.repository import ActionRepository, PresentationIdentity
+from app.match.run_reaper import RunReaper
 from app.match.runtime_state import project_runtime_state
 from app.match.service import (
     RecordNotFound,
@@ -440,6 +441,7 @@ class LiveRuntime:
         worker_id: str | None = None,
         lease_seconds: float = 15.0,
         heartbeat_seconds: float = 3.0,
+        run_reaper: RunReaper | None = None,
     ) -> None:
         if heartbeat_seconds >= lease_seconds:
             raise ValueError("V2 heartbeat interval must be shorter than its lease")
@@ -501,6 +503,11 @@ class LiveRuntime:
         )
         self._channels: dict[str, _GameChannel] = {}
         self._channels_lock = asyncio.Lock()
+        self._run_reaper = run_reaper
+
+    def start_reaper(self) -> None:
+        if self._run_reaper is not None:
+            self._run_reaper.start()
 
     @property
     def tts_capability_enabled(self) -> bool:
@@ -511,6 +518,8 @@ class LiveRuntime:
         return "tts" if self._tts_capability_enabled else "text_only"
 
     async def aclose(self) -> None:
+        if self._run_reaper is not None:
+            await self._run_reaper.stop()
         close = getattr(self._model_client, "aclose", None)
         if callable(close):
             await close()
@@ -768,6 +777,15 @@ def build_live_runtime(config: Settings = settings) -> LiveRuntime:
         ),
         lease_seconds=config.live_run_lease_seconds,
         heartbeat_seconds=config.live_run_heartbeat_seconds,
+        run_reaper=(
+            RunReaper(
+                session_factory=SessionLocal,
+                interval_seconds=config.live_v2_reaper_interval_seconds,
+                grace_seconds=config.live_v2_reaper_grace_seconds,
+            )
+            if config.live_v2_reaper_enabled
+            else None
+        ),
     )
 
 

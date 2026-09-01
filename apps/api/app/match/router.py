@@ -4,7 +4,7 @@ import copy
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -22,6 +22,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -60,6 +61,10 @@ from app.match.contracts import (
     AdminPagination,
     AdminPresentationResponse,
     AdminRunResponse,
+    AdminV2MetricsResponse,
+    AdminV2ModelFailureMetricsResponse,
+    AdminV2RunMetricsResponse,
+    AdminV2SignalMetricsResponse,
     AdminVoiceAssetResponse,
     ActorResponse,
     ApiMetaResponse,
@@ -107,7 +112,7 @@ from app.match.model_failure_episode import FailureEpisode, derive_failure_episo
 from app.match.model_failure_impact import classify_model_failure_impact
 from app.match.god_view_projection import project_god_view_player_identities
 from app.match.live_runtime import ClientProtocolError, LiveRuntime
-from app.match.models import GameRun
+from app.match.models import GameRecordEvent, GameRun
 from app.match.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
@@ -637,6 +642,112 @@ def read_god_view_identity_snapshot(
             assignments=assignments,
             player_states=player_state_map(db, game_id),
         ),
+    )
+
+
+@admin_router.get("/metrics", response_model=AdminV2MetricsResponse)
+def read_admin_v2_metrics(
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    _principal: Annotated[
+        AdminPrincipal,
+        Depends(require_admin_permission(AdminPermission.V2_GAMES_READ)),
+    ],
+    days: Annotated[int, Query(ge=1, le=90)] = 7,
+) -> AdminV2MetricsResponse:
+    """Aggregate match-health metrics for the admin dashboard tile."""
+    _set_admin_headers(request, response)
+    since = datetime.now(tz=UTC) - timedelta(days=days)
+    now = datetime.now(tz=UTC)
+
+    run_status_counts: dict[str, int] = {
+        str(status): int(count)
+        for status, count in db.execute(
+            select(GameRun.status, func.count())
+            .where(
+                or_(
+                    GameRun.started_at >= since,
+                    GameRun.started_at.is_(None),
+                )
+            )
+            .group_by(GameRun.status)
+        )
+    }
+    finished = run_status_counts.get("completed", 0) + run_status_counts.get("failed", 0)
+    completed = run_status_counts.get("completed", 0)
+    failed = run_status_counts.get("failed", 0)
+
+    signal_event_types = (
+        "game_failed",
+        "model_request_failed",
+        "pre_exile_vote_degraded_to_abstain",
+        "day_vote_degraded_to_abstain",
+        "model_action_auto_resumed",
+        "v2_run_execution_reaped",
+    )
+    signal_events = db.execute(
+        select(GameRecordEvent.event_type, GameRecordEvent.payload).where(
+            GameRecordEvent.created_at >= since,
+            GameRecordEvent.event_type.in_(signal_event_types),
+        )
+    ).all()
+
+    death_reasons: dict[str, int] = {}
+    failure_categories: dict[str, int] = {}
+    failure_codes: dict[str, int] = {}
+    degraded_abstains = 0
+    auto_resumes = 0
+    reaped = 0
+    model_failures = 0
+    for event_type, payload in signal_events:
+        payload_dict = payload if isinstance(payload, dict) else {}
+        if event_type == "game_failed":
+            reason = str(payload_dict.get("reason_code") or "unknown")
+            death_reasons[reason] = death_reasons.get(reason, 0) + 1
+        elif event_type == "model_request_failed":
+            model_failures += 1
+            category = str(payload_dict.get("failure_category") or "unknown")
+            failure_categories[category] = failure_categories.get(category, 0) + 1
+            code = str(payload_dict.get("failure_code") or "unknown")
+            failure_codes[code] = failure_codes.get(code, 0) + 1
+        elif event_type in (
+            "pre_exile_vote_degraded_to_abstain",
+            "day_vote_degraded_to_abstain",
+        ):
+            degraded_abstains += 1
+        elif event_type == "model_action_auto_resumed":
+            auto_resumes += 1
+        elif event_type == "v2_run_execution_reaped":
+            reaped += 1
+
+    return AdminV2MetricsResponse(
+        generated_at=now.isoformat(),
+        window_days=days,
+        runs=AdminV2RunMetricsResponse(
+            by_status=run_status_counts,
+            finished=finished,
+            completed=completed,
+            failed=failed,
+            success_rate=(round(completed / finished, 4) if finished else None),
+        ),
+        model_failures=AdminV2ModelFailureMetricsResponse(
+            total=model_failures,
+            by_category=_top_counts(failure_categories),
+            top_failure_codes=_top_counts(failure_codes),
+        ),
+        signals=AdminV2SignalMetricsResponse(
+            death_reasons=_top_counts(death_reasons),
+            degraded_vote_abstains=degraded_abstains,
+            auto_resumed_model_actions=auto_resumes,
+            reaped_runs=reaped,
+        ),
+    )
+
+
+def _top_counts(counts: dict[str, int], *, limit: int = 10) -> dict[str, int]:
+    return dict(
+        sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
     )
 
 

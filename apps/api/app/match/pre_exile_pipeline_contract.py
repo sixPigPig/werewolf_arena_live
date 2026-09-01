@@ -40,6 +40,14 @@ class PreExilePipelineContractError(ValueError):
     pass
 
 
+# Pre-exile vote failure categories the pipeline can re-drive after the vote
+# window closes.  "admission_capacity" never reached the provider; "transport"
+# and "timeout" did but their attempts terminated in a recorded failure.
+RECOVERABLE_PRE_EXILE_VOTE_CATEGORIES = frozenset(
+    {"admission_capacity", "transport", "timeout"}
+)
+
+
 @dataclass(frozen=True)
 class ResolvedPreExilePipelineContract:
     status: Literal["supported", "legacy_sequential"]

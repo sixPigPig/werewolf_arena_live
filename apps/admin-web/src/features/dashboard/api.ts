@@ -4,6 +4,7 @@ import {
   parseAdminOverview,
   parseAdminSearch,
   parseAdminSettings,
+  parseAdminV2Metrics,
 } from "@/features/dashboard/parsers";
 import type { AdminJobList, AdminJobStatus } from "@/features/dashboard/types";
 
@@ -26,4 +27,10 @@ export async function getAdminSettings(signal?: AbortSignal) {
 export async function searchAdminResources(query: string, signal?: AbortSignal) {
   const search = new URLSearchParams({ q: query });
   return parseAdminSearch(await adminApiFetch<unknown>(`/api/v1/admin/search?${search}`, { signal }));
+}
+
+export async function getAdminV2Metrics(signal?: AbortSignal) {
+  return parseAdminV2Metrics(
+    await adminApiFetch<unknown>("/api/v1/admin/v2/metrics?days=7", { signal }),
+  );
 }

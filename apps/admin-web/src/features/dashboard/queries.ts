@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { getAdminOverview, getAdminSettings } from "@/features/dashboard/api";
+import { getAdminOverview, getAdminSettings, getAdminV2Metrics } from "@/features/dashboard/api";
 import type { AdminRuntimeMode } from "@/features/auth/types";
-import type { AdminOverview, AdminSettings } from "@/features/dashboard/types";
+import type { AdminOverview, AdminSettings, AdminV2Metrics } from "@/features/dashboard/types";
 
 const PREVIEW_OVERVIEW: AdminOverview = {
   generated_at: "2026-07-12T00:00:00Z",
@@ -37,5 +37,38 @@ export function useSettingsQuery(runtimeMode: AdminRuntimeMode, enabled = true) 
     queryKey: ["admin", "dashboard", "settings"],
     queryFn: ({ signal }) => runtimeMode === "preview" ? PREVIEW_SETTINGS : getAdminSettings(signal),
     staleTime: 5 * 60_000,
+  });
+}
+
+const PREVIEW_V2_METRICS: AdminV2Metrics = {
+  generated_at: "2026-07-12T00:00:00Z",
+  window_days: 7,
+  runs: {
+    by_status: { completed: 6, failed: 2, generating: 1 },
+    finished: 8,
+    completed: 6,
+    failed: 2,
+    success_rate: 0.75,
+  },
+  model_failures: {
+    total: 14,
+    by_category: { transport: 9, timeout: 4, admission_capacity: 1 },
+    top_failure_codes: { model_transport_failed: 9, model_total_timeout: 4 },
+  },
+  signals: {
+    death_reasons: { worker_lease_expired: 2 },
+    degraded_vote_abstains: 3,
+    auto_resumed_model_actions: 5,
+    reaped_runs: 2,
+  },
+};
+
+export function useV2MetricsQuery(runtimeMode: AdminRuntimeMode, enabled = true) {
+  return useQuery({
+    enabled,
+    queryKey: ["admin", "dashboard", "v2-metrics"],
+    queryFn: ({ signal }) => (runtimeMode === "preview" ? PREVIEW_V2_METRICS : getAdminV2Metrics(signal)),
+    refetchInterval: runtimeMode === "authenticated" ? 30_000 : false,
+    staleTime: 15_000,
   });
 }

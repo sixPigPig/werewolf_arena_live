@@ -20,6 +20,7 @@ from app.match.day_engine import (
     DayRuntimeError,
     _pre_exile_wolf_vote_private_facts,
     _private_fact_visible_at_public_cutoff,
+    _vote_fanout_delay_seconds,
 )
 from app.match.match_repository import (
     MatchPlayer,
@@ -275,6 +276,7 @@ class _PreExileRows:
     def __init__(self, rows: list[Any]) -> None:
         self.rows = rows
         self.adopt_calls: list[dict[str, Any]] = []
+        self.degraded_calls: list[dict[str, Any]] = []
 
     def list_results(self, pipeline_id: str) -> tuple[Any, ...]:
         assert pipeline_id == "v2_preex_pipeline"
@@ -283,6 +285,25 @@ class _PreExileRows:
     def adopt_vote_recovery_result(self, **kwargs: Any) -> Any:
         self.adopt_calls.append(dict(kwargs))
         return SimpleNamespace(action_id=kwargs["source_action_id"])
+
+    def record_vote_degraded_abstain(self, **kwargs: Any) -> Any:
+        self.degraded_calls.append(dict(kwargs))
+        episode_id = (
+            kwargs["failure_episode_id"]
+            or f"v2_episode_degraded_{kwargs['source_action_id']}"
+        )
+        return SimpleNamespace(
+            action_id=kwargs["source_action_id"],
+            failure={
+                "technical_outcome_record_seq": 300,
+                "technical_outcome": {
+                    "technical_outcome": "technical_abstain",
+                    "failure_code": kwargs["failure_code"],
+                    "failure_episode_id": episode_id,
+                    "target_exhaustion_failure_mode": "model_failure_degraded",
+                },
+            },
+        )
 
 
 def _player(player_id: str, seat: int, *, role_key: str = "villager") -> MatchPlayer:
@@ -359,6 +380,7 @@ def _vote_row(
         actor_player_id=player_id,
         result_kind="exile_vote",
         action_id=action_id,
+        recovery_action_id=None,
         failure=failure,
     )
 
@@ -509,6 +531,203 @@ def test_multiple_idle_capacity_failures_recover_concurrently_once() -> None:
             "model_admission_mode": "normal",
         }
         assert spec.context["public_history_cutoff_record_seq"] == 100
+
+
+def test_vote_recovery_failure_degrades_to_durable_abstain() -> None:
+    state = _vote_snapshot()
+    repository = _VoteRepository(state)
+    rows = _PreExileRows(
+        [
+            _vote_row(
+                "player_1",
+                action_id="v2_action_idle_player_1",
+                failure=_capacity_failure("v2_action_idle_player_1"),
+            ),
+            _vote_row("player_2", action_id="v2_action_player_2"),
+            _vote_row("player_3", action_id="v2_action_player_3"),
+        ]
+    )
+
+    class _TimeoutRecoveryActions(_VoteActions):
+        async def run_player_decision_result(
+            self,
+            *,
+            spec: SpeechSpec,
+            **_kwargs: Any,
+        ) -> ActionResult:
+            self.specs.append(spec)
+            return ActionResult(
+                action_id=f"v2_action_recovery_{spec.actor_id}",
+                failure=ActionFailure(
+                    code="model_total_timeout",
+                    category="timeout",
+                    terminal_attempt_id="v2_attempt_recovery_timeout",
+                    failure_episode_id="v2_episode_recovery_timeout",
+                ),
+                terminal_event_record_seq=160,
+            )
+
+    actions = _TimeoutRecoveryActions()
+    engine = DayEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
+    )
+    initial = {
+        "player_1": ActionResult(
+            action_id="v2_action_idle_player_1",
+            failure=ActionFailure(
+                code="model_prefetch_capacity_unavailable",
+                category="admission_capacity",
+                terminal_attempt_id="v2_attempt_idle_capacity",
+            ),
+            terminal_event_record_seq=150,
+        ),
+        "player_2": ActionResult(
+            action_id="v2_action_player_2",
+            decision=_vote_decision("player_1"),
+        ),
+        "player_3": ActionResult(
+            action_id="v2_action_player_3",
+            decision=_vote_decision("player_1"),
+        ),
+    }
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=state.game_id,
+            broadcaster=_Broadcaster(),
+            action_type="exile_vote",
+            voters=list(state.players),
+            candidates=list(state.players),
+            weighted=True,
+            context={"vote_round": 1},
+            pre_exile_pipeline_id="v2_preex_pipeline",
+            frozen_state=state,
+            frozen_private_facts_by_voter={player.player_id: [] for player in state.players},
+            initial_results_by_voter=initial,
+            public_history_cutoff_record_seq=100,
+        )
+    )
+
+    assert totals == {"player_1": 2.0}
+    assert len(actions.specs) == 1
+    assert actions.specs[0].pause_on_model_failure is True
+    assert len(rows.degraded_calls) == 1
+    degraded = rows.degraded_calls[0]
+    assert degraded["source_action_id"] == "v2_action_idle_player_1"
+    assert degraded["recovery_action_id"] == "v2_action_recovery_player_1"
+    assert degraded["failure_code"] == "model_total_timeout"
+    assert degraded["failure_category"] == "timeout"
+    assert degraded["failure_episode_id"] == "v2_episode_recovery_timeout"
+    assert rows.adopt_calls == []
+    assert len(repository.finalize_calls) == 1
+    votes = repository.finalize_calls[0]["votes"]
+    degraded_vote = [vote for vote in votes if vote.voter_player_id == "player_1"]
+    assert len(degraded_vote) == 1
+    assert degraded_vote[0].technical_status == "technical_abstain"
+    assert degraded_vote[0].technical_reason == "model_total_timeout"
+    assert degraded_vote[0].failure_mode == "model_failure_degraded"
+    assert degraded_vote[0].supporting_event_record_seq == 300
+    assert degraded_vote[0].failure_episode_id == "v2_episode_recovery_timeout"
+    degraded_events = [
+        event
+        for event in repository.events
+        if event["event_type"] == "day_vote_degraded_to_abstain"
+    ]
+    assert len(degraded_events) == 1
+    assert degraded_events[0]["payload"]["degraded_from"] == "recovery_failed"
+    completed_events = [
+        event
+        for event in repository.events
+        if event["event_type"] == "day_vote_batch_recovery_completed"
+    ]
+    assert completed_events[-1]["payload"]["degraded_abstained_voter_ids"] == ["player_1"]
+
+
+def test_non_recoverable_source_failure_degrades_without_recovery_drive() -> None:
+    state = _vote_snapshot()
+    repository = _VoteRepository(state)
+    rows = _PreExileRows(
+        [
+            _vote_row(
+                "player_1",
+                action_id="v2_action_machine_player_1",
+                failure={
+                    "action_failed": {
+                        "action_id": "v2_action_machine_player_1",
+                        "failure_code": "model_decision_structured_speech_leak",
+                        "failure_category": "machine_format",
+                    }
+                },
+            ),
+            _vote_row("player_2", action_id="v2_action_player_2"),
+            _vote_row("player_3", action_id="v2_action_player_3"),
+        ]
+    )
+    actions = _VoteActions()
+    engine = DayEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
+    )
+    initial = {
+        "player_1": ActionResult(
+            action_id="v2_action_machine_player_1",
+            failure=ActionFailure(
+                code="model_decision_structured_speech_leak",
+                category="machine_format",
+                terminal_attempt_id="v2_attempt_machine",
+                failure_episode_id="v2_episode_machine",
+            ),
+            terminal_event_record_seq=150,
+        ),
+        "player_2": ActionResult(
+            action_id="v2_action_player_2",
+            decision=_vote_decision("player_1"),
+        ),
+        "player_3": ActionResult(
+            action_id="v2_action_player_3",
+            decision=_vote_decision("player_1"),
+        ),
+    }
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=state.game_id,
+            broadcaster=_Broadcaster(),
+            action_type="exile_vote",
+            voters=list(state.players),
+            candidates=list(state.players),
+            weighted=True,
+            context={"vote_round": 1},
+            pre_exile_pipeline_id="v2_preex_pipeline",
+            frozen_state=state,
+            frozen_private_facts_by_voter={player.player_id: [] for player in state.players},
+            initial_results_by_voter=initial,
+            public_history_cutoff_record_seq=100,
+        )
+    )
+
+    assert totals == {"player_1": 2.0}
+    assert actions.specs == []
+    assert len(rows.degraded_calls) == 1
+    degraded = rows.degraded_calls[0]
+    assert degraded["source_action_id"] == "v2_action_machine_player_1"
+    assert degraded["recovery_action_id"] is None
+    assert degraded["failure_code"] == "model_decision_structured_speech_leak"
+    assert degraded["failure_episode_id"] is None
+    votes = repository.finalize_calls[0]["votes"]
+    degraded_vote = [vote for vote in votes if vote.voter_player_id == "player_1"]
+    assert len(degraded_vote) == 1
+    assert degraded_vote[0].technical_status == "technical_abstain"
+    assert degraded_vote[0].technical_reason == "model_decision_structured_speech_leak"
+    assert degraded_vote[0].failure_mode == "model_failure_degraded"
+    assert degraded_vote[0].supporting_event_record_seq == 300
+    assert (
+        degraded_vote[0].failure_episode_id
+        == "v2_episode_degraded_v2_action_machine_player_1"
+    )
 
 
 class _GenerationRepository(_VoteRepository):
@@ -1087,3 +1306,212 @@ def test_canceled_member_does_not_become_false_or_continue_to_votes() -> None:
     assert repository.finalize_calls == []
     assert pipeline_repository.vote_recorded_count == 0
     assert all(kind == "self_explosion" for kind, _mode, _actor in actions.start_order)
+
+
+def test_vote_fanout_delay_helper_scales_caps_and_disables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "live_v2_vote_fanout_stagger_ms", 300)
+    assert _vote_fanout_delay_seconds(0) == 0.0
+    assert _vote_fanout_delay_seconds(1) == 0.3
+    assert _vote_fanout_delay_seconds(4) == 1.2
+    monkeypatch.setattr(settings, "live_v2_vote_fanout_stagger_ms", 0)
+    assert _vote_fanout_delay_seconds(5) == 0.0
+    monkeypatch.setattr(settings, "live_v2_vote_fanout_stagger_ms", 10_000)
+    # The per-slot delay is capped so a huge batch cannot stall the day.
+    assert _vote_fanout_delay_seconds(50) == 10.0
+
+
+def test_vote_fanout_stagger_covers_votes_and_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.match.day_engine as day_engine_module
+
+    stagger_slots: list[int] = []
+
+    def _record_slot(slot: int) -> float:
+        stagger_slots.append(slot)
+        return 0.0
+
+    monkeypatch.setattr(
+        day_engine_module,
+        "_vote_fanout_delay_seconds",
+        _record_slot,
+    )
+    state = _vote_snapshot()
+    repository = _VoteRepository(state)
+    rows = _PreExileRows(
+        [
+            _vote_row(
+                "player_1",
+                action_id="v2_action_idle_player_1",
+                failure=_capacity_failure("v2_action_idle_player_1"),
+            ),
+            _vote_row("player_2", action_id="v2_action_player_2"),
+            _vote_row("player_3", action_id="v2_action_player_3"),
+        ]
+    )
+    actions = _VoteActions(expected_concurrency=1)
+    engine = DayEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
+    )
+    initial = {
+        "player_1": ActionResult(
+            action_id="v2_action_idle_player_1",
+            failure=ActionFailure(
+                code="model_prefetch_capacity_unavailable",
+                category="admission_capacity",
+                terminal_attempt_id="v2_attempt_idle_capacity",
+            ),
+            terminal_event_record_seq=150,
+        ),
+        "player_2": ActionResult(
+            action_id="v2_action_player_2",
+            decision=_vote_decision("player_1"),
+        ),
+        "player_3": ActionResult(
+            action_id="v2_action_player_3",
+            decision=_vote_decision("player_1"),
+        ),
+    }
+
+    asyncio.run(
+        engine._collect_votes(
+            game_id=state.game_id,
+            broadcaster=_Broadcaster(),
+            action_type="exile_vote",
+            voters=list(state.players),
+            candidates=list(state.players),
+            weighted=True,
+            context={"vote_round": 1},
+            pre_exile_pipeline_id="v2_preex_pipeline",
+            frozen_state=state,
+            frozen_private_facts_by_voter={player.player_id: [] for player in state.players},
+            initial_results_by_voter=initial,
+            public_history_cutoff_record_seq=100,
+        )
+    )
+
+    # The recovery fan-out inside _collect_votes is staggered per slot; the
+    # speculative votes themselves arrive as initial results here, so the
+    # start_vote fan-out (slotted by voter position) is not exercised.
+    assert stagger_slots == [0]
+
+
+def test_vote_phase_disables_thinking_in_model_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    state = _vote_snapshot()
+    thinking_players = tuple(
+        replace(player, model_parameters={"thinking": "enabled"})
+        for player in state.players
+    )
+    state = replace(state, players=thinking_players)
+    repository = _VoteRepository(state)
+    rows = _PreExileRows(
+        [
+            _vote_row(
+                "player_1",
+                action_id="v2_action_idle_player_1",
+                failure=_capacity_failure("v2_action_idle_player_1"),
+            ),
+            _vote_row("player_2", action_id="v2_action_player_2"),
+            _vote_row("player_3", action_id="v2_action_player_3"),
+        ]
+    )
+    actions = _VoteActions(expected_concurrency=1)
+    engine = DayEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
+    )
+    initial = {
+        "player_1": ActionResult(
+            action_id="v2_action_idle_player_1",
+            failure=ActionFailure(
+                code="model_prefetch_capacity_unavailable",
+                category="admission_capacity",
+                terminal_attempt_id="v2_attempt_idle_capacity",
+            ),
+            terminal_event_record_seq=150,
+        ),
+        "player_2": ActionResult(
+            action_id="v2_action_player_2",
+            decision=_vote_decision("player_1"),
+        ),
+        "player_3": ActionResult(
+            action_id="v2_action_player_3",
+            decision=_vote_decision("player_1"),
+        ),
+    }
+    common_kwargs: dict[str, Any] = dict(
+        game_id=state.game_id,
+        broadcaster=_Broadcaster(),
+        action_type="exile_vote",
+        voters=list(state.players),
+        candidates=list(state.players),
+        weighted=True,
+        context={"vote_round": 1},
+        pre_exile_pipeline_id="v2_preex_pipeline",
+        frozen_state=state,
+        frozen_private_facts_by_voter={player.player_id: [] for player in state.players},
+        initial_results_by_voter=initial,
+        public_history_cutoff_record_seq=100,
+    )
+
+    monkeypatch.setattr(settings, "live_v2_vote_disable_thinking", True)
+    asyncio.run(engine._collect_votes(**common_kwargs))
+    # The vote-phase thinking offload must ride on the spec flag — the frozen
+    # player parameters stay canonical and untouched.
+    assert actions.specs[0].disable_provider_thinking is True
+    assert actions.specs[0].model_parameters == {"thinking": "enabled"}
+
+    actions.specs.clear()
+    monkeypatch.setattr(settings, "live_v2_vote_disable_thinking", False)
+    asyncio.run(engine._collect_votes(**common_kwargs))
+    assert actions.specs[0].disable_provider_thinking is False
+    assert actions.specs[0].model_parameters == {"thinking": "enabled"}
+
+
+def test_provider_thinking_override_targets_payload_not_frozen_parameters() -> None:
+    from app.match.action_engine import _apply_provider_thinking_override
+    from app.match.model_client import ModelTarget
+
+    target = ModelTarget(
+        provider="volcengine",
+        model_id="doubao-seed-1-6",
+        supports_thinking=True,
+        parameters={
+            "thinking": "enabled",
+            "reasoning_effort": "high",
+            "max_tokens": 32768,
+        },
+    )
+
+    overridden, source = _apply_provider_thinking_override(
+        target,
+        thinking_source="model_configuration",
+        enabled=True,
+    )
+    assert source == "vote_phase_thinking_policy"
+    assert overridden.parameters["thinking"] == "disabled"
+    assert overridden.parameters["reasoning_effort"] is None
+    assert overridden.parameters["max_tokens"] == 32768
+    # The frozen contract is intact: the original target is not mutated.
+    assert target.parameters["thinking"] == "enabled"
+    assert target.parameters["reasoning_effort"] == "high"
+
+    # No-thinking models and disabled-policy requests pass through untouched.
+    passthrough, passthrough_source = _apply_provider_thinking_override(
+        target,
+        thinking_source="model_configuration",
+        enabled=False,
+    )
+    assert passthrough is target
+    assert passthrough_source == "model_configuration"
