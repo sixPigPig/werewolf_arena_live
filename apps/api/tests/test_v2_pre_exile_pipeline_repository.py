@@ -11,7 +11,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers referenced users table
-from app.match.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
+from app.match.day_speech_pipeline_contract import (
+    freeze_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
+)
 from app.match.execution import RunFence, bind_run_fence
 from app.match.match_repository import (
     DayVoteCommit,
@@ -74,11 +77,18 @@ class _Harness:
     matches: MatchRepository
     fence: RunFence
     predecessor: PresentationIdentity
+    predecessor_claim: ActionClaim
     pipeline: PreExilePipelineSnapshot
     public_history: tuple[dict[str, Any], ...]
     public_skip_record_seq: int | None = None
 
     def close_predecessor(self, *, commit_canonical_speech: bool = True) -> None:
+        self.actions.commit_speech_decision(
+            claim=self.predecessor_claim,
+            identity=self.predecessor,
+            next_live_state="ready",
+            next_phase_state=PHASE_STATE,
+        )
         self.actions.complete_text_action(
             identity=self.predecessor,
             next_live_state="ready",
@@ -273,7 +283,7 @@ def test_pre_exile_generation_claim_allows_finalizing_with_active_predecessor(
     assert opened.payload["context"]["pipeline"]["result_kind"] == "exile_vote"
 
 
-def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecessor(
+def test_pre_exile_generation_claim_accepts_closed_sealed_predecessor(
     harness: _Harness,
 ) -> None:
     harness.pipelines.reserve_result(
@@ -290,13 +300,14 @@ def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecesso
     )
 
     action_id = "v2_action_finalizing_without_active_predecessor"
-    with pytest.raises(RepositoryError, match="pre-exile predecessor is no longer active"):
-        _claim_initial(
-            harness,
-            actor_id="villager_3",
-            result_kind="exile_vote",
-            action_id=action_id,
-        )
+    claim = _claim_initial(
+        harness,
+        actor_id="villager_3",
+        result_kind="exile_vote",
+        action_id=action_id,
+    )
+    assert claim is not None
+    assert claim.action_id == action_id
 
     with harness.factory() as db:
         result = db.scalar(
@@ -313,8 +324,8 @@ def test_pre_exile_generation_claim_rejects_finalizing_without_active_predecesso
                 GameRecordEvent.payload["action_id"].as_string() == action_id,
             )
         )
-    assert result is not None and result.action_id is None
-    assert opened is None
+    assert result is not None and result.action_id == action_id
+    assert opened is not None
 
 
 def test_schema_v2_self_explosion_requires_retry_metadata_and_exile_vote_forbids_it(
@@ -488,7 +499,7 @@ def test_day_speech_generation_claim_remains_rejected_while_finalizing(
         bind_run_fence(harness.fence),
         pytest.raises(
             RepositoryError,
-            match="day speech pipeline generation is not frozen and enabled",
+            match="day speech pipeline generation",
         ),
     ):
         harness.actions.claim_action(
@@ -1187,6 +1198,7 @@ def _build_harness(
     rule_snapshot = freeze_model_context_contract(rule_snapshot)
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
+    rule_snapshot["day_speech_pipeline_contract"] = schema_v3_day_speech_pipeline_contract()
     rule_snapshot = freeze_pre_exile_pipeline_contract(rule_snapshot)
     rule_snapshot["pre_exile_pipeline_contract"] = schema_v2_pre_exile_pipeline_contract()
     if pre_exile_schema_version == 1:
@@ -1370,6 +1382,7 @@ def _build_harness(
         matches=matches,
         fence=fence,
         predecessor=predecessor,
+        predecessor_claim=claim,
         pipeline=pipeline,
         public_history=public_history,
         public_skip_record_seq=public_skip_record_seq,

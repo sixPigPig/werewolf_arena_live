@@ -1076,7 +1076,7 @@ def _validate_open_slot_presentation(
         or presentation.actor_kind != "player"
         or presentation.actor_id != row.actor_player_id
         or presentation.audience not in _PUBLIC_AUDIENCES
-        or presentation.state != "active"
+        or presentation.state not in _OPEN_PRESENTATION_STATES
     ):
         raise DaySpeechPipelineRepositoryError("day speech slot presentation lineage is invalid")
     source = _event_by_id(
@@ -1178,7 +1178,7 @@ def _validate_consumed_presentation(
         event_type="action_succeeded",
         action_id=row.presentation_action_id,
         presentation_id=row.presentation_id,
-        minimum_record_seq=closed.record_seq + 1,
+        minimum_record_seq=source.record_seq + 1,
         maximum_record_seq=last_record_seq,
     )
     if success is None:
@@ -1288,7 +1288,7 @@ def _require_no_active_slot_presentation(db: Session, *, row: DaySpeechSlot) -> 
             LivePresentation.presentation_id == row.presentation_id,
         )
     )
-    if presentation is not None and presentation.state == "active":
+    if presentation is not None and presentation.state in _OPEN_PRESENTATION_STATES:
         raise DaySpeechPipelineRepositoryError(
             "active presentation must be closed before slot cleanup"
         )

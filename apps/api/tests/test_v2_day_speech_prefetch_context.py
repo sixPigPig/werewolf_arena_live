@@ -63,6 +63,7 @@ class _Scenario:
     match_repository: MatchRepository
     action_repository: ActionRepository
     previous: PresentationIdentity
+    predecessor_claim: Any
     predecessor: PresentationIdentity
     predecessor_source_event_id: int
     predecessor_source_record_seq: int
@@ -146,7 +147,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         next_live_state="ready",
         next_phase_state=PHASE_STATE,
     )
-    _predecessor_claim, predecessor = _open_player_presentation(
+    predecessor_claim, predecessor = _open_player_presentation(
         actions,
         action_id="v2_action_predecessor",
         actor_id="player_2",
@@ -195,6 +196,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         match_repository=MatchRepository(session_factory),
         action_repository=actions,
         previous=previous,
+        predecessor_claim=predecessor_claim,
         predecessor=predecessor,
         predecessor_source_event_id=durable_source_event_id,
         predecessor_source_record_seq=source_record_seq,
@@ -408,6 +410,12 @@ def test_prefetch_snapshot_rejects_closed_predecessor(scenario: _Scenario) -> No
 def test_prefetch_snapshot_accepts_active_technical_skip_judge_cue_without_fake_player_speech(
     scenario: _Scenario,
 ) -> None:
+    scenario.action_repository.commit_speech_decision(
+        claim=scenario.predecessor_claim,
+        identity=scenario.predecessor,
+        next_live_state="ready",
+        next_phase_state=PHASE_STATE,
+    )
     scenario.action_repository.complete_text_action(
         identity=scenario.predecessor,
         next_live_state="ready",

@@ -437,7 +437,7 @@ def test_slot_happy_path_is_idempotent_ordered_and_private(harness: _Harness) ->
         fence=harness.fence,
     )
     assert presenting.state == "presenting"
-    _complete_voice_action(harness, next_presentation)
+    _complete_voice_action(harness, next_presentation, claim=next_claim)
     consumed = harness.slots.mark_consumed(slot_id=slot.slot_id, fence=harness.fence)
     assert consumed.state == "consumed"
     assert consumed.consumed_at is not None
@@ -591,7 +591,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
         generation_response_record_seq=response_seq,
         fence=harness.fence,
     )
-    _complete_voice_action(harness, judge)
+    _complete_voice_action(harness, judge, claim=claim)
     with bind_run_fence(harness.fence):
         player_claim = harness.actions.claim_action(
             game_id=GAME_ID,
@@ -628,7 +628,7 @@ def test_slot_accepts_active_technical_skip_judge_cue_as_turn_predecessor(
         fence=harness.fence,
     )
     assert presenting.state == "presenting"
-    _complete_voice_action(harness, player_presentation)
+    _complete_voice_action(harness, player_presentation, claim=player_claim)
     assert (
         harness.slots.mark_consumed(slot_id=slot.slot_id, fence=harness.fence).state == "consumed"
     )
@@ -915,7 +915,28 @@ def _append_record_event(
 def _complete_voice_action(
     harness: _Harness,
     identity: PresentationIdentity,
+    claim: ActionClaim | None = None,
 ) -> None:
+    resolved_claim = (
+        harness.predecessor_claim
+        if identity.action_id == harness.predecessor.action_id
+        else claim
+    )
+    if resolved_claim is not None:
+        harness.actions.commit_speech_decision(
+            claim=resolved_claim,
+            identity=identity,
+            next_live_state="ready",
+            next_phase_state=PHASE_STATE,
+        )
+    else:
+        with harness.session_factory.begin() as db:
+            game = db.get(GameRecord, GAME_ID)
+            run = db.get(GameRun, RUN_ID)
+            assert game is not None and run is not None
+            game.status = "ready"
+            game.phase_state = PHASE_STATE
+            run.status = "ready"
     harness.actions.mark_voice_ready(
         identity=identity,
         tts_attempt_id=f"v2_tts_{identity.presentation_seq}",
