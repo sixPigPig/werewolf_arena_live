@@ -847,6 +847,15 @@ def test_unverified_model_follows_glm_effort_contract(model_admin_client) -> Non
             False,
         ),
         (
+            "agent_plan",
+            "glm-5-3-flash",
+            ("low", "high", "max"),
+            {"low": 4_096, "high": 8_192, "max": 16_384},
+            "low",
+            4_096,
+            True,
+        ),
+        (
             "deepseek",
             "deepseek-v4-flash",
             ("high", "max"),
@@ -1003,6 +1012,49 @@ def test_core_contract_rejects_missing_reasoning_effort_key() -> None:
             supports_thinking=True,
             limit=131_072,
         )
+
+
+def test_glm_5_3_flash_rejects_disabled_and_accepts_effort_floors() -> None:
+    policy = reasoning_policy_for_model(
+        "agent_plan",
+        "glm-5-3-flash",
+        supports_thinking=True,
+    )
+    assert policy.thinking_options == ("enabled",)
+    assert policy.thinking_locked is True
+    assert policy.disabled_max_tokens is None
+    assert policy.reasoning_effort_options == ("low", "high", "max")
+
+    with pytest.raises(ValueError, match="thinking must be one of: enabled"):
+        normalize_model_parameters(
+            "agent_plan",
+            "glm-5-3-flash",
+            {
+                "thinking": "disabled",
+                "reasoning_effort": None,
+                "max_tokens_mode": "auto",
+                "max_tokens": 512,
+            },
+            supports_thinking=True,
+            limit=384_000,
+        )
+
+    for effort, tokens in (("low", 4_096), ("high", 8_192), ("max", 16_384)):
+        normalized = normalize_model_parameters(
+            "agent_plan",
+            "glm-5-3-flash",
+            {
+                "thinking": "enabled",
+                "reasoning_effort": effort,
+                "max_tokens_mode": "auto",
+                "max_tokens": tokens,
+            },
+            supports_thinking=True,
+            limit=384_000,
+        )
+        assert normalized["thinking"] == "enabled"
+        assert normalized["reasoning_effort"] == effort
+        assert normalized["max_tokens"] == tokens
 
 
 def test_verified_model_family_rejects_forged_non_thinking_capability() -> None:

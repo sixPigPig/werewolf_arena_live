@@ -12,7 +12,7 @@ export const previewModelCatalog: AdminModelCatalog = {
       label: "火山方舟 Agent Plan",
       refresh_mode: "manual",
       status: "ok",
-      model_count: 3,
+      model_count: 4,
       last_synced_at: "2026-07-15T11:56:00+08:00",
       docs_url: "https://api.volcengine.com/api-docs/view?action=ChatCompletions&serviceCode=ark&version=2024-01-01",
       error: null,
@@ -42,6 +42,7 @@ export const previewModelCatalog: AdminModelCatalog = {
     previewModel("ark", "ep-example", true, false),
     previewModel("agent_plan", "doubao-seed-2-0-lite-260215", true, true),
     previewModel("agent_plan", "glm-5-2-260617", true, false),
+    previewModel("agent_plan", "glm-5-3-flash", true, false),
     previewModel(
       "agent_plan",
       "doubao-seed-2-0-code-preview-260215",
@@ -60,13 +61,16 @@ function previewModel(
   isDefault: boolean,
 ): AdminModel {
   const usesCodePreviewPolicy = modelId.includes("doubao-seed-2-0-code-preview");
+  const usesGlm53Policy = modelId.includes("glm-5-3");
   const usesHighMaxPolicy =
-    provider === "deepseek" ||
-    modelId.includes("glm-5-2") ||
-    modelId.includes("deepseek-v4") ||
-    (!usesCodePreviewPolicy && !modelId.startsWith("doubao-"));
+    !usesGlm53Policy &&
+    (provider === "deepseek" ||
+      modelId.includes("glm-5-2") ||
+      modelId.includes("deepseek-v4") ||
+      (!usesCodePreviewPolicy && !modelId.startsWith("doubao-")));
   const usesDoubaoPolicy = modelId.startsWith("doubao-") && !usesCodePreviewPolicy;
-  const usesVerifiedThinkingPolicy = usesHighMaxPolicy || usesDoubaoPolicy;
+  const usesVerifiedThinkingPolicy =
+    usesHighMaxPolicy || usesDoubaoPolicy || usesGlm53Policy;
   const supportsThinking = !usesCodePreviewPolicy;
   const parameters = usesVerifiedThinkingPolicy
     ? {
@@ -89,7 +93,19 @@ function previewModel(
         frequency_penalty: null,
         presence_penalty: null,
       };
-  const reasoningPolicy: ModelReasoningPolicy = usesHighMaxPolicy
+  const reasoningPolicy: ModelReasoningPolicy = usesGlm53Policy
+    ? {
+        thinking_options: ["enabled"],
+        default_thinking: "enabled",
+        thinking_locked: true,
+        reasoning_effort_options: ["low", "high", "max"],
+        default_reasoning_effort: "low",
+        max_tokens_by_effort: { low: 4_096, high: 8_192, max: 16_384 },
+        default_max_tokens: 4_096,
+        disabled_max_tokens: null,
+        sampling_parameters_allowed_when_thinking: true,
+      }
+    : usesHighMaxPolicy
     ? {
         thinking_options: ["enabled", "disabled"],
         default_thinking: "enabled",

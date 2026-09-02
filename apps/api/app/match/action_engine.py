@@ -65,6 +65,7 @@ from app.match.repository import (
 )
 from app.match.tts_client import TtsError
 from app.match.voice_recorder import VoiceRecorder, VoiceRecordingError
+from app.model_catalog.defaults import reasoning_policy_for_model
 
 
 logger = logging.getLogger(__name__)
@@ -3344,13 +3345,17 @@ def _apply_provider_thinking_override(
     thinking_source: str,
     enabled: bool,
 ) -> tuple[Any, str]:
-    """Force thinking off on the resolved provider payload.
+    """Apply the vote-phase thinking policy on the resolved provider payload.
 
     This must stay a payload-level override: the frozen player parameters are
     a validated canonical contract, so editing that dict (e.g. flipping
     thinking to disabled while reasoning_effort/max_tokens still match the
     enabled configuration) fails frozen validation and kills every request
     with `model_parameters_invalid` before it reaches the provider.
+
+    Forced-thinking families (no ``disabled`` option) never receive
+    ``thinking.type=disabled``. If they expose effort grades, the override
+    keeps thinking on and floors effort instead.
     """
     if (
         not enabled
@@ -3358,17 +3363,36 @@ def _apply_provider_thinking_override(
         or target.parameters.get("thinking") != "enabled"
     ):
         return target, thinking_source
-    return (
-        replace(
-            target,
-            parameters={
-                **target.parameters,
-                "thinking": "disabled",
-                "reasoning_effort": None,
-            },
-        ),
-        "vote_phase_thinking_policy",
+    policy = reasoning_policy_for_model(
+        target.provider,
+        target.model_id,
+        supports_thinking=target.supports_thinking,
     )
+    if "disabled" in policy.thinking_options:
+        return (
+            replace(
+                target,
+                parameters={
+                    **target.parameters,
+                    "thinking": "disabled",
+                    "reasoning_effort": None,
+                },
+            ),
+            "vote_phase_thinking_policy",
+        )
+    if policy.reasoning_effort_options:
+        return (
+            replace(
+                target,
+                parameters={
+                    **target.parameters,
+                    "thinking": "enabled",
+                    "reasoning_effort": policy.reasoning_effort_options[0],
+                },
+            ),
+            "vote_phase_thinking_policy_effort_floor",
+        )
+    return target, thinking_source
 
 
 def _output_contract(spec: SpeechSpec) -> dict[str, Any]:

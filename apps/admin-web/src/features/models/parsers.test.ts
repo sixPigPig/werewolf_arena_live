@@ -34,6 +34,25 @@ describe("admin model catalog parser", () => {
     });
   });
 
+  it("mirrors glm-5-3 forced-thinking policy", () => {
+    const parsed = parseAdminModelCatalog(catalogPayload());
+    const glm53 = parsed.models.find((model) => model.model_id === "glm-5-3-flash");
+
+    expect(glm53?.parameters).toMatchObject({
+      thinking: "enabled",
+      reasoning_effort: "low",
+      max_tokens_mode: "auto",
+      max_tokens: 4_096,
+    });
+    expect(glm53?.reasoning_policy).toMatchObject({
+      thinking_options: ["enabled"],
+      thinking_locked: true,
+      reasoning_effort_options: ["low", "high", "max"],
+      default_reasoning_effort: "low",
+      disabled_max_tokens: null,
+    });
+  });
+
   it.each([
     "reasoning_effort",
     "temperature",

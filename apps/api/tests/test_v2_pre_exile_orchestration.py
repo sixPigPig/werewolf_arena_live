@@ -1518,3 +1518,30 @@ def test_provider_thinking_override_targets_payload_not_frozen_parameters() -> N
     )
     assert passthrough is target
     assert passthrough_source == "model_configuration"
+
+
+def test_provider_thinking_override_floors_forced_thinking_models() -> None:
+    from app.match.action_engine import _apply_provider_thinking_override
+    from app.match.model_client import ModelTarget
+
+    for model_id in ("glm-5-3-flash", "kimi-k3"):
+        target = ModelTarget(
+            provider="agent_plan",
+            model_id=model_id,
+            supports_thinking=True,
+            parameters={
+                "thinking": "enabled",
+                "reasoning_effort": "max",
+                "max_tokens": 16_384,
+            },
+        )
+        overridden, source = _apply_provider_thinking_override(
+            target,
+            thinking_source="model_configuration",
+            enabled=True,
+        )
+        assert source == "vote_phase_thinking_policy_effort_floor"
+        assert overridden.parameters["thinking"] == "enabled"
+        assert overridden.parameters["reasoning_effort"] == "low"
+        assert overridden.parameters["max_tokens"] == 16_384
+        assert target.parameters["reasoning_effort"] == "max"

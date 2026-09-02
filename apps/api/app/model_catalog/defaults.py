@@ -63,6 +63,18 @@ _GLM_5_2_POLICY = ReasoningPolicy(
     sampling_parameters_allowed_when_thinking=True,
 )
 
+_GLM_5_3_POLICY = ReasoningPolicy(
+    thinking_options=("enabled",),
+    default_thinking="enabled",
+    thinking_locked=True,
+    reasoning_effort_options=("low", "high", "max"),
+    default_reasoning_effort="low",
+    max_tokens_by_effort={"low": 4_096, "high": 8_192, "max": 16_384},
+    default_max_tokens=4_096,
+    disabled_max_tokens=None,
+    sampling_parameters_allowed_when_thinking=True,
+)
+
 _DEEPSEEK_V4_POLICY = ReasoningPolicy(
     thinking_options=("enabled", "disabled"),
     default_thinking="enabled",
@@ -121,6 +133,8 @@ def reasoning_policy_for_model(
     normalized = model_id.strip().lower()
     if "doubao-seed-2-0-code-preview" in normalized:
         return _NON_THINKING_POLICY
+    if "glm-5-3" in normalized:
+        return _GLM_5_3_POLICY
     if "glm-5-2" in normalized:
         return _GLM_5_2_POLICY
     if "deepseek-v4" in normalized:
