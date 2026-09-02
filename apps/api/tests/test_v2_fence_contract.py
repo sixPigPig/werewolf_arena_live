@@ -283,9 +283,9 @@ def test_stale_fence_rejects_tts_finalization_and_voice_ready_mutations(
         voice = db.get(VoiceAsset, identity.voice_asset_id)
         assert game is not None and run is not None
         assert presentation is not None and voice is not None
-        assert game.status == run.status == "broadcasting"
+        assert game.status == run.status == "generating"
         assert game.last_record_seq == before_seq
-        assert presentation.state == "active"
+        assert presentation.state == "queued"
         assert presentation.audio_asset_id is None
         assert presentation.audio_duration_ms is None
         assert voice.state == "writing"

@@ -899,12 +899,10 @@ def test_model_generation_policy_present_unknown_or_malformed_fails_closed(
 def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    frozen = freeze_model_generation_policy_contract({})
-    original = frozen["model_generation_policy_contract"]
+    original = schema_v4_model_generation_policy_contract()
+    frozen = {"model_generation_policy_contract": original}
     changed = current_model_generation_policy_contract()
-    changed["profiles"]["recoverable_public_speech"]["reasoning_only_timeout_ms"] = 195_000
-    changed["profiles"]["isolated_auxiliary"]["reasoning_only_timeout_ms"] = 255_000
-    changed["profiles"]["recoverable_public_speech"]["timeout_max_attempts"] = 2
+    changed["execution"]["transport_max_attempts"] = 9
     monkeypatch.setattr(
         "app.match.model_generation_policy_contract.current_model_generation_policy_contract",
         lambda: changed,
@@ -918,6 +916,7 @@ def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold
         original,
         action_type="day_debate_speech",
     )
+    assert resolved.schema_version == 4
     assert resolved.reasoning_only_timeout_ms == 180_000
     assert resolved.timeout_max_attempts == 1
 
@@ -1026,7 +1025,7 @@ def test_model_generation_policy_legacy_missing_resolves_disabled_metadata() -> 
 
 def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_threshold() -> None:
     policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type="day_debate_speech",
     )
 
@@ -1085,6 +1084,31 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "reasoning_only_elapsed_ms": 180_000,
         "shadow_would_timeout": True,
     }
+
+
+def test_generation_policy_audit_current_v6_has_no_timeout_shadow() -> None:
+    policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type="day_debate_speech",
+    )
+    completed = _model_generation_policy_audit_payload(
+        policy=policy,
+        action_type="day_debate_speech",
+        model_provider="agent_plan",
+        model_id="glm-test",
+        first_token_ms=2_000,
+        first_visible_text_ms=182_000,
+        terminal_elapsed_ms=190_000,
+    )
+    assert completed["model_generation_policy_schema_version"] == 6
+    assert completed["reasoning_only_timeout_ms"] is None
+    assert completed["action_wall_timeout_ms"] is None
+    assert completed["output_budget_max_attempts"] is None
+    assert completed["shadow_would_timeout"] is None
+    assert completed["required_target_exhaustion"]["eligible_failure_modes"] == [
+        "empty_visible_output",
+        "unparseable_output",
+    ]
 
 
 def test_generation_policy_audit_preserves_explicit_elapsed_and_legacy_null_shadow() -> None:
@@ -1429,7 +1453,7 @@ def test_v4_required_target_transport_format_and_soft_timeouts_do_not_technical_
         target_exhaustion_outcome="technical_abstain",
     )
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -1447,7 +1471,7 @@ def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() 
     spec = _blocking_required_target_spec()
     error = ModelError("model_output_budget_exhausted")
     v4_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 

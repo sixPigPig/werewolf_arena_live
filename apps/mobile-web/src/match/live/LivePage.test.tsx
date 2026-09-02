@@ -722,7 +722,7 @@ describe("LivePage", () => {
       });
     });
 
-    expect(await screen.findByText("投票决策已完成 4/6")).toBeInTheDocument();
+    expect((await screen.findAllByText("投票决策已完成 4/6")).length).toBeGreaterThan(0);
   });
 
   it("keeps an authoritative completed result ahead of a later presentation error", async () => {

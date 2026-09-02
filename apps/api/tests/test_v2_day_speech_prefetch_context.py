@@ -127,7 +127,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         )
 
     actions = ActionRepository(session_factory)
-    previous = _open_player_presentation(
+    previous_claim, previous = _open_player_presentation(
         actions,
         action_id="v2_action_previous",
         actor_id="player_1",
@@ -135,12 +135,18 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         speech_id="v2_speech_previous",
         speech="此前已关闭发言",
     )
+    actions.commit_speech_decision(
+        claim=previous_claim,
+        identity=previous,
+        next_live_state="ready",
+        next_phase_state=PHASE_STATE,
+    )
     actions.complete_text_action(
         identity=previous,
         next_live_state="ready",
         next_phase_state=PHASE_STATE,
     )
-    predecessor = _open_player_presentation(
+    _predecessor_claim, predecessor = _open_player_presentation(
         actions,
         action_id="v2_action_predecessor",
         actor_id="player_2",
@@ -217,7 +223,7 @@ def _open_player_presentation(
     presentation_id: str,
     speech_id: str,
     speech: str,
-) -> PresentationIdentity:
+) -> tuple[Any, PresentationIdentity]:
     claim = repository.claim_action(
         game_id=GAME_ID,
         action_id=action_id,
@@ -228,7 +234,7 @@ def _open_player_presentation(
         context_audience="player_private",
     )
     assert claim is not None
-    return repository.open_presentation(
+    return claim, repository.open_presentation(
         claim=claim,
         presentation_id=presentation_id,
         speech_id=speech_id,
@@ -507,7 +513,7 @@ def test_prefetch_snapshot_rejects_another_active_presentation(
         )
         game.last_presentation_seq = predecessor.presentation_seq + 1
 
-    with pytest.raises(RepositoryError, match="unique active presentation"):
+    with pytest.raises(RepositoryError, match="predecessor is not latest"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 

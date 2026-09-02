@@ -81,6 +81,15 @@ _MATCH_TERMINAL_GAME_STATUSES = frozenset(
         "canceled",
     }
 )
+_LIVE_MATCH_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+    }
+)
+_OPEN_PRESENTATION_STATES = frozenset({"queued", "active"})
 
 
 class RepositoryError(RuntimeError):
@@ -531,11 +540,7 @@ class ActionRepository:
                 "broadcasting",
                 "finalizing",
             }
-            if pre_exile_generation and game.status in {
-                "broadcasting",
-                "finalizing",
-                "ready",
-            }:
+            if pre_exile_generation and game.status in _LIVE_MATCH_STATUSES:
                 _bind_broadcast_pipeline_generation_claim(
                     db,
                     game=game,
@@ -550,7 +555,7 @@ class ActionRepository:
                     best_effort=best_effort,
                     non_blocking=non_blocking,
                 )
-            elif pipeline_generation and game.status in match_claimable_statuses:
+            elif pipeline_generation and game.status in _LIVE_MATCH_STATUSES:
                 _bind_broadcast_pipeline_generation_claim(
                     db,
                     game=game,
@@ -1373,7 +1378,7 @@ class ActionRepository:
                     LivePresentation,
                     (identity.game_id, identity.presentation_seq),
                 )
-                if presentation is not None and presentation.state == "active":
+                if presentation is not None and presentation.state in _OPEN_PRESENTATION_STATES:
                     presentation.state = "failed"
                     presentation.closed_at = _now()
                 voice = db.get(VoiceAsset, identity.voice_asset_id)
@@ -1787,7 +1792,7 @@ class ActionRepository:
                 db.scalars(
                     select(LivePresentation).where(
                         LivePresentation.game_id == game.game_id,
-                        LivePresentation.state == "active",
+                        LivePresentation.state.in_(tuple(_OPEN_PRESENTATION_STATES)),
                     )
                 )
             )
@@ -2346,7 +2351,7 @@ def _bind_broadcast_pipeline_generation_claim(
     ):
         raise RepositoryError("day speech pipeline generation is not frozen and enabled")
     if (
-        game.status not in {"broadcasting", "finalizing", "ready", "generating"}
+        game.status not in _LIVE_MATCH_STATUSES
         or run.status != game.status
         or run.run_id != game.current_run_id
         or run.game_id != game.game_id
@@ -2510,7 +2515,7 @@ def _bind_pre_exile_pipeline_generation_claim(
     ):
         raise RepositoryError("pre-exile pipeline contract is not enabled")
     if (
-        game.status not in {"broadcasting", "finalizing", "ready"}
+        game.status not in _LIVE_MATCH_STATUSES
         or run.status != game.status
         or run.run_id != game.current_run_id
         or run.game_id != game.game_id
@@ -3089,21 +3094,21 @@ def _validate_pipeline_generation_predecessor(
     row: DaySpeechSlot,
     speech_order: list[Any],
 ) -> None:
-    active = list(
+    open_presentations = list(
         db.scalars(
             select(LivePresentation)
             .where(
                 LivePresentation.game_id == game.game_id,
-                LivePresentation.state == "active",
+                LivePresentation.state.in_(tuple(_OPEN_PRESENTATION_STATES)),
             )
             .order_by(LivePresentation.presentation_seq)
         )
     )
-    if len(active) != 1:
+    if len(open_presentations) != 1:
         raise RepositoryError(
             "day speech pipeline predecessor is not the unique active presentation"
         )
-    predecessor = active[0]
+    predecessor = open_presentations[0]
     if row.turn_index < 2 or len(speech_order) < row.turn_index:
         raise RepositoryError("day speech pipeline predecessor identity is invalid")
     predecessor_turn_player_id = speech_order[row.turn_index - 2]

@@ -39,6 +39,15 @@ DaySpeechSlotState = Literal[
 
 _TERMINAL_STATES = frozenset({"consumed", "failed", "canceled", "invalidated"})
 _PUBLIC_AUDIENCES = frozenset({"all", "public"})
+_LIVE_MATCH_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+    }
+)
+_OPEN_PRESENTATION_STATES = frozenset({"queued", "active"})
 
 
 class DaySpeechPipelineRepositoryError(RepositoryError):
@@ -108,8 +117,8 @@ class DaySpeechPipelineRepository:
                 or run is None
                 or game.current_run_id != row.run_id
                 or game.phase_id != row.phase_id
-                or game.status != "broadcasting"
-                or run.status != "broadcasting"
+                or game.status not in _LIVE_MATCH_STATUSES
+                or run.status != game.status
                 or row.fence_worker_id != run.worker_id
                 or row.fence_token != run.fence_token
             ):
@@ -124,7 +133,7 @@ class DaySpeechPipelineRepository:
                 predecessor is not None
                 and predecessor.run_id == row.run_id
                 and predecessor.action_id == row.predecessor_action_id
-                and predecessor.state in {"active", "queued"}
+                and predecessor.state in _OPEN_PRESENTATION_STATES
                 and predecessor.closed_at is None
             )
 
@@ -196,9 +205,9 @@ class DaySpeechPipelineRepository:
                 raise DaySpeechPipelineRepositoryError(
                     "technical skip predecessor requires pipeline schema v2 or v3"
                 )
-            if game.status != "broadcasting" or run.status != "broadcasting":
+            if game.status not in _LIVE_MATCH_STATUSES or run.status != game.status:
                 raise DaySpeechPipelineRepositoryError(
-                    "one-ahead reservation requires an active broadcast"
+                    "one-ahead reservation requires a live match"
                 )
             if game.phase_id != phase_id or phase_id != f"day_{round_no}":
                 raise DaySpeechPipelineRepositoryError("day speech reservation phase changed")
@@ -719,7 +728,7 @@ def _validate_active_predecessor(
         or predecessor.actor_kind != ("judge" if technical_skip_predecessor else "player")
         or (technical_skip_predecessor and predecessor.actor_id != "judge")
         or predecessor.audience not in _PUBLIC_AUDIENCES
-        or predecessor.state != "active"
+        or predecessor.state not in _OPEN_PRESENTATION_STATES
         or predecessor.voice_asset_id is None
     ):
         raise DaySpeechPipelineRepositoryError(

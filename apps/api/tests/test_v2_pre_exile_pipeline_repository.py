@@ -488,7 +488,7 @@ def test_day_speech_generation_claim_remains_rejected_while_finalizing(
         bind_run_fence(harness.fence),
         pytest.raises(
             RepositoryError,
-            match="day speech pipeline generation requires an active broadcast",
+            match="day speech pipeline generation is not frozen and enabled",
         ),
     ):
         harness.actions.claim_action(

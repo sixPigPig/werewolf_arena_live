@@ -319,8 +319,8 @@ def test_broadcast_generation_claim_binds_slot_and_preserves_foreground_context(
             )
         )
         foreground = current_action_context(db, GAME_ID)
-    assert game is not None and game.status == "broadcasting"
-    assert run is not None and run.status == "broadcasting"
+    assert game is not None and game.status == "generating"
+    assert run is not None and run.status == "generating"
     assert slot is not None and slot.generation_action_id == action_id
     assert contexts[-1].payload["context"]["pipeline"] == {
         "slot_id": SLOT_ID,
@@ -435,7 +435,9 @@ def test_other_broadcasting_action_remains_unclaimable(harness: _Harness) -> Non
     assert all(event.payload.get("action_id") != action_id for event in opened)
 
 
-def test_pipeline_generation_cannot_fall_through_to_ready_claim(harness: _Harness) -> None:
+def test_pipeline_generation_claim_stays_isolated_while_match_is_ready(
+    harness: _Harness,
+) -> None:
     action_id = "v2_action_pipeline_generation_from_ready"
     with harness.factory.begin() as db:
         game = db.get(GameRecord, GAME_ID)
@@ -444,21 +446,27 @@ def test_pipeline_generation_cannot_fall_through_to_ready_claim(harness: _Harnes
         game.status = "ready"
         run.status = "ready"
 
-    with pytest.raises(RepositoryError, match="requires an active broadcast"):
-        harness.claim_generation(action_id)
+    claim = harness.claim_generation(action_id)
+    assert claim is not None
+    assert claim.non_blocking is True
 
     with harness.factory() as db:
+        game = db.get(GameRecord, GAME_ID)
+        run = db.get(GameRun, RUN_ID)
         slot = db.get(DaySpeechSlot, SLOT_ID)
         opened = list(
             db.scalars(
                 select(GameRecordEvent).where(
                     GameRecordEvent.game_id == GAME_ID,
                     GameRecordEvent.event_type == "action_opened",
+                    GameRecordEvent.payload["action_id"].as_string() == action_id,
                 )
             )
         )
-    assert slot is not None and slot.generation_action_id is None
-    assert all(event.payload.get("action_id") != action_id for event in opened)
+    assert game is not None and game.status == "ready"
+    assert run is not None and run.status == "ready"
+    assert slot is not None and slot.generation_action_id == action_id
+    assert len(opened) == 1
 
 
 @pytest.mark.parametrize(
@@ -547,7 +555,7 @@ def test_fail_action_returns_durable_failure_record_seq(harness: _Harness) -> No
     assert failure.event_type == "action_failed"
     assert failure.payload["action_id"] == action_id
     assert failure.payload["audience"] == "player_private"
-    assert game is not None and game.status == "broadcasting"
+    assert game is not None and game.status == "generating"
 
 
 @pytest.mark.parametrize("slot_state", ["generating", "presenting"])

@@ -53,6 +53,15 @@ PreExileResultState = Literal[
 _PIPELINE_TERMINAL_STATES = frozenset({"explosion_selected", "consumed", "canceled", "invalidated"})
 _RESULT_TERMINAL_STATES = frozenset({"committed", "discarded"})
 _PUBLIC_AUDIENCES = frozenset({"all", "public"})
+_LIVE_MATCH_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+    }
+)
+_OPEN_PRESENTATION_STATES = frozenset({"queued", "active"})
 
 
 class PreExilePipelineRepositoryError(RepositoryError):
@@ -294,9 +303,9 @@ class PreExilePipelineRepository:
                 or game.phase_id != phase_id
             ):
                 raise PreExilePipelineRepositoryError("pre-exile pipeline day changed")
-            if game.status != "broadcasting" or run.status != "broadcasting":
+            if game.status not in _LIVE_MATCH_STATUSES or run.status != game.status:
                 raise PreExilePipelineRepositoryError(
-                    "pre-exile reservation requires active last-speech broadcast"
+                    "pre-exile reservation requires a sealed last speech on a live match"
                 )
             if public_cutoff_record_seq > game.last_record_seq:
                 raise PreExilePipelineRepositoryError(
@@ -1138,19 +1147,19 @@ def _validate_sealed_last_speech(
     predecessor_sealed_record_seq: int,
     public_cutoff_record_seq: int,
 ) -> None:
-    active = list(
+    open_presentations = list(
         db.scalars(
             select(LivePresentation).where(
                 LivePresentation.game_id == game.game_id,
-                LivePresentation.state == "active",
+                LivePresentation.state.in_(tuple(_OPEN_PRESENTATION_STATES)),
             )
         )
     )
-    if len(active) != 1:
+    if len(open_presentations) != 1:
         raise PreExilePipelineRepositoryError(
             "pre-exile predecessor is not the unique active presentation"
         )
-    presentation = active[0]
+    presentation = open_presentations[0]
     if (
         presentation.run_id != game.current_run_id
         or presentation.phase_id != game.phase_id
