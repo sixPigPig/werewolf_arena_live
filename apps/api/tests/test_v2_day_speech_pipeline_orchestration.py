@@ -14,6 +14,7 @@ from app.match.day_engine import DayEngine
 from app.match.day_speech_pipeline_contract import (
     freeze_day_speech_pipeline_contract,
     resolve_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
 )
 from app.match.day_speech_pipeline_repository import DaySpeechSlotSnapshot
 from app.match.live_runtime import LiveRuntime
@@ -733,6 +734,10 @@ def _snapshot(
                 "prefetch_capacity_unavailable_fallback_mode": "fallback_sequential",
             }
         elif schema_version == 3:
+            rule_snapshot["day_speech_pipeline_contract"] = (
+                schema_v3_day_speech_pipeline_contract()
+            )
+        elif schema_version == 4:
             rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
         else:
             raise ValueError("unsupported test day speech pipeline schema")

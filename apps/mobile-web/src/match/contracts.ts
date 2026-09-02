@@ -221,6 +221,7 @@ export type LiveSnapshot = RuntimeProjection & {
   game_phase: GamePhase;
   match_state: MatchState | null;
   latest_presentation_seq: number;
+  playback_cursor: number;
   server_time: string;
   public_rule: PublicRuleSnapshot | null;
   public_players: PublicPlayerSeat[];
@@ -270,6 +271,7 @@ export type DirectorLiveSnapshot = RuntimeProjection & {
   game_phase: GamePhase;
   match_state: MatchState | null;
   latest_presentation_seq: number;
+  playback_cursor: number;
   server_time: string;
   rule: PublicRuleSnapshot | null;
   players: GodViewPlayerIdentity[];
@@ -303,6 +305,7 @@ export type GodViewLiveSnapshot = RuntimeProjection & {
   game_phase: GamePhase;
   match_state: MatchState | null;
   latest_presentation_seq: number;
+  playback_cursor: number;
   server_time: string;
   rule: PublicRuleSnapshot | null;
   players: GodViewPlayerIdentity[];
@@ -351,6 +354,7 @@ export type GamePhaseChanged = {
   previous_phase_id: GamePhase["phase_id"];
   phase_id: GamePhase["phase_id"];
   phase_state: GamePhase["phase_state"];
+  reveal_presentation_seq: number;
 };
 
 export type NightProgress = {
@@ -391,6 +395,7 @@ export type DawnResult = {
   run_id: string;
   server_time: string;
   dead_player_ids: string[];
+  reveal_presentation_seq: number;
 };
 
 export type GodViewNightResolved = {
@@ -412,6 +417,7 @@ export type PlayerStateChanged = {
   player_id: string;
   alive: boolean;
   cause: string | null;
+  reveal_presentation_seq: number;
 };
 
 export type MatchStateChanged = MatchState & {
@@ -420,6 +426,7 @@ export type MatchStateChanged = MatchState & {
   game_id: string;
   run_id: string;
   server_time: string;
+  reveal_presentation_seq: number;
 };
 
 export type DayProgress = {
@@ -432,6 +439,7 @@ export type DayProgress = {
   stage: string;
   completed_count: number | null;
   total_count: number | null;
+  reveal_presentation_seq: number;
 };
 
 export type PresentationClosed = {
@@ -448,6 +456,7 @@ export type PresentationClosed = {
   final_chunk_index: number;
   final_sample_cursor: number;
   result: "audio_drained_and_voice_saved";
+  playback_cursor: number;
 };
 
 export type PresentationFailed = {
@@ -620,6 +629,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       "game_phase",
       "match_state",
       "latest_presentation_seq",
+      "playback_cursor",
       "server_time",
       "public_rule",
       "public_players",
@@ -640,6 +650,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       game_phase: parsedPhase,
       match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      playback_cursor: integer(snapshot.playback_cursor, 0),
       public_rule:
         snapshot.public_rule === null ? null : publicRule(snapshot.public_rule),
       public_players: publicPlayerSeats(snapshot.public_players),
@@ -670,6 +681,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       "game_phase",
       "match_state",
       "latest_presentation_seq",
+      "playback_cursor",
       "server_time",
       "rule",
       "players",
@@ -693,6 +705,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       game_phase: parsedPhase,
       match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      playback_cursor: integer(snapshot.playback_cursor, 0),
       rule,
       players,
       current_scene: directorScene(snapshot.current_scene),
@@ -720,6 +733,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       "game_phase",
       "match_state",
       "latest_presentation_seq",
+      "playback_cursor",
       "server_time",
       "rule",
       "players",
@@ -742,6 +756,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       game_phase: parsedPhase,
       match_state: parsedMatchState,
       latest_presentation_seq: integer(snapshot.latest_presentation_seq, 0),
+      playback_cursor: integer(snapshot.playback_cursor, 0),
       rule,
       players,
       current_presentation:
@@ -791,6 +806,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       previous_phase_id: phaseId(value.previous_phase_id),
       phase_id: phaseId(value.phase_id),
       phase_state: phaseState(value.phase_state),
+      reveal_presentation_seq: optionalNonNegativeInt(value.reveal_presentation_seq),
     };
   }
   if (type === "night.progress_changed") {
@@ -825,6 +841,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       ...base,
       type,
       dead_player_ids: value.dead_player_ids.map(text),
+      reveal_presentation_seq: optionalNonNegativeInt(value.reveal_presentation_seq),
     };
   }
   if (type === "god_view.night_resolved") {
@@ -849,6 +866,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       player_id: text(value.player_id),
       alive: boolean(value.alive),
       cause: value.cause === null ? null : text(value.cause),
+      reveal_presentation_seq: optionalNonNegativeInt(value.reveal_presentation_seq),
     };
   }
   if (type === "match.state_changed") {
@@ -856,6 +874,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       ...base,
       type,
       ...matchState(value),
+      reveal_presentation_seq: optionalNonNegativeInt(value.reveal_presentation_seq),
     };
   }
   if (type === "day.progress_changed") {
@@ -880,6 +899,7 @@ export function parseServerMessage(raw: string): ServerMessage {
       stage: text(value.stage),
       completed_count: completedCount,
       total_count: totalCount,
+      reveal_presentation_seq: optionalNonNegativeInt(value.reveal_presentation_seq),
     };
   }
   if (type === "presentation.opened") {
@@ -919,6 +939,10 @@ export function parseServerMessage(raw: string): ServerMessage {
       final_chunk_index: integer(value.final_chunk_index, -1),
       final_sample_cursor: integer(value.final_sample_cursor, 0),
       result: literal(value.result, ["audio_drained_and_voice_saved"]),
+      playback_cursor: optionalNonNegativeInt(
+        value.playback_cursor,
+        integer(value.presentation_seq, 1),
+      ),
     };
   }
   if (type === "presentation.failed") {
@@ -1310,6 +1334,10 @@ function text(value: unknown): string {
 function integer(value: unknown, minimum: number): number {
   if (!Number.isInteger(value) || Number(value) < minimum) throw invalid();
   return Number(value);
+}
+
+function optionalNonNegativeInt(value: unknown, fallback = 0): number {
+  return value === undefined ? fallback : integer(value, 0);
 }
 
 function boundedInteger(value: unknown, minimum: number, maximum: number): number {

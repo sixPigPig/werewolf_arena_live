@@ -39,6 +39,11 @@ class GameRecord(Base):
         default=0,
         server_default="0",
     )
+    playback_cursor: Mapped[int] = mapped_column(
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
     phase_seq: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     phase_id: Mapped[str] = mapped_column(
         String(40),

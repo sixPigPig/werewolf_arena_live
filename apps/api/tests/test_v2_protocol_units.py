@@ -72,6 +72,7 @@ from app.match.model_generation_policy_contract import (
     is_supported_model_generation_policy_contract,
     resolve_model_generation_action_policy,
     resolve_model_generation_policy_contract,
+    schema_v4_model_generation_policy_contract,
 )
 from app.match.live_runtime import _audience_targets
 from app.match.protocol import LiveProtocolError, audio_frame, day_progress
@@ -743,6 +744,50 @@ def _model_generation_policy_v2() -> dict[str, Any]:
     return contract
 
 
+def test_model_generation_policy_v6_is_emitted_and_v4_remains_supported() -> None:
+    expected = current_model_generation_policy_contract()
+    assert expected["schema_version"] == 6
+    assert expected["profiles"] == {
+        "strategic_full": {},
+        "recoverable_public_speech": {},
+        "isolated_auxiliary": {},
+    }
+    assert "action_wall_timeout_ms" not in expected["execution"]
+    assert expected["execution"]["required_target_exhaustion"]["eligible_failure_modes"] == [
+        "empty_visible_output",
+        "unparseable_output",
+    ]
+    assert resolve_model_generation_policy_contract({}) is None
+    frozen = freeze_model_generation_policy_contract(
+        {
+            "rule_set": {"id": "classic"},
+            "model_generation_policy_contract": {"schema_version": 999},
+        }
+    )
+    assert frozen["model_generation_policy_contract"] == expected
+    resolved = resolve_model_generation_policy_contract(frozen)
+    assert resolved == expected
+    assert is_supported_model_generation_policy_contract(resolved) is True
+    assert is_supported_model_generation_policy_contract(
+        schema_v4_model_generation_policy_contract()
+    ) is True
+    assert is_supported_model_generation_policy_contract(_model_generation_policy_v2()) is False
+    assert (
+        is_supported_model_generation_policy_contract(_legacy_model_generation_policy_v1())
+        is False
+    )
+    assert (
+        project_public_rule_snapshot(
+            {
+                "day_speech_pipeline_contract": current_day_speech_pipeline_contract(),
+                "model_context_contract": {"model_context_schema_version": 11},
+                "model_generation_policy_contract": expected,
+            }
+        )
+        is None
+    )
+
+
 def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> None:
     expected = {
         "schema_version": 4,
@@ -798,34 +843,12 @@ def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> N
         },
     }
 
-    assert current_model_generation_policy_contract() == expected
-    assert resolve_model_generation_policy_contract({}) is None
-    frozen = freeze_model_generation_policy_contract(
-        {
-            "rule_set": {"id": "classic"},
-            "model_generation_policy_contract": {"schema_version": 999},
-        }
+    assert schema_v4_model_generation_policy_contract() == expected
+    resolved = resolve_model_generation_policy_contract(
+        {"model_generation_policy_contract": expected}
     )
-    assert frozen["model_generation_policy_contract"] == expected
-    resolved = resolve_model_generation_policy_contract(frozen)
     assert resolved == expected
-    assert resolved is not frozen["model_generation_policy_contract"]
     assert is_supported_model_generation_policy_contract(resolved) is True
-    assert is_supported_model_generation_policy_contract(_model_generation_policy_v2()) is False
-    assert (
-        is_supported_model_generation_policy_contract(_legacy_model_generation_policy_v1())
-        is False
-    )
-    assert (
-        project_public_rule_snapshot(
-            {
-                "day_speech_pipeline_contract": current_day_speech_pipeline_contract(),
-                "model_context_contract": {"model_context_schema_version": 11},
-                "model_generation_policy_contract": expected,
-            }
-        )
-        is None
-    )
 
 
 @pytest.mark.parametrize(
@@ -924,27 +947,24 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     assert resolved.enforcement == "observe_only"
     assert resolved.profile == profile
     assert resolved.source == "explicit_action_profile"
-    assert resolved.schema_version == 4
+    assert resolved.schema_version == 6
     assert resolved.classification_version == 1
     assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
-    assert resolved.reasoning_only_timeout_ms == (
-        240_000 if profile == "isolated_auxiliary" else 180_000
-    )
-    assert resolved.timeout_max_attempts == 1
+    assert resolved.reasoning_only_timeout_ms is None
+    assert resolved.timeout_max_attempts is None
     assert resolved.automatic_retry_enforcement == "enforce"
-    assert resolved.output_budget_max_attempts == 1
-    assert resolved.attempt_hard_timeout_max_attempts == 1
+    assert resolved.output_budget_max_attempts is None
+    assert resolved.attempt_hard_timeout_max_attempts is None
     assert resolved.transport_max_attempts == 2
     assert resolved.post_token_transport_max_attempts == 1
     assert resolved.queue_wait_budget_mode == "wall_clock"
-    assert resolved.action_wall_timeout_ms == 300_000
-    assert resolved.blocking_required_target_output_timeout_mode == "technical_outcome"
-    assert resolved.blocking_required_target_queue_wait_budget_mode == "wall_clock"
+    assert resolved.action_wall_timeout_ms is None
+    assert resolved.blocking_required_target_output_timeout_mode == "disabled"
+    assert resolved.blocking_required_target_queue_wait_budget_mode == "disabled"
     assert resolved.required_target_exhaustion is not None
     assert resolved.required_target_exhaustion.eligible_failure_modes == (
-        "output_budget_exhausted",
-        "attempt_hard_timeout",
-        "action_wall_timeout",
+        "empty_visible_output",
+        "unparseable_output",
     )
     assert resolved.required_target_exhaustion.day_vote_outcome == "technical_abstain"
     assert (
@@ -977,7 +997,7 @@ def test_model_generation_policy_unknown_actions_fall_back_to_strategic_full(
     assert resolved.profile == "strategic_full"
     assert resolved.source == "default_profile"
     assert resolved.reasoning_only_timeout_ms is None
-    assert resolved.timeout_max_attempts == 2
+    assert resolved.timeout_max_attempts is None
     assert resolved.automatic_retry_enforcement == "enforce"
 
 
@@ -1245,7 +1265,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
     )
     policy = ModelRetryPolicy(max_attempts=3)
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -1380,7 +1400,7 @@ def test_v4_required_target_expensive_exhaustion_returns_typed_technical_outcome
         target_exhaustion_outcome="technical_no_action",
     )
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -3030,6 +3050,7 @@ def test_public_day_progress_exposes_only_anonymous_vote_counts() -> None:
 
     assert message["completed_count"] == 4
     assert message["total_count"] == 9
+    assert message["reveal_presentation_seq"] == 0
     assert "player_id" not in message
     assert "target_player_id" not in message
 

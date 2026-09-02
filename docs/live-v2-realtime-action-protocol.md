@@ -240,6 +240,7 @@ GET /api/v2/god-view/games/{game_id}/ws
     "phase_state": "opening_ready"
   },
   "latest_presentation_seq": 0,
+  "playback_cursor": 0,
   "public_rule": {
     "rule_id": "classic_8",
     "name": "经典 8 人局",
@@ -404,7 +405,8 @@ GET /api/v2/god-view/games/{game_id}/ws
   "phase_seq": 2,
   "previous_phase_id": "opening",
   "phase_id": "first_night",
-  "phase_state": "nightfall_ready"
+  "phase_state": "nightfall_ready",
+  "reveal_presentation_seq": 1
 }
 ```
 
@@ -467,7 +469,8 @@ GET /api/v2/god-view/games/{game_id}/ws
   "final_segment_index": 0,
   "final_chunk_index": 17,
   "final_sample_cursor": 72000,
-  "result": "audio_drained_and_voice_saved"
+  "result": "audio_drained_and_voice_saved",
+  "playback_cursor": 1
 }
 ```
 
@@ -940,3 +943,14 @@ window_opened
 每次夜间结算、放逐、自爆和死亡响应后都重新计算冻结胜负规则。未结束时，白天收口原子推进到 `night_{N+1} / nightfall_ready`；下一夜继续使用同一能力计划和持久化资源状态。满足胜负时，法官实时宣布获胜阵营，状态进入 `game_completed / awaiting_observation`，记录 `winner`、`completion_reason` 和 `run.completed_at`。达到 `max_rounds` 仍无胜负时必须明确进入 `failed / max_rounds_exceeded`，不得伪造平局或静默停止。
 
 普通直播只接收公开存活变化，不接收死亡原因、私密目标和能力结果；上帝视角接收完整原因与私密流水。任一普通连接收到私密字段，客户端必须 fail closed 并关闭连接。
+
+## 20. 对局时间线与播放时间线
+
+新创建对局把 Match 与 Presentation 拆成两条时间线：
+
+- **Match**：模型请求在上一动作 `speech_sealed` 后立即开始；不传 `max_output_tokens` / `max_tokens`，也不执行 first_token / stream_idle / attempt_hard / action_wall。`claim_action` 不再被 `broadcasting` 挡住。
+- **Presentation**：TTS、官方时钟和 `speech_closed` 只推进 `playback_cursor`。同一线路上仍只有一个 active presentation。
+- 观众直播页（含导演投影）跟 `playback_cursor`：`game.phase_changed`、`player.state_changed`、`match.state_changed`、`dawn.result_announced`、`day.progress_changed` 带 `reveal_presentation_seq`，客户端仅当 `seq <= playback_cursor` 时渲染。
+- 上帝视角 / Admin 跟 Match 真状态，快照仍带 `playback_cursor` 便于对照「对局已到 D3 / 语音播到 D1」。
+- `awaiting_observation` 与 `lease is null` 且无 worker 的终局不被 reaper 收割。TTS 失败只标 `presentation.failed` 并前进 cursor，不回写对局失败。
+- 冻结旧局继续走旧合同（白天 pipeline v1–v3、generation policy v4、pre-exile v1–v2）。新局冻结 pipeline v4、generation policy v6、pre-exile v3。

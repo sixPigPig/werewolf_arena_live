@@ -655,6 +655,76 @@ describe("LivePage", () => {
     expect(document.querySelector(".mobile-v2-theater.is-terminal")).not.toBeNull();
   });
 
+  it("keeps the on-air speaker while the match has already reached exile vote", async () => {
+    renderPage();
+    await enterChallenge();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.emitJson(snapshot("ready", null));
+    });
+    await waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      socket.emitJson({
+        ...base("game.phase_changed"),
+        phase_seq: 6,
+        previous_phase_id: "night_1",
+        phase_id: "day_1",
+        phase_state: "public_discussion_open",
+        reveal_presentation_seq: 0,
+      });
+      socket.emitJson({
+        ...base("presentation.opened"),
+        action_id: actionId,
+        presentation_seq: 3,
+        presentation_id: presentationId,
+        phase_id: "day_1",
+        actor: { kind: "player", id: "profile-1" },
+        speech_id: speechId,
+      });
+      socket.emitJson({
+        ...base("speech.segment_committed"),
+        action_id: actionId,
+        presentation_seq: 3,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        segment_index: 0,
+        text: "我觉得今晚可以先听边锋。",
+      });
+      socket.emitJson({
+        ...base("day.progress_changed"),
+        round_no: 1,
+        stage: "pre_exile_vote_collecting",
+        completed_count: 4,
+        total_count: 6,
+        reveal_presentation_seq: 3,
+      });
+    });
+
+    expect(await screen.findByText("我觉得今晚可以先听边锋。")).toBeInTheDocument();
+    expect(screen.getAllByText("字幕与 PCM 正在同步播出").length).toBeGreaterThan(0);
+    expect(screen.queryByText("投票决策已完成 4/6")).not.toBeInTheDocument();
+
+    act(() => {
+      socket.emitJson({
+        ...base("presentation.closed"),
+        action_id: actionId,
+        presentation_seq: 3,
+        presentation_id: presentationId,
+        speech_id: speechId,
+        final_segment_index: 0,
+        final_chunk_index: 0,
+        final_sample_cursor: 2,
+        result: "audio_drained_and_voice_saved",
+        playback_cursor: 3,
+      });
+    });
+
+    expect(await screen.findByText("投票决策已完成 4/6")).toBeInTheDocument();
+  });
+
   it("keeps an authoritative completed result ahead of a later presentation error", async () => {
     renderPage();
     await enterChallenge();
@@ -920,6 +990,7 @@ function directorSnapshot(liveState: string) {
       winner: null,
     },
     latest_presentation_seq: 0,
+    playback_cursor: 0,
     rule: {
       rule_id: "classic_2",
       name: "测试两人局",
@@ -995,6 +1066,7 @@ function snapshot(
       winner: null,
     },
     latest_presentation_seq: presentation ? 1 : 0,
+    playback_cursor: presentation ? 1 : 0,
     public_rule: {
       rule_id: "classic_2",
       name: "测试两人局",

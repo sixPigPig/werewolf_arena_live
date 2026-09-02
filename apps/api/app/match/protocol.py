@@ -91,6 +91,7 @@ def game_phase_changed(transition: PhaseTransition) -> dict[str, Any]:
             "previous_phase_id": transition.previous_phase_id,
             "phase_id": transition.phase_id,
             "phase_state": transition.phase_state,
+            "reveal_presentation_seq": transition.reveal_presentation_seq,
         },
     )
 
@@ -163,12 +164,16 @@ def public_dawn_result(
     game_id: str,
     run_id: str,
     dead_player_ids: list[str],
+    reveal_presentation_seq: int = 0,
 ) -> dict[str, Any]:
     return control_message(
         message_type="dawn.result_announced",
         game_id=game_id,
         run_id=run_id,
-        fields={"dead_player_ids": dead_player_ids},
+        fields={
+            "dead_player_ids": dead_player_ids,
+            "reveal_presentation_seq": reveal_presentation_seq,
+        },
     )
 
 
@@ -197,12 +202,18 @@ def player_state_changed(
     player_id: str,
     alive: bool,
     cause: str | None = None,
+    reveal_presentation_seq: int = 0,
 ) -> dict[str, Any]:
     return control_message(
         message_type="player.state_changed",
         game_id=game_id,
         run_id=run_id,
-        fields={"player_id": player_id, "alive": alive, "cause": cause},
+        fields={
+            "player_id": player_id,
+            "alive": alive,
+            "cause": cause,
+            "reveal_presentation_seq": reveal_presentation_seq,
+        },
     )
 
 
@@ -214,6 +225,7 @@ def match_state_changed(
     sheriff_player_id: str | None,
     sheriff_badge_state: str,
     winner: str | None = None,
+    reveal_presentation_seq: int = 0,
 ) -> dict[str, Any]:
     return control_message(
         message_type="match.state_changed",
@@ -224,6 +236,7 @@ def match_state_changed(
             "sheriff_player_id": sheriff_player_id,
             "sheriff_badge_state": sheriff_badge_state,
             "winner": winner,
+            "reveal_presentation_seq": reveal_presentation_seq,
         },
     )
 
@@ -236,6 +249,7 @@ def day_progress(
     stage: str,
     completed_count: int | None = None,
     total_count: int | None = None,
+    reveal_presentation_seq: int = 0,
 ) -> dict[str, Any]:
     if (completed_count is None) != (total_count is None):
         raise LiveProtocolError("day progress counts must be provided together")
@@ -247,7 +261,13 @@ def day_progress(
         or completed_count > total_count
     ):
         raise LiveProtocolError("invalid public day progress counts")
-    fields: dict[str, Any] = {"round_no": round_no, "stage": stage}
+    if type(reveal_presentation_seq) is not int or reveal_presentation_seq < 0:
+        raise LiveProtocolError("invalid reveal_presentation_seq")
+    fields: dict[str, Any] = {
+        "round_no": round_no,
+        "stage": stage,
+        "reveal_presentation_seq": reveal_presentation_seq,
+    }
     if completed_count is not None:
         fields.update(
             {
@@ -282,6 +302,7 @@ def presentation_closed(
             "final_chunk_index": final_chunk_index,
             "final_sample_cursor": final_sample_cursor,
             "result": "audio_drained_and_voice_saved",
+            "playback_cursor": identity.presentation_seq,
         },
     )
 

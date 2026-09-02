@@ -124,7 +124,7 @@ class DaySpeechPipelineRepository:
                 predecessor is not None
                 and predecessor.run_id == row.run_id
                 and predecessor.action_id == row.predecessor_action_id
-                and predecessor.state == "active"
+                and predecessor.state in {"active", "queued"}
                 and predecessor.closed_at is None
             )
 
@@ -936,7 +936,17 @@ def _validate_pipeline_action_opened(
     payload = _payload(opened)
     context = _action_context(opened)
     pipeline = context.get("pipeline")
-    expected_admission = "idle_only" if stage == "generation" else "normal"
+    game = db.get(GameRecord, row.game_id)
+    contract = (
+        resolve_day_speech_pipeline_contract(game.rule_snapshot)
+        if game is not None
+        else None
+    )
+    expected_admission = (
+        contract.admission_mode
+        if stage == "generation" and contract is not None
+        else "normal"
+    )
     if (
         payload.get("audience") != "player_private"
         or context.get("action_type") != row.action_type

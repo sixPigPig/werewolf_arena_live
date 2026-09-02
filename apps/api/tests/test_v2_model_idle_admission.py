@@ -109,7 +109,7 @@ def test_idle_only_admits_immediately_when_provider_has_idle_capacity() -> None:
     asyncio.run(scenario())
 
 
-def test_idle_only_fails_immediately_when_provider_is_full_without_http() -> None:
+def test_idle_only_queues_fifo_when_provider_is_full() -> None:
     owner_started = asyncio.Event()
     release_owner = asyncio.Event()
     requests: list[httpx.Request] = []
@@ -132,27 +132,25 @@ def test_idle_only_fails_immediately_when_provider_is_full_without_http() -> Non
         )
         await asyncio.wait_for(owner_started.wait(), timeout=0.5)
         progress: list[ModelProgress] = []
+        waiter = asyncio.create_task(
+            client.generate_action_decision_with_progress(
+                action_context=_action_context(),
+                attempt_id="v2_model_prefetch_queued",
+                target=target,
+                admission_mode="idle_only",
+                on_progress=progress.append,
+            )
+        )
         try:
-            with pytest.raises(ModelError) as raised:
-                await asyncio.wait_for(
-                    client.generate_action_decision_with_progress(
-                        action_context=_action_context(),
-                        attempt_id="v2_model_prefetch_rejected",
-                        target=target,
-                        admission_mode="idle_only",
-                        on_progress=progress.append,
-                    ),
-                    timeout=0.1,
-                )
-            error = raised.value
-            assert error.code == "model_prefetch_capacity_unavailable"
-            assert error.retryable is False
-            assert error.failure_stage == "provider_admission"
-            assert error.provider_in_flight == 1
-            assert error.provider_concurrency_limit == 1
-            assert error.queue_wait_ms is not None and error.queue_wait_ms <= 10
+            await asyncio.sleep(0.05)
+            assert waiter.done() is False
             assert [item.stage for item in progress] == ["queued"]
             assert len(requests) == 1
+            release_owner.set()
+            decision = await asyncio.wait_for(waiter, timeout=1)
+            assert decision.speech == "占用请求完成"
+            assert len(requests) == 2
+            assert [item.stage for item in progress[:2]] == ["queued", "admitted"]
         finally:
             release_owner.set()
             await owner

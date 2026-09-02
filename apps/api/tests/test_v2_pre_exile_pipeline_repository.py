@@ -40,6 +40,7 @@ from app.match.pre_exile_pipeline_contract import (
     pre_exile_pipeline_contract_summary,
     pre_exile_context_sha256,
     resolve_pre_exile_pipeline_contract,
+    schema_v2_pre_exile_pipeline_contract,
 )
 from app.match.pre_exile_pipeline_repository import (
     PreExilePipelineRepository,
@@ -153,18 +154,18 @@ def test_contract_is_exact_and_legacy_missing_stays_sequential() -> None:
     assert frozen["pre_exile_pipeline_contract"] == (current_pre_exile_pipeline_contract())
     resolved = resolve_pre_exile_pipeline_contract(frozen)
     assert resolved.status == "supported"
-    assert resolved.schema_version == 2
+    assert resolved.schema_version == 3
     assert resolved.speculative_vote_capacity_recovery_mode == ("normal_batch_after_close_once")
     assert resolved.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
     assert pre_exile_pipeline_contract_summary(frozen) == {
         "status": "supported",
-        "schema_version": 2,
+        "schema_version": 3,
         "mode": "sealed_last_speech_overlap",
         "action_types": ["werewolf_self_explosion", "exile_vote"],
         "launch_boundary": "last_public_speech_sealed",
-        "accept_boundary": "last_public_speech_closed",
+        "accept_boundary": "last_public_speech_sealed",
         "self_explosion_admission_mode": "normal",
-        "speculative_vote_admission_mode": "idle_only",
+        "speculative_vote_admission_mode": "normal",
         "speculative_vote_capacity_recovery_mode": "normal_batch_after_close_once",
         "wolf_vote_gate": "own_no_explosion_result",
         "vote_abort_policy": "any_explosion_discards_all_votes",
@@ -1187,6 +1188,7 @@ def _build_harness(
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
     rule_snapshot = freeze_pre_exile_pipeline_contract(rule_snapshot)
+    rule_snapshot["pre_exile_pipeline_contract"] = schema_v2_pre_exile_pipeline_contract()
     if pre_exile_schema_version == 1:
         schema_v1_contract = dict(rule_snapshot["pre_exile_pipeline_contract"])
         schema_v1_contract["schema_version"] = 1

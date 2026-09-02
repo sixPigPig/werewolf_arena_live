@@ -203,6 +203,7 @@ describe("fetchDirectorLiveSnapshot", () => {
             winner: null,
           },
           latest_presentation_seq: 0,
+          playback_cursor: 0,
           server_time: "2026-07-22T12:00:00Z",
           rule: null,
           players: [
@@ -344,6 +345,7 @@ describe("fetchLiveSnapshot", () => {
             winner: null,
           },
           latest_presentation_seq: 0,
+          playback_cursor: 0,
           server_time: "2026-07-22T12:00:00Z",
           public_rule: {
             rule_id: "classic_2",
@@ -412,6 +414,7 @@ describe("fetchLiveSnapshot", () => {
             live_state: "ready",
             game_phase: openingPhase(),
             latest_presentation_seq: 0,
+            playback_cursor: 0,
             server_time: "2026-07-22T12:00:00Z",
             public_rule: null,
             public_players: [
@@ -452,6 +455,7 @@ describe("fetchLiveSnapshot", () => {
             live_state: "ready",
             game_phase: openingPhase(),
             latest_presentation_seq: 0,
+            playback_cursor: 0,
             server_time: "2026-07-22T12:00:00Z",
             public_rule: {
               rule_id: "classic_1",
@@ -495,6 +499,7 @@ describe("fetchLiveSnapshot", () => {
             live_state: "ready",
             game_phase: openingPhase(),
             latest_presentation_seq: 0,
+            playback_cursor: 0,
             server_time: "2026-07-22T12:00:00Z",
             public_rule: null,
             public_players: [],
@@ -530,6 +535,7 @@ describe("fetchLiveSnapshot", () => {
             live_state: "ready",
             game_phase: openingPhase(),
             latest_presentation_seq: 0,
+            playback_cursor: 0,
             server_time: "2026-07-22T12:00:00Z",
             public_rule: null,
             public_players: [],

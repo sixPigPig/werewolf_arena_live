@@ -15,6 +15,7 @@ from app.match.day_speech_pipeline_contract import (
     DaySpeechPipelineContractError,
     current_day_speech_pipeline_contract,
     freeze_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
     resolve_day_speech_pipeline_contract,
 )
 from app.match.day_speech_pipeline_repository import (
@@ -98,6 +99,7 @@ def harness() -> _Harness:
     rule_snapshot = freeze_model_context_contract(rule_snapshot)
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
+    rule_snapshot["day_speech_pipeline_contract"] = schema_v3_day_speech_pipeline_contract()
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(
@@ -273,29 +275,30 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
     assert frozen["day_speech_pipeline_contract"] == (current_day_speech_pipeline_contract())
     resolved = resolve_day_speech_pipeline_contract(frozen)
     assert resolved.status == "supported"
-    assert resolved.schema_version == 3
+    assert resolved.schema_version == 4
+    assert resolved.mode == "immediate_successor"
     assert resolved.enables("day_debate_speech")
     assert not resolved.enables("sheriff_campaign_speech")
+    assert resolved.max_lookahead == 0
+    assert resolved.context_source == "sealed_predecessor"
+    assert resolved.admission_mode == "normal"
+    assert resolved.fallback_mode == "sequential"
     assert resolved.post_predecessor_close_grace_ms is None
-    assert resolved.post_predecessor_close_wait_mode == "await_same_inflight_to_terminal"
-    assert resolved.duplicate_foreground_fallback_forbidden_failure_categories == (
-        "output_budget",
-        "timeout",
-    )
-    assert resolved.early_transport_hidden_retry_max_retries == 1
-    assert resolved.prefetch_capacity_unavailable_fallback_mode == "fallback_sequential"
+    assert resolved.post_predecessor_close_wait_mode == "disabled"
+    assert resolved.duplicate_foreground_fallback_forbidden_failure_categories == ()
+    assert resolved.early_transport_hidden_retry_max_retries == 0
+    assert resolved.prefetch_capacity_unavailable_fallback_mode == "disabled"
 
     malformed_contracts = [
         {**current_day_speech_pipeline_contract(), "max_lookahead": 2},
         {**current_day_speech_pipeline_contract(), "unexpected": True},
         {
-            key: value
-            for key, value in current_day_speech_pipeline_contract().items()
-            if key != "post_predecessor_close_wait_mode"
+            **current_day_speech_pipeline_contract(),
+            "mode": "one_ahead",
         },
         {
             **current_day_speech_pipeline_contract(),
-            "post_predecessor_close_wait_mode": "deadline_then_technical_skip",
+            "admission_mode": "idle_only",
         },
         {**current_day_speech_pipeline_contract(), "post_predecessor_close_grace_ms": 30_000},
         {
@@ -339,21 +342,18 @@ def test_contract_freeze_resolve_and_new_game_summary() -> None:
         summary = created.payload["day_speech_pipeline_contract"]
         assert summary == {
             "status": "supported",
-            "schema_version": 3,
-            "mode": "one_ahead",
+            "schema_version": 4,
+            "mode": "immediate_successor",
             "action_types": ["day_debate_speech"],
-            "max_lookahead": 1,
-            "context_source": "active_sealed_predecessor",
-            "admission_mode": "idle_only",
-            "fallback_mode": "fallback_sequential",
+            "max_lookahead": 0,
+            "context_source": "sealed_predecessor",
+            "admission_mode": "normal",
+            "fallback_mode": "sequential",
             "post_predecessor_close_grace_ms": None,
-            "post_predecessor_close_wait_mode": "await_same_inflight_to_terminal",
-            "duplicate_foreground_fallback_forbidden_failure_categories": [
-                "output_budget",
-                "timeout",
-            ],
-            "early_transport_hidden_retry_max_retries": 1,
-            "prefetch_capacity_unavailable_fallback_mode": "fallback_sequential",
+            "post_predecessor_close_wait_mode": "disabled",
+            "duplicate_foreground_fallback_forbidden_failure_categories": [],
+            "early_transport_hidden_retry_max_retries": 0,
+            "prefetch_capacity_unavailable_fallback_mode": "disabled",
         }
     engine.dispose()
 

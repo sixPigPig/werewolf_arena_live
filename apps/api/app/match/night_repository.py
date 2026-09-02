@@ -1038,6 +1038,7 @@ class NightRepository:
                 previous_phase_id=previous_phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1083,6 +1084,7 @@ class NightRepository:
                 previous_phase_id=game.phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1143,6 +1145,7 @@ class NightRepository:
                 payload={
                     "round_no": round_no,
                     "dead_player_ids": list(revealed_ids),
+                    "reveal_presentation_seq": game.last_presentation_seq,
                 },
             )
             return tuple(revealed)
@@ -1498,6 +1501,7 @@ class NightRepository:
                 previous_phase_id=game.phase_id,
                 phase_id=game.phase_id,
                 phase_state=next_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1913,6 +1917,7 @@ def _transition_payload(transition: PhaseTransition) -> dict[str, Any]:
         "previous_phase_id": transition.previous_phase_id,
         "phase_id": transition.phase_id,
         "phase_state": transition.phase_state,
+        "reveal_presentation_seq": transition.reveal_presentation_seq,
     }
 
 

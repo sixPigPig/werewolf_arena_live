@@ -11,7 +11,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers referenced users table
-from app.match.day_speech_pipeline_contract import freeze_day_speech_pipeline_contract
+from app.match.day_speech_pipeline_contract import (
+    freeze_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
+)
 from app.match.execution import RunFence, bind_run_fence
 from app.match.model_failure_episode import (
     derive_failure_episodes,
@@ -138,6 +141,7 @@ def _build_harness(
     rule_snapshot = freeze_day_speech_pipeline_contract(
         freeze_model_generation_policy_contract(freeze_model_context_contract(rule_snapshot))
     )
+    rule_snapshot["day_speech_pipeline_contract"] = schema_v3_day_speech_pipeline_contract()
     now = datetime.now(tz=UTC)
     with factory.begin() as db:
         db.add(

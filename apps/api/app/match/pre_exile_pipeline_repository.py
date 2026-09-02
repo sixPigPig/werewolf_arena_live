@@ -1416,11 +1416,15 @@ def _validate_result_action_opened(
     expected_action_type = (
         "werewolf_self_explosion" if row.result_kind == "self_explosion" else "exile_vote"
     )
-    expected_admission = "normal" if row.result_kind == "self_explosion" else "idle_only"
     game = db.get(GameRecord, pipeline.game_id)
     if game is None:
         raise PreExilePipelineRepositoryError("pre-exile action game is missing")
     contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
+    expected_admission = (
+        contract.self_explosion_admission_mode
+        if row.result_kind == "self_explosion"
+        else contract.speculative_vote_admission_mode
+    )
     guarded_self_explosion_retry = (
         row.result_kind == "self_explosion"
         and contract.self_explosion_early_empty_stream_hidden_retry_max_retries == 1

@@ -393,60 +393,15 @@ def read_live_snapshot(
     game_id: Annotated[str, PathParameter(pattern=GAME_ID_PATTERN)],
     request: Request,
     response: Response,
-    db: Annotated[Session, Depends(get_db)],
 ) -> LiveSnapshotResponse:
+    runtime: LiveRuntime = request.app.state.live_runtime
     try:
-        game = get_game(db, game_id)
-        presentation = current_presentation(db, game_id)
+        payload = runtime.snapshot(game_id=game_id, audience="player_public")
     except RecordNotFound as exc:
         raise HTTPException(status_code=404, detail="V2 game not found") from exc
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Request-ID"] = request_id_for(request)
-    match = get_match_state(db, game_id)
-    run = _current_run(db, game)
-    runtime_state = project_runtime_state(
-        game=game,
-        run=run,
-        match=match,
-        now=database_utc_now(db),
-    )
-    return LiveSnapshotResponse(
-        audience="player_public",
-        game_id=game.game_id,
-        run_id=game.current_run_id,
-        live_state=_live_state(game.status),
-        **_runtime_state_fields(runtime_state),
-        game_phase=_game_phase(game),
-        match_state=_match_state(match),
-        latest_presentation_seq=game.last_presentation_seq,
-        server_time=server_now(),
-        public_rule=project_public_rule_snapshot(game.rule_snapshot),
-        public_players=project_public_player_seats(
-            game.players_snapshot,
-            player_states=player_state_map(db, game.game_id),
-        ),
-        public_role_assignment=project_public_role_assignment_status(
-            role_assignment_count(db, game.game_id)
-        ),
-        current_presentation=(
-            CurrentPresentationResponse(
-                action_id=presentation.action_id,
-                presentation_seq=presentation.presentation_seq,
-                presentation_id=presentation.presentation_id,
-                phase_id=presentation.phase_id,
-                actor=ActorResponse(
-                    kind=presentation.actor_kind,
-                    id=presentation.actor_id,
-                ),
-                speech_id=presentation.speech_id,
-                segment_index=presentation.segment_index,
-                subtitle_text=presentation.subtitle_text,
-                join_sample_cursor=0,
-            )
-            if presentation is not None and presentation.action_id is not None
-            else None
-        ),
-    )
+    return LiveSnapshotResponse.model_validate(payload)
 
 
 @public_router.get(

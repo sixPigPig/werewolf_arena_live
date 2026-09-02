@@ -717,6 +717,7 @@ function liveSnapshot(
         ? { phase_seq: 2, phase_id: "first_night", phase_state: "nightfall_announced" }
         : identity.game_phase,
     latest_presentation_seq: currentPresentation ? 1 : 0,
+    playback_cursor: currentPresentation ? 1 : 0,
     current_presentation: currentPresentation,
   };
 }

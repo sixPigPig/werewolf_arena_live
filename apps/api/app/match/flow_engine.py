@@ -40,7 +40,9 @@ class LiveFlowEngine:
     async def run(self, *, game_id: str, broadcaster: BroadcastPort) -> None:
         try:
             await self._run_active(game_id=game_id, broadcaster=broadcaster)
+            await self._actions.drain_presentations(game_id)
         except asyncio.CancelledError:
+            await self._actions.abort_presentations(game_id)
             if not self._action_repository.stop_requested(game_id):
                 raise
             result = self._action_repository.cancel_game(game_id)
@@ -53,6 +55,9 @@ class LiveFlowEngine:
                     reason="operator_interrupted",
                 )
             )
+        except Exception:
+            await self._actions.abort_presentations(game_id)
+            raise
 
     async def _run_active(
         self,
@@ -111,6 +116,7 @@ class LiveFlowEngine:
                     reason="first_night_transition_failed",
                 )
             )
+            await self._actions.abort_presentations(game_id)
             return
         await broadcaster.broadcast_json(game_phase_changed(transition))
         if not self._night_repository.execution_enabled(game_id):

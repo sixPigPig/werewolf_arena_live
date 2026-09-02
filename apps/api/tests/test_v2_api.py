@@ -108,6 +108,7 @@ from app.match.model_failure_episode import (
 )
 from app.match.model_generation_policy_contract import (
     current_model_generation_policy_contract,
+    schema_v4_model_generation_policy_contract,
 )
 from app.match.night_repository import NightRepository
 from app.match.models import (
@@ -2141,6 +2142,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "game_phase",
         "match_state",
         "latest_presentation_seq",
+        "playback_cursor",
         "server_time",
         "public_rule",
         "public_players",
@@ -2239,6 +2241,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "game_phase",
         "match_state",
         "latest_presentation_seq",
+        "playback_cursor",
         "server_time",
         "rule",
         "players",
@@ -2355,6 +2358,7 @@ def test_schema3_vote_output_budget_applies_abstain_and_closes_failure_episode(
 ) -> None:
     client, session_factory, voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, created["game_id"])
     _prepare_day_state(session_factory, created["game_id"])
     repository, engine = _unfenced_text_only_day_engine(
         client=client,
@@ -2958,27 +2962,22 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
         )
         assert created_event is not None
     assert created_event.payload["model_generation_policy_contract"] == {
-        "schema_version": 4,
+        "schema_version": 6,
         "classification_version": 1,
         "enforcement": "observe_only",
     }
     assert "profiles" not in created_event.payload["model_generation_policy_contract"]
     assert expected["enforcement"] == "observe_only"
+    assert expected["schema_version"] == 6
     assert expected["execution"] == {
         "automatic_retry_enforcement": "enforce",
-        "output_budget_max_attempts": 1,
-        "attempt_hard_timeout_max_attempts": 1,
         "transport_max_attempts": 2,
         "post_token_transport_max_attempts": 1,
         "queue_wait_budget_mode": "wall_clock",
-        "action_wall_timeout_ms": 300_000,
-        "blocking_required_target_output_timeout_mode": "technical_outcome",
-        "blocking_required_target_queue_wait_budget_mode": "wall_clock",
         "required_target_exhaustion": {
             "eligible_failure_modes": [
-                "output_budget_exhausted",
-                "attempt_hard_timeout",
-                "action_wall_timeout",
+                "empty_visible_output",
+                "unparseable_output",
             ],
             "day_vote_outcome": "technical_abstain",
             "night_required_target_outcome": "technical_no_action",
@@ -4312,41 +4311,27 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         )
         assert run is not None and run.status == "awaiting_observation"
         assert run.started_at is not None
-        assert [item.event_type for item in events] == [
+        event_types = [item.event_type for item in events]
+        assert event_types[0:3] == [
             "game_created",
             "v2_run_execution_claimed",
             "game_started",
-            "action_opened",
-            "judge_speech_rendered",
-            "speech_opened",
-            "speech_segment_committed",
-            "speech_sealed",
-            "tts_stream_started",
-            "tts_first_chunk_received",
-            "voice_recording_started",
-            "audio_broadcast_started",
-            "tts_stream_completed",
-            "voice_asset_saved",
-            "audio_drained",
-            "speech_closed",
-            "action_succeeded",
-            "game_phase_changed",
-            "action_opened",
-            "judge_speech_rendered",
-            "speech_opened",
-            "speech_segment_committed",
-            "speech_sealed",
-            "tts_stream_started",
-            "tts_first_chunk_received",
-            "voice_recording_started",
-            "audio_broadcast_started",
-            "tts_stream_completed",
-            "voice_asset_saved",
-            "audio_drained",
-            "speech_closed",
-            "action_succeeded",
-            "v2_run_execution_released",
         ]
+        assert event_types[-1] == "v2_run_execution_released"
+        assert event_types.count("action_opened") == 2
+        assert event_types.count("speech_sealed") == 2
+        assert event_types.count("action_succeeded") == 2
+        assert event_types.count("speech_closed") == 2
+        assert event_types.count("audio_drained") == 2
+        assert event_types.count("game_phase_changed") == 1
+        first_seal = event_types.index("speech_sealed")
+        first_success = event_types.index("action_succeeded")
+        first_close = event_types.index("speech_closed")
+        assert first_success < first_close
+        assert first_seal < first_success
+        assert event_types.index("game_phase_changed") < event_types.index(
+            "v2_run_execution_released"
+        )
         started_event = next(item for item in events if item.event_type == "game_started")
         assert started_event.payload["trigger_audience"] == "player_public"
         assert [item.phase_id for item in presentations] == ["opening", "first_night"]
@@ -6903,35 +6888,18 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
                 )
             )
         )
-        assert day_speech_slots
-        assert all(
-            slot.state == "consumed"
-            and slot.generation_action_id is not None
-            and slot.generation_response_record_seq is not None
-            and slot.presentation_action_id is not None
-            and slot.presentation_id is not None
-            and slot.consumed_at is not None
-            for slot in day_speech_slots
-        )
-        generation_action_ids = {
-            slot.generation_action_id for slot in day_speech_slots if slot.generation_action_id
-        }
-        presentation_action_ids = {
-            slot.presentation_action_id for slot in day_speech_slots if slot.presentation_action_id
-        }
-        assert generation_action_ids <= observed_action_ids
+        assert not day_speech_slots
         assert {
             presentation.action_id
             for presentation in adopted_presentations
             if presentation.subtitle_text == contradictory_speech
-        } == (observed_action_ids - generation_action_ids) | presentation_action_ids
+        } == observed_action_ids
         assert all(
             presentation.subtitle_text == contradictory_speech
             for presentation in adopted_presentations
-            if presentation.action_id
-            in ((observed_action_ids - generation_action_ids) | presentation_action_ids)
+            if presentation.action_id in observed_action_ids
         )
-        assert "idle_only" in model_client.admission_modes
+        assert "idle_only" not in model_client.admission_modes
         length_normalized_action_ids = {
             event.payload["action_id"]
             for event in events
@@ -8160,6 +8128,7 @@ def test_managed_model_queue_wait_is_observable_and_consumes_v2_wall_budget(
     runtime = client.app.state.live_runtime
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -8236,6 +8205,7 @@ def test_managed_queue_wait_can_exhaust_v2_wall_budget_before_retry(v2_context) 
         jitter_seconds=0,
     )
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -9065,6 +9035,7 @@ def test_v2_output_budget_speech_and_boolean_use_one_attempt_then_technical_outc
     if advanced:
         request["lobby_snapshot"]["rule_set"]["werewolf_self_explosion_enabled"] = True
     identifiers = client.post("/api/v2/games", json=request).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -9445,6 +9416,20 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
     assert len(committed) == len(committed_voter_ids)
     assert concurrent_recovery_completed.record_seq < batch_recovery_completed.record_seq
     assert batch_recovery_completed.record_seq < min(event.record_seq for event in committed)
+
+
+def _freeze_model_generation_policy_v4(
+    session_factory: sessionmaker[Session],
+    game_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(GameRecord, game_id)
+        assert game is not None
+        frozen_rule = dict(game.rule_snapshot)
+        frozen_rule["model_generation_policy_contract"] = (
+            schema_v4_model_generation_policy_contract()
+        )
+        game.rule_snapshot = frozen_rule
 
 
 def _freeze_model_generation_policy_v2(
@@ -9959,6 +9944,7 @@ def test_attempt_budget_timeout_is_retryable_within_action_budget(
     model_client = client.app.state.test_model_client
     model_client.call_delays_seconds = [0.08, 0]
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -10036,6 +10022,7 @@ def test_progress_capability_preserves_pre_token_outer_timeout_stage(
         first_attempt_progress=first_attempt_progress
     )
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -10079,6 +10066,7 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
     model_client = _ManagedProgressThenSlowModelClient()
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -13524,6 +13512,14 @@ def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
                     return
 
 
+def _is_released_terminal(value: dict[str, Any]) -> bool:
+    return (
+        value.get("type") in {"live.snapshot", "director.live_snapshot"}
+        and value.get("execution_state") == "stopped"
+        and value.get("live_state") in {"awaiting_observation", "failed", "canceled"}
+    )
+
+
 def _collect_until_observation(
     websocket: Any,
     *,
@@ -13538,7 +13534,7 @@ def _collect_until_observation(
         message_types.append(value["type"])
         if value["type"] == "speech.segment_committed":
             committed_texts.append(value["text"])
-        if value.get("live_state") in {"awaiting_observation", "failed"}:
+        if _is_released_terminal(value):
             return
 
 
@@ -13599,7 +13595,7 @@ def _receive_realtime_action(
             presentation_seqs.append(value["presentation_seq"])
         if value.get("type") == "game.phase_changed":
             phase_changes.append(value["phase_id"])
-        if value.get("live_state") == "awaiting_observation":
+        if _is_released_terminal(value):
             result = {
                 "committed_texts": committed_texts,
                 "presentation_seqs": presentation_seqs,

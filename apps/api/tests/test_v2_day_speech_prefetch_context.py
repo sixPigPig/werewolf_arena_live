@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers the referenced users table
 from app.match.day_speech_pipeline_contract import (
     freeze_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
 )
 from app.match.match_repository import MatchRepository
 from app.match.model_context_contract import freeze_model_context_contract
@@ -88,6 +89,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
     rule_snapshot = freeze_model_context_contract(rule_snapshot)
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
+    rule_snapshot["day_speech_pipeline_contract"] = schema_v3_day_speech_pipeline_contract()
     with session_factory.begin() as db:
         db.add(
             GameRecord(

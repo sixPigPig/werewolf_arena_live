@@ -116,6 +116,7 @@ class MatchSnapshot:
     audio_mode: AudioMode
     players: tuple[MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
+    last_presentation_seq: int = 0
     pre_exile_pipeline_contract: ResolvedPreExilePipelineContract = field(
         default_factory=lambda: resolve_pre_exile_pipeline_contract({})
     )
@@ -261,7 +262,7 @@ class MatchRepository:
             run = _run(db, run_id)
             if (
                 run.game_id != game_id
-                or game.status not in {"broadcasting", "finalizing"}
+                or game.status not in {"broadcasting", "finalizing", "ready", "generating"}
                 or run.status != game.status
             ):
                 raise RepositoryError("day speech prefetch predecessor is not presenting")
@@ -275,21 +276,16 @@ class MatchRepository:
             )
             if latest_record_seq != cutoff:
                 raise RepositoryError("day speech prefetch record cutoff is inconsistent")
-            active_presentations = list(
-                db.scalars(
-                    select(LivePresentation)
-                    .where(
-                        LivePresentation.game_id == game_id,
-                        LivePresentation.state == "active",
-                    )
-                    .order_by(LivePresentation.presentation_seq)
+            predecessor = db.scalar(
+                select(LivePresentation).where(
+                    LivePresentation.game_id == game_id,
+                    LivePresentation.presentation_id == predecessor_presentation_id,
                 )
             )
-            if len(active_presentations) != 1:
+            if predecessor is None or predecessor.state not in {"active", "queued"}:
                 raise RepositoryError(
-                    "day speech prefetch predecessor is not the unique active presentation"
+                    "day speech prefetch predecessor is not an open presentation"
                 )
-            predecessor = active_presentations[0]
             technical_skip_predecessor = predecessor_turn_player_id is not None
             if technical_skip_predecessor and resolve_day_speech_pipeline_contract(
                 game.rule_snapshot
@@ -1244,6 +1240,7 @@ class MatchRepository:
                 previous_phase_id=game.phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1256,6 +1253,7 @@ class MatchRepository:
                     "previous_phase_state": previous_phase_state,
                     "phase_id": game.phase_id,
                     "phase_state": game.phase_state,
+                    "reveal_presentation_seq": game.last_presentation_seq,
                 },
             )
             return transition
@@ -1856,6 +1854,7 @@ class MatchRepository:
                 previous_phase_id=previous_phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1868,6 +1867,7 @@ class MatchRepository:
                     "phase_id": transition.phase_id,
                     "phase_state": transition.phase_state,
                     "reason": reason,
+                    "reveal_presentation_seq": transition.reveal_presentation_seq,
                 },
             )
             return transition
@@ -2145,6 +2145,7 @@ def _match_snapshot(
         audio_mode=delivery_audio_mode(game.delivery_snapshot),
         players=_players(db, game),
         public_history=public_history,
+        last_presentation_seq=game.last_presentation_seq,
     )
 
 

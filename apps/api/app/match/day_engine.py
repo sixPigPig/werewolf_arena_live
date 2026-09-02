@@ -64,6 +64,24 @@ from app.match.repository import (
 
 logger = logging.getLogger(__name__)
 
+
+def _public_day_progress(
+    state: MatchSnapshot,
+    *,
+    stage: str,
+    completed_count: int | None = None,
+    total_count: int | None = None,
+) -> dict[str, Any]:
+    return day_progress(
+        game_id=state.game_id,
+        run_id=state.run_id,
+        round_no=state.round_no,
+        stage=stage,
+        completed_count=completed_count,
+        total_count=total_count,
+        reveal_presentation_seq=state.last_presentation_seq,
+    )
+
 _SUPPORTED_DAY_ACTIONS = {
     "sheriff_run",
     "sheriff_speech",
@@ -358,12 +376,7 @@ class DayEngine:
             self._actions.check_cancellation(game_id)
             state = self._repository.snapshot(game_id)
             await broadcaster.broadcast_json(
-                day_progress(
-                    game_id=state.game_id,
-                    run_id=state.run_id,
-                    round_no=state.round_no,
-                    stage="day_started",
-                )
+                _public_day_progress(state, stage="day_started")
             )
             actions = set(state.rule.get("day_actions") or [])
             unknown_actions = actions - _SUPPORTED_DAY_ACTIONS
@@ -1176,12 +1189,7 @@ class DayEngine:
         state: MatchSnapshot = frozen.match_snapshot
         self._actions.check_cancellation(state.game_id)
         await broadcaster.broadcast_json(
-            day_progress(
-                game_id=state.game_id,
-                run_id=state.run_id,
-                round_no=state.round_no,
-                stage="pre_exile_special_action",
-            )
+            _public_day_progress(state, stage="pre_exile_special_action")
         )
         alive = sorted(
             (player for player in state.players if player.alive), key=lambda item: item.seat
@@ -1234,12 +1242,7 @@ class DayEngine:
             nonlocal completed_vote_count
             if result_kind == "self_explosion":
                 await broadcaster.broadcast_json(
-                    day_progress(
-                        game_id=state.game_id,
-                        run_id=state.run_id,
-                        round_no=state.round_no,
-                        stage="pre_exile_special_action",
-                    )
+                    _public_day_progress(state, stage="pre_exile_special_action")
                 )
                 return
             if (
@@ -1251,10 +1254,8 @@ class DayEngine:
                 completed_vote_count += 1
                 if vote_progress_visible.is_set():
                     await broadcaster.broadcast_json(
-                        day_progress(
-                            game_id=state.game_id,
-                            run_id=state.run_id,
-                            round_no=state.round_no,
+                        _public_day_progress(
+                            state,
                             stage="pre_exile_vote_collecting",
                             completed_count=completed_vote_count,
                             total_count=len(voters),
@@ -1377,9 +1378,14 @@ class DayEngine:
                     batch_id=vote_batch_id,
                     decision_family_id=decision_family_id,
                     automatic_machine_format_budget=(_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET),
-                    automatic_output_budget_budget=(_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET),
+                    automatic_output_budget_budget=_vote_automatic_output_budget(state),
                     target_exhaustion_outcome="technical_abstain",
-                    model_admission_mode="idle_only",
+                    model_admission_mode=(
+                        pre_exile_contract.speculative_vote_admission_mode
+                        if pre_exile_contract.speculative_vote_admission_mode
+                        in {"idle_only", "normal"}
+                        else "normal"
+                    ),
                     pipeline_slot_id=pipeline.pipeline_id,
                     pipeline_stage="generation",
                     pipeline_kind="pre_exile",
@@ -1542,12 +1548,7 @@ class DayEngine:
             )
             if resolution.outcome == "explosion_selected":
                 await broadcaster.broadcast_json(
-                    day_progress(
-                        game_id=state.game_id,
-                        run_id=state.run_id,
-                        round_no=state.round_no,
-                        stage="pre_exile_special_action",
-                    )
+                    _public_day_progress(state, stage="pre_exile_special_action")
                 )
                 return _PreExileOutcome(
                     pipeline_id=pipeline.pipeline_id,
@@ -1556,10 +1557,8 @@ class DayEngine:
             async with vote_progress_lock:
                 vote_progress_visible.set()
                 await broadcaster.broadcast_json(
-                    day_progress(
-                        game_id=state.game_id,
-                        run_id=state.run_id,
-                        round_no=state.round_no,
+                    _public_day_progress(
+                        state,
                         stage="pre_exile_vote_collecting",
                         completed_count=completed_vote_count,
                         total_count=len(voters),
@@ -1595,10 +1594,8 @@ class DayEngine:
             )
             if not has_capacity_recovery:
                 await broadcaster.broadcast_json(
-                    day_progress(
-                        game_id=state.game_id,
-                        run_id=state.run_id,
-                        round_no=state.round_no,
+                    _public_day_progress(
+                        state,
                         stage="before_exile_vote",
                         completed_count=len(voters),
                         total_count=len(voters),
@@ -2292,7 +2289,11 @@ class DayEngine:
                 isolated_failure=True,
                 allow_failure=True,
                 batch_id=slot.slot_id,
-                model_admission_mode="idle_only",
+                model_admission_mode=(
+                    contract.admission_mode
+                    if contract.admission_mode in {"idle_only", "normal"}
+                    else "idle_only"
+                ),
                 pipeline_slot_id=slot.slot_id,
                 pipeline_stage="generation",
                 pipeline_empty_stream_max_attempts=(
@@ -2880,7 +2881,7 @@ class DayEngine:
                 prior_machine_format_failures=machine_format_failure_counts[index],
                 automatic_machine_format_budget=(_VOTE_MACHINE_FORMAT_AUTOMATIC_BUDGET),
                 prior_output_budget_failures=output_budget_failure_counts[index],
-                automatic_output_budget_budget=(_VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET),
+                automatic_output_budget_budget=_vote_automatic_output_budget(state),
                 preflight_pause_failure=preflight_pause_failure,
                 target_exhaustion_outcome="technical_abstain",
                 return_result=True,
@@ -3100,10 +3101,8 @@ class DayEngine:
                 payload=recovery_payload,
             )
             await broadcaster.broadcast_json(
-                day_progress(
-                    game_id=state.game_id,
-                    run_id=state.run_id,
-                    round_no=state.round_no,
+                _public_day_progress(
+                    state,
                     stage="before_exile_vote",
                     completed_count=len(prepared),
                     total_count=len(prepared),
@@ -4441,6 +4440,7 @@ class DayEngine:
                 player_id=player_id,
                 alive=False,
                 cause=None,
+                reveal_presentation_seq=state.last_presentation_seq,
             ),
             audience="public",
         )
@@ -4451,6 +4451,7 @@ class DayEngine:
                 player_id=player_id,
                 alive=False,
                 cause=cause,
+                reveal_presentation_seq=state.last_presentation_seq,
             ),
             audience="god_view",
         )
@@ -4469,8 +4470,16 @@ class DayEngine:
             winner=self._repository.current_winner(state.game_id)
             if state.phase_state == "game_completed"
             else None,
+            reveal_presentation_seq=state.last_presentation_seq,
         )
         await broadcaster.broadcast_json(match)
+
+
+def _vote_automatic_output_budget(state: MatchSnapshot) -> int | None:
+    contract = state.model_generation_policy_contract
+    if isinstance(contract, dict) and contract.get("schema_version") == 4:
+        return _VOTE_OUTPUT_BUDGET_AUTOMATIC_BUDGET
+    return None
 
 
 def _leaders(totals: dict[str, float]) -> list[str]:
