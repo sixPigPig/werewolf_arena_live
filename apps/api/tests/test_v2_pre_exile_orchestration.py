@@ -648,6 +648,190 @@ def test_vote_recovery_failure_degrades_to_durable_abstain() -> None:
     assert completed_events[-1]["payload"]["degraded_abstained_voter_ids"] == ["player_1"]
 
 
+def test_isolated_pause_abandons_after_auto_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from pathlib import Path
+
+    from app.core.config import settings
+    from app.match.action_engine import ActionEngine
+    from app.match.repository import ActionClaim
+
+    monkeypatch.setattr(settings, "live_v2_model_auto_retry_enabled", True)
+    monkeypatch.setattr(settings, "live_v2_model_auto_retry_seconds", 0)
+
+    class _PauseRepository:
+        def __init__(self) -> None:
+            self.paused = 0
+            self.abandoned: list[dict[str, Any]] = []
+
+        def check_cancellation(self, _game_id: str) -> None:
+            return
+
+        def pause_model_action(self, **_kwargs: Any) -> None:
+            self.paused += 1
+
+        def pending_model_action_retry(self, **_kwargs: Any) -> None:
+            return None
+
+        def auto_resume_model_action(self, **_kwargs: Any) -> bool:
+            return False
+
+        def abandon_model_action_pause(self, **kwargs: Any) -> None:
+            self.abandoned.append(dict(kwargs))
+
+    repository = _PauseRepository()
+    engine = ActionEngine(
+        repository=repository,  # type: ignore[arg-type]
+        model_client=SimpleNamespace(),  # type: ignore[arg-type]
+        tts_client=None,
+        tts_client_factory=None,
+        tts_capability_enabled=False,
+        voice_root=Path(tmp_path),
+        sample_rate=24_000,
+        judge_configuration_provider=lambda _game_id: None,  # type: ignore[arg-type,return-value]
+    )
+    claim = ActionClaim(
+        game_id="v2_game_auto_retry",
+        run_id="v2_run_auto_retry",
+        action_id="v2_action_recovery_player_1",
+        phase_id="day_1",
+        audience="god_view",
+    )
+
+    with pytest.raises(ModelError, match="model_total_timeout"):
+        asyncio.run(
+            engine._pause_for_model_retry(
+                claim=claim,
+                attempt_id="v2_attempt_recovery_timeout",
+                failure_code="model_total_timeout",
+                recovery={"source_action_id": "v2_action_idle_player_1"},
+                broadcaster=_Broadcaster(),
+                audience="god_view",
+                operator_wait=False,
+            )
+        )
+
+    assert repository.paused == 1
+    assert len(repository.abandoned) == 1
+    assert repository.abandoned[0]["claim"].action_id == "v2_action_recovery_player_1"
+    assert repository.abandoned[0]["failure_code"] == "model_total_timeout"
+
+
+def test_auto_retry_exhaustion_abandons_then_degrades_abstain_lineage() -> None:
+    state = _vote_snapshot()
+    repository = _VoteRepository(state)
+    rows = _PreExileRows(
+        [
+            _vote_row(
+                "player_1",
+                action_id="v2_action_idle_player_1",
+                failure=_capacity_failure("v2_action_idle_player_1"),
+            ),
+            _vote_row("player_2", action_id="v2_action_player_2"),
+            _vote_row("player_3", action_id="v2_action_player_3"),
+        ]
+    )
+
+    class _AbandonedRecoveryActions(_VoteActions):
+        def __init__(self) -> None:
+            super().__init__()
+            self.abandoned: list[dict[str, Any]] = []
+
+        async def run_player_decision_result(
+            self,
+            *,
+            spec: SpeechSpec,
+            **_kwargs: Any,
+        ) -> ActionResult:
+            self.specs.append(spec)
+            assert spec.pause_on_model_failure is True
+            assert spec.isolated_failure is True
+            recovery_action_id = f"v2_action_recovery_{spec.actor_id}"
+            # ActionEngine's isolated pause path: auto-retry misses, abandon
+            # releases the run, then the original failure surfaces to DayEngine.
+            self.abandoned.append(
+                {
+                    "action_id": recovery_action_id,
+                    "reason_code": "auto_retry_exhausted",
+                    "failure_code": "model_total_timeout",
+                }
+            )
+            return ActionResult(
+                action_id=recovery_action_id,
+                failure=ActionFailure(
+                    code="model_total_timeout",
+                    category="timeout",
+                    terminal_attempt_id="v2_attempt_recovery_timeout",
+                    failure_episode_id="v2_episode_recovery_timeout",
+                ),
+                terminal_event_record_seq=160,
+            )
+
+    actions = _AbandonedRecoveryActions()
+    engine = DayEngine(
+        repository=repository,  # type: ignore[arg-type]
+        action_engine=actions,  # type: ignore[arg-type]
+        pre_exile_pipeline_repository=rows,  # type: ignore[arg-type]
+    )
+    initial = {
+        "player_1": ActionResult(
+            action_id="v2_action_idle_player_1",
+            failure=ActionFailure(
+                code="model_prefetch_capacity_unavailable",
+                category="admission_capacity",
+                terminal_attempt_id="v2_attempt_idle_capacity",
+            ),
+            terminal_event_record_seq=150,
+        ),
+        "player_2": ActionResult(
+            action_id="v2_action_player_2",
+            decision=_vote_decision("player_1"),
+        ),
+        "player_3": ActionResult(
+            action_id="v2_action_player_3",
+            decision=_vote_decision("player_1"),
+        ),
+    }
+
+    totals = asyncio.run(
+        engine._collect_votes(
+            game_id=state.game_id,
+            broadcaster=_Broadcaster(),
+            action_type="exile_vote",
+            voters=list(state.players),
+            candidates=list(state.players),
+            weighted=True,
+            context={"vote_round": 1},
+            pre_exile_pipeline_id="v2_preex_pipeline",
+            frozen_state=state,
+            frozen_private_facts_by_voter={player.player_id: [] for player in state.players},
+            initial_results_by_voter=initial,
+            public_history_cutoff_record_seq=100,
+        )
+    )
+
+    assert totals == {"player_1": 2.0}
+    assert actions.abandoned == [
+        {
+            "action_id": "v2_action_recovery_player_1",
+            "reason_code": "auto_retry_exhausted",
+            "failure_code": "model_total_timeout",
+        }
+    ]
+    assert len(rows.degraded_calls) == 1
+    degraded = rows.degraded_calls[0]
+    assert degraded["source_action_id"] == "v2_action_idle_player_1"
+    assert degraded["recovery_action_id"] == "v2_action_recovery_player_1"
+    votes = repository.finalize_calls[0]["votes"]
+    degraded_vote = [vote for vote in votes if vote.voter_player_id == "player_1"]
+    assert len(degraded_vote) == 1
+    assert degraded_vote[0].technical_status == "technical_abstain"
+    assert degraded_vote[0].source_action_id == "v2_action_recovery_player_1"
+    assert degraded_vote[0].failure_mode == "model_failure_degraded"
+
+
 def test_non_recoverable_source_failure_degrades_without_recovery_drive() -> None:
     state = _vote_snapshot()
     repository = _VoteRepository(state)

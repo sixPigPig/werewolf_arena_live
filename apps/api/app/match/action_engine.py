@@ -2357,6 +2357,10 @@ class ActionEngine:
                                     audience=spec.audience,
                                     failure_episode_id=failure_episode_id,
                                     on_paused=clear_active_failure_episode,
+                                    # Isolated vote recovery has no operator. Once
+                                    # auto-retry is exhausted, abandon the pause so
+                                    # the caller can degrade to a durable abstain.
+                                    operator_wait=False,
                                 )
                                 retry_cycle += 1
                                 resumed_after_pause = True
