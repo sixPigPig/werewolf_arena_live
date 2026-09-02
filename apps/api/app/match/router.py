@@ -687,8 +687,10 @@ def read_admin_v2_metrics(
         "v2_run_execution_reaped",
     )
     signal_events = db.execute(
-        select(GameRecordEvent.event_type, GameRecordEvent.payload).where(
-            GameRecordEvent.created_at >= since,
+        select(GameRecordEvent.event_type, GameRecordEvent.payload)
+        .join(GameRun, GameRecordEvent.run_id == GameRun.run_id)
+        .where(
+            GameRun.started_at >= since,
             GameRecordEvent.event_type.in_(signal_event_types),
         )
     ).all()

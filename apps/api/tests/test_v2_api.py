@@ -14168,6 +14168,11 @@ def test_admin_v2_metrics_reports_run_and_failure_aggregates(v2_context) -> None
         )
         for index in range(4)
     ]
+    stale = _create_legacy_waiting_game(
+        client=client,
+        session_factory=session_factory,
+        title="窗口外对局",
+    )
     with session_factory.begin() as db:
         for index, (status, finished) in enumerate(
             [
@@ -14219,6 +14224,25 @@ def test_admin_v2_metrics_reports_run_and_failure_aggregates(v2_context) -> None
                 )
             )
         game.last_record_seq += len(event_specs)
+
+        stale_run = db.get(GameRun, stale["run_id"])
+        stale_game = db.get(GameRecord, stale["game_id"])
+        assert stale_run is not None and stale_game is not None
+        stale_run.status = "failed"
+        stale_run.started_at = datetime.now(tz=UTC) - timedelta(days=30)
+        stale_run.completed_at = datetime.now(tz=UTC) - timedelta(days=30)
+        stale_seq = stale_game.last_record_seq + 1
+        db.add(
+            GameRecordEvent(
+                game_id=stale["game_id"],
+                event_id=stale_seq,
+                record_seq=stale_seq,
+                run_id=stale["run_id"],
+                event_type="day_vote_degraded_to_abstain",
+                payload={},
+            )
+        )
+        stale_game.last_record_seq = stale_seq
 
     metrics = client.get("/api/v1/admin/v2/metrics?days=7")
     assert metrics.status_code == 200, metrics.text
