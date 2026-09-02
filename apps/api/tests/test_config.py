@@ -78,7 +78,8 @@ def test_settings_defaults_disable_tts() -> None:
     assert settings.live_v2_model_attempt_total_seconds == 300.0
     assert settings.live_v2_model_action_total_seconds == 620.0
     assert settings.live_v2_model_max_attempts == 3
-    assert settings.live_v2_agent_plan_max_in_flight == 3
+    assert settings.live_v2_agent_plan_max_in_flight == 6
+    assert settings.live_v2_vote_fanout_stagger_ms == 500
     assert settings.live_v2_ark_max_in_flight == 3
     assert settings.live_v2_deepseek_max_in_flight == 32
     assert settings.live_v2_agent_plan_supports_strict_json_schema is False

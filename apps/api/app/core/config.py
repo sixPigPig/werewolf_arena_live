@@ -146,7 +146,7 @@ class Settings(BaseSettings):
             "DEEPSEEK_BASE_URL",
         ),
     )
-    live_v2_agent_plan_max_in_flight: int = Field(default=3, ge=1, le=64)
+    live_v2_agent_plan_max_in_flight: int = Field(default=6, ge=1, le=64)
     live_v2_ark_max_in_flight: int = Field(default=3, ge=1, le=1024)
     live_v2_deepseek_max_in_flight: int = Field(default=32, ge=1, le=2500)
     live_v2_agent_plan_supports_strict_json_schema: bool = False
@@ -232,7 +232,7 @@ class Settings(BaseSettings):
     live_v2_model_auto_retry_enabled: bool = True
     live_v2_model_auto_retry_seconds: float = Field(default=120.0, ge=0.0, le=3600.0)
     live_v2_stream_progress_min_interval_ms: int = Field(default=3000, ge=0, le=60000)
-    live_v2_vote_fanout_stagger_ms: int = Field(default=300, ge=0, le=10_000)
+    live_v2_vote_fanout_stagger_ms: int = Field(default=500, ge=0, le=10_000)
     live_v2_vote_disable_thinking: bool = True
 
     @field_validator("cors_origins", "public_cors_origins", mode="before")
