@@ -252,36 +252,33 @@ def test_idle_only_never_bypasses_an_existing_normal_waiter() -> None:
         await asyncio.wait_for(waiter_queued.wait(), timeout=0.5)
         await asyncio.sleep(0)
 
-        rejected_progress: list[ModelProgress] = []
-        with pytest.raises(ModelError, match="model_prefetch_capacity_unavailable"):
-            await client.generate_action_decision_with_progress(
+        prefetch_progress: list[ModelProgress] = []
+        prefetch = asyncio.create_task(
+            client.generate_action_decision_with_progress(
                 action_context=_action_context(),
-                attempt_id="v2_model_fifo_prefetch_rejected",
+                attempt_id="v2_model_fifo_prefetch_queued",
                 target=target,
                 admission_mode="idle_only",
-                on_progress=rejected_progress.append,
+                on_progress=prefetch_progress.append,
             )
-        assert [item.stage for item in rejected_progress] == ["queued"]
+        )
+        await asyncio.sleep(0.05)
+        assert prefetch.done() is False
+        assert [item.stage for item in prefetch_progress] == ["queued"]
 
         release_first.set()
         await asyncio.wait_for(second_started.wait(), timeout=0.5)
         assert request_count == 2
+        assert prefetch.done() is False
         release_second.set()
-        first, second = await asyncio.gather(owner, normal_waiter)
-        try:
-            prefetch = await client.generate_action_decision(
-                action_context=_action_context(),
-                attempt_id="v2_model_fifo_prefetch_after_waiter",
-                target=target,
-                admission_mode="idle_only",
-            )
-        finally:
-            await client.aclose()
+        first, second, prefetch_decision = await asyncio.gather(owner, normal_waiter, prefetch)
+        await client.aclose()
 
         assert first.speech == "请求1完成"
         assert second.speech == "请求2完成"
-        assert prefetch.speech == "请求3完成"
+        assert prefetch_decision.speech == "请求3完成"
         assert request_count == 3
+        assert [item.stage for item in prefetch_progress[:2]] == ["queued", "admitted"]
 
     asyncio.run(scenario())
 

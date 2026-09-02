@@ -670,7 +670,7 @@ describe("LivePage", () => {
       socket.emitJson({
         ...base("game.phase_changed"),
         phase_seq: 6,
-        previous_phase_id: "night_1",
+        previous_phase_id: "first_night",
         phase_id: "day_1",
         phase_state: "public_discussion_open",
         reveal_presentation_seq: 0,

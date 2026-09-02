@@ -708,14 +708,14 @@ function liveProcessLabel(
   const matchStatus = effectiveMatchStatus(runtime, phase, match, liveState);
   const winner = effectiveWinner(runtime, match);
   const audioEnabled = runtime?.audio_mode === "tts";
-  if (presentationActive) {
+  if (liveState === "canceled") return "本局已由运营中断";
+  if (liveState === "failed") return "实时演出已停止";
+  if (presentationActive && (matchStatus === "completed" || liveState === "awaiting_observation")) {
     return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
   }
   if (matchStatus === "completed" && winner) {
     return winner === "villagers" ? "好人阵营获胜，对局已完成" : "狼人阵营获胜，对局已完成";
   }
-  if (liveState === "canceled") return "本局已由运营中断";
-  if (liveState === "failed") return "实时演出已停止";
   if (liveState === "awaiting_observation") {
     return awaitingObservationLabel(runtime);
   }
@@ -738,6 +738,9 @@ function liveProcessLabel(
       : "字幕展示完成，正在保存实时记录";
   }
   if (liveState === "broadcasting") {
+    return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
+  }
+  if (presentationActive) {
     return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
   }
   if (liveState === "generating") {
