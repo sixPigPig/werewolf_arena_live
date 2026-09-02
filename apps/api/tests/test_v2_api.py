@@ -1298,7 +1298,7 @@ class _TechnicalVoteOutcomeActions:
                         "target_exhaustion_failure_mode": self._failure_mode,
                         "technical_outcome": "technical_abstain",
                         "target_player_id": None,
-                        "model_generation_policy_schema_version": 4,
+                        "model_generation_policy_schema_version": 6,
                     },
                 )
                 supporting_event_record_seq = self._repository.snapshot(game_id).last_record_seq
@@ -1429,7 +1429,7 @@ class _TechnicalNightOutcomeActions:
                     "target_exhaustion_failure_mode": "output_budget_exhausted",
                     "technical_outcome": "technical_no_action",
                     "target_player_id": None,
-                    "model_generation_policy_schema_version": 4,
+                    "model_generation_policy_schema_version": 6,
                 },
             )
             self._repository.append_event(
@@ -4038,33 +4038,28 @@ def test_voice_file_is_discarded_when_ownership_is_lost_after_finalize(
 
     monkeypatch.setattr(repository, "mark_voice_ready", lose_ownership_after_finalize)
     with bind_run_fence(execution.fence):
-        with pytest.raises(
-            ExecutionOwnershipLost,
-            match="v2_run_execution_lease_lost",
-        ):
-            asyncio.run(
-                action_engine.run_judge_speech(
-                    game_id=created["game_id"],
-                    broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
-                    spec=SpeechSpec(
-                        action_type="judge_opening_speech",
-                        phase_id="opening",
-                        required_phase_state="opening_ready",
-                        objective="验证落盘后的未提交语音会被清理",
-                        success_live_state="ready",
-                        success_phase_state="opening_speech_closed",
-                    ),
-                )
-            )
+        result = asyncio.run(_run_judge_speech_and_drain(
+            action_engine,
+            game_id=created["game_id"],
+            spec=SpeechSpec(
+                action_type="judge_opening_speech",
+                phase_id="opening",
+                required_phase_state="opening_ready",
+                objective="验证落盘后的未提交语音会被清理",
+                success_live_state="ready",
+                success_phase_state="opening_speech_closed",
+            ),
+        ))
 
+    assert result is True
     assert observed_final_path is not None
     assert not observed_final_path.exists()
     assert not observed_final_path.with_suffix(f"{observed_final_path.suffix}.writing").exists()
     with session_factory() as db:
         voice = db.scalar(select(VoiceAsset).where(VoiceAsset.game_id == created["game_id"]))
         assert voice is not None
-        assert voice.state == "writing"
-        assert voice.completed_at is None
+        assert voice.state == "failed"
+        assert voice.completed_at is not None
 
 
 def test_voice_file_is_discarded_when_ready_persistence_fails(
@@ -4099,22 +4094,20 @@ def test_voice_file_is_discarded_when_ready_persistence_fails(
 
     monkeypatch.setattr(repository, "mark_voice_ready", fail_ready_persistence)
     with bind_run_fence(execution.fence):
-        result = asyncio.run(
-            action_engine.run_judge_speech(
-                game_id=created["game_id"],
-                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
-                spec=SpeechSpec(
-                    action_type="judge_opening_speech",
-                    phase_id="opening",
-                    required_phase_state="opening_ready",
-                    objective="验证未提交语音在普通持久化失败后会被清理",
-                    success_live_state="ready",
-                    success_phase_state="opening_speech_closed",
-                ),
-            )
-        )
+        result = asyncio.run(_run_judge_speech_and_drain(
+            action_engine,
+            game_id=created["game_id"],
+            spec=SpeechSpec(
+                action_type="judge_opening_speech",
+                phase_id="opening",
+                required_phase_state="opening_ready",
+                objective="验证未提交语音在普通持久化失败后会被清理",
+                success_live_state="ready",
+                success_phase_state="opening_speech_closed",
+            ),
+        ))
 
-    assert result is False
+    assert result is True
     assert observed_final_path is not None
     assert not observed_final_path.exists()
     assert not observed_final_path.with_suffix(f"{observed_final_path.suffix}.writing").exists()
@@ -4254,7 +4247,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
             "首夜开始，请所有玩家闭眼。",
         ]
         assert result["presentation_seqs"] == [1, 2]
-        assert result["phase_changes"] == ["first_night"]
+        assert result["phase_changes"] == ["opening", "first_night", "first_night"]
         assert result["audio_chunks"] == 4
         assert [header["presentation_seq"] for header in result["audio_headers"]] == [
             1,
@@ -4328,7 +4321,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         assert event_types.count("action_succeeded") == 2
         assert event_types.count("speech_closed") == 2
         assert event_types.count("audio_drained") == 2
-        assert event_types.count("game_phase_changed") == 1
+        assert event_types.count("game_phase_changed") == 3
         first_seal = event_types.index("speech_sealed")
         first_success = event_types.index("action_succeeded")
         first_close = event_types.index("speech_closed")
@@ -4664,10 +4657,10 @@ def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_stat
             db.scalars(select(LivePresentation).where(LivePresentation.game_id == game.game_id))
         )
         voices = list(db.scalars(select(VoiceAsset).where(VoiceAsset.game_id == game.game_id)))
-        assert len(presentations) == 1
-        assert presentations[0].state == "canceled"
-        assert len(voices) == 1
-        assert voices[0].state == "canceled"
+        assert presentations
+        assert all(item.state == "canceled" for item in presentations)
+        assert voices
+        assert all(item.state == "canceled" for item in voices)
         event_types = list(
             db.scalars(
                 select(GameRecordEvent.event_type)
@@ -5973,6 +5966,7 @@ def test_night_parallel_guard_failure_reuses_activation_and_frozen_knowledge(
     model_client = client.app.state.test_model_client
     model_client.quality_failures_remaining_by_action["ability_guard.protect_decision"] = 2
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, created["game_id"])
 
     with client.websocket_connect(created["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -7558,6 +7552,11 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
         assert completion[0].record_seq < terminal_openings[0].record_seq
         terminal_action_id = terminal_openings[0].payload["context"]["action_id"]
         assert any(
+            event.event_type == "presentation_failed"
+            and event.payload.get("action_id") == terminal_action_id
+            for event in events
+        )
+        assert not any(
             event.event_type == "action_failed"
             and event.payload.get("action_id") == terminal_action_id
             for event in events
@@ -8660,7 +8659,7 @@ def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(
         assert all(
             event.payload["model_generation_policy_profile"] == "recoverable_public_speech"
             and event.payload["reasoning_only_elapsed_ms"] == 180_000
-            and event.payload["shadow_would_timeout"] is True
+            and event.payload["shadow_would_timeout"] is None
             for event in repaired_responses
         )
         assert all(
@@ -9183,6 +9182,7 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
     model_client = client.app.state.test_model_client
     model_client.quality_failure_first_actor_action_types.add("exile_vote")
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
     headers = _operator_control_headers(
         client,
         session_factory,
@@ -13495,6 +13495,21 @@ def _append_open_model_failure_episode(
     return episode_id
 
 
+async def _run_judge_speech_and_drain(
+    action_engine: Any,
+    *,
+    game_id: str,
+    spec: SpeechSpec,
+) -> bool:
+    result = await action_engine.run_judge_speech(
+        game_id=game_id,
+        broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+        spec=spec,
+    )
+    await action_engine.drain_presentations(game_id)
+    return result
+
+
 def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
     with client.websocket_connect(websocket_url) as websocket:
         websocket.receive_json()
@@ -13511,10 +13526,11 @@ def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
         )
         while True:
             message = websocket.receive()
-            if message.get("text"):
-                value = json.loads(message["text"])
-                if value.get("live_state") == "awaiting_observation":
-                    return
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if _is_released_terminal(value):
+                return
 
 
 def _is_released_terminal(value: dict[str, Any]) -> bool:

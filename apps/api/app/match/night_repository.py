@@ -14,7 +14,11 @@ from app.match.ability_runtime import ability_snapshot_hash, resolve_first_night
 from app.match.execution import RunFenceRejected, require_run_fence
 from app.match.event_contract import canonical_event_payload
 from app.match.knowledge_timeline import player_private_knowledge
-from app.match.model_generation_policy_contract import MODEL_GENERATION_POLICY_SCHEMA_VERSION
+from app.match.model_generation_policy_contract import (
+    TECHNICAL_OUTCOME_FAILURE_MODES,
+    frozen_model_generation_policy_schema_version,
+    technical_outcome_failure_category,
+)
 from app.match.model_parameters import (
     FrozenModelParametersError,
     frozen_player_model_configuration,
@@ -498,20 +502,17 @@ class NightRepository:
             raise RepositoryError("technical no-action failure episode is missing")
         if not isinstance(source_failure_code, str) or not source_failure_code:
             raise RepositoryError("technical no-action failure code is missing")
-        if source_failure_category not in {"output_budget", "timeout"}:
+        if source_failure_category not in {"output_budget", "timeout", "machine_format"}:
             raise RepositoryError("technical no-action failure category is invalid")
         if not isinstance(source_attempt_id, str) or not source_attempt_id:
             raise RepositoryError("technical no-action source attempt is missing")
-        if failure_mode not in {
-            "output_budget_exhausted",
-            "attempt_hard_timeout",
-            "action_wall_timeout",
-        }:
+        if failure_mode not in TECHNICAL_OUTCOME_FAILURE_MODES:
             raise RepositoryError("technical no-action failure mode is invalid")
-        expected_failure_category = (
-            "output_budget" if failure_mode == "output_budget_exhausted" else "timeout"
-        )
-        if source_failure_category != expected_failure_category:
+        expected_failure_category = technical_outcome_failure_category(str(failure_mode))
+        if (
+            expected_failure_category is None
+            or source_failure_category != expected_failure_category
+        ):
             raise RepositoryError("technical no-action failure mode does not match")
         if (
             not isinstance(supporting_event_record_seq, int)
@@ -553,7 +554,7 @@ class NightRepository:
                 or supporting_payload.get("target_player_id") is not None
                 or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
                 or supporting_payload.get("model_generation_policy_schema_version")
-                != MODEL_GENERATION_POLICY_SCHEMA_VERSION
+                != frozen_model_generation_policy_schema_version(game.rule_snapshot)
             ):
                 raise RepositoryError("technical no-action supporting event does not match")
             action_succeeded_events = list(

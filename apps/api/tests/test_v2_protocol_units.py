@@ -2379,6 +2379,22 @@ def test_technical_outcome_failure_mode_requires_matching_failure_category() -> 
             supporting_event_record_seq=7,
         )
 
+    machine_format_failure = ActionFailure(
+        code="model_empty_visible_output",
+        category="machine_format",
+        terminal_attempt_id="v2_model_terminal",
+        machine_format_failure_count=1,
+        last_machine_format_attempt_id="v2_model_terminal",
+        last_machine_format_failure_code="model_empty_visible_output",
+    )
+    outcome = ActionTechnicalOutcome(
+        kind="technical_no_action",
+        failure_mode="empty_visible_output",
+        failure=machine_format_failure,
+        supporting_event_record_seq=8,
+    )
+    assert outcome.failure.category == "machine_format"
+
 
 def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_example() -> None:
     context = {

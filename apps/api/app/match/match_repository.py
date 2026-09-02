@@ -26,7 +26,8 @@ from app.match.model_context import (
     project_model_action_context_with_metadata,
 )
 from app.match.model_generation_policy_contract import (
-    MODEL_GENERATION_POLICY_SCHEMA_VERSION,
+    TECHNICAL_OUTCOME_FAILURE_MODES,
+    frozen_model_generation_policy_schema_version,
     resolve_model_generation_policy_contract,
 )
 from app.match.model_parameters import (
@@ -201,6 +202,8 @@ class DayVoteCommit:
             "output_budget_exhausted",
             "attempt_hard_timeout",
             "action_wall_timeout",
+            "empty_visible_output",
+            "unparseable_output",
         ]
         | None
     ) = None
@@ -3000,10 +3003,7 @@ def _validate_day_vote_batch(
 
 
 def _frozen_generation_policy_schema_version(game: GameRecord) -> int | None:
-    frozen = resolve_model_generation_policy_contract(game.rule_snapshot)
-    if isinstance(frozen, dict) and isinstance(frozen.get("schema_version"), int):
-        return frozen["schema_version"]
-    return MODEL_GENERATION_POLICY_SCHEMA_VERSION
+    return frozen_model_generation_policy_schema_version(game.rule_snapshot)
 
 
 def _validate_day_vote_technical_abstention_lineage(
@@ -3026,12 +3026,7 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_record_seq <= public_cutoff_record_seq
         or not isinstance(failure_episode_id, str)
         or not failure_episode_id
-        or failure_mode
-        not in {
-            "output_budget_exhausted",
-            "attempt_hard_timeout",
-            "action_wall_timeout",
-        }
+        or failure_mode not in TECHNICAL_OUTCOME_FAILURE_MODES
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
 

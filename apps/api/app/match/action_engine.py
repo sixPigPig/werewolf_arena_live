@@ -42,6 +42,7 @@ from app.match.model_generation_policy_contract import (
     RequiredTargetTechnicalOutcome,
     ResolvedModelGenerationPolicy,
     resolve_model_generation_action_policy,
+    technical_outcome_failure_category,
 )
 from app.match.model_observation import observe_model_speech
 from app.match.protocol import (
@@ -61,6 +62,7 @@ from app.match.repository import (
     ExecutionOwnershipLost,
     PresentationIdentity,
     RepositoryError,
+    SpeechDecisionCommit,
 )
 from app.match.tts_client import TtsError
 from app.match.voice_recorder import VoiceRecorder, VoiceRecordingError
@@ -351,10 +353,8 @@ class ActionTechnicalOutcome:
             or self.supporting_event_record_seq <= 0
         ):
             raise ValueError("technical outcome requires a supporting event record seq")
-        expected_category = (
-            "output_budget" if self.failure_mode == "output_budget_exhausted" else "timeout"
-        )
-        if self.failure.category != expected_category:
+        expected_category = technical_outcome_failure_category(self.failure_mode)
+        if expected_category is None or self.failure.category != expected_category:
             raise ValueError("technical outcome failure category does not match its mode")
 
 
@@ -2943,7 +2943,7 @@ class ActionEngine:
                 actor_kind=spec.actor_kind,
                 actor_id=spec.actor_id,
             )
-            terminal_event_record_seq = self._repository.commit_speech_decision(
+            committed = self._repository.commit_speech_decision(
                 claim=claim,
                 identity=identity,
                 next_live_state=spec.success_live_state,
@@ -2955,6 +2955,14 @@ class ActionEngine:
                     model_decision.provider_request_id if model_decision is not None else None
                 ),
             )
+            if isinstance(committed, SpeechDecisionCommit):
+                terminal_event_record_seq = committed.record_seq
+                if committed.phase_transition is not None:
+                    await broadcaster.broadcast_json(
+                        game_phase_changed(committed.phase_transition)
+                    )
+            else:
+                terminal_event_record_seq = committed
             if on_presentation_opened is not None:
                 on_presentation_opened(identity)
             if not spec.best_effort:

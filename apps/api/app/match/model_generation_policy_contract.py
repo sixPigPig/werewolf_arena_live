@@ -116,6 +116,16 @@ RequiredTargetTechnicalOutcome = Literal[
     "technical_abstain",
     "technical_no_action",
 ]
+TechnicalOutcomeFailureCategory = Literal["output_budget", "timeout", "machine_format"]
+TECHNICAL_OUTCOME_FAILURE_MODES = frozenset(
+    {
+        "output_budget_exhausted",
+        "attempt_hard_timeout",
+        "action_wall_timeout",
+        "empty_visible_output",
+        "unparseable_output",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -230,6 +240,28 @@ def schema_v4_model_generation_policy_contract() -> dict[str, Any]:
             "private_round_memory_mode": "blocking_generation",
         },
     }
+
+
+def technical_outcome_failure_category(
+    failure_mode: RequiredTargetExhaustionFailureMode | str,
+) -> TechnicalOutcomeFailureCategory | None:
+    if failure_mode == "output_budget_exhausted":
+        return "output_budget"
+    if failure_mode in {"attempt_hard_timeout", "action_wall_timeout"}:
+        return "timeout"
+    if failure_mode in {"empty_visible_output", "unparseable_output"}:
+        return "machine_format"
+    return None
+
+
+def frozen_model_generation_policy_schema_version(
+    rule_snapshot: dict[str, Any] | None,
+) -> int:
+    frozen = resolve_model_generation_policy_contract(rule_snapshot)
+    schema_version = frozen.get("schema_version") if isinstance(frozen, dict) else None
+    if isinstance(schema_version, int) and not isinstance(schema_version, bool):
+        return schema_version
+    return MODEL_GENERATION_POLICY_SCHEMA_VERSION
 
 
 def freeze_model_generation_policy_contract(

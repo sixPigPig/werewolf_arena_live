@@ -133,6 +133,12 @@ class PhaseTransition:
 
 
 @dataclass(frozen=True)
+class SpeechDecisionCommit:
+    record_seq: int
+    phase_transition: PhaseTransition | None = None
+
+
+@dataclass(frozen=True)
 class PresentationIdentity:
     game_id: str
     run_id: str
@@ -852,7 +858,7 @@ class ActionRepository:
         source_attempt_id: str | None = None,
         source_model_response_record_seq: int | None = None,
         provider_request_id: str | None = None,
-    ) -> int:
+    ) -> SpeechDecisionCommit:
         with self._session_factory.begin() as db:
             game = _locked_game(
                 db,
@@ -876,10 +882,40 @@ class ActionRepository:
             if game.phase_id != claim.phase_id:
                 raise RepositoryError("action phase changed before speech commit")
             run = _run(db, claim.run_id)
+            previous_phase_id = game.phase_id
+            previous_phase_state = game.phase_state
+            phase_transition: PhaseTransition | None = None
             if not best_effort and not claim.non_blocking:
                 game.status = next_live_state
                 game.phase_state = next_phase_state
                 run.status = next_live_state
+                if previous_phase_state != next_phase_state and claim.audience == "all":
+                    phase_transition = PhaseTransition(
+                        game_id=game.game_id,
+                        run_id=claim.run_id,
+                        phase_seq=game.phase_seq,
+                        previous_phase_id=previous_phase_id,
+                        phase_id=game.phase_id,
+                        phase_state=game.phase_state,
+                        reveal_presentation_seq=identity.presentation_seq,
+                    )
+                    _append_event(
+                        db,
+                        game=game,
+                        run_id=claim.run_id,
+                        event_type="game_phase_changed",
+                        audience="all",
+                        payload={
+                            "phase_seq": phase_transition.phase_seq,
+                            "previous_phase_id": phase_transition.previous_phase_id,
+                            "previous_phase_state": previous_phase_state,
+                            "phase_id": phase_transition.phase_id,
+                            "phase_state": phase_transition.phase_state,
+                            "reveal_presentation_seq": (
+                                phase_transition.reveal_presentation_seq
+                            ),
+                        },
+                    )
             completed = _append_event(
                 db,
                 game=game,
@@ -906,7 +942,10 @@ class ActionRepository:
                     ),
                 },
             )
-            return completed.record_seq
+            return SpeechDecisionCommit(
+                record_seq=completed.record_seq,
+                phase_transition=phase_transition,
+            )
 
     def complete_text_action(
         self,
@@ -1120,6 +1159,11 @@ class ActionRepository:
             if presentation is not None and presentation.state in {"active", "queued"}:
                 presentation.state = "failed"
                 presentation.closed_at = _now()
+            if identity.voice_asset_id is not None:
+                voice = db.get(VoiceAsset, identity.voice_asset_id)
+                if voice is not None and voice.state == "writing":
+                    voice.state = "failed"
+                    voice.completed_at = _now()
             if game.playback_cursor < identity.presentation_seq:
                 game.playback_cursor = identity.presentation_seq
             failed = _append_event(
