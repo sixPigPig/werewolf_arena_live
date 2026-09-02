@@ -2999,6 +2999,13 @@ def _validate_day_vote_batch(
         raise RepositoryError("day vote batch already has durable private decisions")
 
 
+def _frozen_generation_policy_schema_version(game: GameRecord) -> int | None:
+    frozen = resolve_model_generation_policy_contract(game.rule_snapshot)
+    if isinstance(frozen, dict) and isinstance(frozen.get("schema_version"), int):
+        return frozen["schema_version"]
+    return MODEL_GENERATION_POLICY_SCHEMA_VERSION
+
+
 def _validate_day_vote_technical_abstention_lineage(
     db: Session,
     *,
@@ -3050,7 +3057,7 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
         or supporting_payload.get("target_player_id") is not None
         or supporting_payload.get("model_generation_policy_schema_version")
-        != MODEL_GENERATION_POLICY_SCHEMA_VERSION
+        != _frozen_generation_policy_schema_version(game)
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
 

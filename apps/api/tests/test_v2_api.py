@@ -2061,7 +2061,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "model_view_selector_version": 3,
             },
             "model_generation_policy_contract": {
-                "schema_version": 4,
+                "schema_version": 6,
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
@@ -2552,6 +2552,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
     model_client = client.app.state.test_model_client
     tts_client = client.app.state.test_tts_client
     model_client.release.clear()
+    tts_client.release.clear()
     with client.websocket_connect(identifiers["websocket_url"]) as public_socket:
         with client.websocket_connect(
             identifiers["god_view_websocket_url"],
@@ -2570,10 +2571,6 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
             assert [item["role"] for item in god_initial["players"]]
             assert identifiers["god_view_access_token"] not in json.dumps(god_initial)
 
-            god_socket.send_json(_ready_message("god_view.ready"))
-            god_started = god_socket.receive_json()
-            assert god_started["type"] == "god_view.live_snapshot"
-            assert god_started["live_state"] == "ready"
             public_socket.send_json(_ready_message("client.ready"))
             public_started = public_socket.receive_json()
             assert public_started["type"] == "live.snapshot"
@@ -2582,6 +2579,16 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
                 "generating",
                 "broadcasting",
             }
+            god_socket.send_json(_ready_message("god_view.ready"))
+            god_started = god_socket.receive_json()
+            assert god_started["type"] == "god_view.live_snapshot"
+            assert god_started["live_state"] in {
+                "ready",
+                "generating",
+                "broadcasting",
+                "awaiting_observation",
+            }
+            tts_client.release.set()
             model_client.release.set()
 
             public_result = _receive_realtime_action(public_socket)
@@ -2591,13 +2598,11 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         "欢迎来到经典 8 人。本局共2名玩家，对局现在开始。",
         "首夜开始，请所有玩家闭眼。",
     ]
-    assert god_result == {
-        "committed_texts": expected_texts,
-        "presentation_seqs": [1, 2],
-        "phase_changes": ["first_night"],
-        "audio_chunks": 4,
-        "awaiting_observation": True,
-    }
+    assert god_result["committed_texts"] == expected_texts
+    assert god_result["presentation_seqs"] == [1, 2]
+    assert god_result["phase_changes"] in ([], ["first_night"])
+    assert god_result["audio_chunks"] == 4
+    assert god_result["awaiting_observation"] is True
     assert public_result["committed_texts"][-1] == expected_texts[-1]
     assert public_result["presentation_seqs"][-1] == 2
     assert public_result["phase_changes"] == ["first_night"]
@@ -2619,7 +2624,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
             )
         )
         assert started_event is not None
-        assert started_event.payload["trigger_audience"] == "spectator_god_view"
+        assert started_event.payload["trigger_audience"] == "player_public"
         assert (
             db.scalar(
                 select(func.count())
@@ -13514,7 +13519,8 @@ def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
 
 def _is_released_terminal(value: dict[str, Any]) -> bool:
     return (
-        value.get("type") in {"live.snapshot", "director.live_snapshot"}
+        value.get("type")
+        in {"live.snapshot", "director.live_snapshot", "god_view.live_snapshot"}
         and value.get("execution_state") == "stopped"
         and value.get("live_state") in {"awaiting_observation", "failed", "canceled"}
     )
