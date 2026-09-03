@@ -134,6 +134,8 @@ Live V2 不得导入、复用、包装、复制或改名迁移以下旧业务实
 
 ## 6. 发言、语音与保存准则
 
+对局时间线与播放时间线必须拆开：Match 在 `speech_sealed`（或 silent decision 提交）后立刻推进；Presentation 串行 TTS 并只推进 `playback_cursor`。观众页跟播放游标，上帝视角 / Admin 跟对局真状态。
+
 公开发言使用一条明确的生命周期：
 
 `speech_opened -> segment_committed* -> speech_sealed -> audio_drained_or_failed -> speech_closed`
@@ -152,8 +154,8 @@ Live V2 不得导入、复用、包装、复制或改名迁移以下旧业务实
 10. 单个观众的播放 ACK 只能用于遥测或本地资源释放，不能控制整局直播和其他观众的游戏推进。
 11. 每个公开语音分段都必须保存为全新的 V2 语音资产，不复用旧语音表、旧语音任务或旧文件命名空间。
 12. TTS 产生的同一份有序 PCM 必须同时交给实时广播和 V2 语音保存器，禁止为保存再次请求 TTS，也禁止直播改为读取保存文件。
-13. 保存完成必须校验 sample 数、时长和 PCM 哈希；保存资产与实际广播源不一致时，本次动作不得成功。
-14. 保存失败必须产生明确的 `recording` 失败并停止当前动作，不能留下“对局成功但语音缺失”的记录。
+13. 保存完成必须校验 sample 数、时长和 PCM 哈希；保存资产与实际广播源不一致时，该条播放标 `presentation_failed`，对局已提交的决策不变。
+14. 保存失败必须产生明确的 `presentation_failed` 并前进 `playback_cursor`，不能回写对局失败，也不能留下“播放成功但语音缺失”的记录。
 15. 保存语音供 Admin V2 对局记录和未来独立 Replay 使用，但不得出现在普通 Live snapshot 中，也不得成为直播补播或重连队列。
 
 ## 7. 画面与字幕准则
