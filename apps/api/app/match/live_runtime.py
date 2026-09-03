@@ -10,6 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import WebSocket
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, settings
@@ -52,7 +53,7 @@ from app.match.model_generation_policy_contract import (
 )
 from app.match.night_repository import NightRepository
 from app.match.match_repository import MatchRepository
-from app.match.models import GameRecord, GameRun
+from app.match.models import GameRecord, GameRecordEvent, GameRun
 from app.match.public_projection import (
     project_public_player_seats,
     project_public_role_assignment_status,
@@ -611,6 +612,15 @@ class LiveRuntime:
             }
             presentation = current_presentation(db, game_id, audience=audience)
             states = player_state_map(db, game_id)
+            follow_playback = audience in {"player_public", "spectator_directed"}
+            presented_phase = (
+                _presented_game_phase(db, game) if follow_playback else _game_phase(game)
+            )
+            playback_states = (
+                _playback_visible_player_states(db, game=game, states=states)
+                if follow_playback
+                else states
+            )
             current = None
             if presentation is not None and presentation.action_id is not None:
                 current = CurrentPresentationResponse(
@@ -633,19 +643,20 @@ class LiveRuntime:
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
                     **runtime_fields,
-                    game_phase=_game_phase(game),
+                    game_phase=presented_phase,
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
+                    playback_cursor=game.playback_cursor,
                     server_time=server_now(),
                     rule=project_public_rule_snapshot(game.rule_snapshot),
                     players=project_god_view_player_identities(
                         players_snapshot=game.players_snapshot,
                         assignments=god_view_role_assignments(db, game.game_id),
-                        player_states=states,
+                        player_states=playback_states,
                     ),
                     current_scene=project_director_scene(
-                        phase_id=game.phase_id,
-                        phase_state=game.phase_state,
+                        phase_id=presented_phase.phase_id,
+                        phase_state=presented_phase.phase_state,
                         action_context=current_action_context(db, game.game_id),
                     ),
                     current_presentation=current,
@@ -659,6 +670,7 @@ class LiveRuntime:
                     game_phase=_game_phase(game),
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
+                    playback_cursor=game.playback_cursor,
                     server_time=server_now(),
                     rule=project_public_rule_snapshot(game.rule_snapshot),
                     players=project_god_view_player_identities(
@@ -675,14 +687,15 @@ class LiveRuntime:
                     run_id=game.current_run_id,
                     live_state=_live_state(game.status),
                     **runtime_fields,
-                    game_phase=_game_phase(game),
+                    game_phase=presented_phase,
                     match_state=_match_state(match),
                     latest_presentation_seq=game.last_presentation_seq,
+                    playback_cursor=game.playback_cursor,
                     server_time=server_now(),
                     public_rule=project_public_rule_snapshot(game.rule_snapshot),
                     public_players=project_public_player_seats(
                         game.players_snapshot,
-                        player_states=states,
+                        player_states=playback_states,
                     ),
                     public_role_assignment=project_public_role_assignment_status(
                         role_assignment_count(db, game.game_id)
@@ -840,6 +853,91 @@ def _validate_ready(
     expected = {"encoding": "pcm_s16le", "sample_rate": 24000, "channels": 1}
     if any(audio.get(key) != value for key, value in expected.items()):
         raise ClientProtocolError("unsupported_audio_capability")
+
+
+class _PlaybackVisiblePlayerState:
+    def __init__(self, *, alive: bool, death_cause: str | None) -> None:
+        self.alive = alive
+        self.death_cause = death_cause
+
+
+def _presented_game_phase(db: Session, game: Any) -> GamePhaseResponse:
+    cursor = int(getattr(game, "playback_cursor", 0) or 0)
+    events = list(
+        db.scalars(
+            select(GameRecordEvent)
+            .where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.event_type == "game_phase_changed",
+            )
+            .order_by(GameRecordEvent.record_seq)
+        )
+    )
+    chosen: dict[str, Any] | None = None
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        reveal = payload.get("reveal_presentation_seq", 0)
+        if not isinstance(reveal, int) or isinstance(reveal, bool):
+            reveal = 0
+        if reveal <= cursor:
+            chosen = payload
+    if chosen is None:
+        return _game_phase(game)
+    phase_seq = chosen.get("phase_seq")
+    phase_id = chosen.get("phase_id")
+    phase_state = chosen.get("phase_state")
+    if (
+        not isinstance(phase_seq, int)
+        or isinstance(phase_seq, bool)
+        or not isinstance(phase_id, str)
+        or not isinstance(phase_state, str)
+    ):
+        return _game_phase(game)
+    return GamePhaseResponse(
+        phase_seq=phase_seq,
+        phase_id=phase_id,
+        phase_state=phase_state,
+    )
+
+
+def _unrevealed_dead_player_ids(db: Session, game: Any) -> set[str]:
+    cursor = int(getattr(game, "playback_cursor", 0) or 0)
+    hidden: set[str] = set()
+    events = list(
+        db.scalars(
+            select(GameRecordEvent).where(
+                GameRecordEvent.game_id == game.game_id,
+                GameRecordEvent.event_type == "dawn_public_result",
+            )
+        )
+    )
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        reveal = payload.get("reveal_presentation_seq")
+        if not isinstance(reveal, int) or isinstance(reveal, bool) or reveal <= cursor:
+            continue
+        ids = payload.get("dead_player_ids")
+        if isinstance(ids, list):
+            hidden.update(item for item in ids if isinstance(item, str) and item)
+    return hidden
+
+
+def _playback_visible_player_states(
+    db: Session,
+    *,
+    game: Any,
+    states: dict[str, Any],
+) -> dict[str, Any]:
+    hidden = _unrevealed_dead_player_ids(db, game)
+    if not hidden:
+        return states
+    visible: dict[str, Any] = {}
+    for player_id, state in states.items():
+        if player_id in hidden:
+            visible[player_id] = _PlaybackVisiblePlayerState(alive=True, death_cause=None)
+        else:
+            visible[player_id] = state
+    return visible
 
 
 def _live_state(status: str) -> str:

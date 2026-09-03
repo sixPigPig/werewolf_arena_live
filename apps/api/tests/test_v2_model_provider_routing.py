@@ -470,7 +470,8 @@ def test_responses_payload_keeps_frozen_policy_but_omits_internal_mode() -> None
 
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["reasoning_effort"] == "low"
-    assert payload["max_output_tokens"] == 4096
+    assert "max_output_tokens" not in payload
+    assert "max_tokens" not in payload
     assert "max_tokens_mode" not in payload
 
 
@@ -494,7 +495,7 @@ def test_non_thinking_model_omits_unsupported_thinking_fields() -> None:
         target=target,
     )
 
-    assert payload["max_output_tokens"] == 512
+    assert "max_output_tokens" not in payload
     assert "thinking" not in payload
     assert "reasoning_effort" not in payload
     assert "max_tokens_mode" not in payload
@@ -515,17 +516,18 @@ def test_call_budget_caps_frozen_model_output_budget() -> None:
         supports_thinking=True,
     )
 
-    assert payload["max_output_tokens"] == 512
+    assert "max_output_tokens" not in payload
     assert "max_tokens_mode" not in payload
 
 
-def test_request_payload_rejects_missing_output_budget() -> None:
-    with pytest.raises(ModelError, match="model_parameters_invalid"):
-        build_model_request_payload(
-            _target_action_context(),
-            decision=True,
-            model_id="plain-model",
-        )
+def test_request_payload_omits_output_budget_when_unspecified() -> None:
+    payload = build_model_request_payload(
+        _target_action_context(),
+        decision=True,
+        model_id="plain-model",
+    )
+    assert "max_output_tokens" not in payload
+    assert "max_tokens" not in payload
 
 
 def test_responses_sampling_is_filtered_by_model_policy_not_provider() -> None:
@@ -1154,7 +1156,8 @@ def test_agent_plan_target_uses_ark_responses_endpoint_and_credentials() -> None
     assert "input" in payload
     assert "messages" not in payload
     assert payload["thinking"] == {"type": "disabled"}
-    assert payload["max_output_tokens"] == 512
+    assert "max_output_tokens" not in payload
+    assert "max_tokens" not in payload
     assert payload["temperature"] == 0.2
     assert "frequency_penalty" not in payload
     assert "presence_penalty" not in payload
@@ -1208,7 +1211,8 @@ def test_deepseek_target_uses_official_chat_completions_endpoint_and_credentials
     assert "messages" in payload
     assert "input" not in payload
     assert payload["thinking"] == {"type": "enabled"}
-    assert payload["max_tokens"] == 2048
+    assert "max_tokens" not in payload
+    assert "max_output_tokens" not in payload
     assert "temperature" not in payload
 
 
@@ -1577,7 +1581,7 @@ def test_whitespace_text_delta_starts_token_clock_but_not_visible_text_clock() -
     assert first_text.elapsed_ms > first_token.elapsed_ms
 
 
-def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
+def test_stalled_reasoning_completes_as_empty_visible_output_not_idle_timeout() -> None:
     class StalledSSEStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield (
@@ -1608,7 +1612,7 @@ def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_stream_idle_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -1617,12 +1621,12 @@ def test_stream_idle_timeout_distinguishes_stall_from_hard_timeout() -> None:
             )
         )
 
-    assert caught.value.timeout_scope == "stream_idle"
+    assert caught.value.timeout_scope is None
     assert caught.value.reasoning_delta_count == 1
     assert caught.value.first_token_seen is True
 
 
-def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
+def test_long_reasoning_only_stream_completes_as_empty_visible_output() -> None:
     class NeverEndingReasoningStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             for index in range(20):
@@ -1653,7 +1657,7 @@ def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -1662,7 +1666,7 @@ def test_attempt_hard_timeout_caps_continuously_progressing_reasoning() -> None:
             )
         )
 
-    assert caught.value.timeout_scope == "attempt_hard"
+    assert caught.value.timeout_scope is None
     assert caught.value.reasoning_delta_count >= 3
     assert caught.value.text_delta_count == 0
     assert caught.value.first_token_seen is True
@@ -2038,7 +2042,7 @@ def test_transport_reset_preserves_retry_diagnostics() -> None:
     assert caught.value.elapsed_ms is not None
 
 
-def test_first_token_timeout_includes_response_header_wait() -> None:
+def test_slow_response_headers_complete_as_empty_stream_not_first_token_timeout() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0.05)
         return httpx.Response(200, text="data: [DONE]\n\n")
@@ -2060,7 +2064,7 @@ def test_first_token_timeout_includes_response_header_wait() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_first_token_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_stream") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2070,12 +2074,13 @@ def test_first_token_timeout_includes_response_header_wait() -> None:
         )
 
     assert caught.value.retryable is True
-    assert caught.value.failure_stage == "response_headers"
-    assert caught.value.response_headers_seen is False
+    assert caught.value.failure_stage == "stream"
+    assert caught.value.response_headers_seen is True
     assert caught.value.first_token_seen is False
+    assert caught.value.timeout_scope is None
 
 
-def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
+def test_slow_response_headers_are_not_attempt_hard_timeout() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0.05)
         return httpx.Response(200, text="data: [DONE]\n\n")
@@ -2097,7 +2102,7 @@ def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_stream") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2106,12 +2111,13 @@ def test_attempt_hard_timeout_also_caps_response_header_wait() -> None:
             )
         )
 
-    assert caught.value.timeout_scope == "attempt_hard"
-    assert caught.value.failure_stage == "response_headers"
-    assert caught.value.response_headers_seen is False
+    assert caught.value.timeout_scope is None
+    assert caught.value.failure_stage == "stream"
+    assert caught.value.response_headers_seen is True
+    assert caught.value.first_token_seen is False
 
 
-def test_total_timeout_after_first_token_is_retryable() -> None:
+def test_reasoning_only_stream_after_first_token_is_empty_visible_not_hard_timeout() -> None:
     class DelayedSSEStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield (
@@ -2141,7 +2147,7 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2154,10 +2160,10 @@ def test_total_timeout_after_first_token_is_retryable() -> None:
     assert caught.value.failure_stage == "stream"
     assert caught.value.response_headers_seen is True
     assert caught.value.first_token_seen is True
-    assert caught.value.timeout_scope == "attempt_hard"
+    assert caught.value.timeout_scope is None
 
 
-def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
+def test_reasoning_only_stream_after_first_token_uses_uvloop_clock() -> None:
     uvloop = pytest.importorskip("uvloop")
 
     class DelayedSSEStream(httpx.AsyncByteStream):
@@ -2189,7 +2195,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
         },
     )
 
-    with pytest.raises(ModelError, match="model_attempt_hard_timeout") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         _run_with_uvloop(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2203,7 +2209,7 @@ def test_total_timeout_after_first_token_uses_uvloop_clock() -> None:
     assert caught.value.failure_stage == "stream"
     assert caught.value.response_headers_seen is True
     assert caught.value.first_token_seen is True
-    assert caught.value.timeout_scope == "attempt_hard"
+    assert caught.value.timeout_scope is None
 
 
 @pytest.mark.parametrize(
@@ -2278,7 +2284,7 @@ def test_rate_limit_preserves_retry_after_delay() -> None:
     assert caught.value.retry_after_seconds == 1.5
 
 
-def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -> None:
+def test_deepseek_reasoning_only_length_stop_reports_empty_visible_output() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -2312,7 +2318,7 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
         },
     )
 
-    with pytest.raises(ModelError, match="model_output_budget_exhausted") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),
@@ -2322,7 +2328,7 @@ def test_deepseek_reasoning_only_length_stop_reports_output_budget_exhausted() -
         )
 
     error = caught.value
-    assert model_failure_disposition(error).category == "output_budget"
+    assert model_failure_disposition(error).category == "machine_format"
     assert error.failure_stage == "stream"
     assert error.provider_request_id == "chatcmpl-budget"
     assert error.response_headers_seen is True
@@ -2428,7 +2434,7 @@ def test_responses_incomplete_max_output_tokens_preserves_usage_diagnostics() ->
         },
     )
 
-    with pytest.raises(ModelError, match="model_output_budget_exhausted") as caught:
+    with pytest.raises(ModelError, match="model_empty_visible_output") as caught:
         asyncio.run(
             client.generate_action_decision(
                 action_context=_action_context(),

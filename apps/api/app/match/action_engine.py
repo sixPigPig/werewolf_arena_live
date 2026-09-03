@@ -43,6 +43,7 @@ from app.match.model_generation_policy_contract import (
     RequiredTargetTechnicalOutcome,
     ResolvedModelGenerationPolicy,
     resolve_model_generation_action_policy,
+    technical_outcome_failure_category,
 )
 from app.match.model_observation import observe_model_speech
 from app.match.protocol import (
@@ -62,6 +63,7 @@ from app.match.repository import (
     ExecutionOwnershipLost,
     PresentationIdentity,
     RepositoryError,
+    SpeechDecisionCommit,
 )
 from app.match.tts_client import TtsError
 from app.match.voice_recorder import VoiceRecorder, VoiceRecordingError
@@ -357,10 +359,8 @@ class ActionTechnicalOutcome:
             or self.supporting_event_record_seq <= 0
         ):
             raise ValueError("technical outcome requires a supporting event record seq")
-        expected_category = (
-            "output_budget" if self.failure_mode == "output_budget_exhausted" else "timeout"
-        )
-        if self.failure.category != expected_category:
+        expected_category = technical_outcome_failure_category(self.failure_mode)
+        if expected_category is None or self.failure.category != expected_category:
             raise ValueError("technical outcome failure category does not match its mode")
 
 
@@ -416,6 +416,20 @@ class ActionResult:
                 raise ValueError("technical outcome result requires an action_id")
             if self.decision is not None or self.failure is not None:
                 raise ValueError("technical outcome result cannot carry a decision or failure")
+
+
+@dataclass
+class _PresentationJob:
+    claim: ActionClaim
+    spec: SpeechSpec
+    identity: PresentationIdentity
+    speech_text: str
+    speaker: str | None
+    sentence_ms: int
+    judge_configuration: RuntimeJudgeConfiguration | None
+    tts_client: TtsPort | None
+    broadcaster: BroadcastPort
+    on_presentation_closed: Callable[[PresentationIdentity], None] | None
 
 
 @dataclass(frozen=True)
@@ -736,6 +750,8 @@ class ActionEngine:
         self._model_retry_policy = model_retry_policy
         self._paused_model_actions: dict[str, _PausedModelActionWaiter] = {}
         self._paused_model_actions_lock = asyncio.Lock()
+        self._presentation_queues: dict[str, asyncio.Queue[Any]] = {}
+        self._presentation_workers: dict[str, asyncio.Task[None]] = {}
 
     def _tts_client_for_claim(self, claim: ActionClaim) -> TtsPort | None:
         if claim.audio_mode == "text_only":
@@ -751,6 +767,72 @@ class ActionEngine:
         if not bool(getattr(self._tts_client, "enabled", True)):
             raise RepositoryError("v2_audio_mode_unavailable")
         return self._tts_client
+
+    def _ensure_presentation_queue(self, game_id: str) -> asyncio.Queue[Any]:
+        queue = self._presentation_queues.get(game_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._presentation_queues[game_id] = queue
+        worker = self._presentation_workers.get(game_id)
+        if worker is None or worker.done():
+            self._presentation_workers[game_id] = asyncio.create_task(
+                self._drain_presentation_queue(game_id, queue),
+                name=f"presentation:{game_id}",
+            )
+        return queue
+
+    def _enqueue_presentation(self, job: _PresentationJob) -> None:
+        self._ensure_presentation_queue(job.claim.game_id).put_nowait(job)
+
+    async def drain_presentations(self, game_id: str) -> None:
+        queue = self._presentation_queues.get(game_id)
+        if queue is None:
+            return
+        await queue.put(None)
+        worker = self._presentation_workers.pop(game_id, None)
+        self._presentation_queues.pop(game_id, None)
+        if worker is not None:
+            await worker
+
+    async def abort_presentations(self, game_id: str) -> None:
+        queue = self._presentation_queues.pop(game_id, None)
+        worker = self._presentation_workers.pop(game_id, None)
+        if queue is not None:
+            while True:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            await queue.put(None)
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+    async def _drain_presentation_queue(
+        self,
+        game_id: str,
+        queue: asyncio.Queue[Any],
+    ) -> None:
+        while True:
+            job = await queue.get()
+            if job is None:
+                return
+            try:
+                await self._present_job(job)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Live V2 presentation failed without affecting match state",
+                    extra={"game_id": game_id, "action_id": job.claim.action_id},
+                )
+                try:
+                    await self._fail_presentation_job(job)
+                except Exception:
+                    logger.exception(
+                        "Live V2 could not close a failed presentation",
+                        extra={"game_id": game_id, "action_id": job.claim.action_id},
+                    )
 
     def check_cancellation(self, game_id: str) -> None:
         self._repository.check_cancellation(game_id)
@@ -1163,6 +1245,210 @@ class ActionEngine:
             broadcaster=broadcaster,
             spec=spec,
         )
+
+    async def _present_job(self, job: _PresentationJob) -> None:
+        claim = job.claim
+        spec = job.spec
+        identity = job.identity
+        broadcaster = job.broadcaster
+        self._repository.mark_presentation_presenting(identity=identity)
+        await broadcaster.set_current(identity, 0, audience=spec.audience)
+        await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
+        await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
+
+        def check_cancellation() -> None:
+            self._repository.check_cancellation(claim.game_id)
+
+        if job.tts_client is None:
+            self._repository.append_event(
+                game_id=claim.game_id,
+                event_type="tts_skipped",
+                audience=identity.audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "presentation_id": identity.presentation_id,
+                    "reason_code": "configured_text_only",
+                    "configured_audio_mode": "text_only",
+                    "delivery_mode": "text_only",
+                },
+            )
+            self._repository.complete_text_action(
+                identity=identity,
+                next_live_state=spec.success_live_state,
+                next_phase_state=spec.success_phase_state,
+                best_effort=spec.best_effort,
+            )
+            if job.on_presentation_closed is not None:
+                job.on_presentation_closed(identity)
+            await broadcaster.broadcast_json(
+                presentation_closed(
+                    identity,
+                    final_chunk_index=-1,
+                    final_sample_cursor=0,
+                ),
+                audience=spec.audience,
+            )
+            await broadcaster.set_current(None, 0, audience=spec.audience)
+            return
+        if identity.voice_asset_id is None:
+            raise RepositoryError("enabled TTS action has no voice asset")
+        tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
+        self._repository.append_event(
+            game_id=claim.game_id,
+            event_type="tts_stream_started",
+            audience=identity.audience,
+            payload={
+                "action_id": claim.action_id,
+                "presentation_id": identity.presentation_id,
+                "attempt_id": tts_attempt_id,
+                "tts_attempt_id": tts_attempt_id,
+                "sentence_ms": job.sentence_ms,
+                "speaker": job.speaker,
+                "dialect": spec.dialect,
+                "judge_configuration_version": (
+                    job.judge_configuration.version if job.judge_configuration is not None else None
+                ),
+            },
+        )
+        recorder = VoiceRecorder(
+            root=self._voice_root,
+            storage_key=identity.storage_key,
+            sample_rate=self._sample_rate,
+        )
+        try:
+            tts_started = time.monotonic()
+            official_end: float | None = None
+            sample_cursor = 0
+            chunk_index = 0
+            first_chunk = True
+            async for pcm in job.tts_client.synthesize(
+                text=job.speech_text,
+                attempt_id=tts_attempt_id,
+                speaker=job.speaker,
+                dialect=spec.dialect,
+                check_cancellation=check_cancellation,
+            ):
+                check_cancellation()
+                sample_count = recorder.append(pcm)
+                if first_chunk:
+                    first_chunk = False
+                    first_chunk_ms = round((time.monotonic() - tts_started) * 1000)
+                    for event_type in (
+                        "tts_first_chunk_received",
+                        "voice_recording_started",
+                        "audio_broadcast_started",
+                    ):
+                        self._repository.append_event(
+                            game_id=claim.game_id,
+                            event_type=event_type,
+                            audience=identity.audience,
+                            payload={
+                                "action_id": claim.action_id,
+                                "presentation_id": identity.presentation_id,
+                                "attempt_id": tts_attempt_id,
+                                "tts_attempt_id": tts_attempt_id,
+                                "voice_asset_id": identity.voice_asset_id,
+                                "first_chunk_ms": first_chunk_ms,
+                            },
+                        )
+                packet = audio_frame(
+                    identity,
+                    chunk_index=chunk_index,
+                    start_sample=sample_cursor,
+                    sample_count=sample_count,
+                    sample_rate=self._sample_rate,
+                    pcm=pcm,
+                )
+                next_sample_cursor = sample_cursor + sample_count
+                await broadcaster.broadcast_audio(
+                    packet,
+                    identity=identity,
+                    next_sample_cursor=next_sample_cursor,
+                    audience=spec.audience,
+                )
+                now = time.monotonic()
+                duration = sample_count / self._sample_rate
+                official_end = max(official_end or now, now) + duration
+                sample_cursor = next_sample_cursor
+                chunk_index += 1
+            if first_chunk or official_end is None:
+                raise TtsError("tts_empty_audio")
+            check_cancellation()
+            self._repository.mark_finalizing(
+                identity=identity,
+                tts_attempt_id=tts_attempt_id,
+                sample_count=sample_cursor,
+                best_effort=spec.best_effort,
+            )
+            recorded = recorder.finalize()
+            if recorded.sample_count != sample_cursor:
+                recorder.discard_finalized()
+                raise VoiceRecordingError("recorded sample count differs from broadcast")
+            self._repository.mark_voice_ready(
+                identity=identity,
+                tts_attempt_id=tts_attempt_id,
+                sample_count=recorded.sample_count,
+                duration_ms=recorded.duration_ms,
+                pcm_sha256=recorded.pcm_sha256,
+                size_bytes=recorded.size_bytes,
+            )
+            remaining = official_end - time.monotonic()
+            while remaining > 0:
+                await asyncio.sleep(min(remaining, 0.1))
+                check_cancellation()
+                remaining = official_end - time.monotonic()
+            check_cancellation()
+            self._repository.complete_action(
+                identity=identity,
+                tts_attempt_id=tts_attempt_id,
+                final_chunk_index=chunk_index - 1,
+                final_sample_cursor=sample_cursor,
+                next_live_state=spec.success_live_state,
+                next_phase_state=spec.success_phase_state,
+                best_effort=spec.best_effort,
+            )
+            if job.on_presentation_closed is not None:
+                job.on_presentation_closed(identity)
+            await broadcaster.broadcast_json(
+                presentation_closed(
+                    identity,
+                    final_chunk_index=chunk_index - 1,
+                    final_sample_cursor=sample_cursor,
+                ),
+                audience=spec.audience,
+            )
+            await broadcaster.set_current(
+                None,
+                sample_cursor,
+                audience=spec.audience,
+            )
+        except Exception:
+            try:
+                recorder.discard_finalized()
+            except Exception:
+                logger.warning(
+                    "Live V2 could not discard failed presentation recording",
+                    extra={"game_id": claim.game_id, "action_id": claim.action_id},
+                )
+            raise
+
+    async def _fail_presentation_job(self, job: _PresentationJob) -> None:
+        self._repository.fail_presentation(
+            identity=job.identity,
+            failure_kind="presentation",
+            failure_code="presentation_failed",
+        )
+        if job.on_presentation_closed is not None:
+            job.on_presentation_closed(job.identity)
+        await job.broadcaster.broadcast_json(
+            presentation_failed(
+                job.identity,
+                failure_kind="presentation",
+                failure_code="presentation_failed",
+            ),
+            audience=job.spec.audience,
+        )
+        await job.broadcaster.set_current(None, 0, audience=job.spec.audience)
 
     async def _run_model_action(
         self,
@@ -1695,17 +1981,22 @@ class ActionEngine:
                         )
                         model_request_started_recorded = True
                         check_cancellation()
-                        remaining = model_deadline - time.monotonic()
+                        remaining = (
+                            model_deadline - time.monotonic()
+                            if wall_clock_budget_enforced
+                            else float("inf")
+                        )
                         try:
-                            if remaining <= 0:
+                            if wall_clock_budget_enforced and remaining <= 0:
                                 raise ModelError(
                                     "model_total_timeout",
                                     failure_stage="action_budget",
                                     elapsed_ms=0,
                                 )
-                            request_timeout = min(
-                                remaining,
-                                retry_policy.attempt_total_seconds,
+                            request_timeout = (
+                                min(remaining, retry_policy.attempt_total_seconds)
+                                if wall_clock_budget_enforced
+                                else None
                             )
                             timeout_stage = (
                                 "attempt_budget"
@@ -1839,7 +2130,11 @@ class ActionEngine:
                                 family_machine_format_retry_available
                                 and family_output_budget_retry_available
                             )
-                            remaining = model_deadline - time.monotonic()
+                            remaining = (
+                                model_deadline - time.monotonic()
+                                if wall_clock_budget_enforced
+                                else float("inf")
+                            )
                             delay_seconds = _model_retry_delay_seconds(
                                 disposition=disposition,
                                 exc=exc,
@@ -2713,9 +3008,26 @@ class ActionEngine:
                 actor_kind=spec.actor_kind,
                 actor_id=spec.actor_id,
             )
-            await broadcaster.set_current(identity, 0, audience=spec.audience)
-            await broadcaster.broadcast_json(presentation_opened(identity), audience=spec.audience)
-            await broadcaster.broadcast_json(segment_committed(identity), audience=spec.audience)
+            committed = self._repository.commit_speech_decision(
+                claim=claim,
+                identity=identity,
+                next_live_state=spec.success_live_state,
+                next_phase_state=spec.success_phase_state,
+                best_effort=spec.best_effort,
+                source_attempt_id=model_attempt_id,
+                source_model_response_record_seq=model_response_record_seq,
+                provider_request_id=(
+                    model_decision.provider_request_id if model_decision is not None else None
+                ),
+            )
+            if isinstance(committed, SpeechDecisionCommit):
+                terminal_event_record_seq = committed.record_seq
+                if committed.phase_transition is not None:
+                    await broadcaster.broadcast_json(
+                        game_phase_changed(committed.phase_transition)
+                    )
+            else:
+                terminal_event_record_seq = committed
             if on_presentation_opened is not None:
                 on_presentation_opened(identity)
             if not spec.best_effort:
@@ -2723,211 +3035,24 @@ class ActionEngine:
                     live_state(
                         game_id=claim.game_id,
                         run_id=claim.run_id,
-                        state="broadcasting",
+                        state=spec.success_live_state,
                     ),
                     audience=spec.audience,
                 )
-            if tts_client is None:
-                self._repository.append_event(
-                    game_id=claim.game_id,
-                    event_type="tts_skipped",
-                    audience=identity.audience,
-                    payload={
-                        "action_id": claim.action_id,
-                        "presentation_id": identity.presentation_id,
-                        "reason_code": "configured_text_only",
-                        "configured_audio_mode": "text_only",
-                        "delivery_mode": "text_only",
-                    },
-                )
-                self._repository.complete_text_action(
+            self._enqueue_presentation(
+                _PresentationJob(
+                    claim=claim,
+                    spec=spec,
                     identity=identity,
-                    next_live_state=spec.success_live_state,
-                    next_phase_state=spec.success_phase_state,
-                    best_effort=spec.best_effort,
+                    speech_text=speech_text,
+                    speaker=speaker,
+                    sentence_ms=sentence_ms,
+                    judge_configuration=judge_configuration,
+                    tts_client=tts_client,
+                    broadcaster=broadcaster,
+                    on_presentation_closed=on_presentation_closed,
                 )
-                if on_presentation_closed is not None:
-                    on_presentation_closed(identity)
-                await broadcaster.broadcast_json(
-                    presentation_closed(
-                        identity,
-                        final_chunk_index=-1,
-                        final_sample_cursor=0,
-                    ),
-                    audience=spec.audience,
-                )
-                await broadcaster.set_current(None, 0, audience=spec.audience)
-                if spec.success_live_state == "awaiting_observation" and not spec.best_effort:
-                    await broadcaster.broadcast_json(
-                        live_state(
-                            game_id=claim.game_id,
-                            run_id=claim.run_id,
-                            state="awaiting_observation",
-                        ),
-                        audience=spec.audience,
-                    )
-                return ActionResult(
-                    action_id=claim.action_id,
-                    decision=model_decision,
-                    model_response_record_seq=model_response_record_seq,
-                    terminal_event_record_seq=terminal_event_record_seq,
-                    model_attempt_id=model_attempt_id,
-                    request_payload_sha256=request_payload_sha256,
-                    projected_context_sha256=projected_context_sha256,
-                    projected_known_event_refs=projected_known_event_refs,
-                    projected_known_events_sha256=projected_known_events_sha256,
-                )
-            if identity.voice_asset_id is None:
-                raise RepositoryError("enabled TTS action has no voice asset")
-            tts_attempt_id = f"v2_tts_{uuid4().hex[:16]}"
-            self._repository.append_event(
-                game_id=claim.game_id,
-                event_type="tts_stream_started",
-                audience=identity.audience,
-                payload={
-                    "action_id": claim.action_id,
-                    "presentation_id": identity.presentation_id,
-                    "attempt_id": tts_attempt_id,
-                    "tts_attempt_id": tts_attempt_id,
-                    "sentence_ms": sentence_ms,
-                    "speaker": speaker,
-                    "dialect": spec.dialect,
-                    "judge_configuration_version": (
-                        judge_configuration.version if judge_configuration is not None else None
-                    ),
-                },
             )
-            recorder = VoiceRecorder(
-                root=self._voice_root,
-                storage_key=identity.storage_key,
-                sample_rate=self._sample_rate,
-            )
-            tts_started = time.monotonic()
-            official_end: float | None = None
-            sample_cursor = 0
-            chunk_index = 0
-            first_chunk = True
-            async for pcm in tts_client.synthesize(
-                text=speech_text,
-                attempt_id=tts_attempt_id,
-                speaker=speaker,
-                dialect=spec.dialect,
-                check_cancellation=check_cancellation,
-            ):
-                check_cancellation()
-                sample_count = recorder.append(pcm)
-                if first_chunk:
-                    first_chunk = False
-                    first_chunk_ms = round((time.monotonic() - tts_started) * 1000)
-                    for event_type in (
-                        "tts_first_chunk_received",
-                        "voice_recording_started",
-                        "audio_broadcast_started",
-                    ):
-                        self._repository.append_event(
-                            game_id=claim.game_id,
-                            event_type=event_type,
-                            audience=identity.audience,
-                            payload={
-                                "action_id": claim.action_id,
-                                "presentation_id": identity.presentation_id,
-                                "attempt_id": tts_attempt_id,
-                                "tts_attempt_id": tts_attempt_id,
-                                "voice_asset_id": identity.voice_asset_id,
-                                "first_chunk_ms": first_chunk_ms,
-                            },
-                        )
-                packet = audio_frame(
-                    identity,
-                    chunk_index=chunk_index,
-                    start_sample=sample_cursor,
-                    sample_count=sample_count,
-                    sample_rate=self._sample_rate,
-                    pcm=pcm,
-                )
-                next_sample_cursor = sample_cursor + sample_count
-                await broadcaster.broadcast_audio(
-                    packet,
-                    identity=identity,
-                    next_sample_cursor=next_sample_cursor,
-                    audience=spec.audience,
-                )
-                now = time.monotonic()
-                duration = sample_count / self._sample_rate
-                official_end = max(official_end or now, now) + duration
-                sample_cursor = next_sample_cursor
-                chunk_index += 1
-            if first_chunk or official_end is None:
-                raise TtsError("tts_empty_audio")
-            check_cancellation()
-            self._repository.mark_finalizing(
-                identity=identity,
-                tts_attempt_id=tts_attempt_id,
-                sample_count=sample_cursor,
-                best_effort=spec.best_effort,
-            )
-            if not spec.best_effort:
-                await broadcaster.broadcast_json(
-                    live_state(
-                        game_id=claim.game_id,
-                        run_id=claim.run_id,
-                        state="finalizing",
-                    ),
-                    audience=spec.audience,
-                )
-            recorded = recorder.finalize()
-            if recorded.sample_count != sample_cursor:
-                recorder.discard_finalized()
-                recorder = None
-                raise VoiceRecordingError("recorded sample count differs from broadcast")
-            self._repository.mark_voice_ready(
-                identity=identity,
-                tts_attempt_id=tts_attempt_id,
-                sample_count=recorded.sample_count,
-                duration_ms=recorded.duration_ms,
-                pcm_sha256=recorded.pcm_sha256,
-                size_bytes=recorded.size_bytes,
-            )
-            recorder = None
-            remaining = official_end - time.monotonic()
-            while remaining > 0:
-                await asyncio.sleep(min(remaining, 0.1))
-                check_cancellation()
-                remaining = official_end - time.monotonic()
-            check_cancellation()
-            self._repository.complete_action(
-                identity=identity,
-                tts_attempt_id=tts_attempt_id,
-                final_chunk_index=chunk_index - 1,
-                final_sample_cursor=sample_cursor,
-                next_live_state=spec.success_live_state,
-                next_phase_state=spec.success_phase_state,
-                best_effort=spec.best_effort,
-            )
-            if on_presentation_closed is not None:
-                on_presentation_closed(identity)
-            await broadcaster.broadcast_json(
-                presentation_closed(
-                    identity,
-                    final_chunk_index=chunk_index - 1,
-                    final_sample_cursor=sample_cursor,
-                ),
-                audience=spec.audience,
-            )
-            await broadcaster.set_current(
-                None,
-                sample_cursor,
-                audience=spec.audience,
-            )
-            if spec.success_live_state == "awaiting_observation" and not spec.best_effort:
-                await broadcaster.broadcast_json(
-                    live_state(
-                        game_id=claim.game_id,
-                        run_id=claim.run_id,
-                        state="awaiting_observation",
-                    ),
-                    audience=spec.audience,
-                )
             return ActionResult(
                 action_id=claim.action_id,
                 decision=model_decision,
@@ -3688,8 +3813,13 @@ def _technical_target_exhaustion_outcome(
 ) -> tuple[RequiredTargetTechnicalOutcome, RequiredTargetExhaustionFailureMode] | None:
     target_policy = generation_policy.required_target_exhaustion
     if (
-        generation_policy.schema_version not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
-        or generation_policy.blocking_required_target_output_timeout_mode != "technical_outcome"
+        generation_policy.schema_version
+        not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
+        or (
+            generation_policy.schema_version in {4, 5}
+            and generation_policy.blocking_required_target_output_timeout_mode
+            != "technical_outcome"
+        )
         or target_policy is None
         or spec.target_exhaustion_outcome is None
         or spec.decision_contract.kind != "target"
@@ -3711,6 +3841,14 @@ def _technical_target_exhaustion_outcome(
 def _required_target_exhaustion_failure_mode(
     exc: ModelError,
 ) -> RequiredTargetExhaustionFailureMode | None:
+    if exc.code == "model_empty_visible_output":
+        return "empty_visible_output"
+    if exc.code in {
+        "model_decision_unparseable",
+        "model_output_unparseable",
+        "model_invalid_json",
+    } or isinstance(exc, QualityError):
+        return "unparseable_output"
     if exc.code == "model_output_budget_exhausted":
         return "output_budget_exhausted"
     if exc.code == "model_attempt_hard_timeout" or exc.timeout_scope == "attempt_hard":

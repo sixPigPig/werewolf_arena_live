@@ -26,7 +26,8 @@ from app.match.model_context import (
     project_model_action_context_with_metadata,
 )
 from app.match.model_generation_policy_contract import (
-    MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS,
+    TECHNICAL_OUTCOME_FAILURE_MODES,
+    frozen_model_generation_policy_schema_version,
     resolve_model_generation_policy_contract,
 )
 from app.match.model_parameters import (
@@ -116,6 +117,7 @@ class MatchSnapshot:
     audio_mode: AudioMode
     players: tuple[MatchPlayer, ...]
     public_history: tuple[dict[str, Any], ...]
+    last_presentation_seq: int = 0
     pre_exile_pipeline_contract: ResolvedPreExilePipelineContract = field(
         default_factory=lambda: resolve_pre_exile_pipeline_contract({})
     )
@@ -201,6 +203,8 @@ class DayVoteCommit:
             "attempt_hard_timeout",
             "action_wall_timeout",
             "model_failure_degraded",
+            "empty_visible_output",
+            "unparseable_output",
         ]
         | None
     ) = None
@@ -262,7 +266,7 @@ class MatchRepository:
             run = _run(db, run_id)
             if (
                 run.game_id != game_id
-                or game.status not in {"broadcasting", "finalizing"}
+                or game.status not in {"broadcasting", "finalizing", "ready", "generating"}
                 or run.status != game.status
             ):
                 raise RepositoryError("day speech prefetch predecessor is not presenting")
@@ -276,21 +280,16 @@ class MatchRepository:
             )
             if latest_record_seq != cutoff:
                 raise RepositoryError("day speech prefetch record cutoff is inconsistent")
-            active_presentations = list(
-                db.scalars(
-                    select(LivePresentation)
-                    .where(
-                        LivePresentation.game_id == game_id,
-                        LivePresentation.state == "active",
-                    )
-                    .order_by(LivePresentation.presentation_seq)
+            predecessor = db.scalar(
+                select(LivePresentation).where(
+                    LivePresentation.game_id == game_id,
+                    LivePresentation.presentation_id == predecessor_presentation_id,
                 )
             )
-            if len(active_presentations) != 1:
+            if predecessor is None or predecessor.state not in {"active", "queued"}:
                 raise RepositoryError(
-                    "day speech prefetch predecessor is not the unique active presentation"
+                    "day speech prefetch predecessor is not an open presentation"
                 )
-            predecessor = active_presentations[0]
             technical_skip_predecessor = predecessor_turn_player_id is not None
             if technical_skip_predecessor and resolve_day_speech_pipeline_contract(
                 game.rule_snapshot
@@ -1382,6 +1381,7 @@ class MatchRepository:
                 previous_phase_id=game.phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1394,6 +1394,7 @@ class MatchRepository:
                     "previous_phase_state": previous_phase_state,
                     "phase_id": game.phase_id,
                     "phase_state": game.phase_state,
+                    "reveal_presentation_seq": game.last_presentation_seq,
                 },
             )
             return transition
@@ -1994,6 +1995,7 @@ class MatchRepository:
                 previous_phase_id=previous_phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -2006,6 +2008,7 @@ class MatchRepository:
                     "phase_id": transition.phase_id,
                     "phase_state": transition.phase_state,
                     "reason": reason,
+                    "reveal_presentation_seq": transition.reveal_presentation_seq,
                 },
             )
             return transition
@@ -2283,6 +2286,7 @@ def _match_snapshot(
         audio_mode=delivery_audio_mode(game.delivery_snapshot),
         players=_players(db, game),
         public_history=public_history,
+        last_presentation_seq=game.last_presentation_seq,
     )
 
 
@@ -3136,6 +3140,10 @@ def _validate_day_vote_batch(
         raise RepositoryError("day vote batch already has durable private decisions")
 
 
+def _frozen_generation_policy_schema_version(game: GameRecord) -> int | None:
+    return frozen_model_generation_policy_schema_version(game.rule_snapshot)
+
+
 def _validate_day_vote_technical_abstention_lineage(
     db: Session,
     *,
@@ -3157,12 +3165,7 @@ def _validate_day_vote_technical_abstention_lineage(
         or not isinstance(failure_episode_id, str)
         or not failure_episode_id
         or failure_mode
-        not in {
-            "output_budget_exhausted",
-            "attempt_hard_timeout",
-            "action_wall_timeout",
-            "model_failure_degraded",
-        }
+        not in {*TECHNICAL_OUTCOME_FAILURE_MODES, "model_failure_degraded"}
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
 
@@ -3216,7 +3219,7 @@ def _validate_day_vote_technical_abstention_lineage(
         or supporting_payload.get("target_exhaustion_failure_mode") != failure_mode
         or supporting_payload.get("target_player_id") is not None
         or supporting_payload.get("model_generation_policy_schema_version")
-        not in MODEL_GENERATION_POLICY_SUPPORTED_SCHEMA_VERSIONS
+        != _frozen_generation_policy_schema_version(game)
     ):
         raise RepositoryError("day vote technical abstention lineage is invalid")
 

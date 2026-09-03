@@ -72,7 +72,8 @@ from app.match.model_generation_policy_contract import (
     is_supported_model_generation_policy_contract,
     resolve_model_generation_action_policy,
     resolve_model_generation_policy_contract,
-    v4_model_generation_policy_contract,
+    schema_v4_model_generation_policy_contract,
+    schema_v5_model_generation_policy_contract,
 )
 from app.match.live_runtime import _audience_targets
 from app.match.protocol import LiveProtocolError, audio_frame, day_progress
@@ -744,9 +745,56 @@ def _model_generation_policy_v2() -> dict[str, Any]:
     return contract
 
 
-def test_model_generation_policy_v5_emits_background_generation() -> None:
+def test_model_generation_policy_v6_is_emitted_and_v4_remains_supported() -> None:
+    expected = current_model_generation_policy_contract()
+    assert expected["schema_version"] == 6
+    assert expected["profiles"] == {
+        "strategic_full": {},
+        "recoverable_public_speech": {},
+        "isolated_auxiliary": {},
+    }
+    assert "action_wall_timeout_ms" not in expected["execution"]
+    assert expected["execution"]["required_target_exhaustion"]["eligible_failure_modes"] == [
+        "empty_visible_output",
+        "unparseable_output",
+    ]
+    assert resolve_model_generation_policy_contract({}) is None
+    frozen = freeze_model_generation_policy_contract(
+        {
+            "rule_set": {"id": "classic"},
+            "model_generation_policy_contract": {"schema_version": 999},
+        }
+    )
+    assert frozen["model_generation_policy_contract"] == expected
+    resolved = resolve_model_generation_policy_contract(frozen)
+    assert resolved == expected
+    assert is_supported_model_generation_policy_contract(resolved) is True
+    assert is_supported_model_generation_policy_contract(
+        schema_v4_model_generation_policy_contract()
+    ) is True
+    assert is_supported_model_generation_policy_contract(
+        schema_v5_model_generation_policy_contract()
+    ) is True
+    assert is_supported_model_generation_policy_contract(_model_generation_policy_v2()) is False
+    assert (
+        is_supported_model_generation_policy_contract(_legacy_model_generation_policy_v1())
+        is False
+    )
+    assert (
+        project_public_rule_snapshot(
+            {
+                "day_speech_pipeline_contract": current_day_speech_pipeline_contract(),
+                "model_context_contract": {"model_context_schema_version": 11},
+                "model_generation_policy_contract": expected,
+            }
+        )
+        is None
+    )
+
+
+def test_model_generation_policy_v4_is_frozen_for_blocking_rolling_memory() -> None:
     expected = {
-        "schema_version": 5,
+        "schema_version": 4,
         "classification_version": 1,
         "enforcement": "observe_only",
         "reasoning_parameter_mode": "inherit_frozen_model_configuration",
@@ -795,65 +843,41 @@ def test_model_generation_policy_v5_emits_background_generation() -> None:
                 "transport_mode": "retry_then_pause",
                 "machine_format_mode": "retry_then_pause",
             },
-            "private_round_memory_mode": "background_generation",
+            "private_round_memory_mode": "blocking_generation",
         },
     }
 
-    assert current_model_generation_policy_contract() == expected
-    assert resolve_model_generation_policy_contract({}) is None
-    frozen = freeze_model_generation_policy_contract(
-        {
-            "rule_set": {"id": "classic"},
-            "model_generation_policy_contract": {"schema_version": 999},
-        }
+    assert schema_v4_model_generation_policy_contract() == expected
+    resolved = resolve_model_generation_policy_contract(
+        {"model_generation_policy_contract": expected}
     )
-    assert frozen["model_generation_policy_contract"] == expected
-    resolved = resolve_model_generation_policy_contract(frozen)
     assert resolved == expected
-    assert resolved is not frozen["model_generation_policy_contract"]
     assert is_supported_model_generation_policy_contract(resolved) is True
-    assert is_supported_model_generation_policy_contract(_model_generation_policy_v2()) is False
-    assert (
-        is_supported_model_generation_policy_contract(_legacy_model_generation_policy_v1())
-        is False
-    )
-    assert (
-        project_public_rule_snapshot(
-            {
-                "day_speech_pipeline_contract": current_day_speech_pipeline_contract(),
-                "model_context_contract": {"model_context_schema_version": 11},
-                "model_generation_policy_contract": expected,
-            }
-        )
-        is None
-    )
 
 
-def test_v5_emits_background_generation_and_v4_fixture_still_resolves() -> None:
-    v4 = v4_model_generation_policy_contract()
-    assert v4["schema_version"] == 4
-    assert v4["execution"]["private_round_memory_mode"] == "blocking_generation"
-    assert is_supported_model_generation_policy_contract(v4) is True
+def test_model_generation_policy_v5_keeps_background_generation() -> None:
+    v5 = schema_v5_model_generation_policy_contract()
+    assert v5["schema_version"] == 5
+    assert v5["execution"]["private_round_memory_mode"] == "background_generation"
+    assert is_supported_model_generation_policy_contract(v5) is True
     assert resolve_model_generation_policy_contract(
-        {"model_generation_policy_contract": v4}
-    ) == v4
-    current = current_model_generation_policy_contract()
-    assert current["schema_version"] == 5
-    assert current["execution"]["private_round_memory_mode"] == "background_generation"
-    v4_blocking_on_v5 = dict(current)
-    v4_blocking_on_v5["execution"] = dict(current["execution"])
-    v4_blocking_on_v5["execution"]["private_round_memory_mode"] = "blocking_generation"
-    assert is_supported_model_generation_policy_contract(v4_blocking_on_v5) is False
+        {"model_generation_policy_contract": v5}
+    ) == v5
+    v4 = schema_v4_model_generation_policy_contract()
     v5_on_v4 = dict(v4)
     v5_on_v4["execution"] = dict(v4["execution"])
     v5_on_v4["execution"]["private_round_memory_mode"] = "background_generation"
     assert is_supported_model_generation_policy_contract(v5_on_v4) is False
+    v4_blocking_on_v5 = dict(v5)
+    v4_blocking_on_v5["execution"] = dict(v5["execution"])
+    v4_blocking_on_v5["execution"]["private_round_memory_mode"] = "blocking_generation"
+    assert is_supported_model_generation_policy_contract(v4_blocking_on_v5) is False
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value.update(schema_version=6),
+        lambda value: value.update(schema_version=5),
         lambda value: value.update(schema_version=3.0),
         lambda value: value.update(enforcement="enabled"),
         lambda value: value.update(extra=True),
@@ -898,12 +922,10 @@ def test_model_generation_policy_present_unknown_or_malformed_fails_closed(
 def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    frozen = freeze_model_generation_policy_contract({})
-    original = frozen["model_generation_policy_contract"]
+    original = schema_v4_model_generation_policy_contract()
+    frozen = {"model_generation_policy_contract": original}
     changed = current_model_generation_policy_contract()
-    changed["profiles"]["recoverable_public_speech"]["reasoning_only_timeout_ms"] = 195_000
-    changed["profiles"]["isolated_auxiliary"]["reasoning_only_timeout_ms"] = 255_000
-    changed["profiles"]["recoverable_public_speech"]["timeout_max_attempts"] = 2
+    changed["execution"]["transport_max_attempts"] = 9
     monkeypatch.setattr(
         "app.match.model_generation_policy_contract.current_model_generation_policy_contract",
         lambda: changed,
@@ -917,6 +939,7 @@ def test_frozen_model_generation_policy_resolves_after_current_emitter_threshold
         original,
         action_type="day_debate_speech",
     )
+    assert resolved.schema_version == 4
     assert resolved.reasoning_only_timeout_ms == 180_000
     assert resolved.timeout_max_attempts == 1
 
@@ -946,27 +969,24 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     assert resolved.enforcement == "observe_only"
     assert resolved.profile == profile
     assert resolved.source == "explicit_action_profile"
-    assert resolved.schema_version == 5
+    assert resolved.schema_version == 6
     assert resolved.classification_version == 1
     assert resolved.reasoning_parameter_mode == ("inherit_frozen_model_configuration")
-    assert resolved.reasoning_only_timeout_ms == (
-        240_000 if profile == "isolated_auxiliary" else 180_000
-    )
-    assert resolved.timeout_max_attempts == 1
+    assert resolved.reasoning_only_timeout_ms is None
+    assert resolved.timeout_max_attempts is None
     assert resolved.automatic_retry_enforcement == "enforce"
-    assert resolved.output_budget_max_attempts == 1
-    assert resolved.attempt_hard_timeout_max_attempts == 1
+    assert resolved.output_budget_max_attempts is None
+    assert resolved.attempt_hard_timeout_max_attempts is None
     assert resolved.transport_max_attempts == 2
     assert resolved.post_token_transport_max_attempts == 1
     assert resolved.queue_wait_budget_mode == "wall_clock"
-    assert resolved.action_wall_timeout_ms == 300_000
-    assert resolved.blocking_required_target_output_timeout_mode == "technical_outcome"
-    assert resolved.blocking_required_target_queue_wait_budget_mode == "wall_clock"
+    assert resolved.action_wall_timeout_ms is None
+    assert resolved.blocking_required_target_output_timeout_mode == "disabled"
+    assert resolved.blocking_required_target_queue_wait_budget_mode == "disabled"
     assert resolved.required_target_exhaustion is not None
     assert resolved.required_target_exhaustion.eligible_failure_modes == (
-        "output_budget_exhausted",
-        "attempt_hard_timeout",
-        "action_wall_timeout",
+        "empty_visible_output",
+        "unparseable_output",
     )
     assert resolved.required_target_exhaustion.day_vote_outcome == "technical_abstain"
     assert (
@@ -974,7 +994,7 @@ def test_model_generation_policy_resolves_explicit_action_profiles(
     )
     assert resolved.required_target_exhaustion.transport_mode == "retry_then_pause"
     assert resolved.required_target_exhaustion.machine_format_mode == "retry_then_pause"
-    assert resolved.private_round_memory_mode == "background_generation"
+    assert resolved.private_round_memory_mode == "blocking_generation"
 
 
 @pytest.mark.parametrize(
@@ -999,7 +1019,7 @@ def test_model_generation_policy_unknown_actions_fall_back_to_strategic_full(
     assert resolved.profile == "strategic_full"
     assert resolved.source == "default_profile"
     assert resolved.reasoning_only_timeout_ms is None
-    assert resolved.timeout_max_attempts == 2
+    assert resolved.timeout_max_attempts is None
     assert resolved.automatic_retry_enforcement == "enforce"
 
 
@@ -1028,7 +1048,7 @@ def test_model_generation_policy_legacy_missing_resolves_disabled_metadata() -> 
 
 def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_threshold() -> None:
     policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type="day_debate_speech",
     )
 
@@ -1055,7 +1075,7 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
         "model_id": "glm-test",
         "action_type": "day_debate_speech",
         "model_generation_policy_contract_status": "supported",
-        "model_generation_policy_schema_version": 5,
+        "model_generation_policy_schema_version": 4,
         "model_generation_policy_classification_version": 1,
         "model_generation_policy_enforcement": "observe_only",
         "model_generation_policy_profile": "recoverable_public_speech",
@@ -1083,10 +1103,35 @@ def test_generation_policy_audit_uses_active_reasoning_elapsed_and_shadow_thresh
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "background_generation",
+        "private_round_memory_mode": "blocking_generation",
         "reasoning_only_elapsed_ms": 180_000,
         "shadow_would_timeout": True,
     }
+
+
+def test_generation_policy_audit_current_v6_has_no_timeout_shadow() -> None:
+    policy = resolve_model_generation_action_policy(
+        current_model_generation_policy_contract(),
+        action_type="day_debate_speech",
+    )
+    completed = _model_generation_policy_audit_payload(
+        policy=policy,
+        action_type="day_debate_speech",
+        model_provider="agent_plan",
+        model_id="glm-test",
+        first_token_ms=2_000,
+        first_visible_text_ms=182_000,
+        terminal_elapsed_ms=190_000,
+    )
+    assert completed["model_generation_policy_schema_version"] == 6
+    assert completed["reasoning_only_timeout_ms"] is None
+    assert completed["action_wall_timeout_ms"] is None
+    assert completed["output_budget_max_attempts"] is None
+    assert completed["shadow_would_timeout"] is None
+    assert completed["required_target_exhaustion"]["eligible_failure_modes"] == [
+        "empty_visible_output",
+        "unparseable_output",
+    ]
 
 
 def test_generation_policy_audit_preserves_explicit_elapsed_and_legacy_null_shadow() -> None:
@@ -1267,7 +1312,7 @@ def test_generation_policy_v4_suppresses_repeated_expensive_failures() -> None:
     )
     policy = ModelRetryPolicy(max_attempts=3)
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -1402,7 +1447,7 @@ def test_v4_required_target_expensive_exhaustion_returns_typed_technical_outcome
         target_exhaustion_outcome="technical_no_action",
     )
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -1431,7 +1476,7 @@ def test_v4_required_target_transport_format_and_soft_timeouts_do_not_technical_
         target_exhaustion_outcome="technical_abstain",
     )
     generation_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -1449,7 +1494,7 @@ def test_required_target_technical_outcome_requires_v4_and_explicit_spec_mode() 
     spec = _blocking_required_target_spec()
     error = ModelError("model_output_budget_exhausted")
     v4_policy = resolve_model_generation_action_policy(
-        current_model_generation_policy_contract(),
+        schema_v4_model_generation_policy_contract(),
         action_type=spec.action_type,
     )
 
@@ -2357,6 +2402,22 @@ def test_technical_outcome_failure_mode_requires_matching_failure_category() -> 
             supporting_event_record_seq=7,
         )
 
+    machine_format_failure = ActionFailure(
+        code="model_empty_visible_output",
+        category="machine_format",
+        terminal_attempt_id="v2_model_terminal",
+        machine_format_failure_count=1,
+        last_machine_format_attempt_id="v2_model_terminal",
+        last_machine_format_failure_code="model_empty_visible_output",
+    )
+    outcome = ActionTechnicalOutcome(
+        kind="technical_no_action",
+        failure_mode="empty_visible_output",
+        failure=machine_format_failure,
+        supporting_event_record_seq=8,
+    )
+    assert outcome.failure.category == "machine_format"
+
 
 def test_decision_prompt_requires_flat_json_and_omits_forbidden_speech_from_example() -> None:
     context = {
@@ -3052,6 +3113,7 @@ def test_public_day_progress_exposes_only_anonymous_vote_counts() -> None:
 
     assert message["completed_count"] == 4
     assert message["total_count"] == 9
+    assert message["reveal_presentation_seq"] == 0
     assert "player_id" not in message
     assert "target_player_id" not in message
 

@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.models.user import User  # noqa: F401 - registers the referenced users table
 from app.match.day_speech_pipeline_contract import (
     freeze_day_speech_pipeline_contract,
+    schema_v3_day_speech_pipeline_contract,
 )
 from app.match.match_repository import MatchRepository
 from app.match.model_context_contract import freeze_model_context_contract
@@ -62,6 +63,7 @@ class _Scenario:
     match_repository: MatchRepository
     action_repository: ActionRepository
     previous: PresentationIdentity
+    predecessor_claim: Any
     predecessor: PresentationIdentity
     predecessor_source_event_id: int
     predecessor_source_record_seq: int
@@ -88,6 +90,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
     rule_snapshot = freeze_model_context_contract(rule_snapshot)
     rule_snapshot = freeze_model_generation_policy_contract(rule_snapshot)
     rule_snapshot = freeze_day_speech_pipeline_contract(rule_snapshot)
+    rule_snapshot["day_speech_pipeline_contract"] = schema_v3_day_speech_pipeline_contract()
     with session_factory.begin() as db:
         db.add(
             GameRecord(
@@ -125,7 +128,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         )
 
     actions = ActionRepository(session_factory)
-    previous = _open_player_presentation(
+    previous_claim, previous = _open_player_presentation(
         actions,
         action_id="v2_action_previous",
         actor_id="player_1",
@@ -133,12 +136,18 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         speech_id="v2_speech_previous",
         speech="此前已关闭发言",
     )
+    actions.commit_speech_decision(
+        claim=previous_claim,
+        identity=previous,
+        next_live_state="ready",
+        next_phase_state=PHASE_STATE,
+    )
     actions.complete_text_action(
         identity=previous,
         next_live_state="ready",
         next_phase_state=PHASE_STATE,
     )
-    predecessor = _open_player_presentation(
+    predecessor_claim, predecessor = _open_player_presentation(
         actions,
         action_id="v2_action_predecessor",
         actor_id="player_2",
@@ -187,6 +196,7 @@ def scenario(session_factory: sessionmaker[Session]) -> _Scenario:
         match_repository=MatchRepository(session_factory),
         action_repository=actions,
         previous=previous,
+        predecessor_claim=predecessor_claim,
         predecessor=predecessor,
         predecessor_source_event_id=durable_source_event_id,
         predecessor_source_record_seq=source_record_seq,
@@ -215,7 +225,7 @@ def _open_player_presentation(
     presentation_id: str,
     speech_id: str,
     speech: str,
-) -> PresentationIdentity:
+) -> tuple[Any, PresentationIdentity]:
     claim = repository.claim_action(
         game_id=GAME_ID,
         action_id=action_id,
@@ -226,7 +236,7 @@ def _open_player_presentation(
         context_audience="player_private",
     )
     assert claim is not None
-    return repository.open_presentation(
+    return claim, repository.open_presentation(
         claim=claim,
         presentation_id=presentation_id,
         speech_id=speech_id,
@@ -400,6 +410,12 @@ def test_prefetch_snapshot_rejects_closed_predecessor(scenario: _Scenario) -> No
 def test_prefetch_snapshot_accepts_active_technical_skip_judge_cue_without_fake_player_speech(
     scenario: _Scenario,
 ) -> None:
+    scenario.action_repository.commit_speech_decision(
+        claim=scenario.predecessor_claim,
+        identity=scenario.predecessor,
+        next_live_state="ready",
+        next_phase_state=PHASE_STATE,
+    )
     scenario.action_repository.complete_text_action(
         identity=scenario.predecessor,
         next_live_state="ready",
@@ -505,7 +521,7 @@ def test_prefetch_snapshot_rejects_another_active_presentation(
         )
         game.last_presentation_seq = predecessor.presentation_seq + 1
 
-    with pytest.raises(RepositoryError, match="unique active presentation"):
+    with pytest.raises(RepositoryError, match="predecessor is not latest"):
         scenario.match_repository.snapshot_for_day_speech_prefetch(**scenario.prefetch_args())
 
 

@@ -52,6 +52,32 @@ export function LivePage() {
   const terminalRef = useRef(false);
   const audioPulseTimerRef = useRef<number | null>(null);
   const deathReactionTimerRef = useRef<number | null>(null);
+  const playbackCursorRef = useRef(0);
+  const pendingRevealsRef = useRef<Array<{ seq: number; apply: () => void }>>(
+    [],
+  );
+
+  const applyWhenRevealed = (seq: number, apply: () => void) => {
+    if (seq <= playbackCursorRef.current) {
+      apply();
+      return;
+    }
+    pendingRevealsRef.current.push({ seq, apply });
+  };
+
+  const advancePlaybackCursor = (cursor: number) => {
+    if (cursor < playbackCursorRef.current) return;
+    playbackCursorRef.current = cursor;
+    const remaining: Array<{ seq: number; apply: () => void }> = [];
+    for (const item of pendingRevealsRef.current) {
+      if (item.seq <= playbackCursorRef.current) {
+        item.apply();
+      } else {
+        remaining.push(item);
+      }
+    }
+    pendingRevealsRef.current = remaining;
+  };
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
   const [liveState, setLiveState] = useState<LiveState | null>(null);
@@ -91,6 +117,8 @@ export function LivePage() {
         setPublicRule(snapshot.public_rule);
         setPublicPlayers(snapshot.public_players);
         setRoleAssignment(snapshot.public_role_assignment);
+        playbackCursorRef.current = snapshot.playback_cursor;
+        pendingRevealsRef.current = [];
         setGamePhase(snapshot.game_phase);
         setMatchState(snapshot.match_state);
         setLiveState(snapshot.live_state);
@@ -187,6 +215,8 @@ export function LivePage() {
               if (enteredMode !== "director") {
                 throw new Error("推理挑战连接收到导演投影，连接已关闭");
               }
+              playbackCursorRef.current = message.playback_cursor;
+              pendingRevealsRef.current = [];
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
               setMatchState(message.match_state);
@@ -236,10 +266,7 @@ export function LivePage() {
                 );
                 readySent = true;
               }
-              if (
-                message.live_state === "awaiting_observation" ||
-                message.live_state === "failed"
-              ) {
+              if (message.live_state === "failed") {
                 terminalRef.current = true;
               }
               return;
@@ -248,6 +275,8 @@ export function LivePage() {
               if (enteredMode !== "challenge") {
                 throw new Error("导演直播连接收到推理挑战投影，连接已关闭");
               }
+              playbackCursorRef.current = message.playback_cursor;
+              pendingRevealsRef.current = [];
               setLiveState(message.live_state);
               setGamePhase(message.game_phase);
               setMatchState(message.match_state);
@@ -294,10 +323,7 @@ export function LivePage() {
                 );
                 readySent = true;
               }
-              if (
-                message.live_state === "awaiting_observation" ||
-                message.live_state === "failed"
-              ) {
+              if (message.live_state === "failed") {
                 terminalRef.current = true;
               }
               return;
@@ -343,17 +369,15 @@ export function LivePage() {
                 );
                 setError(message.reason ?? "V2 实时动作失败");
               }
-              if (message.live_state === "awaiting_observation") {
-                terminalRef.current = true;
-                setAudioActive(false);
-              }
               return;
             }
             if (message.type === "game.phase_changed") {
-              setGamePhase({
-                phase_seq: message.phase_seq,
-                phase_id: message.phase_id,
-                phase_state: message.phase_state,
+              applyWhenRevealed(message.reveal_presentation_seq, () => {
+                setGamePhase({
+                  phase_seq: message.phase_seq,
+                  phase_id: message.phase_id,
+                  phase_state: message.phase_state,
+                });
               });
               return;
             }
@@ -362,41 +386,47 @@ export function LivePage() {
               return;
             }
             if (message.type === "day.progress_changed") {
-              setDayProgress(message);
+              applyWhenRevealed(message.reveal_presentation_seq, () => {
+                setDayProgress(message);
+              });
               return;
             }
             if (message.type === "match.state_changed") {
-              setMatchState({
-                round_no: message.round_no,
-                sheriff_player_id: message.sheriff_player_id,
-                sheriff_badge_state: message.sheriff_badge_state,
-                winner: message.winner,
+              applyWhenRevealed(message.reveal_presentation_seq, () => {
+                setMatchState({
+                  round_no: message.round_no,
+                  sheriff_player_id: message.sheriff_player_id,
+                  sheriff_badge_state: message.sheriff_badge_state,
+                  winner: message.winner,
+                });
+                setRuntimeProjection((current) =>
+                  current
+                    ? {
+                        ...current,
+                        winner: message.winner,
+                      }
+                    : current,
+                );
               });
-              setRuntimeProjection((current) =>
-                current
-                  ? {
-                      ...current,
-                      winner: message.winner,
-                    }
-                  : current,
-              );
               return;
             }
             if (message.type === "player.state_changed") {
               if (enteredMode === "challenge" && message.cause !== null) {
                 throw new Error("普通观众连接收到私密死亡原因，连接已关闭");
               }
-              if (message.alive) {
-                setPublicPlayers((current) =>
-                  current.map((player) =>
-                    player.player_id === message.player_id
-                      ? { ...player, alive: true }
-                      : player,
-                  ),
-                );
-              } else {
-                revealPublicDeaths([message.player_id]);
-              }
+              applyWhenRevealed(message.reveal_presentation_seq, () => {
+                if (message.alive) {
+                  setPublicPlayers((current) =>
+                    current.map((player) =>
+                      player.player_id === message.player_id
+                        ? { ...player, alive: true }
+                        : player,
+                    ),
+                  );
+                } else {
+                  revealPublicDeaths([message.player_id]);
+                }
+              });
               return;
             }
             if (message.type === "ability.progress_changed") {
@@ -407,7 +437,9 @@ export function LivePage() {
               return;
             }
             if (message.type === "dawn.result_announced") {
-              revealPublicDeaths(message.dead_player_ids);
+              applyWhenRevealed(message.reveal_presentation_seq, () => {
+                revealPublicDeaths(message.dead_player_ids);
+              });
               return;
             }
             if (message.type === "god_view.night_resolved") {
@@ -455,11 +487,18 @@ export function LivePage() {
               return;
             }
             if (message.type === "presentation.failed") {
-              terminalRef.current = true;
-              setAudioActive(false);
-              player?.stop();
-              setLiveState("failed");
-              setError(`${message.failure_kind}: ${message.failure_code}`);
+              if (
+                presentationRef.current?.presentation_id ===
+                message.presentation_id
+              ) {
+                setAudioActive(false);
+                player?.stop();
+                presentationRef.current = null;
+                if (audioEnabled) {
+                  setPresentation(null);
+                }
+              }
+              advancePlaybackCursor(message.presentation_seq);
               return;
             }
             if (message.type === "presentation.closed") {
@@ -474,6 +513,7 @@ export function LivePage() {
                   setPresentation(null);
                 }
               }
+              advancePlaybackCursor(message.playback_cursor);
               return;
             }
           }
@@ -668,11 +708,14 @@ function liveProcessLabel(
   const matchStatus = effectiveMatchStatus(runtime, phase, match, liveState);
   const winner = effectiveWinner(runtime, match);
   const audioEnabled = runtime?.audio_mode === "tts";
+  if (liveState === "canceled") return "本局已由运营中断";
+  if (liveState === "failed") return "实时演出已停止";
+  if (presentationActive && (matchStatus === "completed" || liveState === "awaiting_observation")) {
+    return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
+  }
   if (matchStatus === "completed" && winner) {
     return winner === "villagers" ? "好人阵营获胜，对局已完成" : "狼人阵营获胜，对局已完成";
   }
-  if (liveState === "canceled") return "本局已由运营中断";
-  if (liveState === "failed") return "实时演出已停止";
   if (liveState === "awaiting_observation") {
     return awaitingObservationLabel(runtime);
   }
@@ -695,6 +738,9 @@ function liveProcessLabel(
       : "字幕展示完成，正在保存实时记录";
   }
   if (liveState === "broadcasting") {
+    return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
+  }
+  if (presentationActive) {
     return audioEnabled ? "字幕与 PCM 正在同步播出" : "字幕正在实时展示";
   }
   if (liveState === "generating") {

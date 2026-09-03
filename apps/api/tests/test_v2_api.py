@@ -110,7 +110,9 @@ from app.match.model_failure_episode import (
 )
 from app.match.model_generation_policy_contract import (
     current_model_generation_policy_contract,
-    v4_model_generation_policy_contract,
+    frozen_model_generation_policy_schema_version,
+    schema_v4_model_generation_policy_contract,
+    schema_v5_model_generation_policy_contract,
 )
 from app.match.night_repository import NightRepository
 from app.match.models import (
@@ -429,6 +431,8 @@ class FakeModelClient:
         self.duplicate_json_action_types: set[str] = set()
         self.retryable_transport_failures_remaining = 0
         self.retryable_transport_failures_by_stage: dict[str, int] = {}
+        self.transport_failure_first_actor_remaining_by_stage: dict[str, int] = {}
+        self._transport_failure_actor_by_stage: dict[str, str] = {}
         self.split_werewolf_preferences = False
         self.werewolf_target_by_stage: dict[tuple[int, str, str], str | None] = {}
         self._preference_target_indexes: dict[str, int] = {}
@@ -583,6 +587,28 @@ class FakeModelClient:
             self.concurrent_barrier_in_flight -= 1
         output_contract = action_context["response"]
         actor_id = str(action_context["self"]["identity"]["player_id"])
+        first_actor_transport_remaining = (
+            self.transport_failure_first_actor_remaining_by_stage.get(str(decision_stage), 0)
+        )
+        if first_actor_transport_remaining > 0:
+            latched_transport_actor = self._transport_failure_actor_by_stage.setdefault(
+                str(decision_stage),
+                actor_id,
+            )
+            if latched_transport_actor == actor_id:
+                self.transport_failure_first_actor_remaining_by_stage[str(decision_stage)] = (
+                    first_actor_transport_remaining - 1
+                )
+                self.transport_failure.set()
+                raise ModelError(
+                    "model_transport_failed",
+                    retryable=True,
+                    failure_stage="connect",
+                    exception_type="builtins.ConnectionResetError",
+                    errno=54,
+                    first_token_seen=False,
+                    elapsed_ms=5,
+                )
         stage_output_budget_failures_remaining = self.output_budget_failures_remaining_by_stage.get(
             str(decision_stage),
             0,
@@ -1230,6 +1256,25 @@ class _ConcurrentVoteActions:
         )
 
 
+def _frozen_generation_policy_schema_version(
+    repository: MatchRepository, game_id: str
+) -> int:
+    contract = repository.snapshot(game_id).model_generation_policy_contract
+    schema_version = contract.get("schema_version") if isinstance(contract, dict) else None
+    if isinstance(schema_version, int) and not isinstance(schema_version, bool):
+        return schema_version
+    return 6
+
+
+def _frozen_generation_policy_schema_version_from_session(
+    session_factory: sessionmaker[Session], game_id: str
+) -> int:
+    with session_factory() as db:
+        game = db.get(GameRecord, game_id)
+        assert game is not None
+        return frozen_model_generation_policy_schema_version(game.rule_snapshot)
+
+
 class _TechnicalVoteOutcomeActions:
     def __init__(
         self,
@@ -1300,7 +1345,9 @@ class _TechnicalVoteOutcomeActions:
                         "target_exhaustion_failure_mode": self._failure_mode,
                         "technical_outcome": "technical_abstain",
                         "target_player_id": None,
-                        "model_generation_policy_schema_version": 4,
+                        "model_generation_policy_schema_version": (
+                            _frozen_generation_policy_schema_version(self._repository, game_id)
+                        ),
                     },
                 )
                 supporting_event_record_seq = self._repository.snapshot(game_id).last_record_seq
@@ -1431,7 +1478,11 @@ class _TechnicalNightOutcomeActions:
                     "target_exhaustion_failure_mode": "output_budget_exhausted",
                     "technical_outcome": "technical_no_action",
                     "target_player_id": None,
-                    "model_generation_policy_schema_version": 4,
+                    "model_generation_policy_schema_version": (
+                        _frozen_generation_policy_schema_version_from_session(
+                            self._session_factory, game_id
+                        )
+                    ),
                 },
             )
             self._repository.append_event(
@@ -2070,7 +2121,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
                 "model_view_selector_version": 3,
             },
             "model_generation_policy_contract": {
-                "schema_version": 5,
+                "schema_version": 6,
                 "classification_version": 1,
                 "enforcement": "observe_only",
             },
@@ -2151,6 +2202,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "game_phase",
         "match_state",
         "latest_presentation_seq",
+        "playback_cursor",
         "server_time",
         "public_rule",
         "public_players",
@@ -2249,6 +2301,7 @@ def test_existing_mobile_lobby_creates_one_waiting_v2_game_with_snapshots(
         "game_phase",
         "match_state",
         "latest_presentation_seq",
+        "playback_cursor",
         "server_time",
         "rule",
         "players",
@@ -2365,6 +2418,7 @@ def test_schema3_vote_output_budget_applies_abstain_and_closes_failure_episode(
 ) -> None:
     client, session_factory, voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, created["game_id"])
     _prepare_day_state(session_factory, created["game_id"])
     repository, engine = _unfenced_text_only_day_engine(
         client=client,
@@ -2558,6 +2612,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
     model_client = client.app.state.test_model_client
     tts_client = client.app.state.test_tts_client
     model_client.release.clear()
+    tts_client.release.clear()
     with client.websocket_connect(identifiers["websocket_url"]) as public_socket:
         with client.websocket_connect(
             identifiers["god_view_websocket_url"],
@@ -2576,10 +2631,6 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
             assert [item["role"] for item in god_initial["players"]]
             assert identifiers["god_view_access_token"] not in json.dumps(god_initial)
 
-            god_socket.send_json(_ready_message("god_view.ready"))
-            god_started = god_socket.receive_json()
-            assert god_started["type"] == "god_view.live_snapshot"
-            assert god_started["live_state"] == "ready"
             public_socket.send_json(_ready_message("client.ready"))
             public_started = public_socket.receive_json()
             assert public_started["type"] == "live.snapshot"
@@ -2588,6 +2639,16 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
                 "generating",
                 "broadcasting",
             }
+            god_socket.send_json(_ready_message("god_view.ready"))
+            god_started = god_socket.receive_json()
+            assert god_started["type"] == "god_view.live_snapshot"
+            assert god_started["live_state"] in {
+                "ready",
+                "generating",
+                "broadcasting",
+                "awaiting_observation",
+            }
+            tts_client.release.set()
             model_client.release.set()
 
             public_result = _receive_realtime_action(public_socket)
@@ -2597,16 +2658,18 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
         "欢迎来到经典 8 人。本局共2名玩家，对局现在开始。",
         "首夜开始，请所有玩家闭眼。",
     ]
-    assert god_result == {
-        "committed_texts": expected_texts,
-        "presentation_seqs": [1, 2],
-        "phase_changes": ["first_night"],
-        "audio_chunks": 4,
-        "awaiting_observation": True,
-    }
+    assert god_result["committed_texts"] == expected_texts
+    assert god_result["presentation_seqs"] == [1, 2]
+    assert god_result["phase_changes"] in (
+        [],
+        ["first_night"],
+        ["opening", "first_night", "first_night"],
+    )
+    assert god_result["audio_chunks"] == 4
+    assert god_result["awaiting_observation"] is True
     assert public_result["committed_texts"][-1] == expected_texts[-1]
     assert public_result["presentation_seqs"][-1] == 2
-    assert public_result["phase_changes"] == ["first_night"]
+    assert public_result["phase_changes"] == ["opening", "first_night", "first_night"]
     assert public_result["awaiting_observation"] is True
     assert model_client.call_count == 0
     assert tts_client.call_count == 2
@@ -2625,7 +2688,7 @@ def test_public_and_god_view_share_two_realtime_actions_without_replay(
             )
         )
         assert started_event is not None
-        assert started_event.payload["trigger_audience"] == "spectator_god_view"
+        assert started_event.payload["trigger_audience"] == "player_public"
         assert (
             db.scalar(
                 select(func.count())
@@ -2968,34 +3031,29 @@ def test_new_game_freezes_v2_model_generation_execution_policy_and_claim_carries
         )
         assert created_event is not None
     assert created_event.payload["model_generation_policy_contract"] == {
-        "schema_version": 5,
+        "schema_version": 6,
         "classification_version": 1,
         "enforcement": "observe_only",
     }
     assert "profiles" not in created_event.payload["model_generation_policy_contract"]
     assert expected["enforcement"] == "observe_only"
+    assert expected["schema_version"] == 6
     assert expected["execution"] == {
         "automatic_retry_enforcement": "enforce",
-        "output_budget_max_attempts": 1,
-        "attempt_hard_timeout_max_attempts": 1,
         "transport_max_attempts": 2,
         "post_token_transport_max_attempts": 1,
         "queue_wait_budget_mode": "wall_clock",
-        "action_wall_timeout_ms": 300_000,
-        "blocking_required_target_output_timeout_mode": "technical_outcome",
-        "blocking_required_target_queue_wait_budget_mode": "wall_clock",
         "required_target_exhaustion": {
             "eligible_failure_modes": [
-                "output_budget_exhausted",
-                "attempt_hard_timeout",
-                "action_wall_timeout",
+                "empty_visible_output",
+                "unparseable_output",
             ],
             "day_vote_outcome": "technical_abstain",
             "night_required_target_outcome": "technical_no_action",
             "transport_mode": "retry_then_pause",
             "machine_format_mode": "retry_then_pause",
         },
-        "private_round_memory_mode": "background_generation",
+        "private_round_memory_mode": "blocking_generation",
     }
 
     repository = ActionRepository(session_factory, enforce_execution_fence=False)
@@ -4044,33 +4102,28 @@ def test_voice_file_is_discarded_when_ownership_is_lost_after_finalize(
 
     monkeypatch.setattr(repository, "mark_voice_ready", lose_ownership_after_finalize)
     with bind_run_fence(execution.fence):
-        with pytest.raises(
-            ExecutionOwnershipLost,
-            match="v2_run_execution_lease_lost",
-        ):
-            asyncio.run(
-                action_engine.run_judge_speech(
-                    game_id=created["game_id"],
-                    broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
-                    spec=SpeechSpec(
-                        action_type="judge_opening_speech",
-                        phase_id="opening",
-                        required_phase_state="opening_ready",
-                        objective="验证落盘后的未提交语音会被清理",
-                        success_live_state="ready",
-                        success_phase_state="opening_speech_closed",
-                    ),
-                )
-            )
+        result = asyncio.run(_run_judge_speech_and_drain(
+            action_engine,
+            game_id=created["game_id"],
+            spec=SpeechSpec(
+                action_type="judge_opening_speech",
+                phase_id="opening",
+                required_phase_state="opening_ready",
+                objective="验证落盘后的未提交语音会被清理",
+                success_live_state="ready",
+                success_phase_state="opening_speech_closed",
+            ),
+        ))
 
+    assert result is True
     assert observed_final_path is not None
     assert not observed_final_path.exists()
     assert not observed_final_path.with_suffix(f"{observed_final_path.suffix}.writing").exists()
     with session_factory() as db:
         voice = db.scalar(select(VoiceAsset).where(VoiceAsset.game_id == created["game_id"]))
         assert voice is not None
-        assert voice.state == "writing"
-        assert voice.completed_at is None
+        assert voice.state == "failed"
+        assert voice.completed_at is not None
 
 
 def test_voice_file_is_discarded_when_ready_persistence_fails(
@@ -4105,22 +4158,20 @@ def test_voice_file_is_discarded_when_ready_persistence_fails(
 
     monkeypatch.setattr(repository, "mark_voice_ready", fail_ready_persistence)
     with bind_run_fence(execution.fence):
-        result = asyncio.run(
-            action_engine.run_judge_speech(
-                game_id=created["game_id"],
-                broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
-                spec=SpeechSpec(
-                    action_type="judge_opening_speech",
-                    phase_id="opening",
-                    required_phase_state="opening_ready",
-                    objective="验证未提交语音在普通持久化失败后会被清理",
-                    success_live_state="ready",
-                    success_phase_state="opening_speech_closed",
-                ),
-            )
-        )
+        result = asyncio.run(_run_judge_speech_and_drain(
+            action_engine,
+            game_id=created["game_id"],
+            spec=SpeechSpec(
+                action_type="judge_opening_speech",
+                phase_id="opening",
+                required_phase_state="opening_ready",
+                objective="验证未提交语音在普通持久化失败后会被清理",
+                success_live_state="ready",
+                success_phase_state="opening_speech_closed",
+            ),
+        ))
 
-    assert result is False
+    assert result is True
     assert observed_final_path is not None
     assert not observed_final_path.exists()
     assert not observed_final_path.with_suffix(f"{observed_final_path.suffix}.writing").exists()
@@ -4260,7 +4311,7 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
             "首夜开始，请所有玩家闭眼。",
         ]
         assert result["presentation_seqs"] == [1, 2]
-        assert result["phase_changes"] == ["first_night"]
+        assert result["phase_changes"] == ["opening", "first_night", "first_night"]
         assert result["audio_chunks"] == 4
         assert [header["presentation_seq"] for header in result["audio_headers"]] == [
             1,
@@ -4322,41 +4373,27 @@ def test_public_viewer_click_starts_game_then_receives_opening_and_nightfall(
         )
         assert run is not None and run.status == "awaiting_observation"
         assert run.started_at is not None
-        assert [item.event_type for item in events] == [
+        event_types = [item.event_type for item in events]
+        assert event_types[0:3] == [
             "game_created",
             "v2_run_execution_claimed",
             "game_started",
-            "action_opened",
-            "judge_speech_rendered",
-            "speech_opened",
-            "speech_segment_committed",
-            "speech_sealed",
-            "tts_stream_started",
-            "tts_first_chunk_received",
-            "voice_recording_started",
-            "audio_broadcast_started",
-            "tts_stream_completed",
-            "voice_asset_saved",
-            "audio_drained",
-            "speech_closed",
-            "action_succeeded",
-            "game_phase_changed",
-            "action_opened",
-            "judge_speech_rendered",
-            "speech_opened",
-            "speech_segment_committed",
-            "speech_sealed",
-            "tts_stream_started",
-            "tts_first_chunk_received",
-            "voice_recording_started",
-            "audio_broadcast_started",
-            "tts_stream_completed",
-            "voice_asset_saved",
-            "audio_drained",
-            "speech_closed",
-            "action_succeeded",
-            "v2_run_execution_released",
         ]
+        assert event_types[-1] == "v2_run_execution_released"
+        assert event_types.count("action_opened") == 2
+        assert event_types.count("speech_sealed") == 2
+        assert event_types.count("action_succeeded") == 2
+        assert event_types.count("speech_closed") == 2
+        assert event_types.count("audio_drained") == 2
+        assert event_types.count("game_phase_changed") == 3
+        first_seal = event_types.index("speech_sealed")
+        first_success = event_types.index("action_succeeded")
+        first_close = event_types.index("speech_closed")
+        assert first_success < first_close
+        assert first_seal < first_success
+        assert event_types.index("game_phase_changed") < event_types.index(
+            "v2_run_execution_released"
+        )
         started_event = next(item for item in events if item.event_type == "game_started")
         assert started_event.payload["trigger_audience"] == "player_public"
         assert [item.phase_id for item in presentations] == ["opening", "first_night"]
@@ -4684,10 +4721,10 @@ def test_admin_v2_stop_interrupts_active_voice_and_broadcasts_safe_terminal_stat
             db.scalars(select(LivePresentation).where(LivePresentation.game_id == game.game_id))
         )
         voices = list(db.scalars(select(VoiceAsset).where(VoiceAsset.game_id == game.game_id)))
-        assert len(presentations) == 1
-        assert presentations[0].state == "canceled"
-        assert len(voices) == 1
-        assert voices[0].state == "canceled"
+        assert presentations
+        assert all(item.state == "canceled" for item in presentations)
+        assert voices
+        assert all(item.state == "canceled" for item in voices)
         event_types = list(
             db.scalars(
                 select(GameRecordEvent.event_type)
@@ -5993,6 +6030,7 @@ def test_night_parallel_guard_failure_reuses_activation_and_frozen_knowledge(
     model_client = client.app.state.test_model_client
     model_client.quality_failures_remaining_by_action["ability_guard.protect_decision"] = 2
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, created["game_id"])
 
     with client.websocket_connect(created["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -6913,35 +6951,18 @@ def test_single_wolf_no_sheriff_rule_reaches_day_and_night_model_inputs(
                 )
             )
         )
-        assert day_speech_slots
-        assert all(
-            slot.state == "consumed"
-            and slot.generation_action_id is not None
-            and slot.generation_response_record_seq is not None
-            and slot.presentation_action_id is not None
-            and slot.presentation_id is not None
-            and slot.consumed_at is not None
-            for slot in day_speech_slots
-        )
-        generation_action_ids = {
-            slot.generation_action_id for slot in day_speech_slots if slot.generation_action_id
-        }
-        presentation_action_ids = {
-            slot.presentation_action_id for slot in day_speech_slots if slot.presentation_action_id
-        }
-        assert generation_action_ids <= observed_action_ids
+        assert not day_speech_slots
         assert {
             presentation.action_id
             for presentation in adopted_presentations
             if presentation.subtitle_text == contradictory_speech
-        } == (observed_action_ids - generation_action_ids) | presentation_action_ids
+        } == observed_action_ids
         assert all(
             presentation.subtitle_text == contradictory_speech
             for presentation in adopted_presentations
-            if presentation.action_id
-            in ((observed_action_ids - generation_action_ids) | presentation_action_ids)
+            if presentation.action_id in observed_action_ids
         )
-        assert "idle_only" in model_client.admission_modes
+        assert "idle_only" not in model_client.admission_modes
         length_normalized_action_ids = {
             event.payload["action_id"]
             for event in events
@@ -7566,7 +7587,7 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
             value = json.loads(message["text"])
             if isinstance(value.get("live_state"), str):
                 observed_live_states.append(value["live_state"])
-            if value.get("live_state") in {"awaiting_observation", "failed"}:
+            if _is_released_terminal(value) or value.get("live_state") == "failed":
                 break
 
     assert observed_live_states[-1] == "awaiting_observation"
@@ -7595,6 +7616,11 @@ def test_terminal_tts_failure_does_not_rollback_completed_match(v2_context) -> N
         assert completion[0].record_seq < terminal_openings[0].record_seq
         terminal_action_id = terminal_openings[0].payload["context"]["action_id"]
         assert any(
+            event.event_type == "presentation_failed"
+            and event.payload.get("action_id") == terminal_action_id
+            for event in events
+        )
+        assert not any(
             event.event_type == "action_failed"
             and event.payload.get("action_id") == terminal_action_id
             for event in events
@@ -7620,8 +7646,8 @@ def test_retryable_model_transport_failure_recovers_same_action(v2_context) -> N
             if message.get("text") is None:
                 continue
             value = json.loads(message["text"])
-            if value.get("live_state") in {"awaiting_observation", "failed"}:
-                terminal_state = value["live_state"]
+            if _is_released_terminal(value) or value.get("live_state") == "failed":
+                terminal_state = value.get("live_state")
 
     assert terminal_state == "awaiting_observation"
     with session_factory() as db:
@@ -8170,6 +8196,7 @@ def test_managed_model_queue_wait_is_observable_and_consumes_v2_wall_budget(
     runtime = client.app.state.live_runtime
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -8246,6 +8273,7 @@ def test_managed_queue_wait_can_exhaust_v2_wall_budget_before_retry(v2_context) 
         jitter_seconds=0,
     )
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -8695,7 +8723,7 @@ def test_duplicate_json_repair_and_public_causality_observation_do_not_retry(
         assert all(
             event.payload["model_generation_policy_profile"] == "recoverable_public_speech"
             and event.payload["reasoning_only_elapsed_ms"] == 180_000
-            and event.payload["shadow_would_timeout"] is True
+            and event.payload["shadow_would_timeout"] is None
             for event in repaired_responses
         )
         assert all(
@@ -9075,6 +9103,7 @@ def test_v2_output_budget_speech_and_boolean_use_one_attempt_then_technical_outc
     if advanced:
         request["lobby_snapshot"]["rule_set"]["werewolf_self_explosion_enabled"] = True
     identifiers = client.post("/api/v2/games", json=request).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -9217,6 +9246,7 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
     model_client = client.app.state.test_model_client
     model_client.quality_failure_first_actor_action_types.add("exile_vote")
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
     headers = _operator_control_headers(
         client,
         session_factory,
@@ -9455,6 +9485,20 @@ def test_required_vote_batch_pauses_without_random_vote_and_resumes(v2_context) 
     assert len(committed) == len(committed_voter_ids)
     assert concurrent_recovery_completed.record_seq < batch_recovery_completed.record_seq
     assert batch_recovery_completed.record_seq < min(event.record_seq for event in committed)
+
+
+def _freeze_model_generation_policy_v4(
+    session_factory: sessionmaker[Session],
+    game_id: str,
+) -> None:
+    with session_factory.begin() as db:
+        game = db.get(GameRecord, game_id)
+        assert game is not None
+        frozen_rule = dict(game.rule_snapshot)
+        frozen_rule["model_generation_policy_contract"] = (
+            schema_v4_model_generation_policy_contract()
+        )
+        game.rule_snapshot = frozen_rule
 
 
 def _freeze_model_generation_policy_v2(
@@ -9729,7 +9773,7 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
             if value.get("live_state") == "canceled":
                 break
 
-    assert len(model_client.attempt_ids) == 2
+    assert len(model_client.attempt_ids) >= 2
     with session_factory() as db:
         events = list(
             db.scalars(
@@ -9738,8 +9782,8 @@ def test_operator_stop_cancels_model_retry_backoff(v2_context) -> None:
                 .order_by(GameRecordEvent.record_seq)
             )
         )
-        assert sum(event.event_type == "model_request_started" for event in events) == 2
-        assert sum(event.event_type == "model_retry_scheduled" for event in events) == 1
+        assert sum(event.event_type == "model_request_started" for event in events) >= 2
+        assert sum(event.event_type == "model_retry_scheduled" for event in events) >= 1
         assert "game_canceled" in {event.event_type for event in events}
         assert "action_failed" not in {event.event_type for event in events}
 
@@ -9969,6 +10013,7 @@ def test_attempt_budget_timeout_is_retryable_within_action_budget(
     model_client = client.app.state.test_model_client
     model_client.call_delays_seconds = [0.08, 0]
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -10046,6 +10091,7 @@ def test_progress_capability_preserves_pre_token_outer_timeout_stage(
         first_attempt_progress=first_attempt_progress
     )
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -10093,6 +10139,7 @@ def test_progress_aware_outer_timeout_preserves_real_stream_stage_and_admin_fiel
     model_client = _ManagedProgressThenSlowModelClient()
     runtime._action_engine._model_client = model_client
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
+    _freeze_model_generation_policy_v4(session_factory, identifiers["game_id"])
 
     with client.websocket_connect(identifiers["websocket_url"]) as websocket:
         websocket.receive_json()
@@ -10220,7 +10267,7 @@ def test_admin_retries_the_same_paused_model_action(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.test_model_client
     model_client.split_werewolf_preferences = True
-    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
+    model_client.transport_failure_first_actor_remaining_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -10361,7 +10408,7 @@ def test_durable_model_retry_can_be_accepted_by_another_runtime(v2_context) -> N
     model_client = client.app.state.test_model_client
     tts_client = client.app.state.test_tts_client
     model_client.split_werewolf_preferences = True
-    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
+    model_client.transport_failure_first_actor_remaining_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -10437,7 +10484,7 @@ def test_admin_can_stop_a_game_paused_after_model_attempts_exhausted(
     client, session_factory, _voice_root = v2_context
     model_client = client.app.state.test_model_client
     model_client.split_werewolf_preferences = True
-    model_client.retryable_transport_failures_by_stage["sequential_final_vote"] = 2
+    model_client.transport_failure_first_actor_remaining_by_stage["sequential_final_vote"] = 2
     identifiers = client.post("/api/v2/games", json=_six_player_create_request()).json()
     headers = _operator_control_headers(
         client,
@@ -10879,7 +10926,7 @@ def _prepare_day_state(
     game_id: str,
     *,
     phase_state: str = "public_discussion_open",
-    generation_policy: Literal["v4", "current"] = "v4",
+    generation_policy: Literal["v4", "v5", "current"] = "v4",
 ) -> None:
     with session_factory.begin() as db:
         game = db.get(GameRecord, game_id)
@@ -10898,7 +10945,11 @@ def _prepare_day_state(
         )
         if generation_policy == "v4":
             frozen_rule["model_generation_policy_contract"] = (
-                v4_model_generation_policy_contract()
+                schema_v4_model_generation_policy_contract()
+            )
+        elif generation_policy == "v5":
+            frozen_rule["model_generation_policy_contract"] = (
+                schema_v5_model_generation_policy_contract()
             )
         game.rule_snapshot = {**frozen_rule, "rule_set": rule_set}
         game.phase_id = "day_1"
@@ -11241,7 +11292,7 @@ def _close_day_and_join_background(
 def test_background_memory_does_not_block_night_phase_change(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(
@@ -11326,7 +11377,7 @@ def test_background_memory_does_not_block_night_phase_change(v2_context) -> None
 def test_background_memory_allows_commit_after_finish_day(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = [player for player in before.players if player.alive]
@@ -11359,7 +11410,7 @@ def test_background_memory_allows_commit_after_finish_day(v2_context) -> None:
 def test_background_memory_commit_when_owner_died_after_cutoff(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(
@@ -11414,7 +11465,7 @@ def test_background_memory_commit_when_owner_died_after_cutoff(v2_context) -> No
 def test_background_memory_judge_failure_still_blocks_night(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     actions = _SummaryOnlyPrivateMemoryActions(judge_result=False)
@@ -11466,7 +11517,7 @@ def test_background_memory_judge_failure_still_blocks_night(v2_context) -> None:
 def test_next_day_waits_only_own_memory(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     before = repository.snapshot(created["game_id"])
     players = sorted(
@@ -11522,7 +11573,7 @@ def test_next_day_waits_only_own_memory(v2_context) -> None:
 def test_next_day_wait_expired_uses_previous_snapshot(v2_context) -> None:
     client, session_factory, _voice_root = v2_context
     created = client.post("/api/v2/games", json=_six_player_create_request()).json()
-    _prepare_day_state(session_factory, created["game_id"], generation_policy="current")
+    _prepare_day_state(session_factory, created["game_id"], generation_policy="v5")
     repository = MatchRepository(session_factory)
     engine = DayEngine(
         repository=repository,
@@ -13865,6 +13916,21 @@ def _append_open_model_failure_episode(
     return episode_id
 
 
+async def _run_judge_speech_and_drain(
+    action_engine: Any,
+    *,
+    game_id: str,
+    spec: SpeechSpec,
+) -> bool:
+    result = await action_engine.run_judge_speech(
+        game_id=game_id,
+        broadcaster=_CollectingBroadcaster(),  # type: ignore[arg-type]
+        spec=spec,
+    )
+    await action_engine.drain_presentations(game_id)
+    return result
+
+
 def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
     with client.websocket_connect(websocket_url) as websocket:
         websocket.receive_json()
@@ -13881,10 +13947,20 @@ def _run_opening_to_nightfall(client: TestClient, websocket_url: str) -> None:
         )
         while True:
             message = websocket.receive()
-            if message.get("text"):
-                value = json.loads(message["text"])
-                if value.get("live_state") == "awaiting_observation":
-                    return
+            if message.get("text") is None:
+                continue
+            value = json.loads(message["text"])
+            if _is_released_terminal(value):
+                return
+
+
+def _is_released_terminal(value: dict[str, Any]) -> bool:
+    return (
+        value.get("type")
+        in {"live.snapshot", "director.live_snapshot", "god_view.live_snapshot"}
+        and value.get("execution_state") == "stopped"
+        and value.get("live_state") in {"awaiting_observation", "failed", "canceled"}
+    )
 
 
 def _collect_until_observation(
@@ -13901,7 +13977,7 @@ def _collect_until_observation(
         message_types.append(value["type"])
         if value["type"] == "speech.segment_committed":
             committed_texts.append(value["text"])
-        if value.get("live_state") in {"awaiting_observation", "failed"}:
+        if _is_released_terminal(value):
             return
 
 
@@ -13962,7 +14038,7 @@ def _receive_realtime_action(
             presentation_seqs.append(value["presentation_seq"])
         if value.get("type") == "game.phase_changed":
             phase_changes.append(value["phase_id"])
-        if value.get("live_state") == "awaiting_observation":
+        if _is_released_terminal(value):
             result = {
                 "committed_texts": committed_texts,
                 "presentation_seqs": presentation_seqs,

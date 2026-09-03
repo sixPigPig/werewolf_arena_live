@@ -109,7 +109,7 @@ def test_idle_only_admits_immediately_when_provider_has_idle_capacity() -> None:
     asyncio.run(scenario())
 
 
-def test_idle_only_fails_immediately_when_provider_is_full_without_http() -> None:
+def test_idle_only_queues_fifo_when_provider_is_full() -> None:
     owner_started = asyncio.Event()
     release_owner = asyncio.Event()
     requests: list[httpx.Request] = []
@@ -132,27 +132,25 @@ def test_idle_only_fails_immediately_when_provider_is_full_without_http() -> Non
         )
         await asyncio.wait_for(owner_started.wait(), timeout=0.5)
         progress: list[ModelProgress] = []
+        waiter = asyncio.create_task(
+            client.generate_action_decision_with_progress(
+                action_context=_action_context(),
+                attempt_id="v2_model_prefetch_queued",
+                target=target,
+                admission_mode="idle_only",
+                on_progress=progress.append,
+            )
+        )
         try:
-            with pytest.raises(ModelError) as raised:
-                await asyncio.wait_for(
-                    client.generate_action_decision_with_progress(
-                        action_context=_action_context(),
-                        attempt_id="v2_model_prefetch_rejected",
-                        target=target,
-                        admission_mode="idle_only",
-                        on_progress=progress.append,
-                    ),
-                    timeout=0.1,
-                )
-            error = raised.value
-            assert error.code == "model_prefetch_capacity_unavailable"
-            assert error.retryable is False
-            assert error.failure_stage == "provider_admission"
-            assert error.provider_in_flight == 1
-            assert error.provider_concurrency_limit == 1
-            assert error.queue_wait_ms is not None and error.queue_wait_ms <= 10
+            await asyncio.sleep(0.05)
+            assert waiter.done() is False
             assert [item.stage for item in progress] == ["queued"]
             assert len(requests) == 1
+            release_owner.set()
+            decision = await asyncio.wait_for(waiter, timeout=1)
+            assert decision.speech == "占用请求完成"
+            assert len(requests) == 2
+            assert [item.stage for item in progress[:2]] == ["queued", "admitted"]
         finally:
             release_owner.set()
             await owner
@@ -254,36 +252,33 @@ def test_idle_only_never_bypasses_an_existing_normal_waiter() -> None:
         await asyncio.wait_for(waiter_queued.wait(), timeout=0.5)
         await asyncio.sleep(0)
 
-        rejected_progress: list[ModelProgress] = []
-        with pytest.raises(ModelError, match="model_prefetch_capacity_unavailable"):
-            await client.generate_action_decision_with_progress(
+        prefetch_progress: list[ModelProgress] = []
+        prefetch = asyncio.create_task(
+            client.generate_action_decision_with_progress(
                 action_context=_action_context(),
-                attempt_id="v2_model_fifo_prefetch_rejected",
+                attempt_id="v2_model_fifo_prefetch_queued",
                 target=target,
                 admission_mode="idle_only",
-                on_progress=rejected_progress.append,
+                on_progress=prefetch_progress.append,
             )
-        assert [item.stage for item in rejected_progress] == ["queued"]
+        )
+        await asyncio.sleep(0.05)
+        assert prefetch.done() is False
+        assert [item.stage for item in prefetch_progress] == ["queued"]
 
         release_first.set()
         await asyncio.wait_for(second_started.wait(), timeout=0.5)
         assert request_count == 2
+        assert prefetch.done() is False
         release_second.set()
-        first, second = await asyncio.gather(owner, normal_waiter)
-        try:
-            prefetch = await client.generate_action_decision(
-                action_context=_action_context(),
-                attempt_id="v2_model_fifo_prefetch_after_waiter",
-                target=target,
-                admission_mode="idle_only",
-            )
-        finally:
-            await client.aclose()
+        first, second, prefetch_decision = await asyncio.gather(owner, normal_waiter, prefetch)
+        await client.aclose()
 
         assert first.speech == "请求1完成"
         assert second.speech == "请求2完成"
-        assert prefetch.speech == "请求3完成"
+        assert prefetch_decision.speech == "请求3完成"
         assert request_count == 3
+        assert [item.stage for item in prefetch_progress[:2]] == ["queued", "admitted"]
 
     asyncio.run(scenario())
 

@@ -1177,15 +1177,15 @@ def test_votes_finishing_before_true_explosion_never_commit_and_normal_waiters_l
     assert pipeline_repository.vote_recorded_count == 3
     assert len(repository.resolve_calls) == 1
     assert repository.finalize_calls == []
-    first_idle_index = next(
-        index
-        for index, (_kind, admission, _actor) in enumerate(actions.start_order)
-        if admission == "idle_only"
-    )
-    assert actions.start_order[:first_idle_index] == [
-        ("self_explosion", "normal", "wolf_1"),
-        ("self_explosion", "normal", "wolf_2"),
+    assert [kind for kind, _admission, _actor in actions.start_order[:2]] == [
+        "self_explosion",
+        "self_explosion",
     ]
+    assert {actor for _kind, _admission, actor in actions.start_order[:2]} == {
+        "wolf_1",
+        "wolf_2",
+    }
+    assert {admission for _kind, admission, _actor in actions.start_order} == {"normal"}
     self_explosion_specs = [
         spec for spec in actions.specs if spec.pipeline_result_kind == "self_explosion"
     ]

@@ -105,6 +105,14 @@ class _Repository:
     def complete_text_action(self, **_values: Any) -> None:
         self.completed_text = True
 
+    def commit_speech_decision(self, **_values: Any) -> int:
+        self._record_seq += 1
+        self.events.append((self._record_seq, {"event_type": "action_succeeded", **_values}))
+        return self._record_seq
+
+    def mark_presentation_presenting(self, **_values: Any) -> None:
+        return
+
     def fail_action(self, **values: Any) -> int | None:
         self.failures.append(values)
         if self.fail_action_error is not None:
@@ -298,7 +306,8 @@ def test_precomputed_presentation_has_no_model_response_record_seq(tmp_path: Pat
         pipeline_stage="presentation",
     )
 
-    result = asyncio.run(
+    result = _run_and_drain(
+        engine,
         engine.present_player_decision_result(
             game_id="v2_game_action_lineage",
             broadcaster=_Broadcaster(),
@@ -310,12 +319,12 @@ def test_precomputed_presentation_has_no_model_response_record_seq(tmp_path: Pat
                 first_token_ms=3,
                 completed_ms=8,
             ),
-        )
+        ),
     )
 
     assert result is not None
     assert result.model_response_record_seq is None
-    assert result.terminal_event_record_seq is None
+    assert result.terminal_event_record_seq is not None
     assert model_client.calls == 0
     assert repository.completed_text is True
     assert not any(
@@ -348,7 +357,7 @@ def test_foreground_player_entrypoints_forward_presentation_opened_callback(
     }
 
     if return_result:
-        result = asyncio.run(engine.run_player_decision_result(**arguments))
+        result = _run_and_drain(engine, engine.run_player_decision_result(**arguments))
         assert result is not None and result.decision is not None
         response_seq = next(
             record_seq
@@ -357,7 +366,7 @@ def test_foreground_player_entrypoints_forward_presentation_opened_callback(
         )
         assert result.model_response_record_seq == response_seq
     else:
-        decision = asyncio.run(engine.run_player_decision(**arguments))
+        decision = _run_and_drain(engine, engine.run_player_decision(**arguments))
         assert decision is not None
 
     assert len(opened) == 1
@@ -426,7 +435,8 @@ def test_pipeline_technical_skip_uses_fixed_judge_cue_without_player_model_reque
         failure_episode_id="v2_failure_episode_source",
     )
 
-    result = asyncio.run(
+    result = _run_and_drain(
+        engine,
         engine.complete_pipeline_speech_technical_skip(
             game_id="v2_game_action_lineage",
             broadcaster=_Broadcaster(),
@@ -720,6 +730,19 @@ def test_prefetch_cancellation_is_durable_without_masking_original_cancel(
 def test_action_result_record_sequences_must_be_positive(field_name: str) -> None:
     with pytest.raises(ValueError, match=f"{field_name} must be a positive integer"):
         ActionResult(action_id="v2_action_invalid_seq", **{field_name: 0})
+
+
+def _run_and_drain(
+    engine: ActionEngine,
+    awaitable: Any,
+    game_id: str = "v2_game_action_lineage",
+) -> Any:
+    async def _run() -> Any:
+        result = await awaitable
+        await engine.drain_presentations(game_id)
+        return result
+
+    return asyncio.run(_run())
 
 
 def _engine(

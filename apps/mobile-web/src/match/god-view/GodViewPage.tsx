@@ -358,10 +358,13 @@ export function GodViewPage() {
               return;
             }
             if (message.type === "presentation.failed") {
-              terminalRef.current = true;
-              player?.stop();
-              setLiveState("failed");
-              setLiveError(`${message.failure_kind}: ${message.failure_code}`);
+              if (presentationRef.current?.presentation_id === message.presentation_id) {
+                player?.stop();
+                presentationRef.current = null;
+                if (audioEnabled) {
+                  setPresentation(null);
+                }
+              }
               return;
             }
             if (message.type === "presentation.closed") {

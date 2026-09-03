@@ -236,6 +236,7 @@ class NightEngine:
                     game_id=state.game_id,
                     run_id=state.run_id,
                     dead_player_ids=[item["player_id"] for item in resolution.deaths],
+                    reveal_presentation_seq=self._repository.latest_presentation_seq(game_id),
                 ),
                 audience="public",
             )
@@ -292,6 +293,7 @@ class NightEngine:
                     sheriff_player_id=match["sheriff_player_id"],
                     sheriff_badge_state=match["sheriff_badge_state"],
                     winner=match["winner"],
+                    reveal_presentation_seq=self._repository.latest_presentation_seq(game_id),
                 )
             )
             if final_transition.phase_state == "game_completed":
@@ -1905,6 +1907,9 @@ class NightEngine:
                     game_id=state.game_id,
                     run_id=state.run_id,
                     dead_player_ids=[target.player_id],
+                    reveal_presentation_seq=self._repository.latest_presentation_seq(
+                        state.game_id
+                    ),
                 ),
                 audience="public",
             )

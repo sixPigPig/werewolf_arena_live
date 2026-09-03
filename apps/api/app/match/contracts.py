@@ -316,6 +316,7 @@ class LiveSnapshotResponse(BaseModel):
     game_phase: GamePhaseResponse
     match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
+    playback_cursor: int = Field(ge=0)
     server_time: datetime
     public_rule: PublicRuleSnapshotResponse | None
     public_players: list[PublicPlayerSeatResponse] = Field(max_length=24)
@@ -365,6 +366,7 @@ class DirectorLiveSnapshotResponse(BaseModel):
     game_phase: GamePhaseResponse
     match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
+    playback_cursor: int = Field(ge=0)
     server_time: datetime
     rule: PublicRuleSnapshotResponse | None
     players: list[GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)
@@ -414,6 +416,7 @@ class GodViewLiveSnapshotResponse(BaseModel):
     game_phase: GamePhaseResponse
     match_state: MatchStateResponse | None
     latest_presentation_seq: int = Field(ge=0)
+    playback_cursor: int = Field(ge=0)
     server_time: datetime
     rule: PublicRuleSnapshotResponse | None
     players: list[GodViewPlayerIdentityResponse] = Field(min_length=1, max_length=24)

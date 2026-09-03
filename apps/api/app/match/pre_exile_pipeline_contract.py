@@ -6,7 +6,7 @@ import json
 from typing import Any, Literal
 
 
-PRE_EXILE_PIPELINE_SCHEMA_VERSION = 2
+PRE_EXILE_PIPELINE_SCHEMA_VERSION = 3
 
 _CONTRACT_KEY = "pre_exile_pipeline_contract"
 _UNSUPPORTED_ERROR = "unsupported_pre_exile_pipeline_contract"
@@ -34,6 +34,7 @@ _CONTRACT_KEYS_V2 = frozenset(
         "self_explosion_early_empty_stream_hidden_retry_max_retries",
     }
 )
+_CONTRACT_KEYS_V3 = _CONTRACT_KEYS_V2
 
 
 class PreExilePipelineContractError(ValueError):
@@ -56,9 +57,13 @@ class ResolvedPreExilePipelineContract:
     schema_version: int | None
     action_types: tuple[Literal["werewolf_self_explosion", "exile_vote"], ...]
     launch_boundary: Literal["last_public_speech_sealed", "disabled"]
-    accept_boundary: Literal["last_public_speech_closed", "disabled"]
+    accept_boundary: Literal[
+        "last_public_speech_closed",
+        "last_public_speech_sealed",
+        "disabled",
+    ]
     self_explosion_admission_mode: Literal["normal", "disabled"]
-    speculative_vote_admission_mode: Literal["idle_only", "disabled"]
+    speculative_vote_admission_mode: Literal["idle_only", "normal", "disabled"]
     speculative_vote_capacity_recovery_mode: Literal["normal_batch_after_close_once", "disabled"]
     wolf_vote_gate: Literal["own_no_explosion_result", "disabled"]
     vote_abort_policy: Literal["any_explosion_discards_all_votes", "disabled"]
@@ -81,6 +86,28 @@ def current_pre_exile_pipeline_contract() -> dict[str, Any]:
 
     return {
         "schema_version": PRE_EXILE_PIPELINE_SCHEMA_VERSION,
+        "mode": "sealed_last_speech_overlap",
+        "action_types": ["werewolf_self_explosion", "exile_vote"],
+        "launch_boundary": "last_public_speech_sealed",
+        "accept_boundary": "last_public_speech_sealed",
+        "self_explosion_admission_mode": "normal",
+        "speculative_vote_admission_mode": "normal",
+        "speculative_vote_capacity_recovery_mode": "normal_batch_after_close_once",
+        "wolf_vote_gate": "own_no_explosion_result",
+        "vote_abort_policy": "any_explosion_discards_all_votes",
+        "private_context_mode": "sealed_snapshot_plus_own_no_explosion_fact",
+        "result_commit_mode": "durable_atomic_arbiter",
+        "fallback_mode": "before_launch_sequential_only",
+        "inflight_recovery_mode": "no_duplicate_provider",
+        "self_explosion_early_empty_stream_hidden_retry_max_retries": 1,
+    }
+
+
+def _schema_v2_pre_exile_pipeline_contract() -> dict[str, Any]:
+    """Return the idle-only vote overlap contract retained for frozen games."""
+
+    return {
+        "schema_version": 2,
         "mode": "sealed_last_speech_overlap",
         "action_types": ["werewolf_self_explosion", "exile_vote"],
         "launch_boundary": "last_public_speech_sealed",
@@ -129,6 +156,12 @@ def pre_exile_context_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def schema_v2_pre_exile_pipeline_contract() -> dict[str, Any]:
+    """Return the idle-only vote overlap contract retained for frozen games."""
+
+    return _schema_v2_pre_exile_pipeline_contract()
+
+
 def freeze_pre_exile_pipeline_contract(
     rule_snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -171,9 +204,9 @@ def resolve_pre_exile_pipeline_contract(
         schema_version=schema_version,
         action_types=("werewolf_self_explosion", "exile_vote"),
         launch_boundary="last_public_speech_sealed",
-        accept_boundary="last_public_speech_closed",
+        accept_boundary=contract["accept_boundary"],
         self_explosion_admission_mode="normal",
-        speculative_vote_admission_mode="idle_only",
+        speculative_vote_admission_mode=contract["speculative_vote_admission_mode"],
         speculative_vote_capacity_recovery_mode="normal_batch_after_close_once",
         wolf_vote_gate="own_no_explosion_result",
         vote_abort_policy="any_explosion_discards_all_votes",
@@ -183,7 +216,7 @@ def resolve_pre_exile_pipeline_contract(
         inflight_recovery_mode="no_duplicate_provider",
         self_explosion_early_empty_stream_hidden_retry_max_retries=(
             contract["self_explosion_early_empty_stream_hidden_retry_max_retries"]
-            if schema_version == PRE_EXILE_PIPELINE_SCHEMA_VERSION
+            if schema_version >= 2
             else 0
         ),
     )
@@ -193,14 +226,17 @@ def validate_pre_exile_pipeline_contract(contract: Any) -> dict[str, Any]:
     if type(contract) is not dict:
         _raise_unsupported()
     schema_version = contract.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {1, 2}:
+    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
         _raise_unsupported()
-    expected = (
-        _schema_v1_pre_exile_pipeline_contract()
-        if schema_version == 1
-        else current_pre_exile_pipeline_contract()
-    )
-    expected_keys = _CONTRACT_KEYS_V1 if schema_version == 1 else _CONTRACT_KEYS_V2
+    if schema_version == 1:
+        expected = _schema_v1_pre_exile_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V1
+    elif schema_version == 2:
+        expected = _schema_v2_pre_exile_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V2
+    else:
+        expected = current_pre_exile_pipeline_contract()
+        expected_keys = _CONTRACT_KEYS_V3
     if set(contract) != expected_keys:
         _raise_unsupported()
     for key, expected_value in expected.items():

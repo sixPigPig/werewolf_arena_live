@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.match.day_speech_pipeline_contract import (
@@ -24,6 +24,7 @@ from app.match.models import (
     GameRun,
     KnowledgeFact,
     LivePresentation,
+    MatchState,
     ModelActionRecovery,
     PlayerState,
     PreExilePipeline,
@@ -64,21 +65,35 @@ from app.match.execution import (
 from app.match.event_contract import canonical_event_payload, model_event_audience
 from app.match.runtime_state import AudioMode, delivery_audio_mode
 
-
-class RepositoryError(RuntimeError):
-    pass
-
-
-_ACTIVE_RUN_STATUSES = frozenset(
+_REAPABLE_RUN_STATUSES = frozenset(
     {
         "ready",
         "generating",
         "broadcasting",
         "finalizing",
         "paused_model_error",
-        "awaiting_observation",
     }
 )
+_MATCH_TERMINAL_GAME_STATUSES = frozenset(
+    {
+        "awaiting_observation",
+        "failed",
+        "canceled",
+    }
+)
+_LIVE_MATCH_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+    }
+)
+_OPEN_PRESENTATION_STATES = frozenset({"queued", "active"})
+
+
+class RepositoryError(RuntimeError):
+    pass
 
 
 class ExecutionOwnershipLost(RepositoryError):
@@ -114,6 +129,13 @@ class PhaseTransition:
     previous_phase_id: str
     phase_id: str
     phase_state: str
+    reveal_presentation_seq: int = 0
+
+
+@dataclass(frozen=True)
+class SpeechDecisionCommit:
+    record_seq: int
+    phase_transition: PhaseTransition | None = None
 
 
 @dataclass(frozen=True)
@@ -456,11 +478,12 @@ class ActionRepository:
             run = _run(db, game.current_run_id)
             pipeline_generation = _is_pipeline_generation_context(context)
             pre_exile_generation = _is_pre_exile_pipeline_context(context)
-            if pre_exile_generation and game.status in {
+            match_claimable_statuses = {
+                expected_live_state,
                 "broadcasting",
                 "finalizing",
-                "ready",
-            }:
+            }
+            if pre_exile_generation and game.status in _LIVE_MATCH_STATUSES:
                 _bind_broadcast_pipeline_generation_claim(
                     db,
                     game=game,
@@ -475,9 +498,7 @@ class ActionRepository:
                     best_effort=best_effort,
                     non_blocking=non_blocking,
                 )
-            elif game.status == "broadcasting":
-                if not pipeline_generation:
-                    return None
+            elif pipeline_generation and game.status in _LIVE_MATCH_STATUSES:
                 _bind_broadcast_pipeline_generation_claim(
                     db,
                     game=game,
@@ -491,13 +512,9 @@ class ActionRepository:
                     activation_id=activation_id,
                     best_effort=best_effort,
                     non_blocking=non_blocking,
-                )
-            elif pipeline_generation:
-                raise RepositoryError(
-                    "day speech pipeline generation requires an active broadcast"
                 )
             elif (
-                game.status != expected_live_state
+                game.status not in match_claimable_statuses
                 or game.phase_id != expected_phase_id
                 or game.phase_state != expected_phase_state
             ):
@@ -625,8 +642,22 @@ class ActionRepository:
                 fence=claim.run_fence,
             )
             _raise_if_stop_requested(db, game)
-            expected_status = "awaiting_observation" if claim.best_effort else "generating"
-            if game.status != expected_status:
+            if game.status in {"failed", "canceled"}:
+                raise RepositoryError(f"cannot open presentation from {game.status}")
+            if claim.best_effort and game.status not in {
+                "awaiting_observation",
+                "ready",
+                "generating",
+                "broadcasting",
+                "finalizing",
+            }:
+                raise RepositoryError(f"cannot open presentation from {game.status}")
+            if not claim.best_effort and game.status not in {
+                "generating",
+                "ready",
+                "broadcasting",
+                "finalizing",
+            }:
                 raise RepositoryError(f"cannot open presentation from {game.status}")
             presentation_seq = game.last_presentation_seq + 1
             _append_event(
@@ -706,7 +737,7 @@ class ActionRepository:
                 speech_id=speech_id,
                 segment_index=0,
                 source_event_id=committed.event_id,
-                state="active",
+                state="queued",
                 subtitle_text=subtitle_text,
                 subtitle_timings=[],
                 voice_asset_id=voice_asset_id,
@@ -716,9 +747,6 @@ class ActionRepository:
             )
             db.add(presentation)
             game.last_presentation_seq = presentation_seq
-            if not claim.best_effort:
-                game.status = "broadcasting"
-                _run(db, claim.run_id).status = "broadcasting"
         return PresentationIdentity(
             game_id=claim.game_id,
             run_id=claim.run_id,
@@ -739,6 +767,122 @@ class ActionRepository:
             audience=audience,
             run_fence=claim.run_fence,
         )
+
+    def mark_presentation_presenting(self, *, identity: PresentationIdentity) -> None:
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
+            presentation = db.get(
+                LivePresentation,
+                (identity.game_id, identity.presentation_seq),
+            )
+            if presentation is None or presentation.state not in {"queued", "active"}:
+                raise RepositoryError("presentation is not queued")
+            presentation.state = "active"
+
+    def commit_speech_decision(
+        self,
+        *,
+        claim: ActionClaim,
+        identity: PresentationIdentity,
+        next_live_state: str,
+        next_phase_state: str,
+        best_effort: bool = False,
+        source_attempt_id: str | None = None,
+        source_model_response_record_seq: int | None = None,
+        provider_request_id: str | None = None,
+    ) -> SpeechDecisionCommit:
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                claim.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=claim.run_fence,
+            )
+            _raise_if_stop_requested(db, game)
+            if claim.non_blocking:
+                if game.status in {"failed", "canceled"}:
+                    raise RepositoryError(
+                        f"cannot commit non-blocking speech from {game.status}"
+                    )
+            elif not best_effort and game.status not in {
+                "generating",
+                "ready",
+                "broadcasting",
+                "finalizing",
+            }:
+                raise RepositoryError(f"cannot commit speech decision from {game.status}")
+            if game.phase_id != claim.phase_id:
+                raise RepositoryError("action phase changed before speech commit")
+            run = _run(db, claim.run_id)
+            previous_phase_id = game.phase_id
+            previous_phase_state = game.phase_state
+            phase_transition: PhaseTransition | None = None
+            if not best_effort and not claim.non_blocking:
+                game.status = next_live_state
+                game.phase_state = next_phase_state
+                run.status = next_live_state
+                if previous_phase_state != next_phase_state and claim.audience == "all":
+                    phase_transition = PhaseTransition(
+                        game_id=game.game_id,
+                        run_id=claim.run_id,
+                        phase_seq=game.phase_seq,
+                        previous_phase_id=previous_phase_id,
+                        phase_id=game.phase_id,
+                        phase_state=game.phase_state,
+                        reveal_presentation_seq=identity.presentation_seq,
+                    )
+                    _append_event(
+                        db,
+                        game=game,
+                        run_id=claim.run_id,
+                        event_type="game_phase_changed",
+                        audience="all",
+                        payload={
+                            "phase_seq": phase_transition.phase_seq,
+                            "previous_phase_id": phase_transition.previous_phase_id,
+                            "previous_phase_state": previous_phase_state,
+                            "phase_id": phase_transition.phase_id,
+                            "phase_state": phase_transition.phase_state,
+                            "reveal_presentation_seq": (
+                                phase_transition.reveal_presentation_seq
+                            ),
+                        },
+                    )
+            completed = _append_event(
+                db,
+                game=game,
+                run_id=claim.run_id,
+                event_type="action_succeeded",
+                audience=claim.audience,
+                payload={
+                    "action_id": claim.action_id,
+                    "activation_id": claim.activation_id,
+                    "presentation_id": identity.presentation_id,
+                    "speech_id": identity.speech_id,
+                    "result": "decision_recorded",
+                    "phase_id": claim.phase_id,
+                    **(
+                        {
+                            "source_attempt_id": source_attempt_id,
+                            "source_model_response_record_seq": (
+                                source_model_response_record_seq
+                            ),
+                            "provider_request_id": provider_request_id,
+                        }
+                        if source_attempt_id is not None
+                        else {}
+                    ),
+                },
+            )
+            return SpeechDecisionCommit(
+                record_seq=completed.record_seq,
+                phase_transition=phase_transition,
+            )
 
     def complete_text_action(
         self,
@@ -762,17 +906,12 @@ class ActionRepository:
             )
             if presentation is None or presentation.voice_asset_id is not None:
                 raise RepositoryError("text action presentation is not closable")
-            if presentation.state != "active":
-                raise RepositoryError("text action presentation is not active")
-            if game.phase_id != identity.phase_id:
-                raise RepositoryError("action phase changed before text completion")
+            if presentation.state not in {"active", "queued"}:
+                raise RepositoryError("text action presentation is not closable")
             presentation.state = "closed"
             presentation.closed_at = _now()
-            run = _run(db, identity.run_id)
-            if not best_effort:
-                game.status = next_live_state
-                game.phase_state = next_phase_state
-                run.status = next_live_state
+            if game.playback_cursor < identity.presentation_seq:
+                game.playback_cursor = identity.presentation_seq
             _append_event(
                 db,
                 game=game,
@@ -785,19 +924,7 @@ class ActionRepository:
                     "presentation_id": identity.presentation_id,
                     "speech_id": identity.speech_id,
                     "delivery_mode": "text_only",
-                },
-            )
-            _append_event(
-                db,
-                game=game,
-                run_id=identity.run_id,
-                event_type="action_succeeded",
-                audience=identity.audience,
-                payload={
-                    "action_id": identity.action_id,
-                    "presentation_id": identity.presentation_id,
-                    "speech_id": identity.speech_id,
-                    "delivery_mode": "text_only",
+                    "playback_cursor": game.playback_cursor,
                 },
             )
 
@@ -817,9 +944,6 @@ class ActionRepository:
                 fence=identity.run_fence,
             )
             _raise_if_stop_requested(db, game)
-            if not best_effort:
-                game.status = "finalizing"
-                _run(db, identity.run_id).status = "finalizing"
             _append_event(
                 db,
                 game=game,
@@ -917,13 +1041,8 @@ class ActionRepository:
                 raise RepositoryError("action cannot complete without ready voice")
             presentation.state = "closed"
             presentation.closed_at = _now()
-            if game.phase_id != identity.phase_id:
-                raise RepositoryError("action phase changed before completion")
-            run = _run(db, identity.run_id)
-            if not best_effort:
-                game.status = next_live_state
-                game.phase_state = next_phase_state
-                run.status = next_live_state
+            if game.playback_cursor < identity.presentation_seq:
+                game.playback_cursor = identity.presentation_seq
             _append_event(
                 db,
                 game=game,
@@ -937,6 +1056,7 @@ class ActionRepository:
                     "tts_attempt_id": tts_attempt_id,
                     "final_chunk_index": final_chunk_index,
                     "final_sample_cursor": final_sample_cursor,
+                    "playback_cursor": game.playback_cursor,
                 },
             )
             _append_event(
@@ -951,23 +1071,55 @@ class ActionRepository:
                     "presentation_id": identity.presentation_id,
                     "speech_id": identity.speech_id,
                     "tts_attempt_id": tts_attempt_id,
+                    "playback_cursor": game.playback_cursor,
                 },
             )
-            _append_event(
+
+    def fail_presentation(
+        self,
+        *,
+        identity: PresentationIdentity,
+        failure_kind: str,
+        failure_code: str,
+    ) -> int:
+        with self._session_factory.begin() as db:
+            game = _locked_game(
+                db,
+                identity.game_id,
+                require_fence=self._enforce_execution_fence,
+                fence=identity.run_fence,
+            )
+            presentation = db.get(
+                LivePresentation,
+                (identity.game_id, identity.presentation_seq),
+            )
+            if presentation is not None and presentation.state in {"active", "queued"}:
+                presentation.state = "failed"
+                presentation.closed_at = _now()
+            if identity.voice_asset_id is not None:
+                voice = db.get(VoiceAsset, identity.voice_asset_id)
+                if voice is not None and voice.state == "writing":
+                    voice.state = "failed"
+                    voice.completed_at = _now()
+            if game.playback_cursor < identity.presentation_seq:
+                game.playback_cursor = identity.presentation_seq
+            failed = _append_event(
                 db,
                 game=game,
                 run_id=identity.run_id,
-                event_type="action_succeeded",
+                event_type="presentation_failed",
                 audience=identity.audience,
                 payload={
                     "action_id": identity.action_id,
+                    "activation_id": identity.activation_id,
                     "presentation_id": identity.presentation_id,
-                    "tts_attempt_id": tts_attempt_id,
-                    "voice_asset_id": identity.voice_asset_id,
-                    "result": "audio_drained_and_voice_saved",
-                    "phase_id": identity.phase_id,
+                    "speech_id": identity.speech_id,
+                    "failure_kind": failure_kind,
+                    "failure_code": failure_code,
+                    "playback_cursor": game.playback_cursor,
                 },
             )
+            return failed.record_seq
 
     def complete_silent_action(
         self,
@@ -1068,6 +1220,7 @@ class ActionRepository:
                 previous_phase_id=previous_phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1080,6 +1233,7 @@ class ActionRepository:
                     "previous_phase_id": transition.previous_phase_id,
                     "phase_id": transition.phase_id,
                     "phase_state": transition.phase_state,
+                    "reveal_presentation_seq": transition.reveal_presentation_seq,
                 },
             )
             return transition
@@ -1107,6 +1261,7 @@ class ActionRepository:
                 previous_phase_id=game.phase_id,
                 phase_id=game.phase_id,
                 phase_state=game.phase_state,
+                reveal_presentation_seq=game.last_presentation_seq,
             )
             _append_event(
                 db,
@@ -1120,6 +1275,7 @@ class ActionRepository:
                     "previous_phase_state": previous_phase_state,
                     "phase_id": transition.phase_id,
                     "phase_state": transition.phase_state,
+                    "reveal_presentation_seq": transition.reveal_presentation_seq,
                 },
             )
             return transition
@@ -1211,7 +1367,7 @@ class ActionRepository:
                     LivePresentation,
                     (identity.game_id, identity.presentation_seq),
                 )
-                if presentation is not None and presentation.state == "active":
+                if presentation is not None and presentation.state in _OPEN_PRESENTATION_STATES:
                     presentation.state = "failed"
                     presentation.closed_at = _now()
                 voice = db.get(VoiceAsset, identity.voice_asset_id)
@@ -1753,7 +1909,7 @@ class ActionRepository:
                 db.scalars(
                     select(LivePresentation).where(
                         LivePresentation.game_id == game.game_id,
-                        LivePresentation.state == "active",
+                        LivePresentation.state.in_(tuple(_OPEN_PRESENTATION_STATES)),
                     )
                 )
             )
@@ -2038,7 +2194,13 @@ class ActionRepository:
                 changed=True,
             )
 
-    def reap_stale_runs(self, *, grace_seconds: float) -> list[dict[str, Any]]:
+    def reap_stale_runs(
+        self,
+        *,
+        stale_grace_seconds: float | None = None,
+        grace_seconds: float | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
         """Fail-closed terminalization of active runs whose execution lease expired.
 
         A worker that died (process exit, machine sleep) leaves its run in an
@@ -2046,34 +2208,43 @@ class ActionRepository:
         it.  Bumping the fence token also fences out the dead worker's heartbeat
         and release calls if the process ever wakes back up.
         """
-        if grace_seconds < 0:
+        if stale_grace_seconds is not None and grace_seconds is not None:
+            if stale_grace_seconds != grace_seconds:
+                raise RepositoryError("conflicting V2 reaper grace duration")
+        seconds = (
+            grace_seconds
+            if grace_seconds is not None
+            else stale_grace_seconds if stale_grace_seconds is not None else 30.0
+        )
+        if seconds < 0:
             raise RepositoryError("invalid V2 reaper grace duration")
+        if limit < 1:
+            raise RepositoryError("invalid V2 reaper limit")
         with self._session_factory.begin() as db:
             now = database_utc_now(db)
-            cutoff = now - timedelta(seconds=grace_seconds)
+            cutoff = now - timedelta(seconds=seconds)
             candidates = db.scalars(
                 select(GameRun)
-                .where(
-                    GameRun.status.in_(sorted(_ACTIVE_RUN_STATUSES)),
-                    or_(
-                        GameRun.lease_expires_at.is_(None),
-                        GameRun.lease_expires_at < cutoff,
-                    ),
-                )
+                .where(GameRun.status.in_(sorted(_REAPABLE_RUN_STATUSES)))
                 .order_by(GameRun.run_id)
+                .limit(limit * 4)
                 .with_for_update()
                 .execution_options(populate_existing=True)
             ).all()
             reaped: list[dict[str, Any]] = []
             for run in candidates:
+                if len(reaped) >= limit:
+                    break
                 game = _locked_game(db, run.game_id, require_fence=False)
-                if run.status not in _ACTIVE_RUN_STATUSES:
+                if game.current_run_id != run.run_id:
                     continue
-                if run.lease_expires_at is not None and _as_utc(run.lease_expires_at) >= cutoff:
-                    continue
-                if game.status in {"completed", "failed", "canceled"}:
+                if not _should_reap_stale_run(game=game, run=run, cutoff=cutoff):
                     continue
                 reaped_at = database_utc_now(db)
+                previous_lease = run.lease_expires_at
+                match = db.get(MatchState, game.game_id)
+                if match is not None and match.winner is None:
+                    match.completion_reason = "worker_lease_expired"
                 interrupted_presentations = list(
                     db.scalars(
                         select(LivePresentation).where(
@@ -2151,7 +2322,13 @@ class ActionRepository:
                     audience="god_view",
                     payload={
                         "run_id": run.run_id,
+                        "worker_id": invalidated_worker_id,
+                        "failure_code": "worker_lease_expired",
                         "reason_code": "worker_lease_expired",
+                        "lease_expires_at": (
+                            previous_lease.isoformat() if previous_lease is not None else None
+                        ),
+                        "reaped_at": reaped_at.isoformat(),
                         "invalidated_worker_id": invalidated_worker_id,
                         "invalidated_fence_token": invalidated_fence_token,
                         "interrupted_presentation_count": len(interrupted_presentations),
@@ -2431,7 +2608,7 @@ def _bind_broadcast_pipeline_generation_claim(
     if (
         set(pipeline) != expected_pipeline_keys
         or pipeline.get("stage") != "generation"
-        or pipeline.get("model_admission_mode") != "idle_only"
+        or pipeline.get("model_admission_mode") != contract.admission_mode
         or not isinstance(pipeline.get("slot_id"), str)
         or not str(pipeline["slot_id"]).strip()
         or not non_blocking
@@ -2457,8 +2634,8 @@ def _bind_broadcast_pipeline_generation_claim(
     ):
         raise RepositoryError("day speech pipeline generation is not frozen and enabled")
     if (
-        game.status != "broadcasting"
-        or run.status != "broadcasting"
+        game.status not in _LIVE_MATCH_STATUSES
+        or run.status != game.status
         or run.run_id != game.current_run_id
         or run.game_id != game.game_id
         or game.phase_id != expected_phase_id
@@ -2561,11 +2738,15 @@ def _bind_pre_exile_pipeline_generation_claim(
         if result_kind == "exile_vote"
         else None
     )
-    expected_admission = "normal" if result_kind == "self_explosion" else "idle_only"
     try:
         contract = resolve_pre_exile_pipeline_contract(game.rule_snapshot)
     except PreExilePipelineContractError as exc:
         raise RepositoryError(str(exc)) from exc
+    expected_admission = (
+        contract.self_explosion_admission_mode
+        if result_kind == "self_explosion"
+        else contract.speculative_vote_admission_mode
+    )
     guarded_self_explosion_retry = (
         result_kind == "self_explosion"
         and contract.self_explosion_early_empty_stream_hidden_retry_max_retries == 1
@@ -2609,7 +2790,7 @@ def _bind_pre_exile_pipeline_generation_claim(
     if (
         not contract.enables(expected_action_type)
         or contract.self_explosion_admission_mode != "normal"
-        or contract.speculative_vote_admission_mode != "idle_only"
+        or contract.speculative_vote_admission_mode not in {"idle_only", "normal"}
         or contract.speculative_vote_capacity_recovery_mode != "normal_batch_after_close_once"
         or contract.private_context_mode != "sealed_snapshot_plus_own_no_explosion_fact"
         or contract.result_commit_mode != "durable_atomic_arbiter"
@@ -2617,7 +2798,7 @@ def _bind_pre_exile_pipeline_generation_claim(
     ):
         raise RepositoryError("pre-exile pipeline contract is not enabled")
     if (
-        game.status not in {"broadcasting", "finalizing", "ready"}
+        game.status not in _LIVE_MATCH_STATUSES
         or run.status != game.status
         or run.run_id != game.current_run_id
         or run.game_id != game.game_id
@@ -2703,32 +2884,33 @@ def _bind_pre_exile_pipeline_generation_claim(
             )
         )
     )
-    if game.status in {"broadcasting", "finalizing"}:
+    predecessor = db.scalar(
+        select(LivePresentation).where(
+            LivePresentation.game_id == game.game_id,
+            LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
+        )
+    )
+    if (
+        predecessor is None
+        or predecessor.run_id != pipeline.run_id
+        or predecessor.action_id != pipeline.predecessor_action_id
+        or predecessor.source_event_id != pipeline.predecessor_source_event_id
+        or predecessor.state not in {"queued", "active", "closed"}
+    ):
+        raise RepositoryError("pre-exile predecessor is not sealed")
+    if predecessor.state in {"queued", "active"}:
+        if predecessor.closed_at is not None:
+            raise RepositoryError("pre-exile predecessor is no longer active")
         if (
-            len(active) != 1
-            or active[0].presentation_id != pipeline.predecessor_presentation_id
-            or active[0].action_id != pipeline.predecessor_action_id
-            or active[0].source_event_id != pipeline.predecessor_source_event_id
-            or active[0].closed_at is not None
+            predecessor.state == "active"
+            and (
+                len(active) != 1
+                or active[0].presentation_id != pipeline.predecessor_presentation_id
+            )
         ):
             raise RepositoryError("pre-exile predecessor is no longer active")
     else:
-        if active:
-            raise RepositoryError("pre-exile closed-stage claim found an active presentation")
-        predecessor = db.scalar(
-            select(LivePresentation).where(
-                LivePresentation.game_id == game.game_id,
-                LivePresentation.presentation_id == pipeline.predecessor_presentation_id,
-            )
-        )
-        if (
-            predecessor is None
-            or predecessor.run_id != pipeline.run_id
-            or predecessor.action_id != pipeline.predecessor_action_id
-            or predecessor.source_event_id != pipeline.predecessor_source_event_id
-            or predecessor.state != "closed"
-            or predecessor.closed_at is None
-        ):
+        if predecessor.closed_at is None:
             raise RepositoryError("pre-exile predecessor is not durably closed")
         closed_events = list(
             db.scalars(
@@ -3193,21 +3375,21 @@ def _validate_pipeline_generation_predecessor(
     row: DaySpeechSlot,
     speech_order: list[Any],
 ) -> None:
-    active = list(
+    open_presentations = list(
         db.scalars(
             select(LivePresentation)
             .where(
                 LivePresentation.game_id == game.game_id,
-                LivePresentation.state == "active",
+                LivePresentation.state.in_(tuple(_OPEN_PRESENTATION_STATES)),
             )
             .order_by(LivePresentation.presentation_seq)
         )
     )
-    if len(active) != 1:
+    if len(open_presentations) != 1:
         raise RepositoryError(
             "day speech pipeline predecessor is not the unique active presentation"
         )
-    predecessor = active[0]
+    predecessor = open_presentations[0]
     if row.turn_index < 2 or len(speech_order) < row.turn_index:
         raise RepositoryError("day speech pipeline predecessor identity is invalid")
     predecessor_turn_player_id = speech_order[row.turn_index - 2]
@@ -3459,6 +3641,25 @@ def _open_failure_episode_ids_for_locked_run(
             if episode.is_open
         )
     )
+
+
+def _should_reap_stale_run(
+    *,
+    game: GameRecord,
+    run: GameRun,
+    cutoff: datetime,
+) -> bool:
+    if game.status in _MATCH_TERMINAL_GAME_STATUSES:
+        return False
+    if game.phase_state == "game_completed":
+        return False
+    if run.status not in _REAPABLE_RUN_STATUSES:
+        return False
+    if run.lease_expires_at is None:
+        # A released owner (null lease + no worker) is not a dead worker.
+        # Inconsistent owner fields with a worker still attached are stale.
+        return run.worker_id is not None
+    return _as_utc(run.lease_expires_at) <= _as_utc(cutoff)
 
 
 def _resolved_model_generation_policy_contract(

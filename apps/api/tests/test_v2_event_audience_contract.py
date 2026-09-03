@@ -256,6 +256,12 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
         actor_kind="player",
         actor_id="seat_1",
     )
+    repository.commit_speech_decision(
+        claim=claim,
+        identity=identity,
+        next_live_state="ready",
+        next_phase_state="night_running",
+    )
     repository.complete_text_action(
         identity=identity,
         next_live_state="ready",
@@ -280,8 +286,8 @@ def test_presentation_lifecycle_inherits_claim_audience_and_closes_text_durably(
         "speech_opened",
         "speech_segment_committed",
         "speech_sealed",
-        "speech_closed",
         "action_succeeded",
+        "speech_closed",
     ]
     assert all(event.payload["audience"] == "god_view" for event in events)
     assert all(event.payload["audience_contract_version"] == 1 for event in events)
@@ -387,8 +393,8 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
         first_token_ms=1,
         completed_ms=2,
     )
-    result = asyncio.run(
-        action_engine.present_player_decision(
+    async def _present_and_drain() -> bool:
+        presented = await action_engine.present_player_decision(
             game_id=game_id,
             broadcaster=broadcaster,  # type: ignore[arg-type]
             spec=SpeechSpec(
@@ -406,9 +412,12 @@ def test_private_tts_failure_keeps_presentation_failure_off_public_audience(tmp_
             ),
             decision=decision,
         )
-    )
+        await action_engine.drain_presentations(game_id)
+        return presented
 
-    assert result is False
+    result = asyncio.run(_present_and_drain())
+
+    assert result is True
     failure_messages = [
         (audience, value)
         for audience, value in broadcaster.messages

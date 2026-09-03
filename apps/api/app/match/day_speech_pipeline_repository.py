@@ -39,6 +39,15 @@ DaySpeechSlotState = Literal[
 
 _TERMINAL_STATES = frozenset({"consumed", "failed", "canceled", "invalidated"})
 _PUBLIC_AUDIENCES = frozenset({"all", "public"})
+_LIVE_MATCH_STATUSES = frozenset(
+    {
+        "ready",
+        "generating",
+        "broadcasting",
+        "finalizing",
+    }
+)
+_OPEN_PRESENTATION_STATES = frozenset({"queued", "active"})
 
 
 class DaySpeechPipelineRepositoryError(RepositoryError):
@@ -108,8 +117,8 @@ class DaySpeechPipelineRepository:
                 or run is None
                 or game.current_run_id != row.run_id
                 or game.phase_id != row.phase_id
-                or game.status != "broadcasting"
-                or run.status != "broadcasting"
+                or game.status not in _LIVE_MATCH_STATUSES
+                or run.status != game.status
                 or row.fence_worker_id != run.worker_id
                 or row.fence_token != run.fence_token
             ):
@@ -124,7 +133,7 @@ class DaySpeechPipelineRepository:
                 predecessor is not None
                 and predecessor.run_id == row.run_id
                 and predecessor.action_id == row.predecessor_action_id
-                and predecessor.state == "active"
+                and predecessor.state in _OPEN_PRESENTATION_STATES
                 and predecessor.closed_at is None
             )
 
@@ -196,9 +205,9 @@ class DaySpeechPipelineRepository:
                 raise DaySpeechPipelineRepositoryError(
                     "technical skip predecessor requires pipeline schema v2 or v3"
                 )
-            if game.status != "broadcasting" or run.status != "broadcasting":
+            if game.status not in _LIVE_MATCH_STATUSES or run.status != game.status:
                 raise DaySpeechPipelineRepositoryError(
-                    "one-ahead reservation requires an active broadcast"
+                    "one-ahead reservation requires a live match"
                 )
             if game.phase_id != phase_id or phase_id != f"day_{round_no}":
                 raise DaySpeechPipelineRepositoryError("day speech reservation phase changed")
@@ -719,7 +728,7 @@ def _validate_active_predecessor(
         or predecessor.actor_kind != ("judge" if technical_skip_predecessor else "player")
         or (technical_skip_predecessor and predecessor.actor_id != "judge")
         or predecessor.audience not in _PUBLIC_AUDIENCES
-        or predecessor.state != "active"
+        or predecessor.state not in _OPEN_PRESENTATION_STATES
         or predecessor.voice_asset_id is None
     ):
         raise DaySpeechPipelineRepositoryError(
@@ -936,7 +945,17 @@ def _validate_pipeline_action_opened(
     payload = _payload(opened)
     context = _action_context(opened)
     pipeline = context.get("pipeline")
-    expected_admission = "idle_only" if stage == "generation" else "normal"
+    game = db.get(GameRecord, row.game_id)
+    contract = (
+        resolve_day_speech_pipeline_contract(game.rule_snapshot)
+        if game is not None
+        else None
+    )
+    expected_admission = (
+        contract.admission_mode
+        if stage == "generation" and contract is not None
+        else "normal"
+    )
     if (
         payload.get("audience") != "player_private"
         or context.get("action_type") != row.action_type
@@ -1057,7 +1076,7 @@ def _validate_open_slot_presentation(
         or presentation.actor_kind != "player"
         or presentation.actor_id != row.actor_player_id
         or presentation.audience not in _PUBLIC_AUDIENCES
-        or presentation.state != "active"
+        or presentation.state not in _OPEN_PRESENTATION_STATES
     ):
         raise DaySpeechPipelineRepositoryError("day speech slot presentation lineage is invalid")
     source = _event_by_id(
@@ -1159,7 +1178,7 @@ def _validate_consumed_presentation(
         event_type="action_succeeded",
         action_id=row.presentation_action_id,
         presentation_id=row.presentation_id,
-        minimum_record_seq=closed.record_seq + 1,
+        minimum_record_seq=source.record_seq + 1,
         maximum_record_seq=last_record_seq,
     )
     if success is None:
@@ -1269,7 +1288,7 @@ def _require_no_active_slot_presentation(db: Session, *, row: DaySpeechSlot) -> 
             LivePresentation.presentation_id == row.presentation_id,
         )
     )
-    if presentation is not None and presentation.state == "active":
+    if presentation is not None and presentation.state in _OPEN_PRESENTATION_STATES:
         raise DaySpeechPipelineRepositoryError(
             "active presentation must be closed before slot cleanup"
         )

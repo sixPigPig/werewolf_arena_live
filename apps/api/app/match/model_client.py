@@ -282,34 +282,18 @@ class _ProviderGate:
     ):
         loop = asyncio.get_running_loop()
         queued_at = loop.time()
-        if admission_mode == "idle_only":
-            _check(check_cancellation)
-            if self._normal_waiters > 0 or self._semaphore.locked():
-                raise ModelError(
-                    "model_prefetch_capacity_unavailable",
-                    retryable=False,
-                    failure_stage="provider_admission",
-                    queue_wait_ms=round((loop.time() - queued_at) * 1000),
-                    provider_in_flight=self._in_flight,
-                    provider_concurrency_limit=self.limit,
-                )
-            # No await can interleave between the checks above and an immediately
-            # available Semaphore acquisition on this event loop.  This reserves
-            # genuinely idle capacity without joining or bypassing the normal FIFO.
-            await self._semaphore.acquire()
-        elif admission_mode == "normal":
-            # Register before the first await so idle-only work cannot take an
-            # available permit while an earlier normal request is being queued.
-            self._normal_waiters += 1
-            try:
-                await _acquire_with_cancellation(
-                    self._semaphore,
-                    check_cancellation=check_cancellation,
-                )
-            finally:
-                self._normal_waiters -= 1
-        else:
+        if admission_mode not in {"idle_only", "normal"}:
             raise ValueError(f"unsupported provider admission mode: {admission_mode}")
+        # Prefetch and foreground share the same FIFO. idle_only is retained
+        # as a label for frozen contracts but no longer rejects when busy.
+        self._normal_waiters += 1
+        try:
+            await _acquire_with_cancellation(
+                self._semaphore,
+                check_cancellation=check_cancellation,
+            )
+        finally:
+            self._normal_waiters -= 1
         self._in_flight += 1
         admission = _ProviderAdmission(
             queue_wait_ms=round((loop.time() - queued_at) * 1000),
@@ -426,6 +410,13 @@ def model_failure_disposition(exc: ModelError) -> FailureDisposition:
             retryable=False,
             pausable=False,
             max_attempts=1,
+        )
+    if exc.code == "model_empty_visible_output":
+        return FailureDisposition(
+            category="machine_format",
+            retryable=True,
+            pausable=True,
+            max_attempts=2,
         )
     if exc.code == "model_output_budget_exhausted":
         return FailureDisposition(
@@ -941,16 +932,12 @@ class ModelClient:
             )
         )
         client = self._client_for(target.provider)
-        response_header_timeout = min(
-            self._first_token_seconds,
-            self._total_seconds,
-        )
         try:
             async with _stream_response_with_cancellation(
                 client,
                 "POST",
                 route.url,
-                timeout=response_header_timeout,
+                timeout=None,
                 check_cancellation=check_cancellation,
                 headers={
                     "Authorization": f"Bearer {route.api_key}",
@@ -1000,57 +987,14 @@ class ModelClient:
                 lines = response.aiter_lines().__aiter__()
                 while True:
                     _check(check_cancellation)
-                    now = loop.time()
-                    hard_remaining = self._total_seconds - (now - started)
-                    if first_token_at is None:
-                        phase_remaining = self._first_token_seconds - (now - started)
-                        timeout_scope = "first_token"
-                    else:
-                        assert last_progress_at is not None
-                        phase_remaining = self._stream_idle_seconds - (now - last_progress_at)
-                        timeout_scope = "stream_idle"
-                    remaining = min(hard_remaining, phase_remaining)
-                    if remaining <= 0:
-                        scope = "attempt_hard" if hard_remaining <= 0 else timeout_scope
-                        raise _model_timeout_error(
-                            scope=scope,
-                            started=started,
-                            first_token_at=first_token_at,
-                            provider_request_id=provider_request_id,
-                            response_headers_seen=response_headers_seen,
-                            admission=admission,
-                            reasoning_delta_count=reasoning_delta_count,
-                            text_delta_count=text_delta_count,
-                            max_inter_delta_ms=max_inter_delta_ms,
-                            last_progress_at=last_progress_at,
-                        )
                     try:
                         line = await _next_with_cancellation(
                             lines,
-                            timeout=remaining,
+                            timeout=None,
                             check_cancellation=check_cancellation,
                         )
                     except StopAsyncIteration:
                         break
-                    except TimeoutError as exc:
-                        now = loop.time()
-                        scope = (
-                            "attempt_hard"
-                            if now - started >= self._total_seconds
-                            else ("first_token" if first_token_at is None else "stream_idle")
-                        )
-                        raise _model_timeout_error(
-                            scope=scope,
-                            started=started,
-                            first_token_at=first_token_at,
-                            provider_request_id=provider_request_id,
-                            response_headers_seen=response_headers_seen,
-                            admission=admission,
-                            reasoning_delta_count=reasoning_delta_count,
-                            text_delta_count=text_delta_count,
-                            max_inter_delta_ms=max_inter_delta_ms,
-                            last_progress_at=last_progress_at,
-                        ) from exc
                     event = _sse_data(line)
                     if event is None:
                         continue
@@ -1233,10 +1177,14 @@ class ModelClient:
             raise transport_error from exc
         emit_stream_progress(force=True)
         if not text.strip() or first_token_at is None:
+            empty_visible = first_token_at is not None or finish_reason in {
+                "length",
+                "max_output_tokens",
+            }
             exc = ModelError(
                 (
-                    "model_output_budget_exhausted"
-                    if finish_reason in {"length", "max_output_tokens"}
+                    "model_empty_visible_output"
+                    if empty_visible
                     else "model_empty_stream"
                 ),
                 retryable=True,
@@ -1740,7 +1688,7 @@ def _copy_usage_int(
 async def _next_with_cancellation(
     lines: Any,
     *,
-    timeout: float,
+    timeout: float | None,
     check_cancellation: Callable[[], None] | None,
 ) -> str:
     task = asyncio.create_task(anext(lines))
@@ -1748,12 +1696,16 @@ async def _next_with_cancellation(
     started = loop.time()
     try:
         while True:
-            remaining = timeout - (loop.time() - started)
-            if remaining <= 0:
-                raise TimeoutError
+            if timeout is not None:
+                remaining = timeout - (loop.time() - started)
+                if remaining <= 0:
+                    raise TimeoutError
+                wait_timeout = min(remaining, 0.25)
+            else:
+                wait_timeout = 0.25
             done, _pending = await asyncio.wait(
                 {task},
-                timeout=min(remaining, 0.25),
+                timeout=wait_timeout,
             )
             if task in done:
                 return task.result()
@@ -1770,7 +1722,7 @@ async def _stream_response_with_cancellation(
     method: str,
     url: str,
     *,
-    timeout: float,
+    timeout: float | None,
     check_cancellation: Callable[[], None] | None,
     **kwargs: Any,
 ):
@@ -1781,12 +1733,16 @@ async def _stream_response_with_cancellation(
     entered = False
     try:
         while True:
-            remaining = timeout - (loop.time() - started)
-            if remaining <= 0:
-                raise TimeoutError
+            if timeout is not None:
+                remaining = timeout - (loop.time() - started)
+                if remaining <= 0:
+                    raise TimeoutError
+                wait_timeout = min(remaining, 0.25)
+            else:
+                wait_timeout = 0.25
             done, _pending = await asyncio.wait(
                 {enter_task},
-                timeout=min(remaining, 0.25),
+                timeout=wait_timeout,
             )
             if enter_task in done:
                 response = enter_task.result()
@@ -1871,7 +1827,6 @@ def build_model_request_payload(
     payload: dict[str, Any] = {
         "model": model_id,
         "stream": True,
-        "max_output_tokens": _effective_max_tokens(configured, max_output_tokens),
         "input": (
             _decision_model_input(action_context) if decision else _model_input(action_context)
         ),
@@ -1974,7 +1929,6 @@ def build_chat_completions_request_payload(
     payload: dict[str, Any] = {
         "model": model_id,
         "stream": True,
-        "max_tokens": _effective_max_tokens(configured, max_output_tokens),
         "messages": [
             {
                 "role": item["role"],
